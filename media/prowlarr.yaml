@@ -1,0 +1,237 @@
+
+# ---
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: prowlarr-config-pvc
+#   namespace: media
+# spec:
+#   storageClassName: longhorn
+#   accessModes: [ReadWriteMany]
+#   resources:
+#     requests:
+#       storage: 1Gi
+# ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prowlarr-config-pvc
+  namespace: media
+spec:
+  storageClassName: longhorn
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prowlarr
+  namespace: media
+spec:
+  revisionHistoryLimit: 3
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prowlarr
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: prowlarr
+    spec:
+      containers:
+        - name: prowlarr
+          # envFrom:
+          # - configMapRef:
+          #     name: prowlarr-config
+          image: ghcr.io/linuxserver/prowlarr:1.13.3.4273-ls54
+          imagePullPolicy: IfNotPresent
+          readinessProbe:
+            httpGet:
+                path: /
+                port: 9696
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+            limits:
+              # cpu: 300m
+              memory: 500Mi
+          securityContext:
+            # allowPrivilegeEscalation: true
+            # capabilities:
+            #   add:
+            #   - NET_ADMIN
+            privileged: true
+          volumeMounts:
+          - mountPath: /config
+            name: config
+        # - mountPath: /etc/localtime
+        #   name: localtime
+        #   readOnly: true
+      # restartPolicy: Never
+      # terminationGracePeriodSeconds: 30
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: prowlarr-config-pvc
+      # - hostPath:
+      #     path: /dev/net/tun
+      #     type: ""
+        # name: tunnel
+      # - hostPath:
+      #     path: /etc/localtime
+      #     type: ""
+      #   name: localtime
+#         volumeMounts:
+#         - name: mysql-persistent-storage
+#           mountPath: /var/lib/mysql
+#       volumes:
+#       - name: mysql-persistent-storage
+#         persistentVolumeClaim:
+#           claimName: mysql-pv-claim
+---
+
+
+
+
+
+
+
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prowlarr
+  namespace: media
+  # annotations:
+  #   cert-manager.io/issuer: ca-issuer
+spec:
+  ingressClassName: cilium
+  # tls:
+  #   - hosts:
+  #     - prowlarr.homelab.net
+  #     secretName: prowlarr-homelab-cert
+  rules:
+    - host: prowlarr.homelab.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prowlarr
+                port:
+                  number: 9696
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prowlarr
+  namespace: media
+spec:
+  ports:
+    - port: 9696
+  selector:
+    app: prowlarr
+---
+
+
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prowlarr
+  namespace: media
+spec:
+  selector:
+    matchLabels:
+      app: prowlarr # has to match .spec.template.metadata.labels
+  serviceName: prowlarr
+  replicas: 0 # by default is 1
+  # minReadySeconds: 10 # by default is 0
+  template:
+    metadata:
+      labels:
+        app: prowlarr # has to match .spec.selector.matchLabels
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - node2
+
+
+      # terminationGracePeriodSeconds: 10
+      containers:
+      - name: prowlarr
+        image: ghcr.io/linuxserver/prowlarr:1.13.3.4273-ls54
+        ports:
+          - name: http
+            containerPort: 9696
+
+        readinessProbe:
+          httpGet:
+              path: /
+              port: 9696
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        volumeMounts:
+          - name: prowlarr-config-pvc
+            mountPath: /config
+          
+          # - name: data
+          #   mountPath: /data
+
+          # - name: downloads
+          #   mountPath: /downloads
+          # - name: "render-device"
+          #   mountPath: "/dev/dri/renderD128"
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 100Mi
+          limits:
+            cpu: 300m
+            memory: 500Mi
+        securityContext:
+          # allowPrivilegeEscalation: false
+          # allowPrivilegeEscalation: true
+          # capabilities:
+          #   add:
+          #   - NET_ADMIN
+          privileged: true
+        # nodeSelector:
+        #   kubernetes.io/hostname: node3
+      # volumes:
+      # - name: data
+      #   persistentVolumeClaim:
+      #     claimName: media-data-pvc
+      # - name: downloads
+      #   persistentVolumeClaim:
+      #     claimName: downloads-data-pvc
+  volumeClaimTemplates:
+  - metadata:
+      name: prowlarr-config-pvc
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: local-node2
+      resources:
+        requests:
+          storage: 10Gi
+
+
+
+

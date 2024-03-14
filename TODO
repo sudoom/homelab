@@ -1,0 +1,30 @@
+- local storage class
+- replica set -> statefull set (sonarr, prowlarr, jelly)
+- add logging
+- add ingresses
+- add argo
+- add keepers
+- helm keepers
+
+
+
+
+data
+├── torrents
+│  ├── movies
+│  ├── music
+|  ├── books
+│  └── tv
+└── media
+    ├── movies
+    ├── music
+    ├── books
+    └── tv
+    
+
+
+Torrents only needs access to torrent files, so pass it -v /host/data/torrents:/data/torrents
+
+Plex/Emby only needs access to your media library, so pass -v /host/data/media:/data/media, which can have any number of subfolders like movies, kids movies, tv, documentary tv and/or music as sub folders.
+
+Sonarr, Radarr and Lidarr get everything using -v /host/data:/data because the download folder(s) and media folder will look like and be one file system. Hard links will work and moves will be atomic, instead of copy + delete.
