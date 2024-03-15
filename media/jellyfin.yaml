@@ -159,7 +159,7 @@ spec:
     matchLabels:
       app: jellyfin # has to match .spec.template.metadata.labels
   serviceName: jellyfin
-  replicas: 1 # by default is 1
+  replicas: 0 # by default is 1
   # minReadySeconds: 10 # by default is 0
   template:
     metadata:
@@ -263,38 +263,38 @@ spec:
 ---
 
 
-apiVersion: v1
-kind: Service
-metadata:
-  name: jellyfin1
-  namespace: media
-spec:
-  selector:
-    app:  jellyfin1
-  ports:
-  - port: 8096
-    protocol: TCP
-    targetPort: 8096
-  type: ClusterIP
----
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: jellyfin1
+#   namespace: media
+# spec:
+#   selector:
+#     app:  jellyfin1
+#   ports:
+#   - port: 8096
+#     protocol: TCP
+#     targetPort: 8096
+#   type: ClusterIP
+# ---
 
 
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jellyfin1
+  name: jellyfin
   namespace: media
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: jellyfin1
+      app: jellyfin
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app: jellyfin1
+        app: jellyfin
     spec:
       containers:
         - name: jellyfin
@@ -324,7 +324,7 @@ spec:
           resources:
             requests:
               cpu: 100m
-              # memory: 8000Mi
+              memory: 8000Mi
             limits:
               memory: 12000Mi
           securityContext:
