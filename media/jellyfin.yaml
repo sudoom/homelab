@@ -159,7 +159,7 @@ spec:
     matchLabels:
       app: jellyfin # has to match .spec.template.metadata.labels
   serviceName: jellyfin
-  replicas: 1 # by default is 1
+  replicas: 0 # by default is 1
   # minReadySeconds: 10 # by default is 0
   template:
     metadata:
@@ -245,22 +245,22 @@ spec:
 
 
 
+---
 
 
 
-
-# apiVersion: v1
-# kind: PersistentVolumeClaim
-# metadata:
-#   name: jellyfin-config-pvc
-#   namespace: media
-# spec:
-#   storageClassName: nfs-csi
-#   accessModes: [ReadWriteOnce]
-#   resources:
-#     requests:
-#       storage: 5Gi
-# ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-config-pvc
+  namespace: media
+spec:
+  storageClassName: longhorn
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
 
 
 # apiVersion: v1
@@ -279,91 +279,105 @@ spec:
 # ---
 
 
-# apiVersion: apps/v1
-# kind: Deployment
-# metadata:
-#   name: jellyfin
-#   namespace: media
-# spec:
-#   replicas: 1
-#   selector:
-#     matchLabels:
-#       app: jellyfin
-#   strategy:
-#     type: Recreate
-#   template:
-#     metadata:
-#       labels:
-#         app: jellyfin
-#     spec:
-#       containers:
-#         - name: jellyfin
-#           envFrom:
-#           - configMapRef:
-#               name: sonarr-config
-#           #     optional: false
-#           # - secretRef:
-#           #     name: vpn-creds
-#           #     optional: false
-#           # image: lscr.io/linuxserver/jellyfin:latest
-#           imagePullPolicy: IfNotPresent
-#           # livenessProbe:
-#           #   failureThreshold: 3
-#           #   initialDelaySeconds: 30
-#           #   tcpSocket:
-#           #     port: 8989
-#           #   timeoutSeconds: 2
-#           # readinessProbe:
-#           #   failureThreshold: 3
-#           #   initialDelaySeconds: 30
-#           #   tcpSocket:
-#           #     port: 8989
-#           #   timeoutSeconds: 2
-#           resources:
-#             requests:
-#               cpu: 1000m
-#               memory: 5000Mi
-#             limits:
-#               cpu: 2000m
-#               memory: 10000Mi
-#           securityContext:
-#             allowPrivilegeEscalation: true
-#             capabilities:
-#               add:
-#               - NET_ADMIN
-#             privileged: true
-#           volumeMounts:
-#           - mountPath: /config
-#             name: config
-#           - mountPath: /data
-#             name: data
-#           - name: "render-device"
-#             mountPath: "/dev/dri/renderD128"
-#         # - mountPath: /etc/localtime
-#         #   name: localtime
-#         #   readOnly: true
-#       # restartPolicy: Never
-#       # terminationGracePeriodSeconds: 30
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  namespace: media
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jellyfin
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      containers:
+        - name: jellyfin
+          # envFrom:
+          # - configMapRef:
+          #     name: sonarr-config
+          #     optional: false
+          # - secretRef:
+          #     name: vpn-creds
+          #     optional: false
+          image: lscr.io/linuxserver/jellyfin:10.8.13-1-ls1
+          imagePullPolicy: IfNotPresent
+          # livenessProbe:
+          #   failureThreshold: 3
+          #   initialDelaySeconds: 30
+          #   tcpSocket:
+          #     port: 8989
+          #   timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /web/index.html
+              port: 8096
+            failureThreshold: 5
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 8000Mi
+            limits:
+              memory: 12000Mi
+          securityContext:
+            allowPrivilegeEscalation: true
+            # capabilities:
+            #   add:
+            #   - NET_ADMIN
+            privileged: true
+          volumeMounts:
+
+          - mountPath: /config
+            name: config
+
+          - mountPath: /data
+            name: data
+
+          - name: tty
+            mountPath: /tta
+
+          # - name: "render-device"
+          #   mountPath: "/dev/dri/renderD128"
+        # - mountPath: /etc/localtime
+        #   name: localtime
+        #   readOnly: true
+      # restartPolicy: Never
+      # terminationGracePeriodSeconds: 30
+      volumes:
+
+      - name: config
+        persistentVolumeClaim:
+          claimName: jellyfin-config-pvc
+
+      - name: data
+        persistentVolumeClaim:
+          claimName: media-data-pvc
+
+      - name: tty
+        persistentVolumeClaim:
+          claimName: jellyfin-config-pvc-jellyfin-0
+
+      # - name: "render-device"
+      #   hostPath:
+      #     path: "/dev/dri/renderD128"
+      # - hostPath:
+      #     path: /etc/localtime
+      #     type: ""
+      #   name: localtime
+#         volumeMounts:
+#         - name: mysql-persistent-storage
+#           mountPath: /var/lib/mysql
 #       volumes:
-#       - name: config
+#       - name: mysql-persistent-storage
 #         persistentVolumeClaim:
-#           claimName: jellyfin-config-pvc
-#       - name: data
-#         persistentVolumeClaim:
-#           claimName: data-pvc
-#       - name: "render-device"
-#         hostPath:
-#           path: "/dev/dri/renderD128"
-#       # - hostPath:
-#       #     path: /etc/localtime
-#       #     type: ""
-#       #   name: localtime
-# #         volumeMounts:
-# #         - name: mysql-persistent-storage
-# #           mountPath: /var/lib/mysql
-# #       volumes:
-# #       - name: mysql-persistent-storage
-# #         persistentVolumeClaim:
-# #           claimName: mysql-pv-claim
-# ---
+#           claimName: mysql-pv-claim
+---
 
