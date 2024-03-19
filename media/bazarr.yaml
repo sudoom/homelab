@@ -103,32 +103,32 @@ spec:
 
 
 
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: bazarr
-  namespace: media
-  # annotations:
-  #   cert-manager.io/issuer: ca-issuer
-spec:
-  ingressClassName: cilium
-  # tls:
-  #   - hosts:
-  #     - bazarr.homelab.net
-  #     secretName: bazarr-homelab-cert
-  rules:
-    - host: bazarr.homelab.net
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: bazarr
-                port:
-                  number: 6767
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: bazarr
+#   namespace: media
+#   # annotations:
+#   #   cert-manager.io/issuer: ca-issuer
+# spec:
+#   ingressClassName: cilium
+#   # tls:
+#   #   - hosts:
+#   #     - bazarr.homelab.net
+#   #     secretName: bazarr-homelab-cert
+#   rules:
+#     - host: bazarr.homelab.net
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: bazarr
+#                 port:
+#                   number: 6767
 
----
+# ---
 apiVersion: v1
 kind: Service
 metadata:
