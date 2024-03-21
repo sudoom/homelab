@@ -220,8 +220,8 @@ spec:
           image: "ghcr.io/gethomepage/homepage:latest"
           resources:
             requests:
+              cpu: 25m
               memory: 128Mi
-              cpu: 100m
             limits:
               memory: 256Mi
               # cpu: 300m
