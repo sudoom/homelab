@@ -4083,11 +4083,11 @@ prometheus:
     ## minutes).
     maximumStartupDurationSeconds: 0
 
-  additionalRulesForClusterRole:
-    - apiGroups: [ "" ]
-      resources:
-        - namespaces
-      verbs: [ "get", "list", "watch" ]
+  additionalRulesForClusterRole: []
+  #  - apiGroups: [ "" ]
+  #    resources:
+  #      - nodes/proxy
+  #    verbs: [ "get", "list", "watch" ]
 
   additionalServiceMonitors: []
   ## Name of the ServiceMonitor to create
