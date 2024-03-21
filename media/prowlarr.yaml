@@ -62,7 +62,7 @@ spec:
               memory: 512Mi
             limits:
               # cpu: 300m
-              memory: 500Mi
+              memory: 512Mi
           securityContext:
             # allowPrivilegeEscalation: true
             # capabilities:
