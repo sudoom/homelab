@@ -6,9 +6,10 @@ metadata:
   namespace: keepers
 spec:
   selector:
-    app:  webtlo
+    app: webtlo
   ports:
-  - port: 80
+    - port: 80
+
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -16,14 +17,26 @@ metadata:
   name: webtlo-config
   namespace: keepers
 data:
-  TZ: "Europe/Zurich"
+  TZ: Europe/Zurich
   WEBTLO_CRON: "true"
-  CRON_UPDATE: "15 0 * * *"
+  CRON_UPDATE: 15 0 * * *
   CRON_CONTROL: "false"
-  CRON_KEEPERS: "45 0 * * *"
-  CRON_REPORTS: "0 1 * * *"
-  
+  CRON_KEEPERS: 45 0 * * *
+  CRON_REPORTS: 0 1 * * *
 
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: webtlo-data-pvc
+  namespace: keepers
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 
 ---
 apiVersion: apps/v1
@@ -32,7 +45,7 @@ metadata:
   name: webtlo
   namespace: keepers
 spec:
-  replicas: 1 
+  replicas: 1
   selector:
     matchLabels:
       app: webtlo
@@ -45,81 +58,29 @@ spec:
     spec:
       containers:
         - name: webtlo
-          envFrom:
-          - configMapRef:
-              name: webtlo-config
-              optional: false
           image: berkut174/webtlo:2.5.2
+          envFrom:
+            - configMapRef:
+                name: webtlo-config
+                optional: false
           imagePullPolicy: IfNotPresent
-          # readinessProbe:
-          #   failureThreshold: 3
-          #   initialDelaySeconds: 30
-          #   tcpSocket:
-          #     port: 9091
-          #   timeoutSeconds: 2
+          livenessProbe:
+            tcpSocket:
+              port: 80
+            failureThreshold: 3
           resources:
             requests:
               cpu: 30m
               memory: 32Mi
             limits:
-              # cpu: 500m
               memory: 256Mi
-          securityContext:
-            # allowPrivilegeEscalation: true
-            # capabilities:
-            #   add:
-            #   - NET_ADMIN
-            privileged: true
           volumeMounts:
-          - mountPath: /data
-            name: data
-          # - name: transmission-config-pvc
-          #   mountPath: /tta
-          # - name: data-old
-          #   mountPath: /tta
-
-      # - ./webtlo-data:/data
-        # - mountPath: /dev/net/tun
-        #   name: tunnel
-        # - mountPath: /etc/localtime
-        #   name: localtime
-        #   readOnly: true
-      # restartPolicy: Never
-      # terminationGracePeriodSeconds: 30
+            - mountPath: /data
+              name: data
+      restartPolicy: OnFailure
       volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: webtlo-data-pvc
-      # - name: transmission-config-pvc
-      #   persistentVolumeClaim:
-      #     claimName: transmission-config-pvc-transmission-0
-      # - name: data-old
-      #   persistentVolumeClaim:
-      #     claimName: keepers-data-pvc
-      # - hostPath:
-      #     path: /dev/net/tun
-      #     type: ""
-        # name: tunnel
-      # - hostPath:
-      #     path: /etc/localtime
-      #     type: ""
-      #   name: localtime
-#         volumeMounts:
-#         - name: mysql-persistent-storage
-#           mountPath: /var/lib/mysql
-#       volumes:
-#       - name: mysql-persistent-storage
-#         persistentVolumeClaim:
-#           claimName: mysql-pv-claim
+        - name: data
+          persistentVolumeClaim:
+            claimName: webtlo-data-pvc
+
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: webtlo-data-pvc
-  namespace: keepers
-spec:
-  storageClassName: longhorn
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
