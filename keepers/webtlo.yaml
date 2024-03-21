@@ -46,6 +46,7 @@ metadata:
   namespace: keepers
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: webtlo
@@ -77,7 +78,6 @@ spec:
           volumeMounts:
             - mountPath: /data
               name: data
-      restartPolicy: OnFailure
       volumes:
         - name: data
           persistentVolumeClaim:
