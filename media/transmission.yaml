@@ -209,98 +209,98 @@ spec:
                 number: 9091
 ---
 
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: transmission
-  namespace: media
-spec:
-  selector:
-    matchLabels:
-      app: transmission # has to match .spec.template.metadata.labels
-  serviceName: transmission
-  replicas: 0 # by default is 1
-  # minReadySeconds: 10 # by default is 0
-  template:
-    metadata:
-      labels:
-        app: transmission # has to match .spec.selector.matchLabels
-    spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                - node1
+# apiVersion: apps/v1
+# kind: StatefulSet
+# metadata:
+#   name: transmission
+#   namespace: media
+# spec:
+#   selector:
+#     matchLabels:
+#       app: transmission # has to match .spec.template.metadata.labels
+#   serviceName: transmission
+#   replicas: 0 # by default is 1
+#   # minReadySeconds: 10 # by default is 0
+#   template:
+#     metadata:
+#       labels:
+#         app: transmission # has to match .spec.selector.matchLabels
+#     spec:
+#       affinity:
+#         nodeAffinity:
+#           requiredDuringSchedulingIgnoredDuringExecution:
+#             nodeSelectorTerms:
+#             - matchExpressions:
+#               - key: kubernetes.io/hostname
+#                 operator: In
+#                 values:
+#                 - node1
 
 
-      # terminationGracePeriodSeconds: 10
-      containers:
-      - name: transmission
-        envFrom:
-        - configMapRef:
-            name: transmission-config
-            optional: false
-        - secretRef:
-            name: vpn-creds
-            optional: false
-        image: haugene/transmission-openvpn:5.3.1
-        ports:
-          - name: http
-            containerPort: 9091
-        readinessProbe:
-            failureThreshold: 3
-            initialDelaySeconds: 30
-            tcpSocket:
-              port: 9091
-            timeoutSeconds: 2
-        volumeMounts:
-          - name: transmission-config-pvc
-            mountPath: /config
+#       # terminationGracePeriodSeconds: 10
+#       containers:
+#       - name: transmission
+#         envFrom:
+#         - configMapRef:
+#             name: transmission-config
+#             optional: false
+#         - secretRef:
+#             name: vpn-creds
+#             optional: false
+#         image: haugene/transmission-openvpn:5.3.1
+#         ports:
+#           - name: http
+#             containerPort: 9091
+#         readinessProbe:
+#             failureThreshold: 3
+#             initialDelaySeconds: 30
+#             tcpSocket:
+#               port: 9091
+#             timeoutSeconds: 2
+#         volumeMounts:
+#           - name: transmission-config-pvc
+#             mountPath: /config
           
-          - name: data
-            mountPath: /data
+#           - name: data
+#             mountPath: /data
 
-          # - name: downloads
-          #   mountPath: /downloads
-          # - name: "render-device"
-          #   mountPath: "/dev/dri/renderD128"
+#           # - name: downloads
+#           #   mountPath: /downloads
+#           # - name: "render-device"
+#           #   mountPath: "/dev/dri/renderD128"
 
-        resources:
-          requests:
-            cpu: 100m
-            memory: 100Mi
-          limits:
-            cpu: 1000m
-            memory: 2000Mi
-        securityContext:
-          # allowPrivilegeEscalation: false
-          # allowPrivilegeEscalation: true
-          # capabilities:
-          #   add:
-          #   - NET_ADMIN
-          privileged: true
-        # nodeSelector:
-        #   kubernetes.io/hostname: node3
-      volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: media-data-pvc
-      # - name: downloads
-      #   persistentVolumeClaim:
-      #     claimName: downloads-data-pvc
-  volumeClaimTemplates:
-  - metadata:
-      name: transmission-config-pvc
-    spec:
-      accessModes: [ "ReadWriteOnce" ]
-      storageClassName: local-node1
-      resources:
-        requests:
-          storage: 2Gi
+#         resources:
+#           requests:
+#             cpu: 100m
+#             memory: 100Mi
+#           limits:
+#             cpu: 1000m
+#             memory: 2000Mi
+#         securityContext:
+#           # allowPrivilegeEscalation: false
+#           # allowPrivilegeEscalation: true
+#           # capabilities:
+#           #   add:
+#           #   - NET_ADMIN
+#           privileged: true
+#         # nodeSelector:
+#         #   kubernetes.io/hostname: node3
+#       volumes:
+#       - name: data
+#         persistentVolumeClaim:
+#           claimName: media-data-pvc
+#       # - name: downloads
+#       #   persistentVolumeClaim:
+#       #     claimName: downloads-data-pvc
+#   volumeClaimTemplates:
+#   - metadata:
+#       name: transmission-config-pvc
+#     spec:
+#       accessModes: [ "ReadWriteOnce" ]
+#       storageClassName: local-node1
+#       resources:
+#         requests:
+#           storage: 2Gi
 
 
 
