@@ -129,92 +129,92 @@ spec:
 
 
 
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: sonarr
-  namespace: media
-spec:
-  selector:
-    matchLabels:
-      app: sonarr # has to match .spec.template.metadata.labels
-  serviceName: sonarr
-  replicas: 0 # by default is 1
-  # minReadySeconds: 10 # by default is 0
-  template:
-    metadata:
-      labels:
-        app: sonarr # has to match .spec.selector.matchLabels
-    spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                - node2
+# apiVersion: apps/v1
+# kind: StatefulSet
+# metadata:
+#   name: sonarr
+#   namespace: media
+# spec:
+#   selector:
+#     matchLabels:
+#       app: sonarr # has to match .spec.template.metadata.labels
+#   serviceName: sonarr
+#   replicas: 0 # by default is 1
+#   # minReadySeconds: 10 # by default is 0
+#   template:
+#     metadata:
+#       labels:
+#         app: sonarr # has to match .spec.selector.matchLabels
+#     spec:
+#       affinity:
+#         nodeAffinity:
+#           requiredDuringSchedulingIgnoredDuringExecution:
+#             nodeSelectorTerms:
+#             - matchExpressions:
+#               - key: kubernetes.io/hostname
+#                 operator: In
+#                 values:
+#                 - node2
 
 
-      # terminationGracePeriodSeconds: 10
-      containers:
-      - name: sonarr
-        image: ghcr.io/linuxserver/sonarr:4.0.2.1183-ls230
-        ports:
-          - name: http
-            containerPort: 8989
+#       # terminationGracePeriodSeconds: 10
+#       containers:
+#       - name: sonarr
+#         image: ghcr.io/linuxserver/sonarr:4.0.2.1183-ls230
+#         ports:
+#           - name: http
+#             containerPort: 8989
 
-        readinessProbe:
-          httpGet:
-              path: /login
-              port: 8989
-          initialDelaySeconds: 10
-          periodSeconds: 15
-        volumeMounts:
-          - name: sonarr-config-pvc
-            mountPath: /config
+#         readinessProbe:
+#           httpGet:
+#               path: /login
+#               port: 8989
+#           initialDelaySeconds: 10
+#           periodSeconds: 15
+#         volumeMounts:
+#           - name: sonarr-config-pvc
+#             mountPath: /config
           
-          - name: data
-            mountPath: /data
+#           - name: data
+#             mountPath: /data
 
-          # - name: downloads
-          #   mountPath: /downloads
-          # - name: "render-device"
-          #   mountPath: "/dev/dri/renderD128"
+#           # - name: downloads
+#           #   mountPath: /downloads
+#           # - name: "render-device"
+#           #   mountPath: "/dev/dri/renderD128"
 
-        resources:
-          requests:
-            cpu: 200m
-            memory: 600Mi
-          limits:
-            cpu: 500m
-            memory: 1500Mi
-        securityContext:
-          # allowPrivilegeEscalation: false
-          # allowPrivilegeEscalation: true
-          # capabilities:
-          #   add:
-          #   - NET_ADMIN
-          privileged: true
-        # nodeSelector:
-        #   kubernetes.io/hostname: node3
-      volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: media-data-pvc
-      # - name: downloads
-      #   persistentVolumeClaim:
-      #     claimName: downloads-data-pvc
-  volumeClaimTemplates:
-  - metadata:
-      name: sonarr-config-pvc
-    spec:
-      accessModes: [ "ReadWriteOnce" ]
-      storageClassName: local-node2
-      resources:
-        requests:
-          storage: 10Gi
+#         resources:
+#           requests:
+#             cpu: 200m
+#             memory: 600Mi
+#           limits:
+#             cpu: 500m
+#             memory: 1500Mi
+#         securityContext:
+#           # allowPrivilegeEscalation: false
+#           # allowPrivilegeEscalation: true
+#           # capabilities:
+#           #   add:
+#           #   - NET_ADMIN
+#           privileged: true
+#         # nodeSelector:
+#         #   kubernetes.io/hostname: node3
+#       volumes:
+#       - name: data
+#         persistentVolumeClaim:
+#           claimName: media-data-pvc
+#       # - name: downloads
+#       #   persistentVolumeClaim:
+#       #     claimName: downloads-data-pvc
+#   volumeClaimTemplates:
+#   - metadata:
+#       name: sonarr-config-pvc
+#     spec:
+#       accessModes: [ "ReadWriteOnce" ]
+#       storageClassName: local-node2
+#       resources:
+#         requests:
+#           storage: 10Gi
 
 
 

@@ -145,92 +145,92 @@ spec:
 
 
 
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: prowlarr
-  namespace: media
-spec:
-  selector:
-    matchLabels:
-      app: prowlarr # has to match .spec.template.metadata.labels
-  serviceName: prowlarr
-  replicas: 0 # by default is 1
-  # minReadySeconds: 10 # by default is 0
-  template:
-    metadata:
-      labels:
-        app: prowlarr # has to match .spec.selector.matchLabels
-    spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                - node2
+# apiVersion: apps/v1
+# kind: StatefulSet
+# metadata:
+#   name: prowlarr
+#   namespace: media
+# spec:
+#   selector:
+#     matchLabels:
+#       app: prowlarr # has to match .spec.template.metadata.labels
+#   serviceName: prowlarr
+#   replicas: 0 # by default is 1
+#   # minReadySeconds: 10 # by default is 0
+#   template:
+#     metadata:
+#       labels:
+#         app: prowlarr # has to match .spec.selector.matchLabels
+#     spec:
+#       affinity:
+#         nodeAffinity:
+#           requiredDuringSchedulingIgnoredDuringExecution:
+#             nodeSelectorTerms:
+#             - matchExpressions:
+#               - key: kubernetes.io/hostname
+#                 operator: In
+#                 values:
+#                 - node2
 
 
-      # terminationGracePeriodSeconds: 10
-      containers:
-      - name: prowlarr
-        image: ghcr.io/linuxserver/prowlarr:1.13.3.4273-ls54
-        ports:
-          - name: http
-            containerPort: 9696
+#       # terminationGracePeriodSeconds: 10
+#       containers:
+#       - name: prowlarr
+#         image: ghcr.io/linuxserver/prowlarr:1.13.3.4273-ls54
+#         ports:
+#           - name: http
+#             containerPort: 9696
 
-        readinessProbe:
-          httpGet:
-              path: /
-              port: 9696
-          initialDelaySeconds: 10
-          periodSeconds: 15
-        volumeMounts:
-          - name: prowlarr-config-pvc
-            mountPath: /config
+#         readinessProbe:
+#           httpGet:
+#               path: /
+#               port: 9696
+#           initialDelaySeconds: 10
+#           periodSeconds: 15
+#         volumeMounts:
+#           - name: prowlarr-config-pvc
+#             mountPath: /config
           
-          # - name: data
-          #   mountPath: /data
+#           # - name: data
+#           #   mountPath: /data
 
-          # - name: downloads
-          #   mountPath: /downloads
-          # - name: "render-device"
-          #   mountPath: "/dev/dri/renderD128"
+#           # - name: downloads
+#           #   mountPath: /downloads
+#           # - name: "render-device"
+#           #   mountPath: "/dev/dri/renderD128"
 
-        resources:
-          requests:
-            cpu: 50m
-            memory: 100Mi
-          limits:
-            cpu: 300m
-            memory: 500Mi
-        securityContext:
-          # allowPrivilegeEscalation: false
-          # allowPrivilegeEscalation: true
-          # capabilities:
-          #   add:
-          #   - NET_ADMIN
-          privileged: true
-        # nodeSelector:
-        #   kubernetes.io/hostname: node3
-      # volumes:
-      # - name: data
-      #   persistentVolumeClaim:
-      #     claimName: media-data-pvc
-      # - name: downloads
-      #   persistentVolumeClaim:
-      #     claimName: downloads-data-pvc
-  volumeClaimTemplates:
-  - metadata:
-      name: prowlarr-config-pvc
-    spec:
-      accessModes: [ "ReadWriteOnce" ]
-      storageClassName: local-node2
-      resources:
-        requests:
-          storage: 10Gi
+#         resources:
+#           requests:
+#             cpu: 50m
+#             memory: 100Mi
+#           limits:
+#             cpu: 300m
+#             memory: 500Mi
+#         securityContext:
+#           # allowPrivilegeEscalation: false
+#           # allowPrivilegeEscalation: true
+#           # capabilities:
+#           #   add:
+#           #   - NET_ADMIN
+#           privileged: true
+#         # nodeSelector:
+#         #   kubernetes.io/hostname: node3
+#       # volumes:
+#       # - name: data
+#       #   persistentVolumeClaim:
+#       #     claimName: media-data-pvc
+#       # - name: downloads
+#       #   persistentVolumeClaim:
+#       #     claimName: downloads-data-pvc
+#   volumeClaimTemplates:
+#   - metadata:
+#       name: prowlarr-config-pvc
+#     spec:
+#       accessModes: [ "ReadWriteOnce" ]
+#       storageClassName: local-node2
+#       resources:
+#         requests:
+#           storage: 10Gi
 
 
 
