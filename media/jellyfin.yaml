@@ -393,26 +393,26 @@ spec:
 ---
 
 
-# apiVersion: networking.k8s.io/v1
-# kind: Ingress
-# metadata:
-#   name: jellyfin-ip
-#   namespace: media
-#   # annotations:
-#   #   cert-manager.io/issuer: ca-issuer
-# spec:
-#   ingressClassName: cilium
-#   # tls:
-#   #   - hosts:
-#   #     - jellyfin.homelab.net
-#   #     secretName: jellyfin-homelab-cert
-#   rules:
-#   - http:
-#       paths:
-#         - path: /
-#           pathType: Prefix
-#           backend:
-#             service:
-#               name: jellyfin
-#               port:
-#                 number: 8096
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jellyfin-ip
+  namespace: media
+  # annotations:
+  #   cert-manager.io/issuer: ca-issuer
+spec:
+  ingressClassName: cilium
+  # tls:
+  #   - hosts:
+  #     - jellyfin.homelab.net
+  #     secretName: jellyfin-homelab-cert
+  rules:
+  - http:
+      paths:
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: jellyfin
+              port:
+                number: 8096
