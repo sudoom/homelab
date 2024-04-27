@@ -133,6 +133,17 @@ spec:
                 name: jellyfin
                 port:
                   number: 8096
+    - host: "*"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jellyfin
+                port:
+                  number: 8096
+
 
 ---
 apiVersion: v1
