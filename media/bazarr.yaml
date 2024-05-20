@@ -46,7 +46,7 @@ spec:
           # envFrom:
           # - configMapRef:
           #     name: prowlarr-config
-          image: ghcr.io/linuxserver/bazarr:v1.4.2-ls241
+          image: lscr.io/linuxserver/bazarr:1.4.2
           imagePullPolicy: IfNotPresent
           readinessProbe:
             httpGet:
@@ -128,6 +128,7 @@ spec:
 #               port:
 #                 number: 6767
 
+#systemctl daemon-reload && systemctl restart kubelet && systemctl restart multipathd.service
 ---
 apiVersion: v1
 kind: Service

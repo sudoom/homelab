@@ -48,7 +48,7 @@ spec:
           # envFrom:
           # - configMapRef:
           #     name: prowlarr-config
-          image: ghcr.io/linuxserver/prowlarr:1.13.3.4273-ls54
+          image: lscr.io/linuxserver/prowlarr:1.13.3
           imagePullPolicy: IfNotPresent
           readinessProbe:
             httpGet:

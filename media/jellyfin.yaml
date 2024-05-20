@@ -316,7 +316,7 @@ spec:
           # - secretRef:
           #     name: vpn-creds
           #     optional: false
-          image: lscr.io/linuxserver/jellyfin:10.8.13-1-ls1
+          image: lscr.io/linuxserver/jellyfin:10.8.13
           imagePullPolicy: IfNotPresent
           # livenessProbe:
           #   failureThreshold: 3
