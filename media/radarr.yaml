@@ -37,7 +37,7 @@ spec:
           # envFrom:
           # - configMapRef:
           #     name: prowlarr-config
-          image: lscr.io/linuxserver/radarr:5.6.0
+          image: lscr.io/linuxserver/radarr:5.7.0
           imagePullPolicy: IfNotPresent
           readinessProbe:
             httpGet:
