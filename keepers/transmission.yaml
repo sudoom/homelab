@@ -1,13 +1,15 @@
 
+---
 apiVersion: v1
-data:
-  OPENVPN_USERNAME: R1BuUnhIQmpLQkxZN1hmS0JHd2c1NVRZ
-  OPENVPN_PASSWORD: eEpNVkdrZEI2QTluOFJDelhiajdMYmNp
 kind: Secret
 metadata:
   name: vpn-creds
   namespace: keepers
+data:
+  OPENVPN_USERNAME: R1BuUnhIQmpLQkxZN1hmS0JHd2c1NVRZ
+  OPENVPN_PASSWORD: eEpNVkdrZEI2QTluOFJDelhiajdMYmNp
 type: Opaque
+
 ---
 apiVersion: v1
 kind: Service
@@ -19,6 +21,7 @@ spec:
     app:  transmission
   ports:
   - port: 9091
+
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -27,32 +30,16 @@ metadata:
   namespace: keepers
 data:
   LOCAL_NETWORK: "192.168.1.0/24, 10.0.0.0/8"
-  # OPENVPN_CONFIG: CA Vancouver
   OPENVPN_OPTS: "--inactive 3600 --ping 10 --ping-exit 60"
   CREATE_TUN_DEVICE: "true"
   OPENVPN_PROVIDER: "NORDVPN"
   NORDVPN_CATEGORY: "P2P"
   NORDVPN_COUNTRY: "DE"
-  # OPENVPN_USERNAME: "GPnRxHBjKBLY7XfKBGwg55TY"
-  # OPENVPN_PASSWORD: "xJMVGkdB6A9n8RCzXbj7Lbci"
-  # TRANSMISSION_WEB_UI: "transmission-web-control"
-  # TRANSMISSION_WEB_UI: ""
-
   TRANSMISSION_ENCRYPTION: "2"
   TRANSMISSION_DOWNLOAD_DIR: "/data"
   TRANSMISSION_INCOMPLETE_DIR_ENABLED: "false"
   TRANSMISSION_DOWNLOAD_QUEUE_ENABLED: "false"
-  # TRANSMISSION_WATCH_DIR_ENABLED: "false"
-  # TRANSMISSION_DOWNLOAD_QUEUE_SIZE: "4"
-  # TRANSMISSION_RATIO_LIMIT: "2"
-  # TRANSMISSION_RATIO_LIMIT_ENABLED: "true"
-  # TRANSMISSION_SPEED_LIMIT_DOWN: "10000"
-  # TRANSMISSION_SPEED_LIMIT_DOWN_ENABLED: "true"
-  # TRANSMISSION_SPEED_LIMIT_UP: "1000"
-  # TRANSMISSION_SPEED_LIMIT_UP_ENABLED: "true"
   WEBPROXY_ENABLED: "false"
-
-
 
 ---
 apiVersion: apps/v1
@@ -72,15 +59,6 @@ spec:
       labels:
         app: transmission
     spec:
-      # affinity:
-      #   nodeAffinity:
-      #     requiredDuringSchedulingIgnoredDuringExecution:
-      #       nodeSelectorTerms:
-      #       - matchExpressions:
-      #         - key: kubernetes.io/hostname
-      #           operator: In
-      #           values:
-      #           - node1
       containers:
         - name: transmission
           envFrom:
@@ -112,7 +90,6 @@ spec:
               cpu: 200m
               memory: 500Mi
             limits:
-              # cpu: 500m
               memory: 2000Mi
           securityContext:
             allowPrivilegeEscalation: true
@@ -123,55 +100,16 @@ spec:
           volumeMounts:
           - mountPath: /data
             name: data
-          # - name: transmission-config-pvc
-          #   mountPath: /tta
-          - name: config
-            mountPath: /config
-        # - mountPath: /dev/net/tun
-        #   name: tunnel
-        # - mountPath: /etc/localtime
-        #   name: localtime
-        #   readOnly: true
-      # restartPolicy: Never
-      # terminationGracePeriodSeconds: 30
+          - mountPath: /config
+            name: config
+            
       volumes:
       - name: data
         persistentVolumeClaim:
           claimName: keepers-data-pvc
-      # - name: transmission-config-pvc
-      #   persistentVolumeClaim:
-      #     claimName: transmission-config-pvc-transmission-0
       - name: config
         persistentVolumeClaim:
           claimName: transmission-config-pvc
-      # - hostPath:
-      #     path: /dev/net/tun
-      #     type: ""
-        # name: tunnel
-      # - hostPath:
-      #     path: /etc/localtime
-      #     type: ""
-      #   name: localtime
-#         volumeMounts:
-#         - name: mysql-persistent-storage
-#           mountPath: /var/lib/mysql
-#       volumes:
-#       - name: mysql-persistent-storage
-#         persistentVolumeClaim:
-#           claimName: mysql-pv-claim
-
-
-# ---
-# apiVersion: v1
-# kind: Service
-# metadata:
-#   name: transmission-new
-#   namespace: media
-# spec:
-#   selector:
-#     app:  transmission-new
-#   ports:
-#   - port: 9091
 
 ---
 apiVersion: v1
@@ -186,132 +124,4 @@ spec:
     requests:
       storage: 5Gi
 
-
-
-
-
-
-
-# ---
-# apiVersion: networking.k8s.io/v1
-# kind: Ingress
-# metadata:
-#   name: transmission
-#   namespace: keepers
-#   # annotations:
-#   #   cert-manager.io/issuer: ca-issuer
-# spec:
-#   ingressClassName: cilium
-#   # tls:
-#   #   - hosts:
-#   #     - media-download.homelab.net
-#   #     secretName: media-download-homelab-cert
-#   rules:
-#     - host: media-download.homelab.net
-#       http:
-#         paths:
-#         - path: /
-#           pathType: Prefix
-#           backend:
-#             service:
-#               name: transmission
-#               port:
-#                 number: 9091
-# ---
-
-# apiVersion: apps/v1
-# kind: StatefulSet
-# metadata:
-#   name: transmission
-#   namespace: media
-# spec:
-#   selector:
-#     matchLabels:
-#       app: transmission # has to match .spec.template.metadata.labels
-#   serviceName: transmission
-#   replicas: 0 # by default is 1
-#   # minReadySeconds: 10 # by default is 0
-#   template:
-#     metadata:
-#       labels:
-#         app: transmission # has to match .spec.selector.matchLabels
-#     spec:
-#       affinity:
-#         nodeAffinity:
-#           requiredDuringSchedulingIgnoredDuringExecution:
-#             nodeSelectorTerms:
-#             - matchExpressions:
-#               - key: kubernetes.io/hostname
-#                 operator: In
-#                 values:
-#                 - node1
-
-
-#       # terminationGracePeriodSeconds: 10
-#       containers:
-#       - name: transmission
-#         envFrom:
-#         - configMapRef:
-#             name: transmission-config
-#             optional: false
-#         - secretRef:
-#             name: vpn-creds
-#             optional: false
-#         image: haugene/transmission-openvpn:5.3.1
-#         ports:
-#           - name: http
-#             containerPort: 9091
-#         readinessProbe:
-#             failureThreshold: 3
-#             initialDelaySeconds: 30
-#             tcpSocket:
-#               port: 9091
-#             timeoutSeconds: 2
-#         volumeMounts:
-#           - name: transmission-config-pvc
-#             mountPath: /config
-          
-#           - name: data
-#             mountPath: /data
-
-#           # - name: downloads
-#           #   mountPath: /downloads
-#           # - name: "render-device"
-#           #   mountPath: "/dev/dri/renderD128"
-
-#         resources:
-#           requests:
-#             cpu: 100m
-#             memory: 100Mi
-#           limits:
-#             cpu: 1000m
-#             memory: 2000Mi
-#         securityContext:
-#           # allowPrivilegeEscalation: false
-#           # allowPrivilegeEscalation: true
-#           # capabilities:
-#           #   add:
-#           #   - NET_ADMIN
-#           privileged: true
-#         # nodeSelector:
-#         #   kubernetes.io/hostname: node3
-#       volumes:
-#       - name: data
-#         persistentVolumeClaim:
-#           claimName: media-data-pvc
-#       # - name: downloads
-#       #   persistentVolumeClaim:
-#       #     claimName: downloads-data-pvc
-#   volumeClaimTemplates:
-#   - metadata:
-#       name: transmission-config-pvc
-#     spec:
-#       accessModes: [ "ReadWriteOnce" ]
-#       storageClassName: local-node1
-#       resources:
-#         requests:
-#           storage: 2Gi
-
-
-
-
+---

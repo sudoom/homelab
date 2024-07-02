@@ -1,129 +1,12 @@
-# apiVersion: extensions/v1beta1
-# kind: Deployment
-# metadata:
-#   name: transmission-openvpn-deployment
-# spec:
-#   replicas: 1
-#   template:
-#     metadata:
-#       labels:
-#         app: transmission-openvpn
-#     spec:
-#       terminationGracePeriodSeconds: 10
-#       dnsPolicy: "None"
-#       dnsConfig:
-#         nameservers:
-#           - 8.8.8.8
-#           - 8.8.4.4
-#       containers:
-#       - image: haugene/transmission-openvpn
-#         name: transmission-openvpn
-#         securityContext:
-#           capabilities:
-#             add:
-#               - NET_ADMIN        
-#         ports:
-#         - containerPort: 9091
-#         env:
-#         - name: PUID
-#           value: "1020"
-#         - name: PGID
-#           value: "1020"          
-#         - name: CREATE_TUN_DEVICE
-#           value: "true"
-#         - name: OPENVPN_PROVIDER
-#           value: "TRUSTZONE"
-#         - name: OPENVPN_USERNAME
-#           value: "foo"
-#         - name: OPENVPN_PASSWORD
-#           value: "foo"
-#         - name: WEBPROXY_ENABLED
-#           value: "false"
-#         - name: WEBPROXY_PORT
-#           value: "8888"
-#         - name: OPENVPN_CONFIG
-#           value: "Canada-Quebec"
-#         - name: LOCAL_NETWORK
-#           value: "192.168.1.0/24"
-#         - name: TRANSMISSION_HOME
-#           value: "/transmissionvpn"
-#         - name: TRANSMISSION_RPC_WHITELIST
-#           value: "127.0.0.1,192.168.1.*"
-#         - name: "TRANSMISSION_RPC_WHITELIST_ENABLED"
-#           value: "false"
-#         - name: TRANSMISSION_RPC_HOST_WHITELIST
-#           value: "*"
-#         - name: TRANSMISSION_RPC_HOST_WHITELIST_ENABLED
-#           value: "false"
-#         - name: TRANSMISSION_RPC_AUTHENTICATION_REQUIRED
-#           value: "true"
-#         - name: TRANSMISSION_RPC_USERNAME
-#           value: "foo"
-#         - name: TRANSMISSION_RPC_PASSWORD
-#           value: "foo"
-#         - name: OPENVPN_OPTS
-#           value: "--inactive 3600 --ping 10 --ping-exit 60 --mssfix 1500"
-#         volumeMounts:
-#         - name: config
-#           mountPath: /transmissionvpn        
-#         - name: localtime
-#           readOnly: true
-#           mountPath: /etc/localtime
-#         - name: downloads
-#           mountPath: /data
-#         resources: {}          
-#       restartPolicy: Always
-#       volumes: 
-# ---
-# apiVersion: v1
-# kind: Service
-# metadata:
-#   name: transmission-openvpn-deployment
-# spec:
-#   type: NodePort
-#   ports:
-#   - protocol: TCP
-#     name: "transmission-openvpn-web-ui"
-#     port: 9091
-#     targetPort: 9091
-#     nodePort: 30011
-#   - protocol: TCP
-#     name: "transmission-openvpn-proxy"
-#     port: 8888
-#     targetPort: 8888
-#     nodePort: 30012
-#   selector:
-#     app: transmission-openvpn
-
-# livenessProbe:
-#     exec:
-#       command: ["ping", "-I", "tun0", "-c", "1", "google.com"]
-#     failureThreshold: 3
-#     initialDelaySeconds: 10
-#     periodSeconds: 10
-#     successThreshold: 1
-
-
-
-
-
-
-
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: jellyfin
   namespace: media
-  # annotations:
-  #   cert-manager.io/issuer: ca-issuer
 spec:
   ingressClassName: cilium
-  # tls:
-  #   - hosts:
-  #     - jellyfin.homelab.net
-  #     secretName: jellyfin-homelab-cert
   rules:
-    # - host: jellyfin.homelab.net
   -  http:
       paths:
         - path: /
@@ -133,17 +16,6 @@ spec:
               name: jellyfin
               port:
                 number: 8096
-    # - host: "*"
-    #   http:
-    #     paths:
-    #       - path: /
-    #         pathType: Prefix
-    #         backend:
-    #           service:
-    #             name: jellyfin
-    #             port:
-    #               number: 8096
-
 
 ---
 apiVersion: v1
@@ -156,110 +28,8 @@ spec:
     - port: 8096
   selector:
     app: jellyfin
-# ---
-
-
-
-# apiVersion: apps/v1
-# kind: StatefulSet
-# metadata:
-#   name: jellyfin
-#   namespace: media
-# spec:
-#   selector:
-#     matchLabels:
-#       app: jellyfin # has to match .spec.template.metadata.labels
-#   serviceName: jellyfin
-#   replicas: 0 # by default is 1
-#   # minReadySeconds: 10 # by default is 0
-#   template:
-#     metadata:
-#       labels:
-#         app: jellyfin # has to match .spec.selector.matchLabels
-#     spec:
-#       affinity:
-#         nodeAffinity:
-#           requiredDuringSchedulingIgnoredDuringExecution:
-#             nodeSelectorTerms:
-#             - matchExpressions:
-#               - key: kubernetes.io/hostname
-#                 operator: In
-#                 values:
-#                 - node3
-
-
-#       # terminationGracePeriodSeconds: 10
-#       containers:
-#       - name: jellyfin
-#         image: lscr.io/linuxserver/jellyfin:10.8.13-1-ls1
-#         ports:
-#           - name: http
-#             containerPort: 8096
-#           # - name: https
-#           #   containerPort: 8920
-#           - name: auto-disc-1
-#             containerPort: 1900
-#           - name: auto-disc-2
-#             containerPort: 7359
-# #             8096/tcp is used by default for HTTP traffic. You can change this in the dashboard.
-# # 8920/tcp is used by default for HTTPS traffic. You can change this in the dashboard.
-# # 1900/udp is used for service auto-discovery. This is not configurable.
-# # 7359/udp is also used for auto-discovery. This is not configurable.
-#         readinessProbe:
-#           httpGet:
-#             path: /web/index.html
-#             port: 8096
-#           failureThreshold: 5
-#           initialDelaySeconds: 15
-#           periodSeconds: 10
-#           timeoutSeconds: 3
-#         volumeMounts:
-#           - name: jellyfin-config-pvc
-#             mountPath: /config
-          
-#           - name: data
-#             mountPath: /data
-            
-          
-#           # - name: "render-device"
-#           #   mountPath: "/dev/dri/renderD128"
-
-#         resources:
-#           requests:
-#             cpu: 1000m
-#             memory: 5000Mi
-#           limits:
-#             cpu: 2000m
-#             memory: 10000Mi
-#         securityContext:
-#           # allowPrivilegeEscalation: false
-#           # allowPrivilegeEscalation: true
-#           # capabilities:
-#           #   add:
-#           #   - NET_ADMIN
-#           privileged: true
-#         # nodeSelector:
-#         #   kubernetes.io/hostname: node3
-#       volumes:
-#       - name: data
-#         persistentVolumeClaim:
-#           claimName: media-data-pvc
-#   volumeClaimTemplates:
-#   - metadata:
-#       name: jellyfin-config-pvc
-#     spec:
-#       accessModes: [ "ReadWriteOnce" ]
-#       storageClassName: local-node3
-#       resources:
-#         requests:
-#           storage: 50Gi
-
-
 
 ---
-
-
-
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -271,25 +41,8 @@ spec:
   resources:
     requests:
       storage: 30Gi
+
 ---
-
-
-# apiVersion: v1
-# kind: Service
-# metadata:
-#   name: jellyfin1
-#   namespace: media
-# spec:
-#   selector:
-#     app:  jellyfin1
-#   ports:
-#   - port: 8096
-#     protocol: TCP
-#     targetPort: 8096
-#   type: ClusterIP
-# ---
-
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -309,21 +62,8 @@ spec:
     spec:
       containers:
         - name: jellyfin
-          # envFrom:
-          # - configMapRef:
-          #     name: sonarr-config
-          #     optional: false
-          # - secretRef:
-          #     name: vpn-creds
-          #     optional: false
           image: lscr.io/linuxserver/jellyfin:10.9.7
           imagePullPolicy: IfNotPresent
-          # livenessProbe:
-          #   failureThreshold: 3
-          #   initialDelaySeconds: 30
-          #   tcpSocket:
-          #     port: 8989
-          #   timeoutSeconds: 2
           readinessProbe:
             httpGet:
               path: /web/index.html
@@ -340,79 +80,18 @@ spec:
               memory: 12000Mi
           securityContext:
             allowPrivilegeEscalation: true
-            # capabilities:
-            #   add:
-            #   - NET_ADMIN
             privileged: true
           volumeMounts:
-
           - mountPath: /config
             name: config
-
           - mountPath: /data
             name: data
-
-          # - name: tty
-          #   mountPath: /tta
-
-          # - name: "render-device"
-          #   mountPath: "/dev/dri/renderD128"
-        # - mountPath: /etc/localtime
-        #   name: localtime
-        #   readOnly: true
-      # restartPolicy: Never
-      # terminationGracePeriodSeconds: 30
       volumes:
-
       - name: config
         persistentVolumeClaim:
           claimName: jellyfin-config-pvc
-
       - name: data
         persistentVolumeClaim:
           claimName: media-data-pvc
 
-      # - name: tty
-      #   persistentVolumeClaim:
-      #     claimName: jellyfin-config-pvc-jellyfin-0
-
-      # - name: "render-device"
-      #   hostPath:
-      #     path: "/dev/dri/renderD128"
-      # - hostPath:
-      #     path: /etc/localtime
-      #     type: ""
-      #   name: localtime
-#         volumeMounts:
-#         - name: mysql-persistent-storage
-#           mountPath: /var/lib/mysql
-#       volumes:
-#       - name: mysql-persistent-storage
-#         persistentVolumeClaim:
-#           claimName: mysql-pv-claim
-# ---
-
-
-# apiVersion: networking.k8s.io/v1
-# kind: Ingress
-# metadata:
-#   name: jellyfin-ip
-#   namespace: media
-#   # annotations:
-#   #   cert-manager.io/issuer: ca-issuer
-# spec:
-#   ingressClassName: cilium
-#   # tls:
-#   #   - hosts:
-#   #     - jellyfin.homelab.net
-#   #     secretName: jellyfin-homelab-cert
-#   rules:
-#   - http:
-#       paths:
-#         - path: /
-#           pathType: Prefix
-#           backend:
-#             service:
-#               name: jellyfin
-#               port:
-#                 number: 8096
+---
