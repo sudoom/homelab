@@ -3,7 +3,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: vpn-creds
-  namespace: keepers
+  namespace: media
 data:
   OPENVPN_USERNAME: R1BuUnhIQmpLQkxZN1hmS0JHd2c1NVRZ
   OPENVPN_PASSWORD: eEpNVkdrZEI2QTluOFJDelhiajdMYmNp
