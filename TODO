@@ -8,3 +8,5 @@
 - ansible nodes
 - linters
 - sealed secret
+- etcd backup
+- version control (core + kube)
