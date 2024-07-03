@@ -729,10 +729,10 @@ alertmanager:
     ## Image of Alertmanager
     ##
     image:
-      # registry: quay.io
-      # repository: prometheus/alertmanager
-      # tag: v0.27.0
-      # sha: ""
+      registry: quay.io
+      repository: prometheus/alertmanager
+      tag: v0.27.0
+      sha: ""
 
     ## If true then the user will be responsible to provide a secret with alertmanager configuration
     ## So when true the config part will be ignored (including templateFiles) and the one in the secret will be used
@@ -2384,8 +2384,8 @@ prometheusOperator:
       ## Prometheus-operator webhook image
       ##
       image:
-        # registry: quay.io
-        # repository: prometheus-operator/admission-webhook
+        registry: quay.io
+        repository: prometheus-operator/admission-webhook
         # if not set appVersion field from Chart.yaml is used
         tag: ""
         sha: ""
@@ -2496,9 +2496,9 @@ prometheusOperator:
     patch:
       enabled: true
       image:
-        # registry: registry.k8s.io
-        # repository: ingress-nginx/kube-webhook-certgen
-        # tag: v20221220-controller-v1.5.1-58-g787ea74b6
+        registry: registry.k8s.io
+        repository: ingress-nginx/kube-webhook-certgen
+        tag: v20221220-controller-v1.5.1-58-g787ea74b6
         sha: ""
         pullPolicy: IfNotPresent
       resources: {}
@@ -2842,8 +2842,8 @@ prometheusOperator:
   ## Prometheus-operator image
   ##
   image:
-    # registry: quay.io
-    # repository: prometheus-operator/prometheus-operator
+    registry: quay.io
+    repository: prometheus-operator/prometheus-operator
     # if not set appVersion field from Chart.yaml is used
     tag: ""
     sha: ""
@@ -2869,8 +2869,8 @@ prometheusOperator:
   ##
   prometheusConfigReloader:
     image:
-      # registry: quay.io
-      # repository: prometheus-operator/prometheus-config-reloader
+      registry: quay.io
+      repository: prometheus-operator/prometheus-config-reloader
       # if not set appVersion field from Chart.yaml is used
       tag: ""
       sha: ""
@@ -2890,10 +2890,10 @@ prometheusOperator:
   ## Thanos side-car image when configured
   ##
   thanosImage:
-    # registry: quay.io
-    # repository: thanos/thanos
-    # tag: v0.34.1
-    # sha: ""
+    registry: quay.io
+    repository: thanos/thanos
+    tag: v0.34.1
+    sha: ""
 
   ## Set a Label Selector to filter watched prometheus and prometheusAgent
   ##
@@ -3439,10 +3439,10 @@ prometheus:
     ## Image of Prometheus.
     ##
     image:
-      # registry: quay.io
-      # repository: prometheus/prometheus
-      # tag: v2.50.1
-      # sha: ""
+      registry: quay.io
+      repository: prometheus/prometheus
+      tag: v2.50.1
+      sha: ""
 
     ## Tolerations for use with node taints
     ## ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
@@ -4425,10 +4425,10 @@ thanosRuler:
     ## Image of ThanosRuler
     ##
     image:
-      # registry: quay.io
-      # repository: thanos/thanos
-      # tag: v0.34.1
-      # sha: ""
+      registry: quay.io
+      repository: thanos/thanos
+      tag: v0.34.1
+      sha: ""
 
     ## Namespaces to be selected for PrometheusRules discovery.
     ## If nil, select own namespace. Namespaces to be selected for ServiceMonitor discovery.
