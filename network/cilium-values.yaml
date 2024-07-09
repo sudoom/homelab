@@ -14,17 +14,17 @@ hubble:
     enabled: true
   ui:
     enabled: true
-ingressController:
-  enabled: true
-  loadbalancerMode: dedicated
+# ingressController:
+#   enabled: true
+#   loadbalancerMode: dedicated
 k8sServiceHost: kube-cp.homelab.net
 k8sServicePort: 8443
 kubeProxyReplacement: strict
-l2announcements:
-  enabled: true
-loadBalancer:
-  l7:
-    backend: envoy
+# l2announcements:
+#   enabled: true
+# loadBalancer:
+#   l7:
+#     backend: envoy
 operator:
   prometheus:
     enabled: true
