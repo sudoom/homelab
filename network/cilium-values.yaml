@@ -30,3 +30,6 @@ operator:
     enabled: true
 prometheus:
   enabled: true
+# istio integration
+cni.exclusive: false
+socketLB.hostNamespaceOnly: true
