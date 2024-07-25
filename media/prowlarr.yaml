@@ -69,3 +69,35 @@ spec:
     app: prowlarr
 
 ---
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: prowlarr-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "prowlarr.homelab.net"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: prowlarr
+spec:
+  hosts:
+  - "prowlarr.homelab.net"
+  gateways:
+  - prowlarr-gateway
+  http:
+  - route:
+    - destination:
+        host: prowlarr
+        port:
+          number: 9696

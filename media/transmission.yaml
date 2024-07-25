@@ -122,24 +122,54 @@ spec:
     requests:
       storage: 5Gi
 
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: transmission
-  namespace: media
-spec:
-  ingressClassName: cilium
-  rules:
-    - host: media-download.homelab.net
-      http:
-        paths:
-        - path: /
-          pathType: Prefix
-          backend:
-            service:
-              name: transmission
-              port:
-                number: 9091
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: transmission
+#   namespace: media
+# spec:
+#   ingressClassName: cilium
+#   rules:
+#     - host: media-download.homelab.net
+#       http:
+#         paths:
+#         - path: /
+#           pathType: Prefix
+#           backend:
+#             service:
+#               name: transmission
+#               port:
+#                 number: 9091
 
 ---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: transmission-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "media-download.homelab.net"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: transmission
+spec:
+  hosts:
+  - "media-download.homelab.net"
+  gateways:
+  - transmission-gateway
+  http:
+  - route:
+    - destination:
+        host: transmission
+        port:
+          number: 9091

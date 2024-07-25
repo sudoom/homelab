@@ -74,3 +74,35 @@ spec:
     app: bazarr
 
 ---
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: bazarr-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "bazarr.homelab.net"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: bazarr
+spec:
+  hosts:
+  - "bazarr.homelab.net"
+  gateways:
+  - bazarr-gateway
+  http:
+  - route:
+    - destination:
+        host: bazarr
+        port:
+          number: 6767
