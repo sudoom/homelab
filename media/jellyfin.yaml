@@ -101,6 +101,7 @@ apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
 metadata:
   name: jellyfin-gateway
+  namespace: media
 spec:
   selector:
     istio: ingressgateway
@@ -115,7 +116,8 @@ spec:
 apiVersion: networking.istio.io/v1alpha3
 kind: VirtualService
 metadata:
-  name: jellyfin
+  name: jellyfin-vs
+  namespace: media
 spec:
   hosts:
   - "jellyfin.homelab.net"

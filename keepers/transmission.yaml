@@ -125,3 +125,37 @@ spec:
       storage: 5Gi
 
 ---
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: transmission-keepers-gateway
+  namespace: keepers
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "keepers-trans.homelab.net"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: transmission-keepers-vs
+  namespace: keepers
+spec:
+  hosts:
+  - "keepers-trans.homelab.net"
+  gateways:
+  - transmission-keepers-gateway
+  http:
+  - route:
+    - destination:
+        host: transmission
+        port:
+          number: 9091
