@@ -19,8 +19,11 @@ hubble:
 #   loadbalancerMode: dedicated
 k8sServiceHost: kube-cp.homelab.net
 k8sServicePort: 8443
-kubeProxyReplacement: strict
+kubeProxyReplacement: true
+# l2 integration
 l2announcements:
+  enabled: true
+externalIPs:
   enabled: true
 # loadBalancer:
 #   l7:
@@ -35,5 +38,4 @@ cni:
   exclusive: false
 socketLB:
   hostNamespaceOnly: true
-externalIPs:
-  enabled: true
+
