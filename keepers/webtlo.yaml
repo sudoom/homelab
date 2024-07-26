@@ -59,7 +59,7 @@ spec:
     spec:
       containers:
         - name: webtlo
-          image: berkut174/webtlo:3.0.0
+          image: berkut174/webtlo:3.1.0
           envFrom:
             - configMapRef:
                 name: webtlo-config
