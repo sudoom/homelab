@@ -62,7 +62,7 @@ spec:
     spec:
       containers:
         - name: jellyfin
-          image: lscr.io/linuxserver/jellyfin:10.9.11
+          image: lscr.io/linuxserver/jellyfin:10.10.0
           imagePullPolicy: IfNotPresent
           readinessProbe:
             httpGet:
