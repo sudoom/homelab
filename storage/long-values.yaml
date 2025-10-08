@@ -166,7 +166,7 @@ persistence:
 #   registryPasswd: ~
 #   registrySecret: ~
 
-# # longhornManager:
+# longhornManager:
 # #   log:
 # #     ## Allowed values are `plain` or `json`.
 # #     format: plain
@@ -204,8 +204,8 @@ persistence:
 #   #  label-key1: "label-value1"
 #   #  label-key2: "label-value2"
 
-# longhornUI:
-#   replicas: 2
+longhornUI:
+  replicas: 1
 #   priorityClass: ~
 #   tolerations: []
 #   ## If you want to set tolerations for Longhorn UI Deployment, delete the `[]` in the line above
@@ -220,8 +220,8 @@ persistence:
 #   #  label-key1: "label-value1"
 #   #  label-key2: "label-value2"
 
-# longhornConversionWebhook:
-#   replicas: 2
+#longhornConversionWebhook:
+#  replicas: 1
 #   priorityClass: ~
 #   tolerations: []
 #   ## If you want to set tolerations for Longhorn conversion webhook Deployment, delete the `[]` in the line above
@@ -236,8 +236,8 @@ persistence:
 #   #  label-key1: "label-value1"
 #   #  label-key2: "label-value2"
 
-# longhornAdmissionWebhook:
-#   replicas: 2
+#longhornAdmissionWebhook:
+#  replicas: 1
 #   priorityClass: ~
 #   tolerations: []
 #   ## If you want to set tolerations for Longhorn admission webhook Deployment, delete the `[]` in the line above
@@ -253,7 +253,7 @@ persistence:
 #   #  label-key2: "label-value2"
 
 # longhornRecoveryBackend:
-#   replicas: 2
+  # replicas: 1
 #   priorityClass: ~
 #   tolerations: []
 #   ## If you want to set tolerations for Longhorn recovery backend Deployment, delete the `[]` in the line above
