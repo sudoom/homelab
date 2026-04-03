@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/sudoom/homelab.git
+    repoURL: git@github.com:sudoom/homelab.git
     targetRevision: develop
     path: bootstrap/root-app
     helm:
