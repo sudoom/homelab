@@ -1,0 +1,10 @@
+# Namespace labels (applied via templates/namespace.yaml)
+namespace: rook-ceph
+
+# Values passed to the rook-ceph subchart (prefixed with rook-ceph:)
+rook-ceph:
+  csi:
+    enableRbdDriver: true
+    enableCephfsDriver: true
+  monitoring:
+    enabled: true

@@ -1,0 +1,57 @@
+apiVersion: argoproj.io/v1beta1
+kind: ArgoCD
+metadata:
+  name: argocd
+  namespace: openshift-gitops
+spec:
+  server:
+    route:
+      enabled: true
+      tls:
+        termination: reencrypt
+    insecure: false
+  rbac:
+    defaultPolicy: ''
+    policy: |
+      g, system:cluster-admins, role:admin
+      g, cluster-admins, role:admin
+    scopes: '[groups]'
+  resourceCustomizations: |
+    operators.coreos.com/Subscription:
+      health.lua: |
+        health_status = {}
+        if obj.status ~= nil then
+          if obj.status.conditions ~= nil then
+            for i, condition in ipairs(obj.status.conditions) do
+              if condition.type == "CatalogSourcesUnhealthy" and condition.status == "False" then
+                health_status.status = "Healthy"
+                health_status.message = "Subscription is healthy"
+                return health_status
+              end
+            end
+          end
+        end
+        health_status.status = "Progressing"
+        health_status.message = "Waiting for subscription"
+        return health_status
+    operators.coreos.com/InstallPlan:
+      health.lua: |
+        health_status = {}
+        if obj.status ~= nil then
+          if obj.status.phase == "Complete" then
+            health_status.status = "Healthy"
+            health_status.message = "InstallPlan complete"
+            return health_status
+          end
+        end
+        health_status.status = "Progressing"
+        health_status.message = "Waiting for InstallPlan"
+        return health_status
+  resourceExclusions: |
+    - apiGroups:
+      - tekton.dev
+      clusters:
+      - '*'
+      kinds:
+      - TaskRun
+      - PipelineRun

@@ -1,0 +1,5 @@
+apiVersion: v2
+name: ceph-storage-classes
+description: Ceph block pools and StorageClasses
+version: 1.0.0
+type: application

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: rook-ceph-operator
+description: Rook-Ceph Operator wrapper chart
+version: 1.0.0
+type: application
+dependencies:
+  - name: rook-ceph
+    version: v1.16.5
+    repository: https://charts.rook.io/release

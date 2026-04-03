@@ -1,0 +1,30 @@
+{{- range .Values.nodes }}
+---
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: storage-{{ .name }}
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: {{ .hostname }}
+  desiredState:
+    interfaces:
+      - name: {{ $.Values.storageInterface }}
+        type: ethernet
+        state: up
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: {{ .ip }}
+              prefix-length: {{ .prefix }}
+        ipv6:
+          enabled: false
+      - name: {{ $.Values.unusedInterface }}
+        type: ethernet
+        state: up
+        ipv4:
+          enabled: false
+        ipv6:
+          enabled: false
+{{- end }}

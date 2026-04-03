@@ -1,0 +1,40 @@
+{{- range $name, $app := .Values.applications }}
+{{- if $app.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.global.argocdNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $app.syncWave | quote }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: {{ $.Values.global.repoURL }}
+    targetRevision: {{ $.Values.global.targetRevision }}
+    path: {{ $app.path }}
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: {{ $.Values.global.clusterURL }}
+    namespace: {{ $app.namespace }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+{{- end }}
+{{- end }}

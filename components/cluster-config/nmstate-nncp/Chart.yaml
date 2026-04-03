@@ -1,0 +1,5 @@
+apiVersion: v2
+name: nmstate-nncp
+description: Node network configuration for storage VLAN
+version: 1.0.0
+type: application

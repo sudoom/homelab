@@ -1,0 +1,84 @@
+{{- if .Values.toolbox.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rook-ceph-tools
+  namespace: rook-ceph
+  labels:
+    app: rook-ceph-tools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rook-ceph-tools
+  template:
+    metadata:
+      labels:
+        app: rook-ceph-tools
+    spec:
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/master
+          operator: Exists
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/control-plane
+          operator: Exists
+      containers:
+        - name: rook-ceph-tools
+          image: {{ .Values.cephVersion.image }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              # Copied from upstream toolbox.yaml
+              CEPH_CONFIG="/etc/ceph/ceph.conf"
+              MON_CONFIG="/etc/rook/mon-endpoints"
+              KEYRING_FILE="/etc/ceph/keyring"
+
+              # Create ceph.conf
+              cat <<EOF > "$CEPH_CONFIG"
+              [global]
+              mon_host = $(cat "$MON_CONFIG" | sed 's/[a-z]\+=//g; s/=/ /; s/  */ /g')
+
+              [client.admin]
+              keyring = $KEYRING_FILE
+              EOF
+
+              sleep infinity
+          env:
+            - name: ROOK_CEPH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: rook-ceph-mon
+                  key: ceph-username
+          volumeMounts:
+            - name: ceph-config
+              mountPath: /etc/ceph
+            - name: mon-endpoint-volume
+              mountPath: /etc/rook
+            - name: ceph-admin-secret
+              mountPath: /etc/ceph/keyring-store
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"
+      volumes:
+        - name: ceph-config
+          emptyDir: {}
+        - name: mon-endpoint-volume
+          configMap:
+            name: rook-ceph-mon-endpoints
+            items:
+              - key: data
+                path: mon-endpoints
+        - name: ceph-admin-secret
+          secret:
+            secretName: rook-ceph-mon
+            items:
+              - key: ceph-secret
+                path: keyring
+{{- end }}

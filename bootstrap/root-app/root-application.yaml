@@ -1,0 +1,23 @@
+# This is the ONLY Application you apply manually.
+# It creates all other Applications via the App-of-Apps pattern.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sudoom/homelab.git
+    targetRevision: develop
+    path: bootstrap/root-app
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

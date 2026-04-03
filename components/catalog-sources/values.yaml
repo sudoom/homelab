@@ -1,0 +1,14 @@
+catalogSources:
+  operatorhubio:
+    enabled: false
+    image: quay.io/operatorhubio/catalog:latest
+    displayName: OperatorHub.io Community Catalog
+    publisher: OperatorHub.io
+    pollInterval: 60m
+
+  okderators:
+    enabled: true
+    image: quay.io/okderators/catalog-index:4.20
+    displayName: OKDerators
+    publisher: OKD Community
+    pollInterval: 60m
