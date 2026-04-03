@@ -1,0 +1,34 @@
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: openwebui-gateway
+  namespace: default
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "chat.homelab.net"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: jellyfin-vs
+  namespace: default
+spec:
+  hosts:
+  - "chat.homelab.net"
+  gateways:
+  - openwebui-gateway
+  http:
+  - route:
+    - destination:
+        host: open-webui
+        port:
+          number: 80
