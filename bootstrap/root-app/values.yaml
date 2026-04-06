@@ -44,6 +44,13 @@ applications:
     namespace: cert-manager
     syncWave: "2"
 
+  # Wave 3 — Ingress (depends on cert being issued)
+  ingress-controller:
+    enabled: true
+    path: components/cluster-config/ingress-controller
+    namespace: openshift-ingress-operator
+    syncWave: "3"
+
   # # Wave 3 — Storage (depends on Rook operator + storage network)
   # ceph-cluster:
   #   enabled: false

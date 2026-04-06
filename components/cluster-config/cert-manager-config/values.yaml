@@ -9,6 +9,7 @@ cloudflare:
 
 certificates:
   - name: okd-wildcard
+    namespace: openshift-ingress
     secretName: okd-wildcard-tls
     dnsNames:
       - "*.apps.okd.sudops.pl"
