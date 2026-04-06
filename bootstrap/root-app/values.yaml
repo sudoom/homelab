@@ -19,6 +19,12 @@ applications:
     namespace: openshift-nmstate
     syncWave: "1"
 
+  cert-manager-operator:
+    enabled: true
+    path: components/operators/cert-manager
+    namespace: cert-manager-operator
+    syncWave: "1"
+
   # rook-ceph-operator:
   #   enabled: false
   #   path: components/operators/rook-ceph

@@ -1,0 +1,4 @@
+namespace: cert-manager-operator
+channel: alpha
+source: okderators
+sourceNamespace: openshift-marketplace

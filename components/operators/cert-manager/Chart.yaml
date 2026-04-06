@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cert-manager-operator
+description: cert-manager Operator via OLM
+version: 1.0.0
+type: application
