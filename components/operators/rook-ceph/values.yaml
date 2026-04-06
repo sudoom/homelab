@@ -3,6 +3,8 @@ namespace: rook-ceph
 
 # Values passed to the rook-ceph subchart (prefixed with rook-ceph:)
 rook-ceph:
+  # OpenShift requires privileged hostPath access
+  hostpathRequiresPrivileged: true
   csi:
     enableRbdDriver: true
     enableCephfsDriver: true
