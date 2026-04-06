@@ -1,0 +1,5 @@
+apiVersion: v2
+name: node-labels
+description: Node labels for failure domains and topology
+version: 1.0.0
+type: application

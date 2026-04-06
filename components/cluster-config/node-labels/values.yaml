@@ -1,0 +1,10 @@
+nodes:
+  - hostname: node4.okd.sudops.pl
+    labels:
+      topology.kubernetes.io/zone: fd-a
+  - hostname: node5.okd.sudops.pl
+    labels:
+      topology.kubernetes.io/zone: fd-b
+  - hostname: node6.okd.sudops.pl
+    labels:
+      topology.kubernetes.io/zone: fd-c

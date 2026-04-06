@@ -1,0 +1,11 @@
+{{- range .Values.nodes }}
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: {{ .hostname }}
+  labels:
+    {{- range $key, $value := .labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+{{- end }}

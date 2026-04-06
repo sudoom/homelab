@@ -5,9 +5,16 @@ global:
   clusterURL: https://kubernetes.default.svc
 
 applications:
+  # Wave 0 — Cluster topology
+  node-labels:
+    enabled: true
+    path: components/cluster-config/node-labels
+    namespace: default
+    syncWave: "0"
+
   # Wave 1 — Operators (subscriptions + instances)
   nmstate-operator:
-    enabled: true
+    enabled: false
     path: components/operators/nmstate
     namespace: openshift-nmstate
     syncWave: "1"
@@ -20,7 +27,7 @@ applications:
 
   # Wave 2 — Cluster config (depends on operators being ready)
   nmstate-nncp:
-    enabled: true
+    enabled: false
     path: components/cluster-config/nmstate-nncp
     namespace: default
     syncWave: "2"
