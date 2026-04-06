@@ -14,7 +14,7 @@ applications:
 
   # Wave 1 — Operators (subscriptions + instances)
   nmstate-operator:
-    enabled: false
+    enabled: true
     path: components/operators/nmstate
     namespace: openshift-nmstate
     syncWave: "1"
@@ -33,7 +33,7 @@ applications:
 
   # Wave 2 — Cluster config (depends on operators being ready)
   nmstate-nncp:
-    enabled: false
+    enabled: true
     path: components/cluster-config/nmstate-nncp
     namespace: default
     syncWave: "2"
