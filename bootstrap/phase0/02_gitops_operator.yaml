@@ -1,0 +1,21 @@
+---
+# The OpenShift GitOps operator installs into openshift-operators (AllNamespaces mode).
+# No OperatorGroup needed — openshift-operators already has one.
+# The operator auto-creates:
+#   - openshift-gitops namespace
+#   - Default ArgoCD instance (cluster-scoped, cluster-admin RBAC)
+#   - Route for the ArgoCD UI
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: gitops-operator 
+  namespace: openshift-operators
+spec:
+  # ── Verify before applying ──
+  # Run: oc get packagemanifest gitops-operator -o jsonpath='{.status.channels[*].name}'
+  # Replace channel below with the output
+  channel: alpha
+  installPlanApproval: Automatic
+  name: gitops-operator 
+  source: okderators
+  sourceNamespace: openshift-marketplace

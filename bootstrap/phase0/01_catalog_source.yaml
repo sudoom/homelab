@@ -1,0 +1,14 @@
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: okderators
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: quay.io/okderators/catalog-index:4.20
+  displayName: OKDerators
+  publisher: OKD Community
+  updateStrategy:
+    registryPoll:
+      interval: 60m
