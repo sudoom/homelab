@@ -1,4 +1,4 @@
 namespace: openshift-nmstate
-channel: stable
+channel: alpha
 source: community-operators
 sourceNamespace: openshift-marketplace
