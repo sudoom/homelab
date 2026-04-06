@@ -1,0 +1,5 @@
+apiVersion: v2
+name: api-server
+description: OKD APIServer serving certificate configuration
+version: 1.0.0
+type: application

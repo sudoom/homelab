@@ -14,3 +14,8 @@ certificates:
     dnsNames:
       - "*.apps.okd.sudops.pl"
       - "apps.okd.sudops.pl"
+  - name: api-cert
+    namespace: openshift-config
+    secretName: api-cert-tls
+    dnsNames:
+      - "api.okd.sudops.pl"

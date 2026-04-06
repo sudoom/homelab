@@ -1,0 +1,2 @@
+apiDomain: api.okd.sudops.pl
+certSecretName: api-cert-tls
