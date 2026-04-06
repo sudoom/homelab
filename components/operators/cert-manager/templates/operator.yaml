@@ -30,3 +30,15 @@ spec:
   name: cert-manager-operator
   source: {{ .Values.source }}
   sourceNamespace: {{ .Values.sourceNamespace }}
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: CertManager
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  controllerConfig:
+    overrideArgs:
+      - "--dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53"
+      - "--dns01-recursive-nameservers-only"
