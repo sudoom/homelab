@@ -1,4 +1,4 @@
 namespace: openshift-nmstate
-channel: stable
-source: operatorhubio-catalog
+channel: alpha
+source: okderators
 sourceNamespace: openshift-marketplace

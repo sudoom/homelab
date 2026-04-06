@@ -1,5 +1,0 @@
-apiVersion: v2
-name: catalog-sources
-description: OLM CatalogSources for the cluster
-version: 1.0.0
-type: application
