@@ -25,11 +25,11 @@ applications:
     namespace: cert-manager-operator
     syncWave: "1"
 
-  # rook-ceph-operator:
-  #   enabled: false
-  #   path: components/operators/rook-ceph
-  #   namespace: rook-ceph
-  #   syncWave: "1"
+  rook-ceph-operator:
+    enabled: true
+    path: components/operators/rook-ceph
+    namespace: rook-ceph
+    syncWave: "1"
 
   # Wave 2 — Cluster config (depends on operators being ready)
   nmstate-nncp:
