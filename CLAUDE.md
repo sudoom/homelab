@@ -8,67 +8,58 @@ Homelab GitOps repository for a **3-node bare-metal OKD 4.20 cluster** (OpenShif
 
 - **Cluster domain:** okd.sudops.pl
 - **Nodes:** 3 control-plane+worker nodes (192.168.1.7-9, storage backnet 192.168.10.2-4)
+- **Failure domains:** fd-a (node4), fd-b (node5), fd-c (node6) via `topology.kubernetes.io/zone`
 - **Git remote:** `git@github.com:sudoom/homelab.git`
-- **Branches:** `master` (production/main), `develop` (working branch)
+- **Branches:** `master` (production), `develop` (working branch)
 
 ## Architecture
 
-### Two-layer structure
+### App-of-Apps structure
 
-1. **`okd-homelab-gitops/`** — Core cluster infrastructure managed by ArgoCD root app
-   - `bootstrap/argocd/` — One-time ArgoCD operator setup (Subscription, OperatorGroup)
-   - `bootstrap/root-app/` — Root Application that generates all child Applications via Helm templating
-   - `components/` — Infrastructure components deployed in sync waves:
-     - Wave 0: CatalogSources (OLM)
-     - Wave 1: Operators (NMState, Rook-Ceph)
-     - Wave 2: Cluster config (NMState NNCPs for storage network)
-     - Wave 3: CephCluster
-     - Wave 4: Ceph StorageClasses
+- `bootstrap/phase0/` — One-time manual bootstrap (CatalogSource, GitOps operator, RBAC, root Application)
+- `bootstrap/root-app/` — Root Application that generates all child Applications via Helm templating
+- `components/` — Infrastructure components deployed in sync waves:
+  - **Wave 0:** Cluster topology (node-labels with failure domains)
+  - **Wave 1:** Operators via OLM (cert-manager from okderators, NMState from community-operators)
+  - **Wave 2:** Cluster config (cert-manager ClusterIssuer + certificates, NMState NNCPs for storage network)
+  - **Wave 3:** TLS consumers (IngressController default cert, APIServer serving cert) and storage
+- `bootstrap/root-app/values.yaml` — Central registry of all managed applications with enable/disable flags
 
-2. **Root-level directories** — Application workloads and configuration (deployed separately from the root app):
-   - `media/` — Media stack: Jellyfin, Bazarr, Radarr, Sonarr, Prowlarr
-   - `keepers/` — Transmission+OpenVPN, WebTLO
-   - `ai/` — Open WebUI (connects to external Ollama at 192.168.1.4:11434)
-   - `monitoring/` — ServiceMonitors, Grafana dashboards, Prometheus values
-   - `network/` — Cilium LB IP pool (192.168.1.210-220), L2 announcement policy
-   - `storage/` — NFS CSI (server 192.168.1.2:/volume1/kubenfs), Longhorn values
+### OLM Catalogs
+- **okderators** (`quay.io/okderators/catalog-index:4.20`) — OKD community operators (cert-manager)
+- **community-operators** — Upstream OperatorHub.io catalog (NMState — okderators build has ImageStream bug)
 
-### Key technologies
-- **Storage:** Rook-Ceph (primary, NVMe RAID, replicated×3), NFS CSI, Longhorn
-- **CNI:** Cilium (with LB, L2 announcement, ingress controller)
-- **Service mesh:** Istio (multiple config variants in root-level values files)
-- **Monitoring:** Prometheus + Grafana
-- **Automation:** Renovate Bot for dependency updates (all .yaml files scanned)
+### TLS / Certificate Management
+- cert-manager with Let's Encrypt production (DNS-01 via Cloudflare)
+- Public DNS nameservers (1.1.1.1, 8.8.8.8) configured for DNS-01 challenges (cluster DNS can't resolve external domains)
+- Wildcard cert `*.apps.okd.sudops.pl` in `openshift-ingress` namespace
+- API cert `api.okd.sudops.pl` in `openshift-config` namespace
+- Cloudflare API token secret managed manually (planned: ESO + Bitwarden)
 
-### ArgoCD sync policy
-All managed Applications use: automated prune + selfHeal, ServerSideApply, retry 5× with exponential backoff (5s→3m), CreateNamespace=true.
+### Sync policy
+All managed Applications use: automated prune + selfHeal, ServerSideApply, SkipDryRunOnMissingResource, retry 5× with exponential backoff (5s→3m), CreateNamespace=true.
 
 ## Working with this repo
 
 ### Helm charts
-Each component under `okd-homelab-gitops/components/` is a standalone Helm chart. To validate templates:
+Each component under `components/` is a standalone Helm chart. To validate templates:
 ```bash
-helm template <release-name> okd-homelab-gitops/components/<component-path>
-```
-
-For charts with external dependencies (e.g., rook-ceph operator):
-```bash
-cd okd-homelab-gitops/components/operators/rook-ceph && helm dependency build
+helm template <release-name> components/<category>/<name>/
 ```
 
 ### Adding a new ArgoCD-managed component
-1. Create a Helm chart under `okd-homelab-gitops/components/<category>/<name>/`
-2. Add an entry in `okd-homelab-gitops/bootstrap/root-app/values.yaml` with appropriate sync wave
-3. The root app templates (`bootstrap/root-app/templates/applications.yaml`) will auto-generate the ArgoCD Application
+1. Create a Helm chart under `components/<category>/<name>/` (operators, cluster-config, storage)
+2. Add an entry in `bootstrap/root-app/values.yaml` with appropriate sync wave and enabled: true
+3. The root app template (`bootstrap/root-app/templates/applications.yaml`) auto-generates the ArgoCD Application
+4. For operators with CRDs: use intra-chart sync-wave annotations (Subscription at wave 1, CR at wave 5) to avoid CRD race conditions
 
-### Application workloads (media, keepers, ai)
-These are plain Kubernetes YAML manifests applied directly (not managed by the root app). They use PVCs backed by `nfs-csi` or `longhorn` StorageClasses.
-
-### Sealed secrets
-The `sealed-secret/` directory exists for SealedSecret resources. Secrets (e.g., VPN credentials in `keepers/`) are stored as Kubernetes Secrets in the manifests.
+### Commit and push workflow
+Changes to `master` are picked up by ArgoCD automatically. Always validate templates with `helm template` before pushing.
 
 ## Conventions
 
 - Root-level `*-values.yaml` files are Helm values for tools installed outside the root app (Cilium, Istio, Prometheus, ArgoCD, Kiali)
-- The root app targets the `main` branch in its Application spec — be aware of branch alignment with the `master`/`develop` workflow
 - Renovate handles Docker image tag updates automatically via PRs labeled `dependencies`
+- Operator components follow the pattern: Namespace + OperatorGroup + Subscription (+ optional CR in later sync wave)
+- Cluster-scoped operators (cert-manager) use empty OperatorGroup spec (`spec: {}`)
+- Namespace-scoped operators (NMState) use targetNamespaces

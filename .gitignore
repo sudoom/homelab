@@ -12,3 +12,6 @@ Chart.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code exports
+*.txt
