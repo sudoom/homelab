@@ -5,6 +5,39 @@
   ],
   "labels": ["dependencies"],
   "kubernetes": {
-    "fileMatch": ["\\.yaml$"]
-  }
+    "fileMatch": [
+      "components/.+\\.yaml$",
+      "media/.+\\.yaml$",
+      "keepers/.+\\.yaml$",
+      "ai/.+\\.yaml$"
+    ]
+  },
+  "helm-values": {
+    "fileMatch": [
+      "components/.+values\\.yaml$"
+    ]
+  },
+  "helmv3": {
+    "fileMatch": [
+      "components/.+Chart\\.yaml$"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Automerge patch updates for media stack",
+      "matchPaths": ["media/**", "keepers/**"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "description": "Group rook-ceph updates",
+      "matchPackagePatterns": ["rook-ceph"],
+      "groupName": "rook-ceph"
+    }
+  ],
+  "ignorePaths": [
+    "bootstrap/**",
+    "*-values.yaml",
+    "monitoring/**"
+  ]
 }
