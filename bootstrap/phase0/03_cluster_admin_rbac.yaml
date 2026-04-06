@@ -1,0 +1,22 @@
+---
+# The OpenShift GitOps operator MAY auto-grant cluster-admin to the default instance.
+# If ArgoCD cannot manage cluster-scoped resources, apply this.
+#
+# Verify first:
+#   oc get clusterrolebinding | grep gitops
+#   If you see openshift-gitops-argocd-application-controller → cluster-admin, skip this file.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openshift-gitops-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-application-controller
+    namespace: openshift-gitops
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-server
+    namespace: openshift-gitops

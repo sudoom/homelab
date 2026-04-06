@@ -1,0 +1,16 @@
+storageInterface: enp1s0f0np0
+unusedInterface: enp1s0f1np1
+
+nodes:
+  - name: node4
+    hostname: node4.okd.sudops.pl
+    ip: 192.168.10.2
+    prefix: 24
+  - name: node5
+    hostname: node5.okd.sudops.pl
+    ip: 192.168.10.3
+    prefix: 24
+  - name: node6
+    hostname: node6.okd.sudops.pl
+    ip: 192.168.10.4
+    prefix: 24

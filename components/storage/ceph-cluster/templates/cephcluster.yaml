@@ -1,0 +1,106 @@
+apiVersion: ceph.rook.io/v1
+kind: CephCluster
+metadata:
+  name: rook-ceph
+  namespace: rook-ceph
+spec:
+  cephVersion:
+    image: {{ .Values.cephVersion.image }}
+    allowUnsupported: false
+  dataDirHostPath: {{ .Values.dataDirHostPath }}
+
+  mon:
+    count: {{ .Values.mon.count }}
+    allowMultiplePerNode: false
+  mgr:
+    count: {{ .Values.mgr.count }}
+    allowMultiplePerNode: false
+    modules:
+      - name: pg_autoscaler
+        enabled: true
+      - name: rook
+        enabled: true
+
+  dashboard:
+    enabled: {{ .Values.dashboard.enabled }}
+    ssl: {{ .Values.dashboard.ssl }}
+    port: {{ .Values.dashboard.port }}
+
+  network:
+    provider: host
+    addressRanges:
+      public:
+        - {{ .Values.network.public | quote }}
+      cluster:
+        - {{ .Values.network.cluster | quote }}
+
+  cephConfig:
+    global:
+      osd_pool_default_size: "3"
+      osd_pool_default_min_size: "2"
+      mon_allow_pool_delete: "true"
+    osd:
+      osd_memory_target: {{ .Values.osd.memoryTarget | quote }}
+      bluestore_cache_autotune: "true"
+
+  placement:
+    all:
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/master
+          operator: Exists
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/control-plane
+          operator: Exists
+
+  resources:
+    mon:
+      requests:
+        cpu: {{ .Values.resources.mon.requests.cpu | quote }}
+        memory: {{ .Values.resources.mon.requests.memory | quote }}
+      limits:
+        memory: {{ .Values.resources.mon.limits.memory | quote }}
+    mgr:
+      requests:
+        cpu: {{ .Values.resources.mgr.requests.cpu | quote }}
+        memory: {{ .Values.resources.mgr.requests.memory | quote }}
+      limits:
+        memory: {{ .Values.resources.mgr.limits.memory | quote }}
+    osd:
+      requests:
+        cpu: {{ .Values.resources.osd.requests.cpu | quote }}
+        memory: {{ .Values.resources.osd.requests.memory | quote }}
+      limits:
+        memory: {{ .Values.resources.osd.limits.memory | quote }}
+    prepareosd:
+      requests:
+        cpu: "500m"
+        memory: "400Mi"
+    crashcollector:
+      requests:
+        cpu: "100m"
+        memory: "60Mi"
+      limits:
+        memory: "256Mi"
+
+  storage:
+    useAllNodes: false
+    useAllDevices: false
+    nodes:
+      {{- range .Values.nodes }}
+      - name: {{ .name | quote }}
+        devices:
+          {{- range .devices }}
+          - name: {{ .name | quote }}
+          {{- end }}
+      {{- end }}
+
+  disruptionManagement:
+    managePodBudgets: true
+    osdMaintenanceTimeout: 30
+    manageMachineDisruptionBudgets: false
+
+  cleanupPolicy:
+    confirmation: ""
+
+  removeOSDsIfOutAndSafeToRemove: false

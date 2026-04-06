@@ -1,0 +1,5 @@
+apiVersion: v2
+name: nmstate-operator
+description: Kubernetes NMState Operator
+version: 1.0.0
+type: application

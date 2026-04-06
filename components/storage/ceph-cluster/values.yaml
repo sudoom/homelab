@@ -1,0 +1,60 @@
+cephVersion:
+  image: quay.io/ceph/ceph:v19.2.3
+
+dataDirHostPath: /var/lib/rook
+
+mon:
+  count: 3
+mgr:
+  count: 2
+
+dashboard:
+  enabled: true
+  ssl: true
+  port: 8443
+
+network:
+  public: "192.168.10.0/24"
+  cluster: "192.168.10.0/24"
+
+osd:
+  memoryTarget: "4294967296"    # 4 GB
+
+resources:
+  mon:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      memory: "2Gi"
+  mgr:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      memory: "1Gi"
+  osd:
+    requests:
+      cpu: "1"
+      memory: "5Gi"
+    limits:
+      memory: "6Gi"
+
+# Replace these with actual /dev/disk/by-id/ paths from your nodes
+nodes:
+  - name: "node4.okd.sudops.pl"
+    devices:
+      - name: "/dev/disk/by-id/<NVME_NODE4>"
+  - name: "node5.okd.sudops.pl"
+    devices:
+      - name: "/dev/disk/by-id/<NVME_NODE5>"
+  - name: "node6.okd.sudops.pl"
+    devices:
+      - name: "/dev/disk/by-id/<NVME_NODE6>"
+
+toolbox:
+  enabled: true
+
+dashboardRoute:
+  enabled: true
+  host: ceph.apps.okd.sudops.pl

@@ -1,0 +1,48 @@
+extraEnvVars:
+  - name: OLLAMA_BASE_URL
+    value: http://192.168.1.4:11434
+
+ollama:
+  enabled: false
+
+image:
+  repository: ghcr.io/open-webui/open-webui
+  tag: "v0.5.20"
+  pullPolicy: "IfNotPresent"
+
+
+
+
+# -- A list of Ollama API endpoints. These can be added in lieu of automatically installing the Ollama Helm chart, or in addition to it.
+ollamaUrls: []
+
+
+
+
+# -- Value of cluster domain
+clusterDomain: cluster.local
+
+
+replicaCount: 1
+
+
+resources: {}
+
+
+
+persistence:
+  enabled: true
+  size: 2Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClass: ""
+
+# -- Service values to expose Open WebUI pods to cluster
+service:
+  type: ClusterIP
+  annotations: {}
+  port: 80
+  containerPort: 8080
+  nodePort: ""
+  labels: {}
+  loadBalancerClass: ""

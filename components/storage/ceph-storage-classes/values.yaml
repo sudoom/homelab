@@ -1,0 +1,23 @@
+blockPools:
+  nvme-replicated:
+    failureDomain: host
+    deviceClass: nvme
+    replicated:
+      size: 3
+    default: true
+
+  # Uncomment when HDDs arrive
+  # hdd-replicated:
+  #   failureDomain: host
+  #   deviceClass: hdd
+  #   replicated:
+  #     size: 3
+  #   default: false
+
+csiSecrets:
+  provisionerSecret: rook-csi-rbd-provisioner
+  nodeSecret: rook-csi-rbd-node
+  namespace: rook-ceph
+
+clusterID: rook-ceph
+fsType: ext4

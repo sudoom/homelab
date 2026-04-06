@@ -1,0 +1,46 @@
+global:
+  repoURL: git@github.com:sudoom/homelab.git
+  targetRevision: master
+  argocdNamespace: openshift-gitops
+  clusterURL: https://kubernetes.default.svc
+
+applications:
+  # Wave 0 — CatalogSources (must exist before operators can subscribe)
+  # catalog-sources:
+  #   enabled: true
+  #   path: components/catalog-sources
+  #   namespace: openshift-marketplace
+  #   syncWave: "0"
+
+  # # Wave 1 — Operators (subscriptions + instances)
+  # nmstate-operator:
+  #   enabled: false
+  #   path: components/operators/nmstate
+  #   namespace: openshift-nmstate
+  #   syncWave: "1"
+
+  # rook-ceph-operator:
+  #   enabled: false
+  #   path: components/operators/rook-ceph
+  #   namespace: rook-ceph
+  #   syncWave: "1"
+
+  # # Wave 2 — Cluster config (depends on operators being ready)
+  # nmstate-nncp:
+  #   enabled: false
+  #   path: components/cluster-config/nmstate-nncp
+  #   namespace: default
+  #   syncWave: "2"
+
+  # # Wave 3 — Storage (depends on Rook operator + storage network)
+  # ceph-cluster:
+  #   enabled: false
+  #   path: components/storage/ceph-cluster
+  #   namespace: rook-ceph
+  #   syncWave: "3"
+
+  # ceph-storage-classes:
+  #   enabled: false
+  #   path: components/storage/ceph-storage-classes
+  #   namespace: rook-ceph
+  #   syncWave: "4"

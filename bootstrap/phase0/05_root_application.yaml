@@ -1,0 +1,27 @@
+---
+# This is the ONLY ArgoCD Application you apply manually.
+# It creates all other Applications via App-of-Apps pattern.
+# Apply AFTER:
+#   1. GitOps operator is healthy (all pods Running in openshift-gitops)
+#   2. Repo is pushed to GitHub with all component charts
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:sudoom/homelab.git
+    targetRevision: master
+    path: bootstrap/root-app
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
