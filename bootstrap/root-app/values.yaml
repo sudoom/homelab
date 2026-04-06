@@ -38,6 +38,12 @@ applications:
     namespace: default
     syncWave: "2"
 
+  cert-manager-config:
+    enabled: true
+    path: components/cluster-config/cert-manager-config
+    namespace: cert-manager
+    syncWave: "2"
+
   # # Wave 3 — Storage (depends on Rook operator + storage network)
   # ceph-cluster:
   #   enabled: false

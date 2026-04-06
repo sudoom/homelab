@@ -1,0 +1,8 @@
+email: ""
+cloudflare:
+  # Secret must be created manually until ESO + Bitwarden is in place:
+  # oc create secret generic cloudflare-api-token \
+  #   -n cert-manager \
+  #   --from-literal=api-token=<your-cloudflare-api-token>
+  secretName: cloudflare-api-token
+  secretKey: api-token
