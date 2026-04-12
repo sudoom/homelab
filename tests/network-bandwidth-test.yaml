@@ -1,0 +1,73 @@
+# iperf3 server/client test on the storage backnet (192.168.10.0/24)
+# Interface: enp1s0f0np0 (10GbE)
+#
+# Usage:
+#   1. Deploy server:  oc apply -f network-bandwidth-test.yaml
+#   2. Wait for both pods to be Running
+#   3. Check results:  oc logs iperf3-client -f
+#   4. Cleanup:        oc delete -f network-bandwidth-test.yaml
+#
+# Expected: ~9.4 Gbps for 10GbE link
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: iperf3-server
+  namespace: default
+  labels:
+    app: iperf3-server
+spec:
+  hostNetwork: true
+  nodeSelector:
+    kubernetes.io/hostname: node5.okd.sudops.pl
+  tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/control-plane
+      operator: Exists
+  containers:
+    - name: iperf3
+      image: quay.io/ceph/ceph:v19.2.3
+      command:
+        - /bin/bash
+        - -c
+        - |
+          dnf install -y iperf3 2>/dev/null
+          echo "=== iperf3 server listening on 192.168.10.3 ==="
+          iperf3 -s -B 192.168.10.3
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: iperf3-client
+  namespace: default
+spec:
+  hostNetwork: true
+  nodeSelector:
+    kubernetes.io/hostname: node4.okd.sudops.pl
+  tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/control-plane
+      operator: Exists
+  restartPolicy: Never
+  containers:
+    - name: iperf3
+      image: quay.io/ceph/ceph:v19.2.3
+      command:
+        - /bin/bash
+        - -c
+        - |
+          dnf install -y iperf3 2>/dev/null
+          echo "=== Waiting for server ==="
+          sleep 10
+          echo "=== Running iperf3 client: 192.168.10.2 -> 192.168.10.3 ==="
+          iperf3 -c 192.168.10.3 -B 192.168.10.2 -t 30 -P 4
+          echo "=== Link speed check ==="
+          ethtool enp1s0f0np0 2>/dev/null | grep Speed || echo "ethtool not available"
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"

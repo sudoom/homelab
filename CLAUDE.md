@@ -56,6 +56,9 @@ helm template <release-name> components/<category>/<name>/
 ### Commit and push workflow
 Changes to `master` are picked up by ArgoCD automatically. Always validate templates with `helm template` before pushing.
 
+## Context management
+- Always run `/export` before the conversation is compacted to preserve full context history.
+
 ## Conventions
 
 - Root-level `*-values.yaml` files are Helm values for tools installed outside the root app (Cilium, Istio, Prometheus, ArgoCD, Kiali)
