@@ -10,9 +10,8 @@ spec:
     kind: Service
     name: rook-ceph-mgr-dashboard
   port:
-    targetPort: https-dashboard
+    targetPort: http-dashboard
   tls:
-    termination: reencrypt
+    termination: edge
     insecureEdgeTerminationPolicy: Redirect
-    destinationCACertificate: ""
 {{- end }}

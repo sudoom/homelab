@@ -39,6 +39,8 @@ spec:
       osd_pool_default_size: "3"
       osd_pool_default_min_size: "2"
       mon_allow_pool_delete: "true"
+      mgr/dashboard/ssl: "false"
+      mgr/dashboard/server_port: "8080"
     osd:
       osd_memory_target: {{ .Values.osd.memoryTarget | quote }}
       bluestore_cache_autotune: "true"

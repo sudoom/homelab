@@ -10,8 +10,8 @@ mgr:
 
 dashboard:
   enabled: true
-  ssl: true
-  port: 8443
+  ssl: false
+  port: 8080
 
 network:
   public: "192.168.10.0/24"
