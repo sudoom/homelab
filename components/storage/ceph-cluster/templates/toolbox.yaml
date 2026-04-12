@@ -44,8 +44,11 @@ spec:
               MON_CONFIG="/etc/rook/mon-endpoints"
               KEYRING_FILE="/etc/ceph/keyring"
 
-              # Copy keyring from secret mount into /etc/ceph/
-              cp /etc/ceph/keyring-store/keyring "$KEYRING_FILE"
+              # Build keyring file from raw secret
+              cat <<KEYEOF > "$KEYRING_FILE"
+              [client.admin]
+              key = $(cat /etc/ceph/keyring-store/keyring)
+              KEYEOF
 
               # Create ceph.conf
               cat <<EOF > "$CEPH_CONFIG"
