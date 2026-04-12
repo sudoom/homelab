@@ -12,13 +12,36 @@ spec:
   dnsNames:
     - {{ .Values.dashboardRoute.host }}
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: route-tls-secret-reader
+  namespace: rook-ceph
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["ceph-dashboard-tls"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: route-tls-secret-reader
+  namespace: rook-ceph
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: route-tls-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: router
+    namespace: openshift-ingress
+---
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: ceph-dashboard
   namespace: rook-ceph
-  annotations:
-    route.openshift.io/termination: reencrypt
 spec:
   host: {{ .Values.dashboardRoute.host }}
   to:
