@@ -1,16 +1,33 @@
 {{- if .Values.dashboardRoute.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ceph-dashboard-tls
+  namespace: rook-ceph
+spec:
+  secretName: ceph-dashboard-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - {{ .Values.dashboardRoute.host }}
+---
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: ceph-dashboard
   namespace: rook-ceph
+  annotations:
+    route.openshift.io/termination: reencrypt
 spec:
   host: {{ .Values.dashboardRoute.host }}
   to:
     kind: Service
     name: rook-ceph-mgr-dashboard
   port:
-    targetPort: http-dashboard
+    targetPort: https-dashboard
   tls:
-    termination: edge
+    termination: reencrypt
+    externalCertificate:
+      name: ceph-dashboard-tls
 {{- end }}
