@@ -10,7 +10,7 @@ spec:
     kind: Service
     name: rook-ceph-mgr-dashboard
   port:
-    targetPort: https-dashboard
+    targetPort: http-dashboard
   tls:
-    termination: passthrough
+    termination: edge
 {{- end }}
