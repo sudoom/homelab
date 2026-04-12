@@ -1,0 +1,49 @@
+# Grant the built-in 'privileged' SCC to Rook service accounts via RBAC.
+# On OpenShift, pod-security.kubernetes.io labels alone are insufficient —
+# each SA still needs explicit SCC access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rook-ceph-scc-privileged
+rules:
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    resourceNames: ["privileged"]
+    verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rook-ceph-scc-privileged
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rook-ceph-scc-privileged
+subjects:
+  - kind: ServiceAccount
+    name: rook-ceph-system
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-default
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-osd
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-mgr
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-cmd-reporter
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-purge-osd
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-rgw
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: default
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-tools
+    namespace: {{ .Values.namespace }}
