@@ -4,6 +4,8 @@ metadata:
   name: rook-ceph
   namespace: rook-ceph
 spec:
+  monitoring:
+    enabled: true
   cephVersion:
     image: {{ .Values.cephVersion.image }}
     allowUnsupported: false
