@@ -1,0 +1,46 @@
+# Upstream SCC from rook/rook release-1.19:
+# https://github.com/rook/rook/blob/release-1.19/deploy/examples/operator-openshift.yaml
+kind: SecurityContextConstraints
+apiVersion: security.openshift.io/v1
+metadata:
+  name: rook-ceph-csi
+allowPrivilegedContainer: true
+allowHostNetwork: true
+allowHostDirVolumePlugin: true
+priority:
+allowedCapabilities: ["SYS_ADMIN"]
+allowHostPorts: true
+allowHostPID: true
+allowHostIPC: true
+readOnlyRootFilesystem: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+fsGroup:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - emptyDir
+  - hostPath
+  - projected
+users:
+  # Pre-cephcsi operator service accounts
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:rook-csi-rbd-plugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:rook-csi-rbd-provisioner-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:rook-csi-cephfs-plugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:rook-csi-cephfs-provisioner-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:rook-csi-nfs-plugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:rook-csi-nfs-provisioner-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:nvmeof-csi-provisioner
+  # CSI operator service accounts
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-cephfs-ctrlplugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-cephfs-nodeplugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-nfs-ctrlplugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-nfs-nodeplugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-nvmeof-ctrlplugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-nvmeof-nodeplugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-rbd-ctrlplugin-sa
+  - system:serviceaccount:{{ .Values.csiSecrets.namespace }}:ceph-csi-rbd-nodeplugin-sa
