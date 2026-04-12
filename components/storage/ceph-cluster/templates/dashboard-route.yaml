@@ -13,4 +13,6 @@ spec:
     targetPort: https-dashboard
   tls:
     termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+    destinationCACertificate: ""
 {{- end }}
