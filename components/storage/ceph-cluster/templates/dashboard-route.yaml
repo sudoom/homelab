@@ -12,5 +12,5 @@ spec:
   port:
     targetPort: https-dashboard
   tls:
-    termination: passthrough
+    termination: reencrypt
 {{- end }}
