@@ -5,6 +5,8 @@ namespace: rook-ceph
 rook-ceph:
   # OpenShift requires privileged hostPath access
   hostpathRequiresPrivileged: true
+  # Enable host networking for Ceph daemons (adds allowHostNetwork to SCC)
+  useOperatorHostNetwork: true
   csi:
     enableRbdDriver: true
     enableCephfsDriver: true

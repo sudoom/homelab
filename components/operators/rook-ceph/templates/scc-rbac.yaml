@@ -1,44 +1,28 @@
-# Upstream SCCs from rook/rook release-1.19:
-# https://github.com/rook/rook/blob/release-1.19/deploy/examples/operator-openshift.yaml
-
-# SCC for Rook operator and Ceph daemons (mons, OSDs, mgr, rgw)
-kind: SecurityContextConstraints
-apiVersion: security.openshift.io/v1
+# Grant extra service accounts access to the rook-ceph SCC
+# (provided by the rook-ceph subchart). The subchart only covers
+# core SAs; these are additional SAs used by the cluster.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
 metadata:
-  name: rook-ceph
-allowPrivilegedContainer: true
-allowHostDirVolumePlugin: true
-allowHostPID: false
-allowHostNetwork: true
-allowHostPorts: true
-priority:
-allowedCapabilities: ["MKNOD", "SYS_ADMIN", "NET_RAW"]
-allowHostIPC: true
-readOnlyRootFilesystem: false
-requiredDropCapabilities: ["All"]
-defaultAddCapabilities: []
-runAsUser:
-  type: RunAsAny
-seLinuxContext:
-  type: MustRunAs
-fsGroup:
-  type: MustRunAs
-supplementalGroups:
-  type: RunAsAny
-volumes:
-  - configMap
-  - downwardAPI
-  - emptyDir
-  - hostPath
-  - persistentVolumeClaim
-  - projected
-  - secret
-users:
-  - system:serviceaccount:{{ .Values.namespace }}:rook-ceph-system
-  - system:serviceaccount:{{ .Values.namespace }}:rook-ceph-default
-  - system:serviceaccount:{{ .Values.namespace }}:rook-ceph-mgr
-  - system:serviceaccount:{{ .Values.namespace }}:rook-ceph-osd
-  - system:serviceaccount:{{ .Values.namespace }}:rook-ceph-rgw
-  - system:serviceaccount:{{ .Values.namespace }}:rook-ceph-nvmeof
-  - system:serviceaccount:{{ .Values.namespace }}:default
-  - system:serviceaccount:{{ .Values.namespace }}:rook-ceph-tools
+  name: rook-ceph-scc-extra
+rules:
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    resourceNames: ["rook-ceph"]
+    verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rook-ceph-scc-extra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rook-ceph-scc-extra
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: rook-ceph-tools
+    namespace: {{ .Values.namespace }}
