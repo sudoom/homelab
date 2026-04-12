@@ -57,15 +57,15 @@ applications:
     namespace: openshift-config
     syncWave: "3"
 
-  # # Wave 3 — Storage (depends on Rook operator + storage network)
-  # ceph-cluster:
-  #   enabled: false
-  #   path: components/storage/ceph-cluster
-  #   namespace: rook-ceph
-  #   syncWave: "3"
+  # Wave 3 — Storage (depends on Rook operator + storage network)
+  ceph-cluster:
+    enabled: true
+    path: components/storage/ceph-cluster
+    namespace: rook-ceph
+    syncWave: "3"
 
-  # ceph-storage-classes:
-  #   enabled: false
-  #   path: components/storage/ceph-storage-classes
-  #   namespace: rook-ceph
-  #   syncWave: "4"
+  ceph-storage-classes:
+    enabled: true
+    path: components/storage/ceph-storage-classes
+    namespace: rook-ceph
+    syncWave: "4"
