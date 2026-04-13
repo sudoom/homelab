@@ -12,6 +12,12 @@ applications:
     namespace: default
     syncWave: "0"
 
+  kubelet-config:
+    enabled: true
+    path: components/cluster-config/kubelet-config
+    namespace: default
+    syncWave: "0"
+
   # Wave 1 — Operators (subscriptions + instances)
   nmstate-operator:
     enabled: true

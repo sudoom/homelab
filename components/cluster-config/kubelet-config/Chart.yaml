@@ -1,0 +1,4 @@
+apiVersion: v2
+name: kubelet-config
+description: KubeletConfig overrides for OKD cluster nodes
+version: 0.1.0
