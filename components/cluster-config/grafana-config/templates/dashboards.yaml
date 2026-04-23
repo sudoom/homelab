@@ -1,0 +1,103 @@
+# Ceph — Cluster overview
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: ceph-cluster
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 2842
+---
+# Ceph — OSD overview
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: ceph-osd
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 5336
+---
+# Ceph — Pools overview
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: ceph-pools
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 5342
+---
+# Node Exporter — host metrics
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: node-exporter
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 1860
+---
+# Kubernetes — cluster overview
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: k8s-cluster
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 7249
+---
+# Kubernetes — pod resources
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: k8s-pods
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 6879
+---
+# CoreDNS
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: coredns
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 15762
+---
+# etcd
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: etcd
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 3070
