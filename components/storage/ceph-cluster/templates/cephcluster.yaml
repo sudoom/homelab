@@ -6,7 +6,6 @@ metadata:
 spec:
   monitoring:
     enabled: true
-    createPrometheusRules: true
   cephVersion:
     image: {{ .Values.cephVersion.image }}
     allowUnsupported: false
