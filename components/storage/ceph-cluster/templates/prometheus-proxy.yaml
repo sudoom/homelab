@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-proxy-script
+  namespace: rook-ceph
+data:
+  proxy.py: |
+    import http.server
+    import urllib.request
+    import ssl
+
+    UPSTREAM = "https://prometheus-k8s.openshift-monitoring.svc:9091"
+    TOKEN_PATH = "/var/run/secrets/tokens/prometheus-token"
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                with open(TOKEN_PATH) as f:
+                    token = f.read().strip()
+                req = urllib.request.Request(
+                    f"{UPSTREAM}{self.path}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                resp = urllib.request.urlopen(req, context=ctx)
+                self.send_response(resp.status)
+                for k, v in resp.headers.items():
+                    if k.lower() not in ("transfer-encoding",):
+                        self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(resp.read())
+            except Exception as e:
+                self.send_response(502)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+
+        def log_message(self, fmt, *args):
+            pass
+
+    http.server.HTTPServer(("", 9090), Handler).serve_forever()
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-proxy
+  namespace: rook-ceph
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-proxy-monitoring-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-proxy
+    namespace: rook-ceph
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-proxy
+  namespace: rook-ceph
+  labels:
+    app: prometheus-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-proxy
+  template:
+    metadata:
+      labels:
+        app: prometheus-proxy
+    spec:
+      serviceAccountName: prometheus-proxy
+      containers:
+        - name: proxy
+          image: python:3.12-alpine
+          command: ["python3", "/app/proxy.py"]
+          ports:
+            - containerPort: 9090
+              name: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: script
+              mountPath: /app
+            - name: token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: prometheus-proxy-script
+        - name: token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: prometheus-token
+                  audience: openshift
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-proxy
+  namespace: rook-ceph
+  labels:
+    app: prometheus-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus-proxy
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
