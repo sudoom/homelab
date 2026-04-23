@@ -1,0 +1,6 @@
+prometheus:
+  retention: 15d
+  volumeSize: 10Gi
+
+alertmanager:
+  volumeSize: 1Gi

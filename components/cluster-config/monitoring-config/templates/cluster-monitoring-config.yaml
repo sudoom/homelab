@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    prometheusK8s:
+      retention: {{ .Values.prometheus.retention }}
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ceph-nvme-block
+          resources:
+            requests:
+              storage: {{ .Values.prometheus.volumeSize }}
+    alertmanagerMain:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ceph-nvme-block
+          resources:
+            requests:
+              storage: {{ .Values.alertmanager.volumeSize }}

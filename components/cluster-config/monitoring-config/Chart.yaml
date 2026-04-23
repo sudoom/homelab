@@ -1,0 +1,4 @@
+apiVersion: v2
+name: monitoring-config
+description: OpenShift cluster monitoring stack configuration
+version: 0.1.0

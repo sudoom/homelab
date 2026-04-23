@@ -75,3 +75,10 @@ applications:
     path: components/storage/ceph-storage-classes
     namespace: rook-ceph
     syncWave: "4"
+
+  # Wave 5 — Monitoring config (depends on storage classes)
+  monitoring-config:
+    enabled: true
+    path: components/cluster-config/monitoring-config
+    namespace: openshift-monitoring
+    syncWave: "5"
