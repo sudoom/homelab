@@ -45,7 +45,7 @@ spec:
       mon_allow_pool_delete: "true"
       mgr/dashboard/ssl: "false"
       mgr/dashboard/server_port: "8080"
-      # mgr/dashboard/PROMETHEUS_API_HOST: "http://prometheus-operated.openshift-monitoring.svc:9090"
+      mgr/dashboard/PROMETHEUS_API_HOST: "http://prometheus-unauthenticated.openshift-monitoring.svc:9090"
     osd:
       osd_memory_target: {{ .Values.osd.memoryTarget | quote }}
       bluestore_cache_autotune: "true"
