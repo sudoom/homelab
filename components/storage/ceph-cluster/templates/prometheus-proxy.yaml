@@ -81,7 +81,7 @@ spec:
       serviceAccountName: prometheus-proxy
       containers:
         - name: proxy
-          image: python:3.12-alpine
+          image: python:3.14-alpine
           command: ["python3", "/app/proxy.py"]
           ports:
             - containerPort: 9090
