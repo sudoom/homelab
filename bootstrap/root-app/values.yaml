@@ -76,6 +76,12 @@ applications:
     namespace: rook-ceph
     syncWave: "4"
 
+  nfs-csi:
+    enabled: true
+    path: components/storage/nfs-csi
+    namespace: nfs-csi
+    syncWave: "4"
+
   # Wave 5 — Monitoring config (depends on storage classes)
   monitoring-config:
     enabled: true
