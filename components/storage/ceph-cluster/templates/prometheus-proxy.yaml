@@ -107,7 +107,6 @@ spec:
             sources:
               - serviceAccountToken:
                   path: prometheus-token
-                  audience: openshift
                   expirationSeconds: 3600
 ---
 apiVersion: v1
