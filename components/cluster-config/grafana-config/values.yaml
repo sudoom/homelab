@@ -1,0 +1,4 @@
+namespace: grafana
+
+route:
+  host: grafana.apps.okd.sudops.pl

@@ -1,0 +1,4 @@
+apiVersion: v2
+name: grafana-config
+description: Grafana instance, datasource, and route
+version: 0.1.0

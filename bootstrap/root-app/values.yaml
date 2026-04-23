@@ -37,6 +37,12 @@ applications:
     namespace: rook-ceph
     syncWave: "1"
 
+  grafana-operator:
+    enabled: true
+    path: components/operators/grafana
+    namespace: grafana
+    syncWave: "1"
+
   # Wave 2 — Cluster config (depends on operators being ready)
   nmstate-nncp:
     enabled: true
@@ -82,7 +88,13 @@ applications:
     namespace: nfs-csi
     syncWave: "4"
 
-  # Wave 5 — Monitoring config (depends on storage classes)
+  # Wave 5 — Monitoring + observability config
+  grafana-config:
+    enabled: true
+    path: components/cluster-config/grafana-config
+    namespace: grafana
+    syncWave: "5"
+
   monitoring-config:
     enabled: true
     path: components/cluster-config/monitoring-config

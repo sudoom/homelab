@@ -1,0 +1,78 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: grafana
+  namespace: {{ .Values.namespace }}
+  labels:
+    dashboards: grafana
+spec:
+  route:
+    spec:
+      host: {{ .Values.route.host }}
+      port:
+        targetPort: grafana
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+  config:
+    log:
+      mode: console
+    security:
+      admin_user: admin
+      admin_password: admin
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-prometheus
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grafana-prometheus-monitoring-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: grafana-prometheus
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-prometheus-token
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/service-account.name: grafana-prometheus
+type: kubernetes.io/service-account-token
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: prometheus
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  valuesFrom:
+    - targetPath: secureJsonData.httpHeaderValue1
+      valueFrom:
+        secretKeyRef:
+          name: grafana-prometheus-token
+          key: token
+  datasource:
+    name: Prometheus
+    type: prometheus
+    access: proxy
+    url: https://thanos-querier.openshift-monitoring.svc:9091
+    isDefault: true
+    jsonData:
+      httpHeaderName1: Authorization
+      tlsSkipVerify: true
+      timeInterval: 15s
+    secureJsonData:
+      httpHeaderValue1: "Bearer ${token}"
