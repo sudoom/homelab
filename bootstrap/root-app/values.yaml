@@ -100,3 +100,10 @@ applications:
     path: components/cluster-config/monitoring-config
     namespace: openshift-monitoring
     syncWave: "5"
+
+  # Wave 6 — Applications
+  media:
+    enabled: true
+    path: components/apps/media
+    namespace: media
+    syncWave: "6"

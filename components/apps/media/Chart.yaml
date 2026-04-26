@@ -1,0 +1,4 @@
+apiVersion: v2
+name: media
+description: Media stack — *arr suite, Jellyfin, Transmission
+version: 1.0.0

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-data-pvc
+  namespace: {{ .Values.namespace }}
+spec:
+  storageClassName: {{ .Values.storage.dataClass }}
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.storage.dataSize }}

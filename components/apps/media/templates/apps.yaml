@@ -1,0 +1,103 @@
+{{- range $name, $app := .Values.apps }}
+{{- if and $app.enabled (ne $name "transmission") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-config-pvc
+  namespace: {{ $.Values.namespace }}
+spec:
+  storageClassName: {{ $.Values.storage.configClass }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $app.configSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
+spec:
+  revisionHistoryLimit: 3
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: {{ $app.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ $app.port }}
+          readinessProbe:
+            httpGet:
+              path: {{ $app.readinessPath }}
+              port: {{ $app.port }}
+            initialDelaySeconds: {{ $app.readinessInitialDelay | default 10 }}
+            periodSeconds: 15
+            {{- if eq $name "jellyfin" }}
+            failureThreshold: 5
+            timeoutSeconds: 3
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ $app.resources.requests.cpu }}
+              memory: {{ $app.resources.requests.memory }}
+            limits:
+              memory: {{ $app.resources.limits.memory }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            {{- if $app.mountData }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: {{ $name }}-config-pvc
+        {{- if $app.mountData }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: media-data-pvc
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
+spec:
+  ports:
+    - port: {{ $app.port }}
+  selector:
+    app: {{ $name }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
+spec:
+  host: {{ $app.host | default $name }}.{{ $.Values.domain }}
+  port:
+    targetPort: {{ $app.port }}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: {{ $name }}
+{{- end }}
+{{- end }}
