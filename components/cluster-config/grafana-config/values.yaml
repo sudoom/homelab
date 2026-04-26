@@ -2,3 +2,7 @@ namespace: grafana
 
 route:
   host: grafana.apps.okd.sudops.pl
+
+storage:
+  storageClassName: ceph-nvme-block
+  size: 1Gi

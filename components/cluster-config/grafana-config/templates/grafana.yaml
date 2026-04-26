@@ -17,6 +17,14 @@ spec:
   config:
     log:
       mode: console
+  persistentVolumeClaim:
+    spec:
+      storageClassName: {{ .Values.storage.storageClassName }}
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: {{ .Values.storage.size }}
   deployment:
     spec:
       template:
