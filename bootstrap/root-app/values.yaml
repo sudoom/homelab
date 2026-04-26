@@ -43,6 +43,12 @@ applications:
     namespace: grafana
     syncWave: "1"
 
+  sealed-secrets:
+    enabled: true
+    path: components/operators/sealed-secrets
+    namespace: sealed-secrets
+    syncWave: "1"
+
   # Wave 2 — Cluster config (depends on operators being ready)
   nmstate-nncp:
     enabled: true
