@@ -17,8 +17,6 @@ spec:
   config:
     log:
       mode: console
-    security:
-      disable_initial_admin_creation: "true"
   deployment:
     spec:
       template:
