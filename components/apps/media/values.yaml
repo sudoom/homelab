@@ -82,7 +82,7 @@ apps:
 
   transmission:
     enabled: true
-    image: haugene/transmission-openvpn:5.3.2
+    image: haugene/transmission-openvpn:5.4.1
     port: 9091
     configSize: 5Gi
     host: media-download

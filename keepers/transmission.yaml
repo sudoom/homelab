@@ -68,7 +68,7 @@ spec:
           - secretRef:
               name: vpn-creds
               optional: false
-          image: haugene/transmission-openvpn:5.3.2
+          image: haugene/transmission-openvpn:5.4.1
           imagePullPolicy: IfNotPresent
           readinessProbe:
             failureThreshold: 3
