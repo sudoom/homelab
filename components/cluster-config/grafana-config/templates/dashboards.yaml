@@ -101,3 +101,16 @@ spec:
       dashboards: grafana
   grafanaCom:
     id: 3070
+---
+# Kubernetes — comprehensive dashboard
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: k8s-comprehensive
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 15661
