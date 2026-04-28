@@ -1,2 +1,4 @@
 sealed-secrets:
   fullnameOverride: sealed-secrets-controller
+  args:
+    - --key-renew-period=0
