@@ -40,17 +40,17 @@ resources:
     limits:
       memory: "6Gi"
 
-# Replace these with actual /dev/disk/by-id/ paths from your nodes
+# Positional device name — stable across disk replacements (all nodes use NVMe slot 0)
 nodes:
   - name: "node4.okd.sudops.pl"
     devices:
-      - name: "/dev/disk/by-id/nvme-PNY_CS1030_500GB_SSD_PNB46257035080101591"
+      - name: "/dev/nvme0n1"
   - name: "node5.okd.sudops.pl"
     devices:
-      - name: "/dev/disk/by-id/nvme-PNY_CS1030_500GB_SSD_PNB48250038340500306"
+      - name: "/dev/nvme0n1"
   - name: "node6.okd.sudops.pl"
     devices:
-      - name: "/dev/disk/by-id/nvme-PNY_CS1030_500GB_SSD_PNB48250038340500238"
+      - name: "/dev/nvme0n1"
 
 toolbox:
   enabled: true
