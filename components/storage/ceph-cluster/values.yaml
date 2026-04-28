@@ -14,7 +14,7 @@ dashboard:
   port: 8080
 
 network:
-  public: "192.168.10.0/24"
+  public: "192.168.1.0/24"
   cluster: "192.168.10.0/24"
 
 osd:
