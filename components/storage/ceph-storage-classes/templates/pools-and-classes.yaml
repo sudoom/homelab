@@ -11,6 +11,12 @@ spec:
   replicated:
     size: {{ $pool.replicated.size }}
     requireSafeReplicaSize: true
+  {{- with $pool.parameters }}
+  parameters:
+    {{- range $k, $v := . }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+  {{- end }}
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
