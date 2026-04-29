@@ -1,0 +1,623 @@
+# Running Rook-Ceph on a 3-Node OKD 4.20 Bare-Metal Cluster
+
+Running a hyperconverged storage layer on a small bare-metal cluster comes with real constraints — no spare nodes for dedicated storage, limited RAM, and every daemon competes with workloads for resources. This post covers how I deployed Rook-Ceph on a 3-node OKD 4.20 cluster, the problems I hit, and the decisions I made along the way.
+
+## The hardware
+
+Three identical nodes running as both control-plane and workers:
+
+| Node | Frontend IP | Storage backnet IP | NVMe device |
+|------|-----------|-------------------|-------------|
+| node4.okd.sudops.pl | 192.168.1.7 | 192.168.10.2 | /dev/disk/by-id/nvme-... |
+| node5.okd.sudops.pl | 192.168.1.8 | 192.168.10.3 | /dev/disk/by-id/nvme-... |
+| node6.okd.sudops.pl | 192.168.1.9 | 192.168.10.4 | /dev/disk/by-id/nvme-... |
+
+Each node has a dedicated NVMe drive for Ceph OSDs. The storage network (`192.168.10.0/24`) is a separate VLAN configured via NMState NNCPs, keeping Ceph replication traffic off the frontend network.
+
+## Why Rook-Ceph
+
+I needed block storage for Prometheus, Alertmanager, and Grafana — workloads that need persistent, replicated volumes. The alternatives:
+
+- **Local-path provisioner**: No replication. A node failure means data loss.
+- **NFS**: I have a Synology NAS on the network, but NFS is wrong for database-like workloads (SQLite, Prometheus TSDB). Write latency matters.
+- **OpenShift Data Foundation**: Requires a separate subscription and minimum 3 dedicated storage nodes. Overkill for a homelab.
+
+Rook-Ceph gives me 3-way replicated block storage using the NVMe drives I already have, with no licensing requirements.
+
+## Deployment architecture
+
+Everything is managed by ArgoCD using an app-of-apps pattern with sync waves:
+
+```
+Wave 0  →  Node labels, failure domains, kubelet config
+Wave 1  →  Rook-Ceph operator (Helm subchart, v1.19.3)
+Wave 3  →  CephCluster CR, toolbox, monitoring, dashboard route
+Wave 4  →  CephBlockPool + StorageClass
+Wave 5  →  Monitoring stack (Prometheus/Alertmanager PVCs on Ceph)
+           Grafana (PVC on Ceph, dashboards for Ceph metrics)
+```
+
+The ordering matters. The Rook operator must be running before the CephCluster CR is applied, and storage classes must exist before anything tries to create PVCs.
+
+## Operator installation
+
+The Rook operator is deployed as a Helm subchart wrapping the official `rook-ceph` chart from `https://charts.rook.io/release` (v1.19.3). OpenShift requires extra configuration compared to vanilla Kubernetes:
+
+```yaml
+# values.yaml (operator)
+crds:
+  enabled: true
+hostpathRequiresPrivileged: true
+csi:
+  enableRbdDriver: true
+  enableCephfsDriver: true
+monitoring:
+  enabled: true
+```
+
+The namespace needs privileged pod security labels and cluster monitoring enabled:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rook-ceph
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+    openshift.io/cluster-monitoring: "true"
+```
+
+The `openshift.io/cluster-monitoring: "true"` label is what tells OpenShift's Prometheus to scrape ServiceMonitors in this namespace. Without it, your Ceph metrics go nowhere.
+
+### SCC: pod security labels are not enough on OpenShift
+
+Pod-security labels in the namespace let pods *request* privileged contexts, but on OpenShift each ServiceAccount also needs explicit access to a SecurityContextConstraint via RBAC. The Rook v1.19 subchart ships its own `rook-ceph` SCC (preferred over the built-in `privileged` — narrower scope, identical effect for our daemons) and binds it to the SAs it manages: `rook-ceph-system`, `rook-ceph-osd`, `rook-ceph-mgr`, etc.
+
+The subchart only covers SAs it owns. Two extras need a separate binding: the `default` SA in `rook-ceph` (used by the CSI plugin pods Rook creates dynamically) and `rook-ceph-tools` (the toolbox, which uses host networking):
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rook-ceph-scc-extra
+rules:
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    resourceNames: ["rook-ceph"]
+    verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rook-ceph-scc-extra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rook-ceph-scc-extra
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: rook-ceph
+  - kind: ServiceAccount
+    name: rook-ceph-tools
+    namespace: rook-ceph
+```
+
+Without this binding, the toolbox pod gets stuck in `CreateContainerConfigError` and CSI plugin pods fail to start with `unable to validate against any security context constraint`. The error doesn't mention SCC by name, which is what makes it annoying to debug the first time.
+
+## CephCluster configuration
+
+The CephCluster CR is where the interesting decisions live.
+
+### Network: host networking with a dedicated storage VLAN
+
+The first iteration looked like this:
+
+```yaml
+network:
+  provider: host
+  addressRanges:
+    public:
+      - "192.168.10.0/24"  # 10G storage backnet
+    cluster:
+      - "192.168.10.0/24"
+```
+
+Host networking means Ceph daemons bind directly to node IPs instead of getting pod IPs. On bare-metal it avoids CNI overhead and lets you pin Ceph to a dedicated 10G interface. The `192.168.10.0/24` VLAN is configured via NMState `NodeNetworkConfigurationPolicy` resources, separated from the 1G frontend network (`192.168.1.0/24`).
+
+This config is technically correct — and it broke RBD provisioning the first time anyone created a PVC.
+
+#### The trap: CSI clients live on the SDN
+
+When a PVC is created, the `csi-rbdplugin` controller pod handles `CreateVolume`. It runs as a regular pod on the OVN SDN (`hostNetwork: false`). The flow:
+
+1. Client (CSI plugin) talks to mons → asks for the OSD map.
+2. Client connects to OSDs at the addresses returned by the mons.
+
+Mons happened to advertise on `192.168.1.x` because they bind to whatever the host's primary IP is, but **OSDs bind on `public_network`**, which I'd set to `192.168.10.0/24`. The CSI pod, sitting on the SDN, has no route to `192.168.10.0/24`. Result:
+
+```
+ProvisioningFailed  rpc error: code = DeadlineExceeded desc = context deadline exceeded
+ProvisioningFailed  rpc error: code = Aborted desc = an operation with the given Volume ID ... already exists
+```
+
+The "already exists" looks like a CSI bug — it's actually the in-memory operation tracking saying "the previous CreateVolume is still hanging at the OSD connect step, don't queue another one". The first call never completes because TCP to `192.168.10.4:6800` times out from inside an SDN pod.
+
+I wasted a fair bit of time restarting CSI pods (the documented workaround for "operation already exists") before realizing the issue was below the CSI layer.
+
+#### Diagnosing it
+
+Two commands made it obvious:
+
+```bash
+# From the toolbox pod (hostNetwork: true, has 10G interface)
+oc -n rook-ceph exec deploy/rook-ceph-tools -- rbd ls -p nvme-replicated
+# → returns instantly
+
+# From the CSI plugin pod (SDN-only)
+oc -n rook-ceph exec rook-ceph.rbd.csi.ceph.com-ctrlplugin-... -c csi-rbdplugin -- \
+  rbd ls -p nvme-replicated -m <mons> --id csi-rbd-provisioner.1 --key=... --debug-ms 1
+# → hangs, with debug output:
+#   conn(... v2:192.168.10.4:6800 ...) tick see no progress in more than 10000000 us
+```
+
+The mons are reachable from both pods (because mons happen to advertise on `.1.x`), but only host-network pods can reach the OSDs.
+
+#### The temporary fix: move client traffic back to 1G
+
+Changed `public_network` to the frontend subnet:
+
+```yaml
+network:
+  provider: host
+  addressRanges:
+    public:
+      - "192.168.1.0/24"   # SDN-reachable, but only 1G
+    cluster:
+      - "192.168.10.0/24"  # OSD↔OSD replication stays on 10G
+```
+
+Rook updates the ceph config when you commit this, but it does **not** roll the daemons. Mons happened to already advertise on `.1.x` so they were fine; OSDs needed a manual rolling restart (one at a time, waiting for `HEALTH_OK` between each) to rebind on the new addresses:
+
+```bash
+for i in 0 1 2; do
+  oc -n rook-ceph delete pod -l app=rook-ceph-osd,osd=$i
+  until oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph -s | grep -q HEALTH_OK; do sleep 5; done
+done
+```
+
+After that, `ceph osd metadata` shows the new bind addresses:
+
+```
+"front_addr": "[v2:192.168.1.7:6800/...,v1:192.168.1.7:6801/...]"
+```
+
+PVC binds, pod mounts, life is good — except for the throughput hit. Now client writes traverse the 1G NIC, capped at ~118 MB/s sustained. Replication still happens on the 10G backnet via `cluster_network`, so OSD-to-OSD recovery isn't degraded. But user-visible I/O is suddenly an order of magnitude slower than the hardware can do.
+
+#### The proper fix: Multus
+
+The right answer is to give the CSI plugin pods a second NIC on the storage backnet via Multus, and put `public_network` back to `192.168.10.0/24`. Rook supports this directly:
+
+```yaml
+network:
+  provider: multus
+  selectors:
+    public:  rook-ceph/ceph-public
+    cluster: rook-ceph/ceph-cluster
+```
+
+With `NetworkAttachmentDefinition` resources (using the existing 10G NIC plus `whereabouts` IPAM), Rook attaches the NAD to mons, OSDs, **and** CSI plugin pods. Clients reach OSDs at line rate, the SDN keeps its single-NIC simplicity for everything else.
+
+This is a non-trivial migration — the same kind of rolling daemon restart, plus NAD plumbing — so it's a separate piece of work, queued behind a couple of cheaper wins (PG count, slow-op investigation) covered below.
+
+### Topology: failure domains
+
+```yaml
+nodes:
+  - name: "node4.okd.sudops.pl"
+    devices:
+      - name: "/dev/nvme0n1"
+  - name: "node5.okd.sudops.pl"
+    devices:
+      - name: "/dev/nvme0n1"
+  - name: "node6.okd.sudops.pl"
+    devices:
+      - name: "/dev/nvme0n1"
+```
+
+Each node maps to a failure domain (`fd-a`, `fd-b`, `fd-c`) via Kubernetes topology labels. The block pool uses `failureDomain: host`, so Ceph distributes replicas across all three nodes. With `size: 3` and `min_size: 2`, the cluster can tolerate one node failure without data loss and continues serving I/O in degraded mode.
+
+#### Why positional `/dev/nvme0n1` instead of `/dev/disk/by-id/`
+
+I started with `/dev/disk/by-id/nvme-...` paths, which is the conventional advice — the by-id link is keyed off the drive's serial number, so it survives `nvme0` and `nvme1` swapping at boot. The downside is that the path is **specific to this physical drive**, and it changes the moment you replace the drive. With three nodes and three drives, you'd need a values.yaml change every time you swap a disk.
+
+The cluster's hardware story is simpler than that: every node has exactly one NVMe slot, populated, and that's the device Ceph should use. The OS sits on a different bus (SATA M.2). So `/dev/nvme0n1` is **always** the right device on every node, regardless of which physical drive is plugged in. Disk replacements become a hot-swap with zero git changes.
+
+The values.yaml comment captures the intent:
+
+```yaml
+# Positional device name — stable across disk replacements (all nodes use NVMe slot 0)
+nodes:
+  - name: "node4.okd.sudops.pl"
+    devices:
+      - name: "/dev/nvme0n1"
+```
+
+If a future node ever has two NVMe drives — say one for OSD, one for OS — this assumption breaks and we go back to by-id. For now, positional is the smaller blast radius.
+
+### Resource tuning for small clusters
+
+On a 3-node cluster where every pod counts, you can't give Ceph unlimited resources:
+
+```yaml
+resources:
+  mon:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      memory: "1Gi"
+  mgr:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      memory: "512Mi"
+  osd:
+    requests:
+      cpu: "1"
+      memory: "5Gi"
+    limits:
+      memory: "5Gi"
+```
+
+The OSD memory target is set to 4GB with BlueStore cache autotuning:
+
+```yaml
+cephConfig:
+  global:
+    osd_pool_default_size: "3"
+    osd_pool_default_min_size: "2"
+  osd:
+    osd_memory_target: "4294967296"
+    bluestore_cache_autotune: "true"
+```
+
+4GB per OSD is a reasonable floor for NVMe-backed OSDs. Going lower causes excessive cache eviction and visible latency spikes. The `bluestore_cache_autotune` setting lets Ceph manage the split between BlueStore cache and RocksDB metadata cache automatically.
+
+I also increased the system reserved memory on each node via a `KubeletConfig` to 3Gi, preventing the kernel OOM killer from targeting Ceph OSDs when the node is under memory pressure:
+
+```yaml
+apiVersion: machineconfiguration.openshift.io/v1
+kind: KubeletConfig
+metadata:
+  name: system-reserved-increase
+spec:
+  machineConfigPoolSelector:
+    matchLabels:
+      pools.operator.machineconfiguration.openshift.io/master: ""
+  kubeletConfig:
+    systemReserved:
+      memory: "3Gi"
+```
+
+The `master` pool selector covers all three nodes — they're control-plane and worker simultaneously. Applying this rolls each node sequentially via the MCO; expect ~10 minutes of churn the first time you commit it. The 3Gi value is calibrated against OSDs requesting 5Gi (limit 6Gi) plus headroom for kubelet, container runtime, and OVN — it leaves the OSDs as the largest *evictable* workload but keeps system services off the OOM list.
+
+### Manager modules
+
+```yaml
+mgr:
+  count: 2
+  modules:
+    - name: pg_autoscaler
+      enabled: true
+    - name: rook
+      enabled: true
+    - name: devicehealth
+      enabled: true
+```
+
+`pg_autoscaler` is essential — it automatically adjusts placement group counts as pools grow, which saves you from the classic "too few PGs" warning. `devicehealth` monitors NVMe SMART data and can predict drive failures.
+
+## The toolbox: keyring init quirk
+
+The Rook toolbox pod (`rook-ceph-tools`) is what you `oc rsh` into to run `ceph -s`, `rbd ls`, and similar admin commands. Following upstream's example, the deployment mounts the admin keyring secret at `/etc/ceph/keyring-store/keyring` and runs an init script to set up `ceph.conf`.
+
+The wrinkle: the secret stores **just the raw key**, not a full keyring file. Pointing `ceph` at the mounted file directly fails because Ceph expects keyring files in `[client.admin]\n  key = ...` format. The toolbox script needs to wrap the raw key into a real keyring at startup:
+
+```bash
+CEPH_CONFIG="/etc/ceph/ceph.conf"
+MON_CONFIG="/etc/rook/mon-endpoints"
+KEYRING_FILE="/etc/ceph/keyring"
+
+cat <<KEYEOF > "$KEYRING_FILE"
+[client.admin]
+key = $(cat /etc/ceph/keyring-store/keyring)
+KEYEOF
+
+cat <<EOF > "$CEPH_CONFIG"
+[global]
+mon_host = $(cat "$MON_CONFIG" | sed 's/[a-z]\+=//g; s/=/ /; s/  */ /g')
+
+[client.admin]
+keyring = $KEYRING_FILE
+EOF
+
+sleep infinity
+```
+
+Without that wrap, every `ceph` command in the toolbox hangs waiting for an auth handshake that never completes — no useful error message, just silence. Worth knowing before you go down a "why can't the toolbox talk to mons" rabbit hole.
+
+The toolbox also runs `hostNetwork: true` so it can reach OSDs on the storage backnet. That's why it shows up in the SCC binding above — host networking on OpenShift requires SCC `use` permission.
+
+## Storage classes
+
+A single replicated block pool backed by NVMe drives:
+
+```yaml
+apiVersion: ceph.rook.io/v1
+kind: CephBlockPool
+metadata:
+  name: nvme-replicated
+  namespace: rook-ceph
+spec:
+  failureDomain: host
+  deviceClass: nvme
+  replicated:
+    size: 3
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ceph-nvme-block
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rook-ceph.rbd.csi.ceph.com
+parameters:
+  pool: nvme-replicated
+  imageFormat: "2"
+  imageFeatures: layering
+  csi.storage.k8s.io/fstype: ext4
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+```
+
+Setting `ceph-nvme-block` as the default storage class means any PVC without an explicit `storageClassName` automatically lands on Ceph. I chose ext4 over XFS for the filesystem — it's simpler to debug and resize, and for my workloads (Prometheus TSDB, SQLite) there's no meaningful performance difference.
+
+## Monitoring: the tricky part
+
+Getting Ceph metrics into Prometheus on OKD required understanding how OpenShift's monitoring stack actually works.
+
+### ServiceMonitor
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rook-ceph-mgr
+  namespace: rook-ceph
+spec:
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 15s
+  selector:
+    matchLabels:
+      app: rook-ceph-mgr
+      rook_cluster: rook-ceph
+```
+
+This tells Prometheus to scrape the Ceph Manager's `/metrics` endpoint. But Prometheus needs RBAC to reach into the `rook-ceph` namespace:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-k8s-rook-ceph
+  namespace: rook-ceph
+rules:
+  - apiGroups: [""]
+    resources: [services, endpoints, pods]
+    verbs: [get, list, watch]
+```
+
+Without this Role and RoleBinding, Prometheus discovers the ServiceMonitor but can't resolve the target endpoints.
+
+### Ceph dashboard and Prometheus integration
+
+The Ceph dashboard runs on port 8080 (SSL disabled for simplicity behind the OpenShift router's edge TLS):
+
+```yaml
+cephConfig:
+  global:
+    mgr/dashboard/ssl: "false"
+    mgr/dashboard/server_port: "8080"
+```
+
+I initially tried connecting the Ceph dashboard to Prometheus for its built-in graphs. This turned into a rabbit hole:
+
+1. **Prometheus on OKD binds to `127.0.0.1:9090`** — it's not directly accessible from other pods.
+2. The `prometheus-operated` service actually hits `kube-rbac-proxy` on port 9091, which requires a bearer token.
+3. The Ceph MGR on host networking can reach ClusterIPs but not pod IPs.
+
+After building (and then deleting) a Python auth proxy, I realized Grafana with dedicated Ceph dashboards is a far better solution than the built-in dashboard graphs. The Ceph dashboard is still useful for cluster management, but metrics visualization belongs in Grafana.
+
+### Exposing the dashboard via Route
+
+The dashboard listens on plain HTTP port 8080 inside the cluster (SSL terminated at the OpenShift router) and is reached via a Route at `ceph.apps.okd.sudops.pl`:
+
+```yaml
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ceph-dashboard
+  namespace: rook-ceph
+spec:
+  host: ceph.apps.okd.sudops.pl
+  to:
+    kind: Service
+    name: rook-ceph-mgr-dashboard
+  port:
+    targetPort: http-dashboard
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+Edge termination + the wildcard `*.apps.okd.sudops.pl` cert (managed by cert-manager) means the browser sees a valid Let's Encrypt cert and no warnings. The alternative — passthrough with the dashboard's self-signed cert — would force a browser exception every time, which gets old fast.
+
+`insecureEdgeTerminationPolicy: Redirect` quietly bumps any `http://ceph.apps...` request up to HTTPS. Cheap and useful.
+
+### Grafana dashboards
+
+Three Ceph-specific dashboards from grafana.com:
+
+- **Ceph Cluster overview** (ID: 2842) — overall health, IOPS, throughput
+- **Ceph OSD overview** (ID: 5336) — per-OSD latency and utilization
+- **Ceph Pools overview** (ID: 5342) — pool-level stats
+
+The Grafana datasource authenticates to OpenShift's Thanos Querier using a ServiceAccount token with `cluster-monitoring-view` privileges:
+
+```yaml
+datasource:
+  name: Prometheus
+  type: prometheus
+  url: https://thanos-querier.openshift-monitoring.svc:9091
+  jsonData:
+    httpHeaderName1: Authorization
+    tlsSkipVerify: true
+  secureJsonData:
+    httpHeaderValue1: "Bearer ${token}"
+```
+
+This gives Grafana access to all cluster metrics, including Ceph, node-level, and Kubernetes metrics from a single datasource.
+
+## Performance: the first benchmark, and what it taught me
+
+After the network detour, I ran a 200 GB random-write test from a test pod to validate the cluster:
+
+```yaml
+spec:
+  containers:
+    - name: test
+      image: quay.io/ceph/ceph:v19.2.3
+      command: ["/bin/bash","-c"]
+      args:
+        - dd if=/dev/urandom of=/data/testfile bs=1M count=200000 status=progress
+      volumeMounts:
+        - { name: data, mountPath: /data }
+  volumes:
+    - name: data
+      persistentVolumeClaim: { claimName: ceph-test-pvc-200 }
+```
+
+Ceph dashboard reported peaks around 580 MB/s, settling to ~150 MB/s sustained. Cluster health flipped to:
+
+```
+HEALTH_WARN  3 OSD(s) experiencing slow operations in BlueStore
+```
+
+Two real problems behind this, both fixable.
+
+### Problem 1: only one PG in the pool
+
+```
+$ ceph osd pool ls detail
+pool 2 'nvme-replicated' replicated size 3 ... pg_num 1 pgp_num 1 autoscale_mode on
+```
+
+A pool with one PG funnels every write through a single primary OSD. The other two OSDs only ever see replica writes for that one PG. With 53k objects on 1 PG, queue depth piles up, and `BLUESTORE_SLOW_OP_ALERT` fires when individual ops cross the slow threshold (default 5s) under sustained load.
+
+The pg_autoscaler had been on the whole time. It just hadn't bumped pg_num because:
+
+- `bulk` is `false` on the pool — without that hint, the autoscaler treats it as a small pool and grows reactively.
+- `target_size_ratio` is unset — without an explicit "this pool will hold X% of cluster capacity" signal, growth is conservative.
+
+Setting either nudges the autoscaler. For an RBD pool that's the cluster's only block backend, `bulk: true` is the right answer:
+
+```yaml
+# CephBlockPool
+spec:
+  parameters:
+    bulk: "true"
+```
+
+This alone takes the pool from 1 → ~32 PGs (the autoscaler picks based on `100 × replicas / OSD count`, capped at `mon_target_pg_per_osd`).
+
+### Problem 2: 1G client link
+
+The peak 580 MB/s was almost certainly a co-locality artifact (the test pod scheduled on the same node as the PG-0 primary OSD, so that hop went over loopback). The settled 150 MB/s is what the 1G frontend NIC can actually do once writes leave the local node — about 118 MB/s sustained plus burst headroom.
+
+The 10G backnet is sitting there idle from the client's perspective. This is the Multus migration above: get CSI clients onto the storage backnet, put `public_network` back to `192.168.10.0/24`, and the same test should saturate the NVMe drives instead of the NIC.
+
+### Combined effect on slow ops
+
+The slow-op alert is the union of these:
+
+1. Single-PG serialization → BlueStore queues stretch
+2. 1G client link → backpressure makes ops sit in the queue longer
+3. Cold caches after the rolling restart we did to fix the network → first GBs of the test hit raw NVMe with full write amplification
+4. RocksDB compaction kicking in mid-test, competing for IOPS
+
+It's transient on this hardware. After the test stops and compaction settles, the warning clears. But all four contributors get smaller after fixing PG count and putting 10G back in front of clients.
+
+## Lessons learned
+
+### 1. `network.addressRanges.public` is a client-reachability decision, not a performance one
+
+I picked the storage backnet for `public_network` thinking "more bandwidth = better". The trap is that **CSI plugin pods are clients too**, and they live on the SDN. If the public network isn't routable from the SDN, your provisioner times out and you get a misleading "operation already exists" error from the CSI layer.
+
+The clean fix is Multus (give CSI pods a NIC on the storage network). The quick fix is putting `public_network` on something the SDN can reach. Either way, ask "what speaks to the OSDs?" before picking the subnet.
+
+### 2. Host networking changes the debugging model
+
+With host networking, Ceph daemons don't have pod IPs. When troubleshooting connectivity, you're debugging at the node level, not the pod level. `oc debug node/` becomes more useful than `oc exec`. And Ceph's `--debug-ms 1 --debug-monc 20` is the single most useful diagnostic — it tells you exactly which `v2:IP:PORT` it's failing to reach.
+
+### 3. Rook updates ceph config but doesn't restart daemons for network changes
+
+Changing `network.addressRanges.public` updates `ceph config` immediately on the next operator reconcile, but mons and OSDs keep their old bind addresses until they restart. After this kind of change you need a **manual** rolling restart, one daemon at a time, waiting for `HEALTH_OK` between. Rook will not do it for you.
+
+### 4. The pg_autoscaler is conservative by default
+
+Pools start at `pg_num: 1` with `bulk: false`. For RBD pools that will hold real data, set `bulk: true` (or an explicit `target_size_ratio`) at creation time. Otherwise you're running on 1 PG until the autoscaler's reactive heuristics finally trip — long after performance has been miserable for everyone.
+
+### 5. OKD's Prometheus is not a general-purpose Prometheus
+
+It's locked down with kube-rbac-proxy and only accessible via Thanos Querier with proper auth. Don't try to point things directly at port 9090 — it won't work.
+
+### 6. `monitoring.enabled: true` doesn't do what you think
+
+In the Rook v1.19.3 CRD, `monitoring.enabled: true` creates ServiceMonitors but **not** PrometheusRules. The field description in the docs is misleading. You need to manage alerting rules separately.
+
+### 7. Memory pressure kills OSDs first
+
+On small clusters, the OSD is often the largest memory consumer per node. If you don't reserve system memory via `KubeletConfig`, the kernel OOM killer targets OSDs under pressure, which triggers recovery storms that make things worse. Reserve at least 3Gi system memory on nodes running OSDs.
+
+### 8. Separate your storage network — but keep CSI in mind
+
+A dedicated storage VLAN is worth the configuration effort, especially with replication factor 3. Just remember that the CSI plugin needs to reach the OSDs too, so isolating the storage network requires either Multus or routable connectivity from the SDN. (See lesson #1.)
+
+## What's next
+
+In rough order of impact-per-effort:
+
+1. **`bulk: true` on the RBD pool** — one-line change, immediate PG bump from 1 → ~32, kills the slow-op contributor that's serialization on a single primary OSD.
+2. **Multus migration for CSI** — add `NetworkAttachmentDefinition` resources for public/cluster, flip `network.provider: multus`, do another rolling daemon restart. Restores 10G client throughput and lets us put `public_network` back to `192.168.10.0/24` cleanly.
+3. **CephFS storage class** for ReadWriteMany workloads.
+4. **S3-compatible object storage** via CephObjectStore for backups.
+5. **Alerting rules** for OSD down, PG degraded, and nearfull warnings.
+6. **Encryption at rest** for the OSD volumes.
+
+## Repository
+
+The full configuration is available at [github.com/sudoom/homelab](https://github.com/sudoom/homelab). The relevant paths:
+
+```
+components/operators/rook-ceph/        # Operator (Helm subchart)
+components/storage/ceph-cluster/       # CephCluster CR, toolbox, monitoring
+components/storage/ceph-storage-classes/ # Block pools and StorageClasses
+components/cluster-config/grafana-config/ # Grafana with Ceph dashboards
+```
