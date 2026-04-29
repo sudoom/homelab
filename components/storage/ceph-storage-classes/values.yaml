@@ -6,6 +6,7 @@ blockPools:
       size: 3
     parameters:
       bulk: "true"
+      pg_num_min: "32"
     default: true
 
   # Uncomment when HDDs arrive
