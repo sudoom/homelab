@@ -1,0 +1,3 @@
+pool 1 '.mgr' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 1 pgp_num 1 autoscale_mode on last_change 14 flags hashpspool stripe_width 0 pg_num_max 32 pg_num_min 1 application mgr read_balance_score 3.00
+pool 2 'nvme-replicated' replicated size 3 min_size 2 crush_rule 1 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 181 lfor 0/0/137 flags hashpspool,selfmanaged_snaps,bulk stripe_width 0 application rbd read_balance_score 1.22
+

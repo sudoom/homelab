@@ -1,0 +1,50 @@
+# fio QD1 fsync=1 4k randwrite on Samsung PM9A1 512GB
+# Captured 2026-04-29 ~23:59 from CentOS 10 live on Optiplex 7050
+# Run 1 — first invocation, may include cold cache / SLC effects
+
+# Command:
+sudo fio --name=qd1-fsync --filename=/dev/nvme0n1 --direct=1 \
+  --rw=randwrite --bs=4k --iodepth=1 --numjobs=1 --fsync=1 \
+  --time_based --runtime=60 --group_reporting
+
+qd1-fsync: (g=0): rw=randwrite, bs=(R) 4096B-4096B, (W) 4096B-4096B, ioengine=psync, iodepth=1
+fio-3.36
+Starting 1 process
+Jobs: 1 (f=1)
+
+# clat (completion latency) — pre-fsync per-IO
+clat (usec): min=29, max=2552, avg=24.13, stdev=10.30, samples=119
+
+# Latency percentiles (clat, usec):
+   1.00th=[   29], 5.00th=[   30], 10.00th=[   30], 20.00th=[   30],
+  30.00th=[   30], 40.00th=[   30], 50.00th=[   30], 60.00th=[   30],
+  70.00th=[   30], 80.00th=[   30], 90.00th=[   30], 95.00th=[   30],
+  99.00th=[  297], 99.50th=[  351], 99.90th=[ 2114], 99.95th=[ 2376],
+  99.99th=[ 2424]
+
+# fsync/fdatasync/sync_file_range — THIS is the BlueStore-equivalent number
+sync (usec): min=1239, max=4525, avg=1601.18, stdev=419.92
+sync percentiles (usec):
+   1.00th=[ 1352], 5.00th=[ 1369], 10.00th=[ 1385], 20.00th=[ 1418],
+  30.00th=[ 1450], 40.00th=[ 1483], 50.00th=[ 1532], 60.00th=[ 1565],
+  70.00th=[ 1614], 80.00th=[ 1680], 90.00th=[ 1827], 95.00th=[ 2073],
+  99.00th=[ 3097], 99.50th=[ 3326], 99.95th=[ 4146], 99.99th=[ 4424]
+
+cpu          : usr=0.50%, sys=0.97%, ctx=146372, majf=0, minf=27
+IO depths    : 1=200.0%, 2=0.0%, 4=0.0%, 8=0.0%, 16=0.0%, 32=0.0%, >=64=0.0%
+   submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+   complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+   issued rwts: total=0,36149,0,36149 short=0,0,0,0 dropped=0,0,0,0
+   latency   : target=0, window=0, percentile=100.00%, depth=1
+
+Run status group 0 (all jobs):
+  WRITE: bw=2411KiB/s (2469kB/s), 2411KiB/s-2411KiB/s (2469kB/s-2469kB/s),
+         io=141MiB (148MB), run=60002-60002msec
+
+Disk stats (read/write):
+  nvme0n1: ios=0/97/72299, merge=0/0, ticks=0/57672, in_queue=116294, util=95.39%
+
+# Summary:
+# - mean fsync = 1.6 ms
+# - 99th-percentile fsync = ~3.1 ms
+# - bw = 2.41 MiB/s ≈ 617 IOPS at QD1+fsync

@@ -1,0 +1,55 @@
+# fio QD1 fsync=1 4k randwrite on Samsung PM9A1 512GB
+# Captured 2026-04-30 ~00:02 from CentOS 10 live on Optiplex 7050
+# Run 2 — back-to-back rerun, steady state
+
+# Command:
+sudo fio --name=qd1-fsync --filename=/dev/nvme0n1 --direct=1 \
+  --rw=randwrite --bs=4k --iodepth=1 --numjobs=1 --fsync=1 \
+  --time_based --runtime=60 --group_reporting
+
+qd1-fsync: (g=0): rw=randwrite, bs=(R) 4096B-4096B, (W) 4096B-4096B, ioengine=psync, iodepth=1
+fio-3.36
+Starting 1 process
+Jobs: 1 (f=1)
+
+# clat (completion latency) — pre-fsync per-IO
+clat (usec): min=29, max=2526, avg=23.87, stdev=11.27, samples=152
+
+# Latency percentiles (clat, usec):
+   1.00th=[   30], 5.00th=[   30], 10.00th=[   30], 20.00th=[   30],
+  30.00th=[   30], 40.00th=[   30], 50.00th=[   30], 60.00th=[   30],
+  70.00th=[   30], 80.00th=[   30], 90.00th=[   30], 95.00th=[   30],
+  99.00th=[  281], 99.50th=[  321], 99.90th=[ 1827], 99.95th=[ 1991],
+  99.99th=[ 2114]
+
+# fsync/fdatasync/sync_file_range
+sync (usec): min=1226, max=5520, avg=2933.00, stdev=400.92
+sync percentiles (usec):
+   1.00th=[ 1369], 5.00th=[ 1401], 10.00th=[ 1450], 20.00th=[ 1483],
+  30.00th=[ 1516], 40.00th=[ 1565], 50.00th=[ 1614], 60.00th=[ 1696],
+  70.00th=[ 1827], 80.00th=[ 2057], 90.00th=[ 2376], 95.00th=[ 2868],
+  99.00th=[ 3654], 99.50th=[ 4080], 99.95th=[ 5145], 99.99th=[ 5407]
+
+cpu          : usr=0.46%, sys=0.95%, ctx=146100, majf=0, minf=27
+IO depths    : 1=200.0%, 2=0.0%, 4=0.0%, 8=0.0%, 16=0.0%, 32=0.0%, >=64=0.0%
+   submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+   complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+   issued rwts: total=0,36050,0,36050 short=0,0,0,0 dropped=0,0,0,0
+   latency   : target=0, window=0, percentile=100.00%, depth=1
+
+Run status group 0 (all jobs):
+  WRITE: bw=2411KiB/s (2467kB/s), 2411KiB/s-2411KiB/s (2467kB/s-2467kB/s),
+         io=141MiB (148MB), run=60001-60001msec
+
+Disk stats (read/write):
+  nvme0n1: ios=0/72299, sectors=0/297298, merge=0/0,
+           ticks=0/97082, in_queue=116294, util=95.22%
+
+# Summary (steady state):
+# - mean fsync = 2.9 ms
+# - 99th-percentile fsync = ~3.7 ms
+# - bw = 2.41 MiB/s ≈ 600 IOPS at QD1+fsync
+#
+# Compare to PNY CS1030 in production cluster:
+#   bluestore.kv_commit_lat avg = ~130 ms (lifetime, ~250k samples per OSD)
+# PM9A1 is ~45–80× faster on the metric BlueStore is bottlenecked on.

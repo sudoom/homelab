@@ -1,0 +1,25 @@
+# nvme smart-log on Samsung PM9A1 512GB
+# Captured 2026-04-29 ~23:56 from CentOS 10 live on Optiplex 7050
+# Pre-fio baseline
+
+Smart Log for NVME device:nvme0n1 namespace-id:ffffffff
+critical_warning                        : 0
+temperature                             : 40 C (104 F)
+available_spare                         : 100%
+available_spare_threshold               : 50%
+percentage_used                         : 18%
+endurance group critical warning summary: 0
+Data Units Read                         : 18603816 (9.53 TB)
+Data Units Written                      : 26458385 (13.55 TB)
+host_read_commands                      : 305518829
+host_write_commands                     : 570906009
+controller_busy_time                    : 2410
+power_cycles                            : 119
+power_on_hours                          : 12866
+unsafe_shutdowns                        : 69
+media_errors                            : 0
+num_err_log_entries                     : 0
+Warning Composite Temperature Time      : 0
+Critical Composite Temperature Time     : 0
+Temperature Sensor 1                    : 40 C (104 F)
+Temperature Sensor 2                    : 47 C (116 F)

@@ -1,0 +1,6 @@
+ID  CLASS  WEIGHT   REWEIGHT  SIZE     RAW USE  DATA     OMAP    META     AVAIL    %USE   VAR   PGS  STATUS
+ 0   nvme  0.46579   1.00000  477 GiB  315 GiB  313 GiB  30 KiB  1.4 GiB  162 GiB  66.02  1.00   33      up
+ 1   nvme  0.46579   1.00000  477 GiB  315 GiB  313 GiB  30 KiB  1.4 GiB  162 GiB  66.02  1.00   33      up
+ 2   nvme  0.46579   1.00000  477 GiB  315 GiB  313 GiB  32 KiB  1.4 GiB  162 GiB  66.02  1.00   33      up
+                       TOTAL  1.4 TiB  945 GiB  940 GiB  94 KiB  4.2 GiB  486 GiB  66.02                   
+MIN/MAX VAR: 1.00/1.00  STDDEV: 0
