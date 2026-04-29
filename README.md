@@ -78,10 +78,12 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 
 ### Queued — observability
 - [ ] **Mikrotik metrics → Grafana** via `mktxp` exporter. New chart `components/cluster-config/mikrotik-exporter/` with Deployment + Service + ServiceMonitor + SealedSecret for the RouterOS API creds. Read-only RouterOS user, API service enabled. Grafana dashboard ID 13679. Lets us correlate Ceph throughput vs switch byte counters during benchmarks.
+- [ ] **NVMe SMART metrics → Grafana** via `smartctl_exporter` DaemonSet. Surfaces `percentage_used`, `data_units_written`, media errors per device. Goal: a wear-rate panel that catches consumer NVMe burning through TBW under Ceph write amp before failure (~5–10× amplification = a 600 TBW drive can wear out in weeks under sustained load).
 - [ ] **Ceph alerting rules** — `monitoring.enabled: true` only creates ServiceMonitors, not PrometheusRules. Add `OSDDown`, `PGDegraded`, `OSDNearFull`, `MGRsDown`, `MonClockSkew` at minimum.
-- [ ] **Loki logging stack** — central log aggregation. Loki + Promtail (or the Vector alternative) deployed via the `loki-stack` Helm chart, backed by Ceph PVCs. Wire Grafana as the log datasource so logs and metrics live in one pane.
+- [ ] **Loki logging stack (OKDerator)** — central log aggregation. Loki + Promtail (or the Vector alternative) deployed via the `loki-stack` Helm chart, backed by Ceph PVCs. Wire Grafana as the log datasource so logs and metrics live in one pane.
 
 ### Queued — storage
+- [ ] **Baseline NVMe SMART now** — one-shot capture per node: `oc debug node/<n>` → `chroot /host nvme smart-log /dev/nvme0n1`. Record `data_units_written` + `percentage_used` and pin in the rook-ceph blog draft. Re-run weekly to derive an actual wear rate; informs when (not if) the consumer drives need replacing with PLP-equipped enterprise NVMe.
 - [ ] **Multus migration for Ceph clients** — drafted in `blog-multus-ceph-migration-draft.md`. Macvlan NAD over `enp1s0f0np0`, flip `network.provider: multus`, rolling daemon restart. Pre-flight already passes (Multus + whereabouts present). No longer expected to lift throughput per Mikrotik traffic data — pursued for cleaner architecture, not bandwidth.
 - [ ] **CephFS storage class** for ReadWriteMany workloads (currently RWO-only).
 - [ ] **CephObjectStore (S3-compatible)** for backups; bucket-class wired into Velero or kopia.
@@ -93,10 +95,23 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Cloudflare API token → ESO + Bitwarden** — currently created manually. Migrate to External Secrets Operator with Bitwarden as backend.
 
 ### Queued — platform expansion
-- [ ] **Service mesh evaluation** — Istio (already in repo as `istio-values.yaml`) vs OpenShift Service Mesh vs nothing. Decide based on actual use cases: mTLS between namespaces, traffic shifting for app rollouts, request-level observability. Don't adopt without a workload that benefits.
+- [ ] **Service mesh evaluation(OKDerator)** — Istio (already in repo as `istio-values.yaml`) vs OpenShift Service Mesh vs nothing. Decide based on actual use cases: mTLS between namespaces, traffic shifting for app rollouts, request-level observability. Don't adopt without a workload that benefits.
 - [ ] **KubeVirt** — run VMs alongside containers (nested control plane, legacy workloads, isolated dev environments). Needs CPU/RAM headroom audit first; OSDs already eat 5–6 GiB per node and the autoscaler is fragile under memory pressure.
 
 ### Documentation hygiene
 - [ ] **Refresh the rest of this README** — Architecture and Repo Structure sections list only the original components. Reality now includes `cluster-topology`, `kubelet-config`, `sealed-secrets`, `cert-manager`, monitoring/Grafana stack, ingress config, sample apps. Update both the wave list and the directory tree to match `bootstrap/root-app/values.yaml`.
 - [ ] **Repo public-readiness pass** — drafts at `blog-*-draft.md` and `nmstate-imagestream-bug.md` currently committed; review for anything that shouldn't be public before next push to GitHub.
 
+- loki-logging grafana connection
+
+
+- evaluate OKDerator:
+Cluster Observability Operator
+NetObserv Operator
+Loki Operator
+Node Feature Discovery Operator
+OADP Operator
+OKD Logging
+OKD Pipelines
+OKD Service Mesh 3 (Istio)
+Observability Operator
