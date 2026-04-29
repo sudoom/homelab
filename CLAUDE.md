@@ -160,3 +160,20 @@ Claude should refuse these actions and explain why briefly:
 
 - Before the context window is compacted, run `/export` to preserve the full conversation.
 - When diagnosing a live issue, paste real `oc` / `argocd` output into chat rather than describing it — diagnoses from raw output are much better than from paraphrase.
+
+## Blog notes — keep them current
+
+Every session that diagnoses an issue, changes infrastructure, or runs a non-trivial benchmark should be captured in a blog-style draft at the repo root. These drafts are the working memory for future write-ups.
+
+- **File naming:** `blog-<topic>-draft.md` at the repo root (e.g. `blog-rook-ceph-draft.md`, `blog-cert-manager-draft.md`). One file per topic, appended over time.
+- **If a relevant draft exists:** update it. Add new sections rather than rewriting old ones, so the chronology survives.
+- **If no relevant draft exists:** create one. Lead with a one-paragraph framing, then the technical content.
+- **What to capture:**
+  - Every meaningful command run (with the exact invocation, not paraphrased — `oc -n rook-ceph exec ...`, full `helm template` lines, etc.).
+  - Raw output snippets that drove a decision (errors, `ceph -s`, `oc describe` excerpts).
+  - The decision made and *why*, including alternatives ruled out.
+  - Sequencing: a rolling restart, a network change, a PG bump — list the steps in order so it can be retraced.
+- **Tone:** technical, first-person, no marketing fluff. These are notes that may become posts later, not the posts themselves.
+- **Not to capture:** secrets, tokens, raw kubeconfigs, anything that would be a problem if the draft were committed publicly. Reference secrets by name.
+
+Update the draft as you work, not at the end. If a session does something undocumented, that's a regression — flag it.
