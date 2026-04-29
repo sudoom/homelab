@@ -177,3 +177,19 @@ Every session that diagnoses an issue, changes infrastructure, or runs a non-tri
 - **Not to capture:** secrets, tokens, raw kubeconfigs, anything that would be a problem if the draft were committed publicly. Reference secrets by name.
 
 Update the draft as you work, not at the end. If a session does something undocumented, that's a regression — flag it.
+
+## README files — keep them current
+
+Whenever you change something that a `README.md` describes, update that README in the same change. READMEs that drift out of sync are worse than no README at all — readers trust them and end up running stale commands.
+
+- **Scope:** every `README.md` in the repo (root, `components/<component>/README.md`, `bootstrap/<thing>/README.md`, etc.). Find them with `find . -name README.md -not -path './charts/*'` before assuming there's only one.
+- **Triggers that require a README update:**
+  - Bootstrap steps changed (commands, file paths, prerequisites).
+  - A component's purpose, sync wave, or values surface changed.
+  - Architecture diagram in the README no longer reflects what's deployed.
+  - Repository layout changed (directory moved/renamed).
+  - A new component was added that belongs in the top-level overview.
+- **What good looks like:** the README's commands, paths, and version pins match `git ls-files` reality. Sync waves listed in the README match `bootstrap/root-app/values.yaml`. If you can't run a command from the README copy-paste and have it succeed, the README is broken.
+- **If a README is wrong but unrelated to your change:** flag it, don't silently fix it in an unrelated commit. Open a separate `docs(readme): …` commit.
+
+Treat outdated READMEs the same as undocumented sessions — a regression to flag.
