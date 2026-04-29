@@ -547,11 +547,26 @@ spec:
 
 This alone takes the pool from 1 → ~32 PGs (the autoscaler picks based on `100 × replicas / OSD count`, capped at `mon_target_pg_per_osd`).
 
-### Problem 2: 1G client link
+### Problem 2: it isn't actually the 1G client link (revised)
 
-The peak 580 MB/s was almost certainly a co-locality artifact (the test pod scheduled on the same node as the PG-0 primary OSD, so that hop went over loopback). The settled 150 MB/s is what the 1G frontend NIC can actually do once writes leave the local node — about 118 MB/s sustained plus burst headroom.
+I assumed the settled 150 MB/s was the 1G frontend NIC saturating, since that's the obvious story when you've put `public_network` on a 1G subnet. The Mikrotik switch data killed that theory:
 
-The 10G backnet is sitting there idle from the client's perspective. This is the Multus migration above: get CSI clients onto the storage backnet, put `public_network` back to `192.168.10.0/24`, and the same test should saturate the NVMe drives instead of the NIC.
+```
+1G frontend (.1.x), node6:
+  Tx 2.9 Mbps   Rx 3.1 Mbps   peak ~100 Mbps    ← 10% of capacity
+10G backnet  (.10.x), node6:
+  Tx 50 kbps    Rx 13 kbps    peak ~2 Gbps Rx   ← replication, doing its job
+```
+
+The 1G link is barely used. Replication on the 10G backnet is doing what it should (every client write fans out to two replica writes between OSDs, and that's where the bandwidth goes — not the client side).
+
+So the throughput ceiling at ~150 MB/s sustained isn't a NIC limit at all. It's the combination of:
+
+1. **Single PG** — every write through one primary OSD, queue depth saturates that one BlueStore.
+2. **NVMe random-write IOPS** under `dd if=/dev/urandom`. Consumer/prosumer NVMe drives degrade hard on sustained random writes once SLC cache fills.
+3. **Ceph write amplification** — `size: 3`, journaling, RocksDB compaction.
+
+The Multus migration is still on the roadmap (it's a cleaner architecture and removes the public_network hack), but it's no longer expected to be a *throughput* win. The cheap, high-impact lever is the PG count.
 
 ### Combined effect on slow ops
 
@@ -563,6 +578,126 @@ The slow-op alert is the union of these:
 4. RocksDB compaction kicking in mid-test, competing for IOPS
 
 It's transient on this hardware. After the test stops and compaction settles, the warning clears. But all four contributors get smaller after fixing PG count and putting 10G back in front of clients.
+
+### Problem 3: with PG=32, what's the bottleneck *now*?
+
+After `pg_num: 1 → 32` shipped and the cluster re-stabilized, dd into a fresh 100 GB test PVC produced a different shape on the Grafana panel: writes plateau at ~30 MB/s commit immediately, no sawtooth, no slow ramp. That's the textbook symptom of the parallelism win — primary PGs distribute across all 3 OSDs from the first write instead of stacking onto one.
+
+But the ceiling is suspicious. 30 MB/s is **240 Mbps** — about 25% of a single 1 GbE link, and roughly **1% of what the NVMe drives are spec'd for** (PNY CS1030: 1750 MB/s sequential write). Neither network nor raw drive bandwidth is the constraint. So what is?
+
+The answer is in `bluestore`'s perf counters. After 25 hours of cluster uptime since the last roll, lifetime averages across all three OSDs:
+
+```bash
+$ for osd in 0 1 2; do
+    oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+      ceph tell osd.$osd perf dump | \
+      jq '{kv_commit_lat: .bluestore.kv_commit_lat.avgtime,
+           kv_sync_lat:   .bluestore.kv_sync_lat.avgtime}'
+  done
+```
+
+| OSD | `kv_commit_lat` avg | `kv_sync_lat` avg | sample count |
+|---|---|---|---|
+| osd.0 | **133 ms** | 136 ms | 262,811 |
+| osd.1 | **144 ms** | 147 ms | 258,550 |
+| osd.2 | **125 ms** | 127 ms | 250,361 |
+
+Reference points:
+- Enterprise NVMe with PLP: **0.1–1 ms** per kv commit
+- "Decent" consumer NVMe without PLP: 5–15 ms
+- These drives: **~130 ms** — roughly 1000× worse than enterprise, ~10× worse than typical consumer
+
+That single number explains the ceiling. Single-client sequential math:
+
+```
+single_pipeline_throughput ≈ block_size / commit_latency
+                          = 1 MiB / 130 ms
+                          ≈ 7.7 MB/s
+
+with ~3 parallel primary pipelines per OSD (32 PGs / 3 OSDs / size=3):
+                          ≈ 23 MB/s
+```
+
+That matches the ~25–30 MB/s sustained number we see almost exactly.
+
+### What the drives actually are
+
+Looked them up:
+
+```bash
+$ oc debug node/node6.okd.sudops.pl -- chroot /host nvme list
+Node          Generic     SN                    Model                       Format         FW Rev
+/dev/nvme0n1  /dev/ng0n1  PNB48250038340500238  PNY CS1030 500GB SSD       512   B + 0 B  GT67d92d
+```
+
+PNY CS1030 is essentially the worst-case profile for Ceph BlueStore:
+
+| Property | This drive | Why it kills Ceph specifically |
+|---|---|---|
+| **DRAM-less + HMB** | uses host RAM for FTL via PCIe | Every metadata access has PCIe round-trip latency; under sustained QD1 sync writes the FTL becomes the bottleneck, not the NAND |
+| **No PLP** | consumer drive, no power-loss capacitors | Every `fdatasync()` forces a real NAND program; the controller cannot ack from DRAM and rely on capacitor flush |
+| **TLC NAND, consumer firmware** | desktop-burst tuned | QD1 random sync IOPS collapses to the low hundreds/sec |
+| **TBW = 250 TBW** | 0.5 DWPD over 5 yrs | At Ceph's 5–10× write amp, ~25–50 TB of *client* writes total before the drive enters wear-out warnings |
+
+The fsync chain on this drive looks like:
+
+1. Host issues `fdatasync` over PCIe to controller
+2. Controller has no PLP — must finish all in-flight programs to NAND before ack
+3. Controller has no DRAM — must read FTL metadata back over HMB (PCIe round-trip again)
+4. Each step has fixed latency that doesn't shrink with workload size or queue depth
+
+So `kv_commit_lat` of ~130 ms isn't a bug or a misconfig — it's what this hardware delivers at QD1 sync, and Ceph's write path is mostly QD1 per primary OSD by construction.
+
+### Practical implications
+
+1. **Don't expect more than ~30–50 MB/s sustained** on this hardware regardless of further Ceph tuning. iodepth helps a bit, but the per-pool single-client test is going to live near the calculated ceiling.
+2. **TBW is the real risk.** Each 200 GB benchmark writes ~1.2 TB of raw data across the cluster (200 × 3 replicas × ~2× BlueStore amp). That's ~5% of total TBW per drive *per benchmark run*. The SMART monitoring TODO is more urgent than I initially framed it — burn-rate could be days, not years, under a heavy test cadence.
+3. **The hardware fix isn't a full drive swap.** A small enterprise NVMe per node (Micron 7450 PRO 480 GB, Kioxia CD8 800 GB, used Samsung PM9A3) hosting WAL+DB *only* would put rocksdb sync on PLP without replacing the bulk data drives. Typical published result for that split: `kv_commit_lat` from ~100 ms range to <1 ms, throughput up 5–10×. Bluestore data can stay on the consumer drives because their read path and queue-depth-32 write path are fine.
+4. **Multus, encryption, and other items in the roadmap don't address this.** They're all good ideas for other reasons (architecture, security) but none of them shorten `kv_commit_lat`. Only PLP does.
+
+This is the hard wall, and it's the right one to hit. PG=1 → 32 unlocked the parallelism that was on the table; everything beyond that requires hardware that supports the workload Ceph generates.
+
+### Validating the diagnosis on a known-different drive
+
+The theory said: *the bottleneck is fsync latency on consumer NVMe without PLP*. Before buying replacement hardware, I wanted a direct measurement on a drive that *should* behave differently — same physical interface, but enterprise-class firmware and DRAM cache.
+
+I had a Samsung **PM9A1 512 GB** sitting on the shelf (mid-life, 18% wear, 13.55 TB lifetime writes — fine as a test sled, not a production drive). Booted CentOS 10 live on an Optiplex 7050, attached the drive, ran the same workload BlueStore generates: 4k random write at QD1 with `fsync=1` after each IO.
+
+```bash
+sudo fio --name=qd1-fsync --filename=/dev/nvme0n1 --direct=1 \
+  --rw=randwrite --bs=4k --iodepth=1 --numjobs=1 --fsync=1 \
+  --time_based --runtime=60 --group_reporting
+```
+
+Run it twice — the first 60 s on a freshly inserted drive can show artificially good numbers from idle SLC cache. The second run is the steady-state value worth reporting.
+
+| Drive | mean fsync | 99th-pct fsync | bw at QD1+fsync | Notes |
+|---|---|---|---|---|
+| **PNY CS1030 500 GB** (in cluster) | **~130 ms** (`bluestore.kv_commit_lat`, 250k+ samples) | — | — | DRAM-less + HMB + no PLP |
+| **Samsung PM9A1 512 GB** (run 1, cold) | 1.6 ms | 3.1 ms | 2.41 MiB/s, ~617 IOPS | DRAM cache, enterprise firmware |
+| **Samsung PM9A1 512 GB** (run 2, steady) | 2.9 ms | 3.7 ms | 2.41 MiB/s, ~600 IOPS | same drive, back-to-back |
+
+The PM9A1 commits a 4k fsynced IO **45–80× faster** than the PNY's lifetime average, on the exact metric BlueStore is bottlenecked on. The bandwidth headline (2.41 MiB/s) looks tiny because `--fsync=1` after every 4k IO is a pathological pattern — but it's the right pattern, because that's what rocksdb does.
+
+Sanity check via the QD1 throughput math from earlier:
+
+| Drive | bs / commit_lat | × 3 parallel pipelines | Predicted client ceiling | Observed |
+|---|---|---|---|---|
+| PNY (production) | 1 MiB / 130 ms ≈ 7.7 MB/s | 23 MB/s | ~25 MB/s | **~25 MB/s ✓** |
+| PM9A1 (theoretical, in same role) | 1 MiB / 3 ms ≈ 333 MB/s | 1000 MB/s | network-limited (1 GbE) | TBD |
+
+So a swap is predicted to move the ceiling from "fsync-limited at ~25 MB/s" to "network-limited at ~110 MB/s". The cluster wouldn't be fast — it'd just hit a different wall.
+
+Drive wear cost of the test: 540 `data_units_written` (~276 MB) for 120 s of synthetic load. The 0.5 °C/s temperature climb (sensor 2 hit 57 °C) is the bigger live concern than wear at this duration. The full output of `nvme smart-log`, `nvme id-ctrl -H`, and both fio runs is captured under `data/pre-swap/pm9a1-*.txt` for reproducibility.
+
+### Next step: single-OSD swap, in-cluster A/B
+
+The synthetic test rules out *the drive isn't the issue*. To rule out *something else in the cluster makes Ceph slow regardless of drive*, the next step is to swap **one** PNY for the PM9A1 in node4 and let the cluster run normal load for ~24 h. With three OSDs sharing the same PG distribution, network, workload mix, and configuration, `ceph daemon osd.N perf dump | jq .bluestore.kv_commit_lat` becomes a clean A/B:
+
+- If `osd.0` (PM9A1) drops from ~130 ms to single-digit ms while `osd.1` and `osd.2` (still PNY) stay at ~130 ms → diagnosis confirmed, `kv_commit_lat` is hardware-dependent.
+- If all three stay at ~130 ms → the bottleneck is somewhere other than NAND commit latency, and I need to keep digging.
+
+That single-OSD experiment is the cheapest possible test: one drive, ~1–2 h of backfill, no procurement. Results to follow in a sequel post.
 
 ## Lessons learned
 
@@ -604,8 +739,9 @@ A dedicated storage VLAN is worth the configuration effort, especially with repl
 
 In rough order of impact-per-effort:
 
-1. **`bulk: true` on the RBD pool** — one-line change, immediate PG bump from 1 → ~32, kills the slow-op contributor that's serialization on a single primary OSD.
-2. **Multus migration for CSI** — add `NetworkAttachmentDefinition` resources for public/cluster, flip `network.provider: multus`, do another rolling daemon restart. Restores 10G client throughput and lets us put `public_network` back to `192.168.10.0/24` cleanly.
+1. **`bulk: true` on the RBD pool** — shipped (PR `feat/nvme-pool-bulk-true`, merged). The flag landed on the pool (`flags hashpspool,selfmanaged_snaps,bulk` in `ceph osd dump`), but the autoscaler emitted *zero* recommendations afterward (`ceph osd pool autoscale-status` returns `[]`) and `pg_num` stayed at 1. Bouncing the active mgr didn't help.
+2. **`pg_num_min: "32"` on the pool** — follow-up. The autoscaler is bailing out for reasons I haven't fully traced, so force the floor explicitly. Setting `pg_num_min` is a documented Rook parameter that gets passed straight to `ceph osd pool set`. This skips the autoscaler entirely and gets us to ~32 PGs in one reconcile.
+3. **Multus migration for CSI** — add `NetworkAttachmentDefinition` resources for public/cluster, flip `network.provider: multus`, do another rolling daemon restart. Cleaner architecture (removes the `public_network` workaround), but per the switch data it's no longer expected to lift throughput — the 1G link wasn't actually the constraint.
 3. **CephFS storage class** for ReadWriteMany workloads.
 4. **S3-compatible object storage** via CephObjectStore for backups.
 5. **Alerting rules** for OSD down, PG degraded, and nearfull warnings.
