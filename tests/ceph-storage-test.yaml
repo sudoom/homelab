@@ -9,7 +9,7 @@ spec:
   storageClassName: ceph-nvme-block
   resources:
     requests:
-      storage: 250Gi
+      storage: 150Gi
 ---
 apiVersion: v1
 kind: Pod
@@ -24,8 +24,8 @@ spec:
         - /bin/bash
         - -c
         - |
-          echo "=== Writing 200GB test data ==="
-          dd if=/dev/urandom of=/data/testfile bs=1M count=204800 status=progress
+          echo "=== Writing 100GB test data ==="
+          dd if=/dev/urandom of=/data/testfile bs=1M count=102400 status=progress
           echo "=== Done ==="
           ls -lh /data/testfile
           df -h /data
