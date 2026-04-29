@@ -79,6 +79,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 ### Queued — observability
 - [ ] **Mikrotik metrics → Grafana** via `mktxp` exporter. New chart `components/cluster-config/mikrotik-exporter/` with Deployment + Service + ServiceMonitor + SealedSecret for the RouterOS API creds. Read-only RouterOS user, API service enabled. Grafana dashboard ID 13679. Lets us correlate Ceph throughput vs switch byte counters during benchmarks.
 - [ ] **Ceph alerting rules** — `monitoring.enabled: true` only creates ServiceMonitors, not PrometheusRules. Add `OSDDown`, `PGDegraded`, `OSDNearFull`, `MGRsDown`, `MonClockSkew` at minimum.
+- [ ] **Loki logging stack** — central log aggregation. Loki + Promtail (or the Vector alternative) deployed via the `loki-stack` Helm chart, backed by Ceph PVCs. Wire Grafana as the log datasource so logs and metrics live in one pane.
 
 ### Queued — storage
 - [ ] **Multus migration for Ceph clients** — drafted in `blog-multus-ceph-migration-draft.md`. Macvlan NAD over `enp1s0f0np0`, flip `network.provider: multus`, rolling daemon restart. Pre-flight already passes (Multus + whereabouts present). No longer expected to lift throughput per Mikrotik traffic data — pursued for cleaner architecture, not bandwidth.
@@ -91,6 +92,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **NMState operator: upstream PR for `okderators` ImageStream bug** — context in `nmstate-imagestream-bug.md`. Today we use `community-operators` as a workaround.
 - [ ] **Cloudflare API token → ESO + Bitwarden** — currently created manually. Migrate to External Secrets Operator with Bitwarden as backend.
 
+### Queued — platform expansion
+- [ ] **Service mesh evaluation** — Istio (already in repo as `istio-values.yaml`) vs OpenShift Service Mesh vs nothing. Decide based on actual use cases: mTLS between namespaces, traffic shifting for app rollouts, request-level observability. Don't adopt without a workload that benefits.
+- [ ] **KubeVirt** — run VMs alongside containers (nested control plane, legacy workloads, isolated dev environments). Needs CPU/RAM headroom audit first; OSDs already eat 5–6 GiB per node and the autoscaler is fragile under memory pressure.
+
 ### Documentation hygiene
 - [ ] **Refresh the rest of this README** — Architecture and Repo Structure sections list only the original components. Reality now includes `cluster-topology`, `kubelet-config`, `sealed-secrets`, `cert-manager`, monitoring/Grafana stack, ingress config, sample apps. Update both the wave list and the directory tree to match `bootstrap/root-app/values.yaml`.
 - [ ] **Repo public-readiness pass** — drafts at `blog-*-draft.md` and `nmstate-imagestream-bug.md` currently committed; review for anything that shouldn't be public before next push to GitHub.
+
