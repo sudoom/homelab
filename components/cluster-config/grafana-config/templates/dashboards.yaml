@@ -114,3 +114,16 @@ spec:
       dashboards: grafana
   grafanaCom:
     id: 15661
+---
+# smartctl_exporter — NVMe/SATA SMART (wear, temp, media errors, data written)
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: smartctl-exporter
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  grafanaCom:
+    id: 22604
