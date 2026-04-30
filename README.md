@@ -74,7 +74,6 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 
 ### In flight
 - [ ] **Finish the PNY → PM9A1 swap (node5, then node6)** — osd.0 swapped 04/2026 and validated (lifetime `kv_commit_lat` ~4 ms vs PNY ~95 ms, ~20× speedup). 2× more PM9A1 ordered late 04/2026; swap node5 first (was the slower of the two PNYs under fio — commit_latency hit 3.2 s). Reuse `data/pre-swap/swap-runbook.md`. After node6 lands, re-run `tests/ceph-storage-test.yaml` and expect cluster-side fsync ~30 ms (vs current 9.25 s with 2 PNYs in path).
-- [ ] **Force `pg_num=32` on `nvme-replicated`** — `pg_num_min: "32"` shipped (commit `86580cd`); waiting for ArgoCD reconcile + PG split. Validate with `ceph osd pool ls detail`. Note: `BLUESTORE_SLOW_OP_ALERT` is hardware-bound on the PNYs (validated 04/2026), so this won't clear it on its own — only the drive swap will.
 - [ ] **Investigate why `pg_autoscaler` returns empty status** — `ceph osd pool autoscale-status` returns `[]` even with `bulk: true` set; bouncing the active mgr didn't help. Likely a Squid 19.2.3 quirk; confirm and file upstream if reproducible.
 
 ### Queued — observability
@@ -83,7 +82,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 ### Queued — storage
 - [ ] **Baseline NVMe SMART now** — initial node-by-node capture done 04/2026 (`data/pre-swap/nvme-smart-node{4,5,6}.txt`); PM9A1 standalone baseline + post-fio captured (`data/pre-swap/pm9a1-smart-{before,after}.txt`). Still missing: a **periodic** capture cadence to derive a real wear-rate trend. Capture incoming PM9A1 SMART before insertion into node5/node6 so the new drives have a clean t=0. Long-term replacement landed 04/2026: `smartctl_exporter` DaemonSet now exposes `percentage_used` + `data_units_written` per device for trend graphs.
 - [ ] **Multus migration for Ceph clients** — drafted in `blog-multus-ceph-migration-draft.md`. Macvlan NAD over `enp1s0f0np0`, flip `network.provider: multus`, rolling daemon restart. Pre-flight already passes (Multus + whereabouts present). No longer expected to lift throughput per Mikrotik traffic data — pursued for cleaner architecture, not bandwidth.
-- [ ] **CephFS storage class** for ReadWriteMany workloads (currently RWO-only).
+- [ ] **CephFS storage class** for ReadWriteMany workloads (currently RWO-only). **Blocked on HDD addition** — CephFS data pool will live on bulk HDDs (NVMe stays for the metadata pool); deferred until the HDDs land in the chassis.
 - [ ] **CephObjectStore (S3-compatible)** for backups; bucket-class wired into Velero or kopia.
 - [ ] **OSD encryption at rest** — `encryptedDevice: true` on each OSD device entry; needs cluster-wide rolling redeploy of OSDs.
 - [ ] **Periodic `rbd trash purge` schedule** — RBD CSI calls `rbd trash mv` (deferred delete) on PVC removal; the trashed images sit until something purges them and continue to consume pool space. A one-shot purge in 04/2026 reclaimed ~600 GiB. Use Ceph's built-in scheduler: `rbd trash purge schedule add --pool nvme-replicated 1d`. Validate with `rbd trash purge schedule status` and `rbd trash ls`.
