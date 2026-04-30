@@ -107,6 +107,12 @@ applications:
     namespace: openshift-monitoring
     syncWave: "5"
 
+  smartctl-exporter:
+    enabled: true
+    path: components/cluster-config/smartctl-exporter
+    namespace: smartctl-exporter
+    syncWave: "5"
+
   # Wave 6 — Applications
   media:
     enabled: true

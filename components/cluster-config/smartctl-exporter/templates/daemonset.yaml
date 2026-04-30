@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: smartctl-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: smartctl-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: smartctl-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: smartctl-exporter
+    spec:
+      serviceAccountName: smartctl-exporter
+      hostPID: false
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: smartctl-exporter
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --web.listen-address=:{{ .Values.port }}
+            {{- range .Values.devices }}
+            - --smartctl.device={{ . }}
+            {{- end }}
+          ports:
+            - containerPort: {{ .Values.port }}
+              name: metrics
+              protocol: TCP
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+              readOnly: true
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev
+            type: Directory

@@ -1,0 +1,23 @@
+namespace: smartctl-exporter
+
+image:
+  repository: quay.io/prometheuscommunity/smartctl-exporter
+  tag: v0.14.0
+
+port: 9633
+
+scrapeInterval: 60s
+
+devices:
+  # Devices to expose to the exporter container. The exporter auto-discovers
+  # block devices under /dev that smartctl can query; we restrict to NVMe to
+  # avoid noise from rbd*/loop* devices.
+  - /dev/nvme0n1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
