@@ -1,0 +1,4 @@
+apiVersion: v2
+name: mikrotik-exporter
+description: RouterOS metrics via akpw/mktxp exporter (Prometheus scrape target)
+version: 0.1.0

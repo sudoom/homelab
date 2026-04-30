@@ -1,0 +1,45 @@
+# Example mktxp router config — DO NOT COMMIT THIS FILE WITH REAL CREDENTIALS.
+# This is the file you seal into the `mktxp-config` SealedSecret per the chart README.
+# Reference: https://github.com/akpw/mktxp#mktxp-configuration
+
+[home-router]
+    enabled = True
+    hostname = 192.168.1.1
+    port = 8728
+    username = mktxp
+    password = REPLACE_ME
+    use_ssl = False
+    no_ssl_certificate = False
+    ssl_certificate_verify = False
+
+    # What to scrape — pick what's useful, leave others False to cut load.
+    installed_packages = True
+    dhcp = True
+    dhcp_lease = True
+    pool = True
+    interface = True
+    monitor = True
+    route = True
+    wireless = True
+    wireless_clients = True
+    capsman = False
+    capsman_clients = False
+    poe = True
+    public_ip = True
+    netwatch = True
+    user = True
+    queue = True
+    ipv6_route = False
+    ipv6_pool = False
+    ipv6_neighbor = False
+    firewall = True
+    ipv6_firewall = False
+    connections = True
+    connection_stats = True
+    bandwidth = False
+    bandwidth_test = False
+
+    use_comments_over_names = True
+
+[default]
+    enabled = False

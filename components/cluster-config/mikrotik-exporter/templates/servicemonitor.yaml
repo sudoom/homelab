@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mikrotik-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: mikrotik-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mikrotik-exporter
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.scrapeInterval }}
+      scheme: http

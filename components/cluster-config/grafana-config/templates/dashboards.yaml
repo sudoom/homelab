@@ -138,3 +138,17 @@ spec:
   datasources:{{ $bindings }}
   grafanaCom:
     id: 22604
+---
+# mktxp — MikroTik RouterOS exporter (akpw/mktxp)
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: mikrotik-exporter
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  grafanaCom:
+    id: 13679

@@ -113,6 +113,12 @@ applications:
     namespace: smartctl-exporter
     syncWave: "5"
 
+  mikrotik-exporter:
+    enabled: true
+    path: components/cluster-config/mikrotik-exporter
+    namespace: mikrotik-exporter
+    syncWave: "5"
+
   # Wave 6 — Applications
   media:
     enabled: true

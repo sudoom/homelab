@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mikrotik-exporter-system
+  namespace: {{ .Values.namespace }}
+data:
+  _mktxp.conf: |
+    [MKTXP]
+    {{- range $k, $v := .Values.system }}
+    {{ $k }} = {{ $v }}
+    {{- end }}

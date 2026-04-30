@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mikrotik-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: mikrotik-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mikrotik-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mikrotik-exporter
+    spec:
+      serviceAccountName: mikrotik-exporter
+      containers:
+        - name: mktxp
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - export
+          ports:
+            - containerPort: {{ .Values.port }}
+              name: metrics
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: system-conf
+              mountPath: /home/mktxp/mktxp/_mktxp.conf
+              subPath: _mktxp.conf
+              readOnly: true
+            - name: router-conf
+              mountPath: /home/mktxp/mktxp/mktxp.conf
+              subPath: mktxp.conf
+              readOnly: true
+      volumes:
+        - name: system-conf
+          configMap:
+            name: mikrotik-exporter-system
+        - name: router-conf
+          secret:
+            secretName: mktxp-config

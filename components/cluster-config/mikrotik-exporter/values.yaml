@@ -1,0 +1,37 @@
+namespace: mikrotik-exporter
+
+image:
+  repository: ghcr.io/akpw/mktxp
+  tag: v1.2.17
+
+# mktxp default Prometheus scrape port
+port: 49090
+
+scrapeInterval: 30s
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# System-wide mktxp settings rendered into _mktxp.conf.
+# Per-router credentials live in a SealedSecret (mktxp-config / mktxp.conf)
+# that must be created out-of-band — see README.
+system:
+  port: 49090
+  socket_timeout: 5
+  initial_delay_on_failure: 120
+  max_delay_on_failure: 900
+  delay_inc_div: 5
+  bandwidth: false
+  bandwidth_test_interval: 600
+  minimal_collect_interval: 5
+  verbose_mode: false
+  fetch_routers_in_parallel: false
+  max_worker_threads: 5
+  max_scrape_duration: 30
+  total_max_scrape_duration: 90
+  compact_default_conf_values: false
