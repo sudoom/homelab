@@ -160,6 +160,13 @@ Claude should refuse these actions and explain why briefly:
 
 - Before the context window is compacted, run `/export` to preserve the full conversation.
 - When diagnosing a live issue, paste real `oc` / `argocd` output into chat rather than describing it — diagnoses from raw output are much better than from paraphrase.
+- **At session start and immediately after a context compaction**, re-read the markdown files that carry working state, in this order — don't rely on the post-compaction summary alone:
+  1. `CLAUDE.md` (this file) — rules may have tightened since the snapshot.
+  2. Any `blog-*-draft.md` files at the repo root that are relevant to the work in flight — these are the chronological notes for what was tried, what worked, and what's still open.
+  3. The TODO list at the bottom of `README.md` — confirm what's still queued vs. shipped.
+  4. Auto-memory `MEMORY.md` (loaded automatically) plus the linked memory files — re-skim before assuming a remembered fact still holds.
+
+  Compaction summaries are lossy by design; the markdown is the source of truth.
 
 ## Blog notes — keep them current
 
