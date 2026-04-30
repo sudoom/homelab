@@ -78,7 +78,6 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Investigate why `pg_autoscaler` returns empty status** — `ceph osd pool autoscale-status` returns `[]` even with `bulk: true` set; bouncing the active mgr didn't help. Likely a Squid 19.2.3 quirk; confirm and file upstream if reproducible.
 
 ### Queued — observability
-- [ ] **Mikrotik metrics → Grafana** via `mktxp` exporter. New chart `components/cluster-config/mikrotik-exporter/` with Deployment + Service + ServiceMonitor + SealedSecret for the RouterOS API creds. Read-only RouterOS user, API service enabled. Grafana dashboard ID 13679. Lets us correlate Ceph throughput vs switch byte counters during benchmarks.
 - [ ] **Loki logging stack (OKDerator)** — central log aggregation. Loki + Promtail (or the Vector alternative) deployed via the `loki-stack` Helm chart, backed by Ceph PVCs. Wire Grafana as the log datasource so logs and metrics live in one pane.
 
 ### Queued — storage
@@ -105,3 +104,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 ### Documentation hygiene
 - [ ] **Refresh the rest of this README** — Architecture and Repo Structure sections list only the original components. Reality now includes `cluster-topology`, `kubelet-config`, `sealed-secrets`, `cert-manager`, monitoring/Grafana stack, ingress config, sample apps. Update both the wave list and the directory tree to match `bootstrap/root-app/values.yaml`.
 - [ ] **Repo public-readiness pass** — drafts at `blog-*-draft.md` and `nmstate-imagestream-bug.md` currently committed; review for anything that shouldn't be public before next push to GitHub.
+
+
+
+- add gatus for monitoring
