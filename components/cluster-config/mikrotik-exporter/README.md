@@ -1,6 +1,6 @@
 # mikrotik-exporter
 
-Scrape RouterOS metrics into Prometheus via [`akpw/mktxp`](https://github.com/akpw/mktxp). The exporter talks to the RouterOS API on each configured router, polls the requested resource trees on a fixed interval, and serves Prometheus metrics on `:49090/metrics`.
+Scrape RouterOS metrics into Prometheus via [`akpw/mktxp`](https://github.com/akpw/mktxp). The exporter talks to the RouterOS API on each configured device (router *and* switch — anything running RouterOS), polls the requested resource trees on a fixed interval, and serves Prometheus metrics on `:49090/metrics`. Each device shows up as a distinct `routerboard_name` label so router and switch metrics are graphable side-by-side.
 
 ## What this chart deploys
 
@@ -15,7 +15,7 @@ The per-router credentials are **not** in this chart — they live in a `SealedS
 
 ### 1. RouterOS-side: enable the API and create a read-only user
 
-The exporter needs the RouterOS API enabled and a dedicated read-only user. SSH into RouterOS (or use Winbox) and run:
+**Repeat this on every device you want to scrape** (the router *and* the switch — same commands, same credentials make the seal step simpler). SSH into RouterOS (or use Winbox) and run:
 
 ```routeros
 # Enable the API service on the management VLAN only (adjust address subnet to taste)
@@ -28,18 +28,20 @@ The exporter needs the RouterOS API enabled and a dedicated read-only user. SSH 
 /user add name=mktxp group=prometheus password="<LONG_RANDOM_PASSWORD>" comment="prometheus / mktxp"
 ```
 
-Verify with `/user print` and `/ip service print`. If the router has a firewall rule on the management interface, allow `tcp/8728` from the cluster nodes (`192.168.1.7-9`).
+Verify with `/user print` and `/ip service print`. If the device has a firewall rule on the management interface, allow `tcp/8728` from the cluster nodes (`192.168.1.7-9`).
+
+> Use the **same** `mktxp` username + password on both devices — the SealedSecret holds the credentials inline per `[entry]`, so reusing them keeps the config short and avoids two separate seal/rotate flows. If your switch is locked down separately and reuse isn't acceptable, the example config supports per-entry credentials.
 
 > mktxp also supports `api-ssl` on `tcp/8729` if you've imported a cert. The chart's example config defaults to plain `api`/`8728` to keep first-time setup simple — flip `use_ssl = True` and adjust the port once you've validated end-to-end.
 
 ### 2. Seal the per-router credentials into a `SealedSecret`
 
-Copy the example, fill in the real password, then seal it:
+Copy the example, fill in the real hostnames + password for **each `[entry]` block** (one per device), then seal the whole file as a single secret:
 
 ```bash
 # from the chart directory
 cp examples/mktxp.conf.example /tmp/mktxp.conf
-$EDITOR /tmp/mktxp.conf       # paste the real password into [home-router].password
+$EDITOR /tmp/mktxp.conf       # set hostname + password under [home-router] and [home-switch]
 
 # Build a regular Secret manifest (note: --from-file= keys it as 'mktxp.conf')
 kubectl create secret generic mktxp-config \
@@ -67,7 +69,7 @@ Once Argo has synced the chart:
 
 ```bash
 oc -n mikrotik-exporter get pods                       # mikrotik-exporter-... 1/1 Running
-oc -n mikrotik-exporter logs deploy/mikrotik-exporter  # should show 'home-router scraping...' lines
+oc -n mikrotik-exporter logs deploy/mikrotik-exporter  # one 'scraping...' line per [entry] (home-router, home-switch)
 
 # From inside the cluster — UWM Prometheus picks it up via ServiceMonitor
 # (no manual config needed because the ns has openshift.io/cluster-monitoring=false)

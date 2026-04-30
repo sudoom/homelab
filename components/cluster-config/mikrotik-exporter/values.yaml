@@ -30,7 +30,7 @@ system:
   bandwidth_test_interval: 600
   minimal_collect_interval: 5
   verbose_mode: false
-  fetch_routers_in_parallel: false
+  fetch_routers_in_parallel: true
   max_worker_threads: 5
   max_scrape_duration: 30
   total_max_scrape_duration: 90

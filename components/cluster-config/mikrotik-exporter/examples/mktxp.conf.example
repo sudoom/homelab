@@ -1,6 +1,9 @@
 # Example mktxp router config — DO NOT COMMIT THIS FILE WITH REAL CREDENTIALS.
 # This is the file you seal into the `mktxp-config` SealedSecret per the chart README.
 # Reference: https://github.com/akpw/mktxp#mktxp-configuration
+#
+# One [entry] block per RouterOS device. The block name becomes the `routerboard_name`
+# label on every metric, so pick something stable and human-friendly.
 
 [home-router]
     enabled = True
@@ -36,6 +39,47 @@
     ipv6_firewall = False
     connections = True
     connection_stats = True
+    bandwidth = False
+    bandwidth_test = False
+
+    use_comments_over_names = True
+
+# Switch — RouterOS device with no routing/DHCP role. Disable the collectors
+# that don't apply (DHCP, routes, wireless, NAT) so the exporter doesn't waste
+# RPCs on empty tables.
+[home-switch]
+    enabled = True
+    hostname = 192.168.1.2
+    port = 8728
+    username = mktxp
+    password = REPLACE_ME
+    use_ssl = False
+    no_ssl_certificate = False
+    ssl_certificate_verify = False
+
+    installed_packages = True
+    dhcp = False
+    dhcp_lease = False
+    pool = False
+    interface = True
+    monitor = True
+    route = False
+    wireless = False
+    wireless_clients = False
+    capsman = False
+    capsman_clients = False
+    poe = True
+    public_ip = False
+    netwatch = False
+    user = True
+    queue = False
+    ipv6_route = False
+    ipv6_pool = False
+    ipv6_neighbor = False
+    firewall = False
+    ipv6_firewall = False
+    connections = False
+    connection_stats = False
     bandwidth = False
     bandwidth_test = False
 
