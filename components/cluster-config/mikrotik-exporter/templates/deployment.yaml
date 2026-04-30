@@ -20,6 +20,8 @@ spec:
         - name: mktxp
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           imagePullPolicy: IfNotPresent
+          command:
+            - mktxp
           args:
             - export
           ports:
