@@ -1,3 +1,4 @@
+{{- $bindings := include "grafana-config.datasourceBindings" . | nindent 4 -}}
 # Ceph — Cluster overview
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
@@ -8,6 +9,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 2842
 ---
@@ -21,6 +23,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 5336
 ---
@@ -34,6 +37,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 5342
 ---
@@ -47,6 +51,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 1860
 ---
@@ -60,6 +65,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 7249
 ---
@@ -73,6 +79,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 6879
 ---
@@ -86,6 +93,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 15762
 ---
@@ -99,6 +107,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 3070
 ---
@@ -112,6 +121,7 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 15661
 ---
@@ -125,8 +135,6 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
-  datasources:
-    - inputName: DS_PROMETHEUS
-      datasourceName: Prometheus
+  datasources:{{ $bindings }}
   grafanaCom:
     id: 22604
