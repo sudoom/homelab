@@ -779,6 +779,29 @@ In rough order of impact-per-effort:
 5. **Alerting rules** for OSD down, PG degraded, and nearfull warnings.
 6. **Encryption at rest** for the OSD volumes.
 
+## Update 04/2026: alerting rules shipped (vendored)
+
+Following up on lesson #6 — `monitoring.enabled: true` on the operator only creates ServiceMonitors, not PrometheusRules. Confirmed live: `oc -n rook-ceph get prometheusrules` returned zero before this change.
+
+Rook does ship a curated rule set, but only via the `rook-ceph-cluster` subchart's `monitoring.createPrometheusRules: true` flag. We don't use that subchart — we deploy the CephCluster as a raw CR template under `components/storage/ceph-cluster/templates/`, plus a separate `components/storage/ceph-storage-classes` for the StorageClasses. Two options surfaced:
+
+1. **Vendor the rules file**: pull `release-1.15`'s `localrules.yaml` (~870 lines, ~30 alerts covering OSD/Mon/Mgr/PG/capacity/network/RGW/RBD-mirror) into `components/storage/ceph-cluster/files/ceph-prometheus-rules.yaml`, wrap it in a minimal PrometheusRule template, and load via `.Files.Get` to bypass Helm's templating engine — necessary because the upstream alert annotations contain `{{ $min := query "..." }}` runtime expressions that Helm would otherwise try to evaluate.
+2. **Migrate to the `rook-ceph-cluster` subchart**: cleaner long-term, but the subchart wants to own BlockPool + StorageClass + CephFilesystem, which we've split across two charts; combined with our 3-OSD topology (no drain headroom) and the in-progress PNY → PM9A1 swap, doing this mid-flight makes regressions harder to attribute.
+
+Picked option 1 for now — closes the alerting gap immediately at zero risk. Subchart migration deferred until after the drive swaps are complete; logged as a TODO.
+
+Failure mode worth noting: a first attempt put the rules content directly under `templates/` and got `parse error at (...:39): function "query" not defined` from `helm lint` — Helm tried to evaluate the Prometheus-side template expressions. Moving the file out of `templates/` and loading via `{{ .Files.Get "files/ceph-prometheus-rules.yaml" | indent 2 }}` fixed it because Helm doesn't template files outside `templates/`. The wrapper template itself stays trivial.
+
+After this, validation:
+
+```bash
+helm lint components/storage/ceph-cluster/                     # 0 failed
+helm template ... | kubeconform -strict ...                    # silent → ok
+helm template ... | oc diff -f -                               # only the new PrometheusRule, no other deltas
+```
+
+`oc -n rook-ceph get prometheusrules` after sync confirms the rule object lives in the right namespace, and UWM Prometheus picks it up automatically (no namespace selector tweaks needed — UWM's default ruleSelector is namespace-agnostic outside `openshift-*`).
+
 ## Repository
 
 The full configuration is available at [github.com/sudoom/homelab](https://github.com/sudoom/homelab). The relevant paths:
