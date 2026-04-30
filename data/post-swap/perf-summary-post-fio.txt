@@ -1,0 +1,29 @@
+--- 2026-04-30T11:51:19Z UTC, post-fio test ---
+  cluster:
+    id:     739ea0de-6637-45d5-8332-fbdb28350022
+    health: HEALTH_WARN
+            2 OSD(s) experiencing slow operations in BlueStore
+ 
+  services:
+    mon: 3 daemons, quorum a,b,c (age 2h)
+    mgr: b(active, since 18h), standbys: a
+    osd: 3 osds: 3 up (since 2h), 3 in (since 2w)
+ 
+  data:
+    pools:   2 pools, 33 pgs
+    objects: 30.93k objects, 119 GiB
+    usage:   361 GiB used, 1.0 TiB / 1.4 TiB avail
+    pgs:     33 active+clean
+ 
+  io:
+    client:   229 KiB/s wr, 0 op/s rd, 2 op/s wr
+ 
+
+osd  commit_latency(ms)  apply_latency(ms)
+  0                  11                 11
+  2                  15                 15
+  1                  30                 30
+
+osd.0 kv_commit_lat avg=4.08411ms n=143055
+osd.1 kv_commit_lat avg=95.01937600000001ms n=427606
+osd.2 kv_commit_lat avg=81.86213000000001ms n=419380

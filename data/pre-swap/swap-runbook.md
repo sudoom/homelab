@@ -24,37 +24,37 @@ oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph health detail   > data/pre-s
 oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph pg dump pgs_brief | head -50 > data/pre-swap/pgs-pre-swap.txt
 ```
 
-Verify health is `HEALTH_OK` and no scrubs in progress. **Do not start the swap if cluster is degraded** — you'd be running effectively `size=2` plus `size=2` on the same data.
+Verify all PGs are `active+clean` and no scrubs/recovery in progress. (`HEALTH_WARN` from `BLUESTORE_SLOW_OP_ALERT` is fine — that's the bottleneck we're investigating.)
 
 ---
 
-## 1. Drain osd.0 (cluster stays online, just remaps PGs off osd.0)
+## 1. Why we don't drain in this cluster
 
-```bash
-# Tell Ceph to stop placing data on osd.0
-oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd out 0
+With **size=3 and exactly 3 OSDs**, every PG already lives on every OSD. There's nowhere for `ceph osd out 0` data to migrate — the PGs would just go `undersized` waiting for osd.0 to come back. "Drain → backfill off → swap" only works when N+1 OSDs exist.
 
-# Watch backfill — this is where the cluster spends 1–2 h depending on data volume
-watch -n 5 'oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph -s'
-```
+So we accept a **degraded window**: stop osd.0, swap the drive, recreate. During the window, every PG runs at 2 of 3 replicas. `min_size=2` keeps the cluster serving I/O. Risk: if osd.1 OR osd.2 also fails during the swap window, data loss.
 
-Expect ~315 GiB to drain off osd.0. Frontnet is the choke point during backfill (200–250 Mbps observed). At that rate: **~3 h walltime**.
-
-**Wait until** `ceph -s` shows `HEALTH_OK` and `pgs: ... active+clean` only (no `backfilling`, no `recovering`).
+Mitigations:
+- Keep the physical swap window short (target: < 30 min total from "OSD pod gone" to "new OSD pod up")
+- Don't run during peak write workloads (media stack ingestion, backups)
+- Verify osd.1/osd.2 are healthy *immediately* before stopping osd.0 (`ceph osd df`, no `BLUESTORE_DISK_*` warnings beyond the slow-op alert)
 
 ---
 
 ## 2. Stop and purge osd.0
 
-The OSD is still **UP** at this point — `out` only changes data placement weight. Now take it down.
-
 ```bash
-# Pause Rook so it doesn't try to recreate the OSD mid-procedure
-oc -n rook-ceph patch cephcluster rook-ceph --type merge -p '{"spec":{"disruptionManagement":{"managePodBudgets":false}}}'
+# Pause Rook so it doesn't try to recreate the OSD mid-procedure.
+# (ArgoCD manages this deployment — see step 6 for restoring it after swap.)
 oc scale deploy/rook-ceph-operator -n rook-ceph --replicas=0
 
 # Stop the OSD daemon
 oc scale deploy/rook-ceph-osd-0 -n rook-ceph --replicas=0
+
+# Cluster is now degraded: 33 PGs at 2 replicas each. Verify min_size=2 keeps it serving:
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph -s
+# Expect: HEALTH_WARN (Reduced data availability... and Degraded data redundancy...)
+# PGs should still be 'active+undersized+degraded', not 'inactive'.
 
 # Remove from CRUSH and OSD map
 oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd down 0

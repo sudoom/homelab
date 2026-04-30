@@ -1,0 +1,105 @@
+Copr repo for python-scikit-learn owned by tcha 3.7 kB/s |  46 kB     00:12    
+CentOS Stream 9 - BaseOS                        459 kB/s | 8.9 MB     00:19    
+CentOS Stream 9 - AppStream                     388 kB/s |  27 MB     01:11    
+CentOS Stream 9 - Extras packages               1.1 kB/s |  21 kB     00:18    
+Extra Packages for Enterprise Linux 9 - x86_64  995 kB/s |  21 MB     00:21    
+Extra Packages for Enterprise Linux 9 openh264  134  B/s | 2.5 kB     00:18    
+Dependencies resolved.
+================================================================================
+ Package                 Architecture Version             Repository       Size
+================================================================================
+Installing:
+ fio                     x86_64       3.35-1.el9          appstream       6.2 M
+Installing weak dependencies:
+ fio-engine-http         x86_64       3.35-1.el9          appstream        18 k
+ fio-engine-libaio       x86_64       3.35-1.el9          appstream        16 k
+ fio-engine-nbd          x86_64       3.35-1.el9          appstream        15 k
+ fio-engine-rados        x86_64       3.35-1.el9          appstream        16 k
+ fio-engine-rbd          x86_64       3.35-1.el9          appstream        16 k
+ fio-engine-rdma         x86_64       3.35-1.el9          appstream        21 k
+
+Transaction Summary
+================================================================================
+Install  7 Packages
+
+Total download size: 6.3 M
+Installed size: 8.7 M
+Downloading Packages:
+(1/7): fio-engine-http-3.35-1.el9.x86_64.rpm    2.8 kB/s |  18 kB     00:06    
+(2/7): fio-engine-libaio-3.35-1.el9.x86_64.rpm  2.4 kB/s |  16 kB     00:06    
+(3/7): fio-engine-nbd-3.35-1.el9.x86_64.rpm      94 kB/s |  15 kB     00:00    
+(4/7): fio-engine-rados-3.35-1.el9.x86_64.rpm    98 kB/s |  16 kB     00:00    
+(5/7): fio-engine-rbd-3.35-1.el9.x86_64.rpm     103 kB/s |  16 kB     00:00    
+(6/7): fio-engine-rdma-3.35-1.el9.x86_64.rpm    127 kB/s |  21 kB     00:00    
+(7/7): fio-3.35-1.el9.x86_64.rpm                810 kB/s | 6.2 MB     00:07    
+--------------------------------------------------------------------------------
+Total                                           459 kB/s | 6.3 MB     00:14     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Installing       : fio-engine-http-3.35-1.el9.x86_64                      1/7 
+  Installing       : fio-engine-libaio-3.35-1.el9.x86_64                    2/7 
+  Installing       : fio-engine-nbd-3.35-1.el9.x86_64                       3/7 
+  Installing       : fio-engine-rados-3.35-1.el9.x86_64                     4/7 
+  Installing       : fio-engine-rbd-3.35-1.el9.x86_64                       5/7 
+  Installing       : fio-engine-rdma-3.35-1.el9.x86_64                      6/7 
+  Installing       : fio-3.35-1.el9.x86_64                                  7/7 
+  Running scriptlet: fio-3.35-1.el9.x86_64                                  7/7 
+  Verifying        : fio-3.35-1.el9.x86_64                                  1/7 
+  Verifying        : fio-engine-http-3.35-1.el9.x86_64                      2/7 
+  Verifying        : fio-engine-libaio-3.35-1.el9.x86_64                    3/7 
+  Verifying        : fio-engine-nbd-3.35-1.el9.x86_64                       4/7 
+  Verifying        : fio-engine-rados-3.35-1.el9.x86_64                     5/7 
+  Verifying        : fio-engine-rbd-3.35-1.el9.x86_64                       6/7 
+  Verifying        : fio-engine-rdma-3.35-1.el9.x86_64                      7/7 
+
+Installed:
+  fio-3.35-1.el9.x86_64                   fio-engine-http-3.35-1.el9.x86_64    
+  fio-engine-libaio-3.35-1.el9.x86_64     fio-engine-nbd-3.35-1.el9.x86_64     
+  fio-engine-rados-3.35-1.el9.x86_64      fio-engine-rbd-3.35-1.el9.x86_64     
+  fio-engine-rdma-3.35-1.el9.x86_64      
+
+Complete!
+=== Pre-creating 10GB test file ===
+=== fio 4k QD1 fsync randwrite, 120s ===
+qd1-fsync: (g=0): rw=randwrite, bs=(R) 4096B-4096B, (W) 4096B-4096B, (T) 4096B-4096B, ioengine=psync, iodepth=1
+fio-3.35
+Starting 1 process
+
+qd1-fsync: (groupid=0, jobs=1): err= 0: pid=62: Thu Apr 30 11:42:14 2026
+  write: IOPS=0, BW=442B/s (442B/s)(52.0KiB/120352msec); 0 zone resets
+    clat (nsec): min=14802, max=23646, avg=19374.62, stdev=2664.92
+     lat (nsec): min=15488, max=24036, avg=19846.62, stdev=2649.38
+    clat percentiles (nsec):
+     |  1.00th=[14784],  5.00th=[14784], 10.00th=[15680], 20.00th=[17024],
+     | 30.00th=[17536], 40.00th=[19328], 50.00th=[19840], 60.00th=[20096],
+     | 70.00th=[20864], 80.00th=[21120], 90.00th=[23168], 95.00th=[23680],
+     | 99.00th=[23680], 99.50th=[23680], 99.90th=[23680], 99.95th=[23680],
+     | 99.99th=[23680]
+   bw (  KiB/s): min=    8, max=    8, per=100.00%, avg= 8.00, stdev= 0.00, samples=13
+   iops        : min=    2, max=    2, avg= 2.00, stdev= 0.00, samples=13
+  lat (usec)   : 20=53.85%, 50=46.15%
+  fsync/fdatasync/sync_file_range:
+    sync (msec): min=4846, max=13219, avg=9257.75, stdev=2884.84
+    sync percentiles (msec):
+     |  1.00th=[ 4866],  5.00th=[ 4866], 10.00th=[ 5805], 20.00th=[ 6342],
+     | 30.00th=[ 6477], 40.00th=[ 8423], 50.00th=[10000], 60.00th=[10402],
+     | 70.00th=[11476], 80.00th=[12416], 90.00th=[12550], 95.00th=[13221],
+     | 99.00th=[13221], 99.50th=[13221], 99.90th=[13221], 99.95th=[13221],
+     | 99.99th=[13221]
+  cpu          : usr=0.00%, sys=0.00%, ctx=32, majf=0, minf=9
+  IO depths    : 1=200.0%, 2=0.0%, 4=0.0%, 8=0.0%, 16=0.0%, 32=0.0%, >=64=0.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     issued rwts: total=0,13,0,13 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=1
+
+Run status group 0 (all jobs):
+  WRITE: bw=442B/s (442B/s), 442B/s-442B/s (442B/s-442B/s), io=52.0KiB (53.2kB), run=120352-120352msec
+
+Disk stats (read/write):
+  rbd1: ios=0/79, merge=0/130, ticks=0/161531, in_queue=161531, util=99.96%
+=== Sleeping for dashboard inspection ===

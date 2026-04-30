@@ -699,6 +699,38 @@ The synthetic test rules out *the drive isn't the issue*. To rule out *something
 
 That single-OSD experiment is the cheapest possible test: one drive, ~1–2 h of backfill, no procurement. Results to follow in a sequel post.
 
+### Swap done — the in-cluster A/B confirms it
+
+I executed the swap on node4 (full procedure in `data/pre-swap/swap-runbook.md`). Stop osd.0, cordon + drain node4, power down, swap PNY CS1030 → PM9A1, boot, wipe device, let Rook re-provision the OSD, backfill ~315 GiB of replicated data back into osd.0. Total degraded window ~30 min, no data loss (size=3, min_size=2 kept the cluster serving I/O the whole time).
+
+After backfill completed and the cluster ran normal load for ~50 min, lifetime `kv_commit_lat` per OSD:
+
+| OSD | Drive | `kv_commit_lat` avg | sample count |
+|---|---|---|---|
+| osd.0 | **PM9A1 (new)** | **4.4 ms** | 104k |
+| osd.1 | PNY CS1030 | 96.4 ms | 408k |
+| osd.2 | PNY CS1030 | 82.7 ms | 401k |
+
+→ **~20× faster** on the metric BlueStore is bottlenecked on. And the BlueStore slow-op alert that used to flag all three OSDs now only flags osd.1 and osd.2 — corroborating evidence.
+
+To make the divergence visible in real-time (not just lifetime averages), I ran a 4k QD1 fsync `fio` against a fresh `ceph-nvme-block` PVC for 120 s. This is the cluster-side mirror of the standalone test from earlier.
+
+Cluster-side fio result (against an RBD volume, replicated 3-way):
+
+| Metric | Value |
+|---|---|
+| Bandwidth | **442 B/s** |
+| IOPS | 2 |
+| Mean fsync latency | **9,257 ms** |
+| 99th-pct fsync | 13,221 ms |
+| osd.0 commit_latency (live) | 9 ms |
+| osd.1 commit_latency (live) | up to 3,236 ms |
+| osd.2 commit_latency (live) | up to 1,795 ms |
+
+Compare to the standalone PM9A1 result (2.9 ms mean fsync, ~600 IOPS) and the cluster-side number reads as a benchmark of the slowest replica. Ceph's RBD client must wait for all three replicas to ack each write — so even though osd.0 acks in 9 ms, osd.1 sometimes takes 3.2 *seconds*, and the client sees the worst of the three. Replace the remaining two PNYs and the cluster-side fsync should drop ~3 orders of magnitude. The single-OSD swap was the cheap experiment; the verdict is unambiguous.
+
+Raw post-swap data (perf dumps, fio output, ceph status) is captured under `data/post-swap/`.
+
 ## Lessons learned
 
 ### 1. `network.addressRanges.public` is a client-reachability decision, not a performance one

@@ -24,11 +24,14 @@ spec:
         - /bin/bash
         - -c
         - |
-          echo "=== Writing 100GB test data ==="
-          dd if=/dev/urandom of=/data/testfile bs=1M count=102400 status=progress
-          echo "=== Done ==="
-          ls -lh /data/testfile
-          df -h /data
+          dnf install -y fio
+          echo "=== Pre-creating 10GB test file ==="
+          fallocate -l 10G /data/testfile
+          echo "=== fio 4k QD1 fsync randwrite, 120s ==="
+          fio --name=qd1-fsync --filename=/data/testfile \
+              --rw=randwrite --bs=4k --iodepth=1 --numjobs=1 \
+              --fsync=1 --direct=0 \
+              --time_based --runtime=120 --group_reporting
           echo "=== Sleeping for dashboard inspection ==="
           sleep 3600
       volumeMounts:
