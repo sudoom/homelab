@@ -2,7 +2,7 @@ namespace: mikrotik-exporter
 
 image:
   repository: ghcr.io/akpw/mktxp
-  tag: v1.2.17
+  tag: "1.2.17"
 
 # mktxp default Prometheus scrape port
 port: 49090
