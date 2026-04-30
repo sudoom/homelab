@@ -178,6 +178,8 @@ Every session that diagnoses an issue, changes infrastructure, or runs a non-tri
 
 Update the draft as you work, not at the end. If a session does something undocumented, that's a regression — flag it.
 
+**Don't ask for permission to create or update blog drafts, READMEs, or any documentation that this CLAUDE.md says to keep current.** Just do it as part of the work, in the same commit/series as the change that prompted it. Asking "should I write this up?" is friction; the answer is always yes when the rule applies.
+
 ## TODO list lives at the bottom of README.md
 
 The repo's TODO list is the structured section at the bottom of `README.md` (categories: In flight, Queued — observability, Queued — storage, Queued — operators / catalog, Queued — platform expansion, Documentation hygiene). Treat it as the single source of truth for tracked work.
