@@ -24,6 +24,9 @@ spec:
             - mktxp
           args:
             - export
+          env:
+            - name: HOME
+              value: /home/mktxp
           ports:
             - containerPort: {{ .Values.port }}
               name: metrics
