@@ -83,6 +83,50 @@ For operators bringing CRDs, use **intra-chart** sync-wave annotations: `Subscri
 - API cert `api.okd.sudops.pl` → `openshift-config`.
 - Cloudflare API token is created **manually** today. Planned migration: ESO + Bitwarden.
 
+## Storage (Rook-Ceph)
+
+The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is shipped via the upstream `rook-ceph` Helm chart; the `CephCluster` CR + pools + StorageClasses are vendored as raw manifests under `components/storage/` (not the `rook-ceph-cluster` subchart yet — see TODO). Suggestions and changes around storage need to respect the constraints below.
+
+### Topology
+
+- **3 OSDs total**, one per node, each on a single NVMe device. Failure domain is `host` (the failure-domain labels are `fd-a/fd-b/fd-c`, one per node).
+- **No drain headroom.** Any rolling change to OSDs (rebuild, encrypt-at-rest, redeploy) goes through a degraded window — there is no fourth node to absorb the missing OSD. Plan accordingly: schedule during quiet IO, never run two OSD-impacting changes at once, never propose `oc cordon node{4,5,6}` without an explicit ask.
+- **Mons:** 3-of-3, one per node. Same topology constraint applies.
+- **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication. Multus migration drafted in `blog-multus-ceph-migration-draft.md` but **not pursued for throughput** — Mikrotik traffic data showed the bottleneck is media, not switch.
+
+### Hardware migration in flight (PNY → PM9A1)
+
+- Original 3× PNY consumer NVMes had pathological commit latency (~95 ms `kv_commit_lat` lifetime average; observed cluster-side fsync latency in seconds). One PM9A1 swap on node4 (osd.0) validated 04/2026: **~20× speedup** to ~4 ms `kv_commit_lat`.
+- 2× more PM9A1 ordered late 04/2026; node5 swaps next (it was the worse of the two remaining PNYs under fio), then node6.
+- `BLUESTORE_SLOW_OP_ALERT` HEALTH_WARN is **hardware-bound** on the PNYs — won't clear until the swap finishes. Do not propose tuning, deep-scrub adjustments, or pool-config changes to "fix" it; the only fix is the swap.
+- Defer big storage refactors (subchart migration, OSD encryption, large topology changes) until **after** node5 + node6 swaps complete.
+
+### Pools and pg_num
+
+- Primary pool: `nvme-replicated` (`size=3`, `min_size=2`, CRUSH rule on `device_class=nvme`, `bulk: true`). Backs the only StorageClass today (`ceph-nvme-block`, RBD provisioner).
+- **Target `pg_num` is 128** for `nvme-replicated`: 100 PGs/OSD × 3 OSDs / replication 3 = 100 → next pow2 = 128. Use `pg_num_min: 128` in the BlockPool to enforce — the autoscaler is **not** applying the `bulk` hint correctly (sits at 32 because data utilization is ~4% and `ceph osd pool autoscale-status` returns `[]`; root cause likely a Squid 19.2.3 quirk, tracked as an open TODO).
+- When proposing pool changes: floor with `pg_num_min`, don't disable autoscale. Don't suggest manual `pg_num` bumps unless paired with the autoscaler diagnosis.
+
+### CephFS plan (not yet shipped)
+
+- **Two storage classes** against a **single `CephFilesystem` CR** — not two filesystems.
+- One filesystem with metadata pool on NVMe and **two `dataPools` entries**: `deviceClass: nvme` (low-latency RWX) + `deviceClass: hdd` (bulk RWX).
+- Two `StorageClass` objects against the same filesystem, differing only in the `pool` parameter.
+- **Sequencing:** the NVMe SC can ship before HDDs land — no HDD dependency for the NVMe tier. The HDD SC waits on bulk HDDs being added to the chassis.
+- Don't propose pure-NVMe CephFS as the long-term answer; the two-tier shape is the chosen plan.
+
+### RBD CSI quirks
+
+- The CSI driver does **deferred delete**: PVC removal calls `rbd trash mv`, not `rbd rm`. Trashed images keep consuming pool space until purged. Manual purge in 04/2026 reclaimed ~600 GiB.
+- Need a periodic `rbd trash purge schedule` (use Ceph's built-in scheduler, not a CronJob — it lives in mgr config).
+- Occasionally an image refuses removal with `image has watchers` — usually a stuck CSI nodeplugin attachment; investigate the node, don't force-delete the image.
+
+### When proposing storage changes
+
+- Always state the impact on the degraded window first. "Rolling restart of OSDs" = degraded cluster, not a free operation.
+- For pool/CRUSH changes: `helm template … | oc diff -f -` against the live `CephCluster` / `CephBlockPool` so the deltas are inspected before commit.
+- The toolbox is `oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph …`. Read-only `ceph` commands are fine; Ceph-internal mutations (e.g. `ceph mgr fail`, `ceph orch ...`, `rbd trash purge schedule add`) are different from K8s mutations and may be appropriate — but flag them and confirm before running.
+
 ## Validation workflow
 
 Every change to a chart must pass **lint → template → schema-validate → diff** before commit. Don't skip steps.
