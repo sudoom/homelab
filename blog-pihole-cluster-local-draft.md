@@ -117,7 +117,36 @@ REFUSED in 5 ms instead of a 6 s timeout. Glibc/Go's resolver immediately moves 
 - **Diagnose by following the actual chain.** It's tempting to assume "DNS works for everyone else, so it's not DNS." The fact that `dig grafana.com` works at the upstream doesn't tell you that *every* query works there. The give-away here was the heterogeneous failure: `dig grafana.com` succeeds, `dig anything.cluster.local.okd.sudops.pl` times out — same upstream, same path, only the qname differs.
 - **A pod's `NAME-AGE` mismatched against the rest of its stack is a strong signal.** If one pod is freshly rolled and the rest are 7 hours old, the freshly-rolled one has had to do everything from cold (DNS, TLS, secrets) — that's where DNS regressions reveal themselves first.
 
+## Aftershock — node6 REFUSED by pi-hole
+
+A few hours after the rebinding-protection fix landed, ArgoCD started failing differently:
+
+```
+Failed to load target state: failed to generate manifest for source 1 of 1:
+rpc error: code = Unknown desc = failed to list refs:
+dial tcp: lookup github.com on 172.30.0.10:53: server misbehaving
+```
+
+`server misbehaving` is what Go's resolver reports for SERVFAIL/REFUSED. Cluster CoreDNS logs showed `i/o timeout` forwarding to `192.168.1.9` (node6's host CoreDNS) for `github.com.okd.sudops.pl` (search-list expansion).
+
+The diagnostic that cracked it was running the same `dig @192.168.1.12 github.com` from each node:
+
+| client                | result          | time |
+|-----------------------|-----------------|------|
+| laptop (192.168.1.x) | NOERROR, A      | 6 ms |
+| node4 (192.168.1.7)  | NOERROR, A      | 3 ms |
+| node5 (192.168.1.8)  | NOERROR, A      | 17 ms|
+| node6 (192.168.1.9)  | **REFUSED**     | 2 ms |
+
+Per-client REFUSED in 2 ms is the pi-hole v6 rate-limit signature. Default is 1000 queries/min per client; pi-hole v6 returns REFUSED (rather than the v5 silent-drop) once a client exceeds it within the rolling 60-second window.
+
+Why only node6: smartctl-exporter, rook-ceph-mon, and at least one busy CoreDNS-on-pod replica all happened to land there, and those pods do enough cold lookups (with 4-attempt search-list expansion under `ndots:5`) to drive a single node well past 1000 q/min. The other two nodes stayed under.
+
+Two follow-ups to bake in:
+1. **Raise pi-hole's `RATE_LIMIT`** for cluster-node clients (or set it to `0/0` to disable). The cluster's lookup volume is legitimate, not an attack surface — rate-limiting it just creates the kind of opaque, intermittent failure we just hit. Best done via pi-hole web UI → Settings → All settings → DNS → Rate limit, or in `/etc/pihole/pihole.toml`.
+2. **Cluster CoreDNS's i/o-timeout error is misleading here.** When pi-hole rate-limits, host CoreDNS sees no UDP response, eventually marks pi-hole unhealthy, then returns REFUSED (which Go reports as "server misbehaving"). The chain `pod → cluster CoreDNS → host CoreDNS → pi-hole` has three places that can each turn a rate-limit into a different-looking error.
+
 ## Open follow-ups
 
 - Consider switching the pi-hole Conditional Forwarding target for `okd.sudops.pl` from the home router (`192.168.1.1`) to the OKD API VIP (`192.168.1.240`). The host CoreDNS authoritatively serves `api.okd.sudops.pl` and `*.apps.okd.sudops.pl` — pointing pi-hole there would let LAN clients resolve cluster ingress names without a static `/etc/hosts`. Side benefit only; not required for the fix above.
-- Document a "lab DNS prerequisites" section in the bootstrap docs once we have a few of these workarounds: rebinding-protection exemption for `cluster.local` is the kind of thing that's invisible until it bites.
+- Document a "lab DNS prerequisites" section in the bootstrap docs once we have a few of these workarounds: rebinding-protection exemption for `cluster.local` plus a raised rate-limit for cluster-node clients are both invisible-until-it-bites items.
