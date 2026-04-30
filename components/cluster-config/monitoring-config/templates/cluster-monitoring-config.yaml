@@ -5,6 +5,7 @@ metadata:
   namespace: openshift-monitoring
 data:
   config.yaml: |
+    enableUserWorkload: {{ .Values.userWorkload.enabled }}
     prometheusK8s:
       retention: {{ .Values.prometheus.retention }}
       volumeClaimTemplate:
@@ -20,3 +21,29 @@ data:
           resources:
             requests:
               storage: {{ .Values.alertmanager.volumeSize }}
+{{- if .Values.userWorkload.enabled }}
+---
+# The openshift-user-workload-monitoring namespace is created by the
+# cluster-monitoring-operator only after enableUserWorkload=true above is
+# observed. Use intra-app sync-wave so this lands after the
+# cluster-monitoring-config ConfigMap (default wave 0); ArgoCD retry +
+# SkipDryRunOnMissingResource handle the brief gap before the namespace
+# exists.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-workload-monitoring-config
+  namespace: openshift-user-workload-monitoring
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  config.yaml: |
+    prometheus:
+      retention: {{ .Values.userWorkload.retention }}
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ceph-nvme-block
+          resources:
+            requests:
+              storage: {{ .Values.userWorkload.volumeSize }}
+{{- end }}

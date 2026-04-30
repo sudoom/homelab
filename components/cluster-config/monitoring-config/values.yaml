@@ -4,3 +4,8 @@ prometheus:
 
 alertmanager:
   volumeSize: 1Gi
+
+userWorkload:
+  enabled: true
+  retention: 15d
+  volumeSize: 10Gi
