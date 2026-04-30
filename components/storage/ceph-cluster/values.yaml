@@ -55,6 +55,16 @@ nodes:
 toolbox:
   enabled: true
 
+# Bootstrap Job that adds Ceph's built-in RBD trash purge schedule.
+# Schedule lives in mgr config (not git), so this Job re-applies it on
+# every chart sync — idempotent: skips if 'every <interval>' is already
+# present for the pool. Sync wave 10 = after CephCluster + pools are up.
+rbdTrashPurgeSchedule:
+  enabled: true
+  interval: "1d"
+  pools:
+    - nvme-replicated
+
 dashboardRoute:
   enabled: true
   host: ceph.apps.okd.sudops.pl

@@ -935,3 +935,47 @@ A few CLI gotchas worth recording for next time:
 What this changes for ops: PVC deletes still go to trash first (CSI behavior, unchanged), but stale images get reaped automatically the next midnight. Any image with `image has watchers` will still refuse removal — those need investigation, not a schedule. The "image has watchers" stuck image at `csi-vol-3af138f8-1b96-41e4-a05d-108896d26954` from 04/2026 stays as its own TODO; the schedule won't unstick it.
 
 No data movement, no degraded window, no client impact. Pure metadata operation.
+
+## 2026-05-01 — Capturing the trash purge schedule as a Kubernetes Job
+
+The previous section ended with a caveat: the schedule lives in mgr config, not git. A clean rebuild of the cluster would silently lose it, and the orphan-and-grow cycle would creep back. This entry closes that loop by capturing the bootstrap as GitOps.
+
+Design choices:
+
+- **Job, not CronJob.** The schedule itself is a one-shot bootstrap (`rbd trash purge schedule add` is idempotent on the mgr side, but we still only need to run it once after a fresh cluster). The actual recurring purge is what mgr does internally on its own timer — we are not replacing that with a cron.
+- **`argocd.argoproj.io/sync-options: Replace=true`.** Job specs are immutable once created. Without `Replace=true`, any change to the values block (e.g., adding a new pool) fails to reconcile because Argo can't patch the existing Job. With it, Argo deletes and recreates on change.
+- **Sync-wave 10.** The Job needs the CephCluster, the pool (`nvme-replicated`), and the toolbox secret/configmap to all exist. Wave 10 puts it after the storage-class chart's pools (wave 5–6) and well after the cluster CR.
+- **Idempotent script.** `rbd trash purge schedule list --pool $POOL | grep -q "every $INTERVAL"` short-circuits when the schedule is already present. Re-runs are silent.
+- **Reuses the toolbox auth pattern.** Mounts `rook-ceph-mon` (admin keyring) and `rook-ceph-mon-endpoints` (mon list), assembles `/etc/ceph/ceph.conf` and `/etc/ceph/keyring` at runtime — same shape as the toolbox deployment.
+- **`hostNetwork: true` + `dnsPolicy: ClusterFirstWithHostNet`.** Ceph clients want direct mon connectivity; matches the toolbox pattern.
+
+Values surface (`components/storage/ceph-cluster/values.yaml`):
+
+```yaml
+rbdTrashPurgeSchedule:
+  enabled: true
+  interval: "1d"
+  pools:
+    - nvme-replicated
+```
+
+Adding a pool later (when CephFS lands or HDDs arrive) is a one-line change to this list.
+
+First sync after the Job lands: expected to log `[nvme-replicated] schedule 'every 1d' already present, skipping` because the manual `rbd trash purge schedule add` from the previous session already wrote it. That's the validation — same script must produce that exact line on a no-op run, and `rbd trash purge schedule status --pool nvme-replicated` must still show the schedule afterward.
+
+Validation pre-commit:
+
+```
+$ helm lint components/storage/ceph-cluster/
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template ceph-cluster components/storage/ceph-cluster/ -n rook-ceph \
+    -f components/storage/ceph-cluster/values.yaml | \
+    kubeconform -strict -ignore-missing-schemas \
+      -schema-location default \
+      -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+                              <- silent, all kinds OK
+
+$ helm template ... | oc diff -f -
+                              <- only the new Job, no other drift
+```

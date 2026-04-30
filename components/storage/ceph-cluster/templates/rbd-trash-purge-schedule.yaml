@@ -1,0 +1,86 @@
+{{- if .Values.rbdTrashPurgeSchedule.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rbd-trash-purge-schedule-bootstrap
+  namespace: rook-ceph
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: rbd-trash-purge-schedule-bootstrap
+    spec:
+      serviceAccountName: rook-ceph-tools
+      restartPolicy: OnFailure
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: rbd
+          image: {{ .Values.cephVersion.image }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              CEPH_CONFIG="/etc/ceph/ceph.conf"
+              MON_CONFIG="/etc/rook/mon-endpoints"
+              KEYRING_FILE="/etc/ceph/keyring"
+
+              cat <<KEYEOF > "$KEYRING_FILE"
+              [client.admin]
+              key = $(cat /etc/ceph/keyring-store/keyring)
+              KEYEOF
+
+              cat <<EOF > "$CEPH_CONFIG"
+              [global]
+              mon_host = $(cat "$MON_CONFIG" | sed 's/[a-z]\+=//g; s/=/ /; s/  */ /g')
+
+              [client.admin]
+              keyring = $KEYRING_FILE
+              EOF
+
+              INTERVAL="{{ .Values.rbdTrashPurgeSchedule.interval }}"
+              {{- range .Values.rbdTrashPurgeSchedule.pools }}
+              POOL="{{ . }}"
+              if rbd trash purge schedule list --pool "$POOL" 2>/dev/null | grep -q "every $INTERVAL"; then
+                echo "[$POOL] schedule 'every $INTERVAL' already present, skipping"
+              else
+                echo "[$POOL] adding schedule 'every $INTERVAL'"
+                rbd trash purge schedule add --pool "$POOL" "$INTERVAL"
+              fi
+              rbd trash purge schedule status --pool "$POOL"
+              {{- end }}
+          volumeMounts:
+            - name: ceph-config
+              mountPath: /etc/ceph
+            - name: mon-endpoint-volume
+              mountPath: /etc/rook
+            - name: ceph-admin-secret
+              mountPath: /etc/ceph/keyring-store
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              memory: "128Mi"
+      volumes:
+        - name: ceph-config
+          emptyDir: {}
+        - name: mon-endpoint-volume
+          configMap:
+            name: rook-ceph-mon-endpoints
+            items:
+              - key: data
+                path: mon-endpoints
+        - name: ceph-admin-secret
+          secret:
+            secretName: rook-ceph-mon
+            items:
+              - key: ceph-secret
+                path: keyring
+{{- end }}
