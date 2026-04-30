@@ -96,3 +96,28 @@ oc -n openshift-user-workload-monitoring port-forward svc/prometheus-user-worklo
 - **Grafana dashboard**: deferred. Once metrics are flowing, pick a community dashboard ID (the prometheus-community/smartctl_exporter project README links one) and add it to `grafana-config/templates/dashboards.yaml` alongside the existing Ceph/k8s dashboards.
 - **Wear-rate alert**: when do we want to be paged? Probably `rate(smartctl_device_data_units_written_total[24h]) * 86400 > <some TBW/day budget>`. Park until we have a few weeks of baseline data to set the threshold from.
 - **Per-drive labels**: the ServiceMonitor relabels `__meta_kubernetes_pod_node_name` to `node`, but if a node ever has multiple NVMe drives we'll need a `device` label too. Not a problem today (one NVMe per node).
+
+## 2026-05-01 — Adding OS disks to the scrape set
+
+Initial scope was the Ceph OSD device only (`/dev/nvme0n1`) — that's the failure mode I cared about because consumer NVMe wear was pathological on the PNYs. But the OS disks (`/dev/sda` on all three nodes) get hammered by control-plane writes, container runtime, kubelet state, log buffering, and they're the same generic consumer-SSD class. No reason to leave them blind.
+
+One-line change in `components/cluster-config/smartctl-exporter/values.yaml`:
+
+```yaml
+devices:
+  - /dev/nvme0n1
+  - /dev/sda
+```
+
+The DaemonSet already runs privileged with `/dev` mounted, so no RBAC or security-context change is needed — only the `--smartctl.device=...` arg list grows. `oc diff` confirmed exactly that:
+
+```
+       - args:
+         - --web.listen-address=:9633
+         - --smartctl.device=/dev/nvme0n1
++        - --smartctl.device=/dev/sda
+```
+
+Why explicit list instead of `smartctl --scan` auto-discovery: the explicit list keeps the per-node scrape set predictable and makes "what are we monitoring" a values question, not a runtime question. If a future node has a different OS disk path, that's a values change — not a silent gap or a noisy add.
+
+The "node-exporter already exposes this" assumption is wrong. OKD's bundled `node-exporter` exports `node_disk_*` — kernel-level IO counters: read bytes, write bytes, queue depth, IO time — but does **not** enable the `smartctl` collector or the textfile pattern. SMART health (`percentage_used`, `data_units_written`, `temperature_celsius`, `media_errors`) only comes from `smartctl-exporter`. Easy to conflate because both sets of metrics show up under "disk" panels in Grafana.

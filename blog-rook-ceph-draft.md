@@ -963,6 +963,23 @@ Adding a pool later (when CephFS lands or HDDs arrive) is a one-line change to t
 
 First sync after the Job lands: expected to log `[nvme-replicated] schedule 'every 1d' already present, skipping` because the manual `rbd trash purge schedule add` from the previous session already wrote it. That's the validation — same script must produce that exact line on a no-op run, and `rbd trash purge schedule status --pool nvme-replicated` must still show the schedule afterward.
 
+### Bumping cadence to 1h
+
+After landing the Job at `1d`, dropped the interval to `1h`. Reasoning: trashed RBD images sit in the pool consuming reservation space until purged, and the CSI default trash delay is effectively zero — so the only thing standing between "PVC deleted" and "space reclaimed" is the next purge tick. Hourly is cheap (it's a metadata walk, not data movement) and turns "I deleted a PV, why is the pool still full?" into a one-hour worst case instead of a 24-hour worst case.
+
+The naive "if not present, add" check was only safe at a fixed interval. Bumping it surfaced the gap: the existing `every 1d` schedule wouldn't match a grep for `every 1h`, so the Job would `add` the new schedule and leave both running. Fixed by walking existing schedules first and removing any that don't match the desired interval:
+
+```bash
+for SCHED in $(rbd trash purge schedule list --pool "$POOL" 2>/dev/null | awk '/^every / {print $2}'); do
+  if [ "$SCHED" != "$INTERVAL" ]; then
+    echo "[$POOL] removing stale schedule 'every $SCHED'"
+    rbd trash purge schedule remove --pool "$POOL" "$SCHED"
+  fi
+done
+```
+
+Then the existing add-if-missing block stays the same. Job is now idempotent across interval changes — drop the new value into `values.yaml`, Argo replaces the Job, and the next run reconciles to the desired single schedule.
+
 Validation pre-commit:
 
 ```

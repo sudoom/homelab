@@ -10,9 +10,10 @@ scrapeInterval: 60s
 
 devices:
   # Devices to expose to the exporter container. The exporter auto-discovers
-  # block devices under /dev that smartctl can query; we restrict to NVMe to
-  # avoid noise from rbd*/loop* devices.
+  # block devices under /dev that smartctl can query; we list explicitly so
+  # rbd*/loop* devices stay out and the per-node device set stays predictable.
   - /dev/nvme0n1
+  - /dev/sda
 
 resources:
   requests:

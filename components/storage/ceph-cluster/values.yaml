@@ -61,7 +61,7 @@ toolbox:
 # present for the pool. Sync wave 10 = after CephCluster + pools are up.
 rbdTrashPurgeSchedule:
   enabled: true
-  interval: "1d"
+  interval: "1h"
   pools:
     - nvme-replicated
 

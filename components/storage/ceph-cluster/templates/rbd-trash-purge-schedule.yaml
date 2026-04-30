@@ -47,7 +47,15 @@ spec:
               INTERVAL="{{ .Values.rbdTrashPurgeSchedule.interval }}"
               {{- range .Values.rbdTrashPurgeSchedule.pools }}
               POOL="{{ . }}"
-              if rbd trash purge schedule list --pool "$POOL" 2>/dev/null | grep -q "every $INTERVAL"; then
+              # Drop any schedule on this pool that doesn't match the desired
+              # interval — keeps the Job idempotent across config changes.
+              for SCHED in $(rbd trash purge schedule list --pool "$POOL" 2>/dev/null | awk '/^every / {print $2}'); do
+                if [ "$SCHED" != "$INTERVAL" ]; then
+                  echo "[$POOL] removing stale schedule 'every $SCHED'"
+                  rbd trash purge schedule remove --pool "$POOL" "$SCHED"
+                fi
+              done
+              if rbd trash purge schedule list --pool "$POOL" 2>/dev/null | grep -q "^every $INTERVAL$"; then
                 echo "[$POOL] schedule 'every $INTERVAL' already present, skipping"
               else
                 echo "[$POOL] adding schedule 'every $INTERVAL'"
