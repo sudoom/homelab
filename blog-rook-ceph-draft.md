@@ -896,3 +896,42 @@ osd.0                   node4   running (12h)
 All four node4 daemons now visible to the orchestrator; dashboard refreshes and shows the full badge set for node4. Cosmetic-only fix — no impact on data, IO, or quorum — but worth knowing as a recipe: any time `ceph orch ls/ps` looks stale relative to the actual pod state in a Rook cluster, fail the active mgr to force a full inventory rebuild.
 
 Why the inventory drifted in the first place is unanswered. Active mgr `b` had been running 28h; it's possible Rook's host-list refresh logic missed an event, or there was an mgr restart somewhere in the chain that left node4's host record half-populated. Not chasing root cause unless it recurs.
+
+## 2026-05-01 — RBD trash purge schedule
+
+Closing the long-running "periodic `rbd trash purge` schedule" TODO. Backstory: RBD CSI doesn't actually delete the image when a PVC is removed — it calls `rbd trash mv` (deferred delete). Trashed images keep their pool space until something explicitly purges them. We hit this in 04/2026 when a one-shot `rbd trash purge` reclaimed ~600 GiB of orphaned images. Without a schedule, the same orphan-and-grow cycle would repeat.
+
+Pre-state:
+
+```
+$ rbd trash purge schedule status
+POOL  NAMESPACE  SCHEDULE TIME
+                              <- empty, no schedule
+
+$ rbd trash ls --pool nvme-replicated
+                              <- empty, the manual purge cleared everything
+```
+
+Add the schedule:
+
+```
+$ rbd trash purge schedule add --pool nvme-replicated 1d
+$ rbd trash purge schedule list --pool nvme-replicated
+every 1d
+
+$ rbd trash purge schedule status --pool nvme-replicated
+POOL             NAMESPACE  SCHEDULE TIME
+nvme-replicated             2026-05-02 00:00:00
+```
+
+Schedule is "every 1 day", fires at the next 00:00 cluster-local. Lives in **mgr config state**, persists across mgr restarts. Caveat: it does *not* live in git, so a full cluster rebuild needs the command re-run during bootstrap. Acceptable for now; if we ever do a clean rebuild, capture it as a Kubernetes Job under `components/storage/`.
+
+A few CLI gotchas worth recording for next time:
+
+- `rbd trash purge schedule list` (no flags) returns nothing useful — shows only the pool-less default, which we never set. Always pass `--pool <name>` or, for the global view, `--recursive` (only valid on `list`, **not** `status`).
+- `rbd trash purge schedule status --recursive` returns `unrecognised option`. Use `--pool <name>` for status; `--recursive` is list-only.
+- `add`, `list`, `status` all return clean exit 0 when scoped correctly.
+
+What this changes for ops: PVC deletes still go to trash first (CSI behavior, unchanged), but stale images get reaped automatically the next midnight. Any image with `image has watchers` will still refuse removal — those need investigation, not a schedule. The "image has watchers" stuck image at `csi-vol-3af138f8-1b96-41e4-a05d-108896d26954` from 04/2026 stays as its own TODO; the schedule won't unstick it.
+
+No data movement, no degraded window, no client impact. Pure metadata operation.
