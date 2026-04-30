@@ -812,3 +812,87 @@ components/storage/ceph-cluster/       # CephCluster CR, toolbox, monitoring
 components/storage/ceph-storage-classes/ # Block pools and StorageClasses
 components/cluster-config/grafana-config/ # Grafana with Ceph dashboards
 ```
+
+## 2026-05-01 — `pg_num_min` bump 32 → 128 + dashboard host inventory refresh
+
+Two storage-side actions in one session, both worth a paragraph each.
+
+### `pg_num_min: 128` on `nvme-replicated`
+
+Pre-state:
+
+```
+$ ceph osd pool ls detail | grep nvme-replicated
+pool 2 'nvme-replicated' replicated size 3 min_size 2 crush_rule 1 ... pg_num 32
+  pgp_num 32 autoscale_mode on last_change 194 ... flags hashpspool,selfmanaged_snaps,bulk
+  pg_num_min 32 application rbd read_balance_score 1.22
+```
+
+Pool sat at `pg_num=32`, even though it has `bulk: true` and the textbook target for `3 OSDs × 100 PGs/OSD ÷ replication 3` rounds up to **128**. Autoscaler isn't applying the bulk hint — a known issue tracked under the `pg_autoscaler returns empty status` TODO; `ceph osd pool autoscale-status` returns `[]` even with `bulk: true` set. Likely a Squid 19.2.3 quirk; not chasing it down today.
+
+Pragmatic fix: floor `pg_num_min` to the textbook target. Change:
+
+```diff
+ # components/storage/ceph-storage-classes/values.yaml
+ blockPools:
+   nvme-replicated:
+     parameters:
+       bulk: "true"
+-      pg_num_min: "32"
++      pg_num_min: "128"
+```
+
+Validation:
+
+```
+$ helm lint components/storage/ceph-storage-classes/   # OK
+$ helm template … | oc diff -f -
+   parameters:
+     bulk: "true"
+-    pg_num_min: "32"
++    pg_num_min: "128"
+```
+
+Single-field diff, no other resource churn. Committed as `nvme-replicated: bump pg_num_min to 128`. Argo will reconcile, the `CephBlockPool` controller will re-write the pool config, and Ceph will start the PG split. **Expected impact:** background recovery while PGs split (96 new PGs created from 32 existing = roughly 3× the current PG count). Cluster stays HEALTH_OK throughout; clients see no IO impact because the split is incremental and copy-then-cut, not stop-the-world.
+
+This doesn't unblock the autoscaler bug. Re-opening the original `pg_num=32` TODO (closed prematurely earlier today) and leaving the autoscaler-empty-status TODO open in parallel.
+
+### `ceph mgr fail b` — refreshed orchestrator host inventory
+
+The Ceph dashboard's "Service Instances" column for **node4** showed empty, while node5/node6 showed full badge sets (`crashcollector`, `ceph-exporter`, `mgr`, `mon`, `osd`). The pods were actually up:
+
+```
+$ oc -n rook-ceph get pods -o wide | awk '$7 ~ /node4/'
+rook-ceph-crashcollector-node4...     Running   node4.okd.sudops.pl
+rook-ceph-exporter-node4...           Running   node4.okd.sudops.pl
+rook-ceph-mon-a...                    Running   node4.okd.sudops.pl
+rook-ceph-osd-0...                    Running   node4.okd.sudops.pl
+```
+
+And `ceph -s` agreed: `mon: 3 daemons, quorum a,b,c`, `osd: 3 osds: 3 up`. So the daemons were healthy — the orchestrator's view was stale. `ceph orch ls` confirmed:
+
+```
+NAME   PORTS  RUNNING  REFRESHED  AGE  PLACEMENT
+crash             2/3  ...                       *      <- target 3, only seeing 2
+mon               2/3  ...                       count:3
+```
+
+Orchestrator inventory in a Rook deployment lives in the active mgr's state. Failing the active mgr forces the standby to promote and rebuild the inventory from scratch.
+
+```
+$ ceph mgr fail b
+$ ceph -s | grep mgr
+    mgr: a(active, since 8s), standbys: b
+$ ceph orch ls
+crash             3/3  ...
+mon               3/3  ...
+$ ceph orch ps --hostname=node4.okd.sudops.pl
+ceph-exporter.exporter  node4   running (13h)
+crashcollector.crash    node4   running (13h)
+mon.a                   node4   running (13h)
+osd.0                   node4   running (12h)
+```
+
+All four node4 daemons now visible to the orchestrator; dashboard refreshes and shows the full badge set for node4. Cosmetic-only fix — no impact on data, IO, or quorum — but worth knowing as a recipe: any time `ceph orch ls/ps` looks stale relative to the actual pod state in a Rook cluster, fail the active mgr to force a full inventory rebuild.
+
+Why the inventory drifted in the first place is unanswered. Active mgr `b` had been running 28h; it's possible Rook's host-list refresh logic missed an event, or there was an mgr restart somewhere in the chain that left node4's host record half-populated. Not chasing root cause unless it recurs.

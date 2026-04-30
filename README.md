@@ -74,6 +74,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 
 ### In flight
 - [ ] **Finish the PNY → PM9A1 swap (node5, then node6)** — osd.0 swapped 04/2026 and validated (lifetime `kv_commit_lat` ~4 ms vs PNY ~95 ms, ~20× speedup). 2× more PM9A1 ordered late 04/2026; swap node5 first (was the slower of the two PNYs under fio — commit_latency hit 3.2 s). Reuse `data/pre-swap/swap-runbook.md`. After node6 lands, re-run `tests/ceph-storage-test.yaml` and expect cluster-side fsync ~30 ms (vs current 9.25 s with 2 PNYs in path).
+- [ ] **Validate `pg_num` reaches 128 on `nvme-replicated`** — `pg_num_min: "128"` shipped (commit pending); waiting for ArgoCD reconcile + PG split (32 → 128). Validate with `ceph osd pool ls detail` and watch `ceph -s` for `pgs: ... peering` / `... active+clean` cycles. Target: `pg_num 128 pgp_num 128 pg_num_min 128`. The split is background recovery, no stop-the-world.
 - [ ] **Investigate why `pg_autoscaler` returns empty status** — `ceph osd pool autoscale-status` returns `[]` even with `bulk: true` set; bouncing the active mgr didn't help. Likely a Squid 19.2.3 quirk; confirm and file upstream if reproducible.
 
 ### Queued — observability
