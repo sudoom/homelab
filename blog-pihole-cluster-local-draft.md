@@ -150,3 +150,19 @@ Two follow-ups to bake in:
 
 - Consider switching the pi-hole Conditional Forwarding target for `okd.sudops.pl` from the home router (`192.168.1.1`) to the OKD API VIP (`192.168.1.240`). The host CoreDNS authoritatively serves `api.okd.sudops.pl` and `*.apps.okd.sudops.pl` — pointing pi-hole there would let LAN clients resolve cluster ingress names without a static `/etc/hosts`. Side benefit only; not required for the fix above.
 - Document a "lab DNS prerequisites" section in the bootstrap docs once we have a few of these workarounds: rebinding-protection exemption for `cluster.local` plus a raised rate-limit for cluster-node clients are both invisible-until-it-bites items.
+
+## Aftershock — Argo repo-server can't fetch from GitHub (2026-04-30 ~20:45 CEST)
+
+While shipping the Mikrotik exporter chart, ArgoCD got stuck on commit `fe5c239` and refused to pick up the next commit `6ad53ec`. The Application status condition was:
+
+```
+Failed to load target state: failed to generate manifest for source 1 of 1:
+rpc error: code = Unknown desc = failed to list refs:
+dial tcp: lookup github.com on 172.30.0.10:53: server misbehaving
+```
+
+Same fingerprint as before — `server misbehaving` is Go's translation of REFUSED. The rate-limit window keeps tripping because repo-server retries `git ls-remote` ~once per second, which is precisely the kind of self-feeding load that pi-hole's per-client rate-limit was designed to clamp.
+
+`openshift-gitops-repo-server` was scheduled on **node6**, which is the same client pi-hole was REFUSING in the prior session. CoreDNS-on-node6 → pi-hole → REFUSED → repo-server's `net.LookupHost("github.com")` returns "server misbehaving" → Argo can't render manifests for any Helm-source app, not just Mikrotik.
+
+Not fixed in-session per the planned pi-hole → technetium migration (don't pile workarounds onto the box that's going away). The acute symptom self-clears when the rate-limit window resets *and* the retry pressure drops — but with repo-server retrying every second on a permanent error, that doesn't happen until something breaks the loop (operator pod move, repo-server restart, pi-hole restart, or the migration). Recording it here so the same wake-up call doesn't have to happen a third time.
