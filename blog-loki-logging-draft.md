@@ -456,6 +456,52 @@ The write path is fine throughout — distributor → ingester writes happen in-
 
 Decision: park the read path for now, document, and revisit. The OpenShift console plugin (`oc -n openshift-logging patch lokistack ... --patch '{"spec":{"tenants":{"openshift":{"logsCollectorEnabled": ...`) might bypass the issue entirely since it talks to a different querier path. If hardware swap (PM9A1 on osd.1 + osd.2) is the missing piece, the read path may simply heal once Ceph stops returning slow reads.
 
+## Tier-bump experiment (2026-05-01)
+
+To rule out a `1x.pico`-specific operator wiring quirk, bumped `LokiStack.spec.size` to `1x.extra-small` in `components/cluster-config/logging-stack/values.yaml` and pushed. Argo synced; ingesters scaled 3 → 2, queriers + query-frontend doubled per-pod requests. Same symptom — index-gateway logs unchanged (`distinct_users_len=0`, periodic 5m table sync), querier still hits `pool.go:250 reason="DeadlineExceeded"` and `client connection is closing`, external probe to gateway hangs to timeout. Reverted to `1x.pico` (commit `3227b10`). Rationale captured back in `values.yaml` so a future me doesn't re-run the experiment.
+
+## Index-gateway debug logs + packet capture (2026-05-01)
+
+Lokistack CRD doesn't expose a per-component log-level field. Loki has a runtime `/log_level` HTTP endpoint though, exposed on the main HTTP server (`:3100`, mTLS). Spun up a debug pod with the index-gateway HTTP serving cert + Loki internal CA mounted, dialed both ig-0 and ig-1 with `--resolve <fqdn>:3100:<podIP>` to bypass the headless-svc not-resolving-per-pod problem (StatefulSet without `spec.serviceName`):
+
+```bash
+curl -X POST --cacert /tls/ca/service-ca.crt \
+  --cert /tls/http/tls.crt --key /tls/http/tls.key \
+  --resolve "logging-loki-index-gateway-http.openshift-logging.svc.cluster.local:3100:<podIP>" \
+  "https://logging-loki-index-gateway-http.openshift-logging.svc.cluster.local:3100/log_level?log_level=debug"
+# {"status":"success","message":"Log level set to debug"}
+```
+
+Both pods returned 200. Ten minutes of debug logs after the bump showed only:
+
+```
+GET /ready (200) 22µs        # every 10s — kubelet liveness
+GET /loki/api/v1/status/buildinfo (200) 25µs  # every 30s — gateway probe
+table_manager.go:300 ... query readiness setup completed ... distinct_users_len=0 distinct_users=
+```
+
+Zero log lines from `caller=grpc_logging.go`, the file Loki uses to log inbound gRPC requests at debug level. So either (a) gRPC requests aren't reaching the application layer, or (b) the gRPC server's per-request debug logger isn't wired through `/log_level`.
+
+To disambiguate, ran `tcpdump` inside the index-gateway pod's network namespace. Used `oc debug node/node4` with the `nicolaka/netshoot` image, found the container PID via `crictl ps -q | crictl inspect`, and ran `nsenter -t <pid> -n -- tcpdump -ni any "port 9095 or port 3100 or port 3101" -w cap.pcap` for 60 seconds:
+
+```
+243 packets captured
+... 72 Out 10.130.1.227.3101  ← internal_server (kubelet probe), 10s cycle
+... 32 Out 10.130.1.227.3100  ← HTTP (querier/query-frontend healthchecks)
+...  0  ANY  10.130.1.227.9095 ← gRPC port: ZERO PACKETS in 60s
+```
+
+So the queriers do reach the index-gateway pod — just on the HTTP port (`:3100`, mTLS healthchecks) and the kubelet hits `:3101` (internal_server). **No querier ever opens a TCP connection to the gRPC port `:9095`.**
+
+That reframes the whole problem. The earlier finding — querier logging `pool.go:250 reason="DeadlineExceeded"` — must come from the gRPC client pool's *internal* health probe failing, not from a real on-the-wire RPC. The pool seems to be in a permanently-broken state where it never even retries the dial. The connection isn't slow, it's not happening. With zero TCP-level evidence of a dial, slow Ceph S3 reads (the original hypothesis) can't explain this — there's no wire activity at all to be slow.
+
+Two new threads to chase next:
+
+1. **DNS-side issue.** The querier's `index_gateway_client.server_address` is `dns:///logging-loki-index-gateway-grpc...:9095` — the `dns:///` prefix tells gRPC-Go to use the DNS resolver and re-resolve every 30s. If that resolution returns zero healthy endpoints (e.g., headless-service `subdomain` mismatch, or readinessProbe gating SRV records), the gRPC client just sits in `IDLE` state forever — no dial attempt, no log line. Worth grabbing `nslookup -type=srv` inside a querier pod and comparing the EndpointSlice contents to the resolver's view.
+2. **gRPC client never started.** Loki splits index-gateway's reachability across `index_gateway_client` (querier-side) and `index_gateway` (server-side). If the operator-rendered config has the *querier-target* without the right `tsdb_shipper` `index_gateway_client` block, the querier may be doing local index lookups (which then fail because there's no local index data) instead of dialing a remote gateway. Should diff the querier's running `/config` against the index-gateway's.
+
+The packet capture is also the cleaner story for the eventual blog post: "we thought it was slow, it was actually nothing at all." Will follow up on the next session.
+
 ## Open follow-ups
 
 - **Console plugin.** `cluster-logging` ships a `ConsolePlugin` that adds a "Logs" tab to the OpenShift console UI. Not enabled by default. Likely the easiest workaround for application logs while LOG-6894 is open — the console path uses OAuth, not SA tokens, and bypasses OPA's broken read SAR.
