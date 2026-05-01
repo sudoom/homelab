@@ -1,0 +1,109 @@
+namespace: gatus
+
+image:
+  repository: ghcr.io/twin/gatus
+  tag: v5.16.0
+
+port: 8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: ceph-nvme-block
+
+route:
+  enabled: true
+  host: gatus.apps.okd.sudops.pl
+
+# Endpoint set monitored by Gatus. Mirror the human-meaningful URLs first
+# (the things you'd want to know are down at 02:00), infrastructure second.
+config:
+  storage:
+    type: sqlite
+    path: /data/data.db
+  endpoints:
+    # External — internet path / DNS sanity
+    - name: github
+      group: external
+      url: https://github.com
+      interval: 60s
+      conditions:
+        - "[STATUS] == 200"
+
+    - name: sudops-blog
+      group: external
+      url: https://sudops.pl
+      interval: 60s
+      conditions:
+        - "[STATUS] == 200"
+        - "[CERTIFICATE_EXPIRATION] > 168h"
+
+    # OKD platform
+    - name: okd-api
+      group: platform
+      url: https://api.okd.sudops.pl:6443/healthz
+      interval: 30s
+      conditions:
+        - "[STATUS] == 200"
+        - "[CERTIFICATE_EXPIRATION] > 168h"
+
+    - name: okd-ingress
+      group: platform
+      url: https://canary-openshift-ingress-canary.apps.okd.sudops.pl
+      interval: 60s
+      conditions:
+        - "[STATUS] == 200"
+        - "[CERTIFICATE_EXPIRATION] > 168h"
+
+    # Cluster apps
+    - name: argocd
+      group: cluster-apps
+      url: https://openshift-gitops-server-openshift-gitops.apps.okd.sudops.pl
+      interval: 60s
+      conditions:
+        - "[STATUS] == 200"
+
+    - name: grafana
+      group: cluster-apps
+      url: https://grafana-grafana.apps.okd.sudops.pl
+      interval: 60s
+      conditions:
+        - "[STATUS] == 200"
+
+    - name: ceph-dashboard
+      group: cluster-apps
+      url: https://ceph.apps.okd.sudops.pl
+      interval: 60s
+      conditions:
+        - "[STATUS] == 200"
+
+    # Network gear (frontnet)
+    - name: mikrotik-router
+      group: network
+      url: icmp://192.168.1.1
+      interval: 60s
+      conditions:
+        - "[CONNECTED] == true"
+
+    - name: mikrotik-switch
+      group: network
+      url: icmp://192.168.1.220
+      interval: 60s
+      conditions:
+        - "[CONNECTED] == true"
+
+    # DNS — pi-hole on its way out (technetium migration), but keep it
+    # visible until cutover so we can see the day it stops being authoritative.
+    - name: pihole-dns
+      group: network
+      url: udp://192.168.1.12:53
+      interval: 60s
+      conditions:
+        - "[CONNECTED] == true"

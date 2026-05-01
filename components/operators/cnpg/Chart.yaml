@@ -1,0 +1,4 @@
+apiVersion: v2
+name: cnpg
+description: CloudNativePG operator (Postgres CRDs for app charts)
+version: 0.1.0

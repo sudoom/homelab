@@ -49,6 +49,12 @@ applications:
     namespace: sealed-secrets
     syncWave: "1"
 
+  cnpg-operator:
+    enabled: true
+    path: components/operators/cnpg
+    namespace: cnpg-system
+    syncWave: "1"
+
   # Wave 2 — Cluster config (depends on operators being ready)
   nmstate-nncp:
     enabled: true
@@ -117,6 +123,12 @@ applications:
     enabled: true
     path: components/cluster-config/mikrotik-exporter
     namespace: mikrotik-exporter
+    syncWave: "5"
+
+  gatus:
+    enabled: true
+    path: components/cluster-config/gatus
+    namespace: gatus
     syncWave: "5"
 
   # Wave 6 — Applications

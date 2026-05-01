@@ -99,11 +99,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **KubeVirt** — run VMs alongside containers (nested control plane, legacy workloads, isolated dev environments). Needs CPU/RAM headroom audit first; OSDs already eat 5–6 GiB per node and the autoscaler is fragile under memory pressure.
 - [ ] **Migrate apps from old cluster (media stack + keepers)** — port over the workloads still running on the previous cluster. Prerequisite: cluster-side fsync latency in single-digit ms (i.e. swap finished). Apps are mostly RWO PVC workloads — fits current `ceph-nvme-block` SC. Open question: keeper/secret migration path (sealed-secrets re-encrypt vs ESO/Bitwarden cutover).
 - [ ] **Immich** — self-hosted photo library. Needs RWX (CephFS, queued) for the library mount + a Postgres PVC. Defer until CephFS is up and the swap is done.
+- [ ] **CNPG follow-ups** — operator landed 2026-05-01 (Subscription-only, no clusters yet). Open work: (a) decide single-instance vs HA pattern per app — leaning `instances: 1` for everything until headroom audit, with Ceph 3-way replication as durability story; (b) backup target — interim `pg_dump` CronJobs to PVC until `CephObjectStore` lands, then flip CNPG `barmanObjectStore` config to S3 + WAL archiving; (c) first app to onboard (Immich is the obvious candidate once CephFS + swap are done).
 
 ### Documentation hygiene
 - [ ] **Refresh the rest of this README** — Architecture and Repo Structure sections list only the original components. Reality now includes `cluster-topology`, `kubelet-config`, `sealed-secrets`, `cert-manager`, monitoring/Grafana stack, ingress config, sample apps. Update both the wave list and the directory tree to match `bootstrap/root-app/values.yaml`.
 - [ ] **Repo public-readiness pass** — drafts at `blog-*-draft.md` and `nmstate-imagestream-bug.md` currently committed; review for anything that shouldn't be public before next push to GitHub.
-
-
-
-- add gatus for monitoring

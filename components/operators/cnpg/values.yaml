@@ -1,0 +1,4 @@
+namespace: cnpg-system
+channel: stable-v1
+source: community-operators
+sourceNamespace: openshift-marketplace

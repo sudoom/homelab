@@ -1,0 +1,4 @@
+apiVersion: v2
+name: gatus
+description: Gatus uptime/health dashboard for cluster + external endpoints
+version: 0.1.0
