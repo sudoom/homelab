@@ -15,12 +15,16 @@ secretTranslator:
   destinationSecretName: loki-storage
   region: us-east-1
 
-# LokiStack — 1x.demo is the smallest tier (single replica per
-# component, no resource requests). Fine for homelab; bump tier
-# only if log volume justifies.
+# LokiStack — 1x.small is the smallest HA tier. 1x.demo / 1x.pico /
+# 1x.extra-small all ship single-replica components, which sets every
+# PDB to minAvailable=1 and ALLOWED DISRUPTIONS=0 — node drains for
+# kernel/kubelet updates block forever. 1x.small ships 2+ replicas
+# for distributor/ingester/querier/query-frontend/index-gateway/ruler
+# so PDBs accept disruption. Resource cost is higher (~15-20 GiB RAM,
+# few CPU cores cluster-wide); homelab has headroom for it.
 lokistack:
   name: logging-loki
-  size: 1x.demo
+  size: 1x.small
   storageSchemaVersion: v13
   storageSchemaEffectiveDate: "2024-01-01"
   # Persistent storage class for ingester WAL + ruler — small RBD.
