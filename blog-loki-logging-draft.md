@@ -379,6 +379,83 @@ Workarounds available now:
 
 Sticking with the three datasources. Application stays broken until the upstream bug ships a fix; revisit on the next loki-operator bump.
 
+### Querier ↔ index-gateway gRPC stuck after rapid demo→small→pico cycle
+
+Even with audit + infrastructure tenants authorized end-to-end, Grafana queries returned **504 Gateway Time-out** at 30s. The bucket was healthy and growing (446 MiB → 588 MiB in ten minutes), so this was strictly a read-path issue.
+
+The querier logs are unambiguous:
+
+```
+caller=pool.go:250 index-store=tsdb-2024-01-01
+  msg="removing index gateway failing healthcheck"
+  addr=dns:///logging-loki-index-gateway-grpc.openshift-logging.svc.cluster.local:9095
+  reason="rpc error: code = DeadlineExceeded desc = context deadline exceeded"
+
+caller=client.go:469 ... msg="client do failed for instance dns:///logging-loki-index-gateway-grpc..."
+  err="rpc error: code = Canceled desc = grpc: the client connection is closing"
+```
+
+Every ~10s the querier evicts the index-gateway from its connection pool (failed healthcheck), re-resolves DNS, opens a new gRPC channel, and the cycle repeats — none of the reads ever land.
+
+What the network looked like:
+
+- TCP from querier pod to `logging-loki-index-gateway-grpc.openshift-logging.svc.cluster.local:9095` opens cleanly (`/dev/tcp` succeeds).
+- The headless service `logging-loki-index-gateway-grpc` resolves to both pod IPs (10.128.1.95, 10.130.1.187), endpoints object lists both with `nodeName` populated.
+- Index-gateway pods themselves log nothing but `Loki started` + periodic `syncing tables` — no inbound gRPC errors, no client-side EOFs. They're not seeing the calls at all.
+- Index-gateway's gRPC serving cert (`logging-loki-index-gateway-grpc` Secret) has SANs for both `logging-loki-index-gateway-grpc.openshift-logging.svc` and `…svc.cluster.local`, validity 90d, signed by the OpenShift service-CA. Matches the querier's `tls_server_name` config.
+- Querier mounts `service-ca.crt` and the same per-component grpc client cert it uses for ingester/compactor RPCs. Those RPCs succeed (writes are flowing); only index-gateway hangs.
+
+So: TCP reachable, TLS material valid, server idle. The 9095 listener is accepting TCP but the gRPC client side is timing out the handshake / first RPC. Smells like a stuck connection state in the querier's gRPC client pool — likely a leftover from the rapid sizing cycle `1x.demo → 1x.small → 1x.pico` over ~10 minutes, where the previous-generation querier opened gRPC channels to index-gateway pods that no longer exist, and the new generation either inherited a bad pool entry or has stuck channel state from the connection storm.
+
+Plan: rollout-restart `logging-loki-querier` and `logging-loki-query-frontend` to flush the gRPC pool. ArgoCD will heal the deployment state — restart only cycles pods. Defer ingester/distributor (write path) and index-gateway (no client-side issue there) so the bucket flow stays steady.
+
+#### Restart did not fix it; hypothesis was wrong
+
+`oc rollout restart deployment/logging-loki-querier deployment/logging-loki-query-frontend` is silently reverted by ArgoCD selfHeal — the `kubectl.kubernetes.io/restartedAt` annotation lives in the pod template, which Argo owns. Pods stay at their original AGE.
+
+Workaround: `oc -n openshift-logging delete pod -l 'app.kubernetes.io/component in (querier,query-frontend)'` — Argo doesn't track Pods directly, only Deployments, so pod-delete sticks and the ReplicaSet recreates them. New pods came up in ~80s.
+
+Re-probe shows the read path still hangs identically. Both fresh queriers log the same eviction loop within 30s of startup:
+
+```
+caller=pool.go:250 msg="removing index gateway failing healthcheck"
+  addr=dns:///logging-loki-index-gateway-grpc...:9095
+  reason="rpc error: code = DeadlineExceeded desc = context deadline exceeded"
+```
+
+So the stuck-connection-pool hypothesis was wrong. The issue is structural, not state.
+
+#### Real diagnosis: TLS works, gRPC application layer hangs
+
+Spun up a debug pod with `quay.io/openshift/origin-cli:4.20` to do a clean handshake test, with the querier's actual client identity (`logging-loki-querier-grpc` Secret) and the right CA bundle (`logging-loki-ca-bundle` ConfigMap, which contains the **Loki internal signing CA**, not the OpenShift service-CA — the file is named `service-ca.crt` for code compatibility but the issuer is `openshift-logging_logging-loki-signing-ca@…`).
+
+```
+$ openssl s_client -connect logging-loki-index-gateway-grpc...:9095 \
+    -servername ... -cert q-cert.pem -key q-key.pem -CAfile loki-ca.pem
+CONNECTED(00000003)
+subject=O=system:logging, CN=system:lokistacks
+issuer=CN=openshift-logging_logging-loki-signing-ca@1777647217
+SSL handshake has read 2585 bytes and written 2656 bytes
+Verify return code: 0 (ok)
+EXIT=0
+```
+
+mTLS handshake completes in subseconds against the index-gateway, ingester, and query-frontend identically. So the failure is *above* TLS — gRPC application layer.
+
+What we know:
+- TCP open to both index-gateway pods (`/dev/tcp` succeeds).
+- Full mTLS handshake succeeds (right cert chain, no cipher suite mismatch).
+- Index-gateway logs nothing but `Loki started` + 5-min `syncing tables` from `table_manager.go` — no inbound gRPC errors, no client-side EOFs.
+- Querier's gRPC pool calls a custom *index-gateway* health RPC (not standard `grpc.health.v1.Health`); it deadline-exceeds at the configured `1s` `remote_timeout` and the eviction loop kicks in every ~10s.
+
+Plausible causes still open:
+1. **Index-gateway TSDB shipper is blocking gRPC handlers on a slow S3 GET**. The shipper runs in RO mode here and fetches indexes from Ceph RGW on demand. Ceph is mid PNY→PM9A1 swap (CLAUDE.md storage section), only osd.0 is upgraded, the other two PNYs have `BLUESTORE_SLOW_OP_ALERT` open. If a TSDB index fetch blocks for >1s, every querier-side healthcheck against that gateway fails. Plausible but hard to confirm without index-gateway metrics — and the `loki-index-gateway` container has no curl/wget to scrape its own `/metrics`.
+2. **A known bug in Loki Operator v6.3.0 / Loki 3.5 around the index-gateway pool when run at `1x.pico` scale.** The pico tier is the smallest HA tier, possibly under-tested. Worth searching upstream issues.
+
+The write path is fine throughout — distributor → ingester writes happen in-memory and flush asynchronously, so slow RGW reads don't backpressure. Bucket grew from 446 MiB / 123 obj to 590 MiB / 175 obj across the diagnosis window.
+
+Decision: park the read path for now, document, and revisit. The OpenShift console plugin (`oc -n openshift-logging patch lokistack ... --patch '{"spec":{"tenants":{"openshift":{"logsCollectorEnabled": ...`) might bypass the issue entirely since it talks to a different querier path. If hardware swap (PM9A1 on osd.1 + osd.2) is the missing piece, the read path may simply heal once Ceph stops returning slow reads.
+
 ## Open follow-ups
 
 - **Console plugin.** `cluster-logging` ships a `ConsolePlugin` that adds a "Logs" tab to the OpenShift console UI. Not enabled by default. Likely the easiest workaround for application logs while LOG-6894 is open — the console path uses OAuth, not SA tokens, and bypasses OPA's broken read SAR.
