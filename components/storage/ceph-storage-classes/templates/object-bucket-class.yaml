@@ -1,0 +1,11 @@
+{{- if .Values.objectBucket.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.objectBucket.storageClassName }}
+provisioner: rook-ceph.ceph.rook.io/bucket
+reclaimPolicy: {{ .Values.objectBucket.reclaimPolicy }}
+parameters:
+  objectStoreName: {{ .Values.objectBucket.objectStoreName }}
+  objectStoreNamespace: {{ .Values.objectBucket.objectStoreNamespace }}
+{{- end }}

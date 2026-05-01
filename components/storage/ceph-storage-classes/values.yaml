@@ -24,3 +24,14 @@ csiSecrets:
 
 clusterID: rook-ceph
 fsType: ext4
+
+# StorageClass that provisions buckets in the CephObjectStore via OBC
+# (ObjectBucketClaim). Consumers (Loki, OADP, apps) write a tiny OBC,
+# get a fresh bucket plus a ConfigMap+Secret with endpoint+credentials
+# in their own namespace.
+objectBucket:
+  enabled: true
+  storageClassName: ceph-bucket
+  objectStoreName: ceph-objectstore
+  objectStoreNamespace: rook-ceph
+  reclaimPolicy: Delete
