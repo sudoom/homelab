@@ -11,7 +11,7 @@ obc:
 # access_key_id, access_key_secret, region. The Job loops until the OBC
 # is Bound, then writes the Secret idempotently (apply-from-stdin).
 secretTranslator:
-  image: quay.io/openshift/origin-cli:4.20
+  image: quay.io/openshift/origin-cli:4.22
   destinationSecretName: loki-storage
   region: us-east-1
 
