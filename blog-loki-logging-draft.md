@@ -312,9 +312,27 @@ logging-loki-query-frontend   1               N/A               0
 
 `ALLOWED DISRUPTIONS: 0` everywhere except gateway (which has 2 replicas). That means a node drain for a kernel update — or any voluntary eviction — blocks indefinitely on every singleton.
 
-The smallest tier that fixes this is `1x.small`, which ships 2+ replicas for distributor/ingester/querier/query-frontend/index-gateway/ruler. Resource cost is meaningful (~15-20 GiB RAM cluster-wide, few CPU cores), but it's the price of a drainable cluster. The intermediate `1x.pico` and `1x.extra-small` tiers help with resource requests and chunk sizing but are still single-replica — they don't fix the PDB problem.
+First instinct was `1x.small` — the docs frame it as the standard "real workload" tier. The operator started rolling new replicas immediately and within seconds:
 
-Bumped to `1x.small` and let the operator scale up. The two-instance gateway already proved the PDB shape works once `ALLOWED DISRUPTIONS >= 1`.
+```
+$ oc -n openshift-logging describe pod logging-loki-ingester-0
+Events:
+  Warning  FailedScheduling  default-scheduler  0/3 nodes are available:
+    3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption
+    victims found for incoming pod.
+```
+
+Pulled the per-component requests out of `operator/internal/manifests/internal/sizes.go` and totalled them. `1x.small` is **~42 CPU / ~83 GiB cluster-wide** — way too much for a 3-node baremetal cluster. The "small" framing in the docs assumes you've got a real-cluster control-plane sitting somewhere with headroom; on a homelab where the control planes are also the workers, it doesn't fit.
+
+Right size for this cluster is `1x.pico`:
+- Same 4 MB/s ingestion target as `1x.demo` (homelab volume is well under)
+- HA replicas on every component except compactor (singleton by design)
+- **3-replica ingesters** that map cleanly to `fd-a / fd-b / fd-c`
+- ~6.8 CPU / ~18 GiB cluster-wide — fits without any preemption pressure
+
+Notable: `1x.extra-small` has the same ingestion target as pico but heavier per-pod requests (`2 CPU / 8 GiB` ingester vs pico's `0.5 CPU / 3 GiB`) — designed for "small but not memory-starved." For a homelab, pico wins on pure footprint without losing anything that matters.
+
+Switched to `1x.pico` and let the operator settle. The compactor stays at `ALLOWED DISRUPTIONS: 0` (singleton by design — there's only one), but every other component now accepts disruption.
 
 ## Wiring Loki into Grafana
 
