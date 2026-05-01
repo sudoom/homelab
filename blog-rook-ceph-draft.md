@@ -980,6 +980,76 @@ done
 
 Then the existing add-if-missing block stays the same. Job is now idempotent across interval changes — drop the new value into `values.yaml`, Argo replaces the Job, and the next run reconciles to the desired single schedule.
 
+## 2026-05-01 — Manually bumping `pg_num` 32 → 128
+
+Reopening the pg_num story. The earlier session shipped `pg_num_min: "128"` in the `CephBlockPool` `parameters` map, expecting Rook to push that to Ceph and the autoscaler (with `bulk: true`) to grow `pg_num` upward to meet the floor. Neither happened. The actual reason is in the Rook operator log:
+
+```
+ceph-block-pool-controller: [rook-ceph/nvme-replicated] creating pool
+cephclient: setting pool property "bulk" to "true" on pool "nvme-replicated"
+cephclient: setting pool property "pg_num_min" to "128" on pool "nvme-replicated"
+cephclient: failed to set property "pg_num_min" to pool "nvme-replicated" to "128".
+  failed to set pool property "pg_num_min" on pool "nvme-replicated".
+  Error EINVAL: specified pg_num_min 128 > pg_num 32: exit status 22
+cephclient: reconciling replicated pool nvme-replicated succeeded
+```
+
+Ceph enforces the invariant `pg_num_min <= pg_num`. So you can't raise the floor higher than the current pg_num. Rook treats the `pg_num_min` set as best-effort: it logs the EINVAL, then declares the reconcile a success (so `observedGeneration` matches `generation` and no retry is queued). That's why the chart change shipped cleanly but live state stayed at 32.
+
+The autoscaler should have closed this gap on its own — `bulk: true` is the Ceph-supported hint to "treat this pool as if it'll grow large, target more PGs upfront." But `ceph osd pool autoscale-status` returns `[]` on this cluster (likely a Squid 19.2.3 quirk; tracked separately). Without autoscaler input, pg_num sat at the original 32.
+
+So the unblock is manual: bump `pg_num` directly, then the operator's `pg_num_min: 128` reconcile finally has room to land.
+
+Ran from the toolbox:
+
+```
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph osd pool set nvme-replicated pg_num 128
+set pool 2 pg_num to 128
+```
+
+Watched it split. Surprisingly fast on the current hardware:
+
+```
+$ ceph -s
+  data:
+    pools:   2 pools, 129 pgs
+    objects: 15.08k objects, 58 GiB
+    usage:   175 GiB used, 1.2 TiB / 1.4 TiB avail
+    pgs:     129 active+clean
+
+  health: HEALTH_WARN
+          2 OSD(s) experiencing slow operations in BlueStore
+```
+
+129 pgs (`.mgr` + 128 on `nvme-replicated`), all `active+clean`. The `BLUESTORE_SLOW_OP_ALERT` HEALTH_WARN is unchanged — that's the PNY hardware story, not split-induced.
+
+Two-step state model now:
+- `pg_num: 128` — the live PG count.
+- `pg_num_min: 32` — still old; the operator has no spec change to react to. The CR still says 128, the live pool says 32, and `observedGeneration == generation` so the operator considers itself idle.
+
+Closing that gap requires either re-triggering reconcile (operator pod restart, or a meaningless spec touch) or just setting it directly:
+
+```
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph osd pool set nvme-replicated pg_num_min 128
+set pool 2 pg_num_min to 128
+```
+
+After that, operator + chart + live state all agree on 128.
+
+Validation:
+
+```
+$ rados bench / fio / ceph osd pool ls detail
+pg_num 128 pgp_num 128 pg_num_min 128
+```
+
+Lessons:
+- "Set the floor first" doesn't work in Ceph. The floor follows the value, not the other way around.
+- Rook's silent-on-EINVAL behavior for parameter sets means the operator can mark a reconcile "succeeded" while leaving a parameter unapplied. Worth knowing for future debugging — always cross-check the live pool state, not the CR observedGeneration.
+- `bulk: true` is supposed to let the autoscaler do this for you, but the autoscaler is broken here. Until the Squid 19.2.3 autoscaler quirk is fixed, manual pg_num bumps are the path.
+
 Validation pre-commit:
 
 ```
