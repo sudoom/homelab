@@ -1,4 +1,4 @@
 namespace: cnpg-system
 channel: stable-v1
-source: community-operators
+source: operatorhubio-catalog
 sourceNamespace: openshift-marketplace
