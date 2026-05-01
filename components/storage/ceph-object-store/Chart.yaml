@@ -1,0 +1,5 @@
+apiVersion: v2
+name: ceph-object-store
+description: Ceph RGW (S3-compatible) object store for Loki / OADP / app backups
+version: 1.0.0
+type: application

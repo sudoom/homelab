@@ -1,0 +1,43 @@
+namespace: rook-ceph
+
+# CephObjectStore — RGW deployment + the two pools it backs onto.
+# metadataPool stays on NVMe permanently (small, IO-hot).
+# dataPool starts on NVMe; flip to hdd once the chassis has bulk drives.
+objectStore:
+  name: ceph-objectstore
+
+  metadataPool:
+    failureDomain: host
+    deviceClass: nvme
+    replicated:
+      size: 3
+
+  dataPool:
+    failureDomain: host
+    deviceClass: nvme
+    replicated:
+      size: 3
+
+  # Preserve the pools+CR if the chart is uninstalled. RGW data isn't
+  # a thing you accidentally delete — same posture as ceph-cluster.
+  preservePoolsOnDelete: true
+
+  gateway:
+    instances: 1
+    # In-cluster RGW listens on plain HTTP; TLS is terminated at the
+    # OpenShift Route (edge). securePort: 0 disables RGW's own TLS.
+    port: 80
+    securePort: 0
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+
+# OpenShift Route exposing the RGW service on the wildcard cert.
+# In-cluster S3 clients (Loki, OADP, etc.) can also use the in-cluster
+# Service rook-ceph-rgw-<name>.rook-ceph.svc on port 80 directly.
+route:
+  enabled: true
+  host: s3.apps.okd.sudops.pl

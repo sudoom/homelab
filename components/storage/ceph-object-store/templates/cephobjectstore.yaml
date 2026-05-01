@@ -1,0 +1,25 @@
+apiVersion: ceph.rook.io/v1
+kind: CephObjectStore
+metadata:
+  name: {{ .Values.objectStore.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  metadataPool:
+    failureDomain: {{ .Values.objectStore.metadataPool.failureDomain }}
+    deviceClass: {{ .Values.objectStore.metadataPool.deviceClass }}
+    replicated:
+      size: {{ .Values.objectStore.metadataPool.replicated.size }}
+      requireSafeReplicaSize: true
+  dataPool:
+    failureDomain: {{ .Values.objectStore.dataPool.failureDomain }}
+    deviceClass: {{ .Values.objectStore.dataPool.deviceClass }}
+    replicated:
+      size: {{ .Values.objectStore.dataPool.replicated.size }}
+      requireSafeReplicaSize: true
+  preservePoolsOnDelete: {{ .Values.objectStore.preservePoolsOnDelete }}
+  gateway:
+    port: {{ .Values.objectStore.gateway.port }}
+    securePort: {{ .Values.objectStore.gateway.securePort }}
+    instances: {{ .Values.objectStore.gateway.instances }}
+    resources:
+      {{- toYaml .Values.objectStore.gateway.resources | nindent 6 }}

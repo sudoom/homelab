@@ -1,0 +1,17 @@
+{{- if .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Values.objectStore.name }}-s3
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.route.host }}
+  to:
+    kind: Service
+    name: rook-ceph-rgw-{{ .Values.objectStore.name }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
