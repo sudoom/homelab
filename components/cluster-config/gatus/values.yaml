@@ -2,7 +2,7 @@ namespace: gatus
 
 image:
   repository: ghcr.io/twin/gatus
-  tag: v5.16.0
+  tag: v5.35.0
 
 port: 8080
 

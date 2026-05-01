@@ -149,6 +149,25 @@ After the three fixes (commit `1229d65` for the endpoints, prior commit for the 
 
 All ten endpoints green. Cert-expiry placeholders rendered as actual remaining-time numbers (months, not parse errors). Pod is running with the OpenShift-assigned random UID; PVC bound on `ceph-nvme-block` and writes to SQLite are working.
 
+## UI bump: v5.16.0 → v5.35.0
+
+After first paint on `v5.16.0` the dashboard rendered the classic groups-of-pills view (one row per endpoint, group headers stacked above). Compared side-by-side with the upstream demo at `status.twin.sh`, the demo showed a card-based "Health Dashboard" with a search box and Filter/Sort dropdowns — visibly nicer for a 10-endpoint board, and *much* nicer once it grows.
+
+That UI is just the default in newer Gatus. The relevant config keys (`ui.dashboard-heading`, `ui.dashboard-subheading`) and the layout itself landed in **v5.32.0**. We were sitting on `v5.16.0` because that was current when the chart was first authored — no other reason.
+
+Diff:
+
+```diff
+ image:
+   repository: ghcr.io/twin/gatus
+-  tag: v5.16.0
++  tag: v5.35.0
+```
+
+No config-shape changes between v5.16 and v5.35 for the keys we use (`endpoints[*]`, `[STATUS]`, `[CERTIFICATE_EXPIRATION]`, `[CONNECTED]`, `storage.type: sqlite`). Drop-in replacement; pod rolls, history persists in the Ceph PVC, the new UI paints.
+
+Renovate will keep this current going forward — once the chart is in tree, future bumps come in as labeled PRs rather than us spotting "we're 19 minor versions behind" again.
+
 ## Open follow-ups
 
 - **Alerting**: deferred. Gatus has webhook/Discord/Slack/email backends; once we decide on a notification channel (probably Discord for homelab), wire it via a SealedSecret holding the webhook URL and add `alerts:` blocks to the per-endpoint config.
