@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cluster-logging
+description: OKD Cluster Logging operator (ClusterLogForwarder CRD) — drives Vector
+version: 0.1.0
+type: application

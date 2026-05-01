@@ -1,0 +1,5 @@
+apiVersion: v2
+name: loki-operator
+description: Loki Operator (LokiStack CRD) — backs OKD Logging at wave 5
+version: 0.1.0
+type: application

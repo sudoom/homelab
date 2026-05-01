@@ -55,6 +55,18 @@ applications:
     namespace: cnpg-system
     syncWave: "1"
 
+  loki-operator:
+    enabled: true
+    path: components/operators/loki-operator
+    namespace: openshift-operators-redhat
+    syncWave: "1"
+
+  cluster-logging-operator:
+    enabled: true
+    path: components/operators/cluster-logging
+    namespace: openshift-logging
+    syncWave: "1"
+
   # Wave 2 — Cluster config (depends on operators being ready)
   nmstate-nncp:
     enabled: true

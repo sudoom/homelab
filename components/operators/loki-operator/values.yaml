@@ -1,0 +1,11 @@
+# Loki Operator namespace conventions for OpenShift/OKD logging:
+#   - openshift-operators-redhat: cluster-scoped operator landing zone
+#   - the openshift.io/cluster-monitoring label makes Prom scrape its metrics
+namespace: openshift-operators-redhat
+
+subscription:
+  # Match cluster-logging — both ship paired from okderators v6.3.0.
+  channel: alpha
+  source: okderators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

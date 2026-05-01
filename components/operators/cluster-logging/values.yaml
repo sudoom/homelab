@@ -1,0 +1,8 @@
+namespace: openshift-logging
+
+subscription:
+  # Paired with loki-operator from okderators v6.3.0.
+  channel: alpha
+  source: okderators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
