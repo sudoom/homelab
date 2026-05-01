@@ -148,8 +148,63 @@ Two follow-ups to bake in:
 
 ## Open follow-ups
 
-- Consider switching the pi-hole Conditional Forwarding target for `okd.sudops.pl` from the home router (`192.168.1.1`) to the OKD API VIP (`192.168.1.240`). The host CoreDNS authoritatively serves `api.okd.sudops.pl` and `*.apps.okd.sudops.pl` — pointing pi-hole there would let LAN clients resolve cluster ingress names without a static `/etc/hosts`. Side benefit only; not required for the fix above.
+- ~~Consider switching the pi-hole Conditional Forwarding target for `okd.sudops.pl` from the home router (`192.168.1.1`) to the OKD API VIP (`192.168.1.240`).~~ **Tried this. Caused a forwarding loop and an 80 qps DNS firehose. Reverted to `192.168.1.1`. See "Aftershock — pi-hole ↔ node6 forwarding loop" below.**
 - Document a "lab DNS prerequisites" section in the bootstrap docs once we have a few of these workarounds: rebinding-protection exemption for `cluster.local` plus a raised rate-limit for cluster-node clients are both invisible-until-it-bites items.
+
+## Aftershock — pi-hole ↔ node6 forwarding loop (2026-05-01)
+
+After the pi-hole rate-limit was lifted (so the box would stop returning REFUSED to nodes), the dashboard finally showed real query volume — and it was wild. ~80 sustained QPS at the upstream, and the "Top Permitted Domains" view was full of search-suffix-leaked names like:
+
+```
+openshift-gitops-repo-server.openshift-gitops.svc.cluster.local.okd.sudops.pl   465876
+github.com.okd.sudops.pl                                                        141147
+grafana.com.okd.sudops.pl                                                       116437
+monitoring-plugin.openshift-monitoring.svc.cluster.local.okd.sudops.pl           23170
+```
+
+…and "Top Clients" showed **node6 at 1,121,164 queries** while node4/node5 were each at ~25,000. A 40-50× ratio between near-identical hosts is never legitimate workload imbalance.
+
+### Root cause: pi-hole forwarding to node6's host CoreDNS, which forwards back to pi-hole
+
+A few sessions earlier I had recommended switching pi-hole's Conditional Forwarding for `okd.sudops.pl` from the home router (`192.168.1.1`) to the OKD API VIP (`192.168.1.240`), on the theory that host CoreDNS authoritatively serves `api.okd.sudops.pl` / `*.apps.okd.sudops.pl` and would be a more useful answer source for LAN clients.
+
+That recommendation was wrong, in a way that's worth dissecting because the failure mode isn't obvious from either side in isolation:
+
+1. `192.168.1.240` is the keepalived-managed OKD API VIP. It's pinned to whichever control-plane node is currently the leader — node6, in this cluster.
+2. The thing listening on `1.240:53` is node6's host CoreDNS static pod. It is authoritative for **only** the OKD-installer-managed names (`api.okd.sudops.pl`, `api-int.okd.sudops.pl`, `*.apps.okd.sudops.pl` via wildcard).
+3. For anything else — including search-list-expanded names like `github.com.okd.sudops.pl` — host CoreDNS falls through to its `forward . <upstream>` block.
+4. That upstream is configured as `forward . 192.168.1.12 …` (pi-hole), per the host Corefile already documented above.
+
+So every `*.okd.sudops.pl` query that wasn't a real cluster name became:
+
+```
+client → pi-hole → 1.240 (= node6) → pi-hole → 1.240 → pi-hole → ...
+```
+
+A two-hop A→B→A loop. Pi-hole's per-query timeout/retry behavior amplified each external lookup by 10-100× before something gave up. Pi-hole counted node6 as the source for the back-half of every loop iteration, which is why "Top Clients" showed node6 doing 40× more queries than node5 — node6 wasn't *issuing* extra queries, it was *relaying pi-hole's own queries back at pi-hole*.
+
+This also explains why the symptom was concentrated specifically on whichever node held the API VIP. If keepalived had failed over to node4 or node5 mid-session, the "1.12M-queries client" would have shifted with it.
+
+### Fix and confirmation
+
+User flipped pi-hole Conditional Forwarding back to `192.168.1.1` (the home router), which simply returns NXDOMAIN for `okd.sudops.pl` queries it doesn't know about. Result: **upstream QPS dropped from 80 to 6.**
+
+Post-revert "Top Clients" looks healthy:
+
+```
+gw.home.lab.okd.sudops.pl     609 (32.3%)
+node6                         608 (32.3%)
+192.168.1.61                  333 (17.7%)
+node5.okd.sudops.pl           168  (8.5%)
+node4.okd.sudops.pl            30  (1.6%)
+node6.okd.sudops.pl            27  (1.4%)
+```
+
+node5 ≈ node6 to within a small constant. That's what nodes-doing-similar-work actually looks like.
+
+### Lesson
+
+**Never point a recursive resolver's conditional forwarder at a Kubernetes node that uses that same recursive resolver as upstream.** It's a textbook A→B→A loop and it's invisible until traffic volume gives it away. The "host CoreDNS will give better answers for `*.apps.okd.sudops.pl`" intuition isn't wrong on its own — but the loop risk dominates. If we ever want LAN clients to resolve cluster ingress names without `/etc/hosts`, the right answer is to add the records to whatever LAN-side resolver pi-hole *can* point at without looping (the router, or the planned technetium box), not to forward into the cluster.
 
 ## Aftershock — Argo repo-server can't fetch from GitHub (2026-04-30 ~20:45 CEST)
 
