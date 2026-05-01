@@ -1,0 +1,25 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.clusterLogForwarder.serviceAccount }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+{{- range $role := list "collect-application-logs" "collect-audit-logs" "collect-infrastructure-logs" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $.Values.clusterLogForwarder.serviceAccount }}-{{ $role }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.clusterLogForwarder.serviceAccount }}
+    namespace: {{ $.Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $role }}
+{{- end }}

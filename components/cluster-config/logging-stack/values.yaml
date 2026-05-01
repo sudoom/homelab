@@ -1,0 +1,40 @@
+namespace: openshift-logging
+
+# OBC against the ceph-bucket StorageClass (CephObjectStore-backed).
+# The OBC controller materialises a CM (BUCKET_HOST/PORT/NAME) and a
+# Secret (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) in this namespace.
+obc:
+  name: loki
+
+# Pre-sync Job that translates OBC outputs -> LokiStack-shaped Secret.
+# LokiStack wants a Secret with keys: endpoint, bucketnames,
+# access_key_id, access_key_secret, region. The Job loops until the OBC
+# is Bound, then writes the Secret idempotently (apply-from-stdin).
+secretTranslator:
+  image: quay.io/openshift/origin-cli:4.20
+  destinationSecretName: loki-storage
+  region: us-east-1
+
+# LokiStack — 1x.demo is the smallest tier (single replica per
+# component, no resource requests). Fine for homelab; bump tier
+# only if log volume justifies.
+lokistack:
+  name: logging-loki
+  size: 1x.demo
+  storageSchemaVersion: v13
+  storageSchemaEffectiveDate: "2024-01-01"
+  # Persistent storage class for ingester WAL + ruler — small RBD.
+  storageClassName: ceph-nvme-block
+  # openshift-logging mode wires Vector's tenant-per-source push and
+  # the in-cluster gateway for read-side multi-tenancy.
+  tenantsMode: openshift-logging
+
+# ClusterLogForwarder — Vector pipeline that picks up app + audit +
+# infra logs and pushes them to the LokiStack via its gateway.
+clusterLogForwarder:
+  name: instance
+  serviceAccount: logcollector
+  inputs:
+    - application
+    - infrastructure
+    - audit

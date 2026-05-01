@@ -1,0 +1,19 @@
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: {{ .Values.lokistack.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  size: {{ .Values.lokistack.size }}
+  storage:
+    schemas:
+      - effectiveDate: {{ .Values.lokistack.storageSchemaEffectiveDate | quote }}
+        version: {{ .Values.lokistack.storageSchemaVersion }}
+    secret:
+      name: {{ .Values.secretTranslator.destinationSecretName }}
+      type: s3
+  storageClassName: {{ .Values.lokistack.storageClassName }}
+  tenants:
+    mode: {{ .Values.lokistack.tenantsMode }}

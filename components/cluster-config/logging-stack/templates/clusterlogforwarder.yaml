@@ -1,0 +1,33 @@
+apiVersion: observability.openshift.io/v1
+kind: ClusterLogForwarder
+metadata:
+  name: {{ .Values.clusterLogForwarder.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  managementState: Managed
+  serviceAccount:
+    name: {{ .Values.clusterLogForwarder.serviceAccount }}
+  outputs:
+    - name: lokistack-output
+      type: lokiStack
+      lokiStack:
+        target:
+          name: {{ .Values.lokistack.name }}
+          namespace: {{ .Values.namespace }}
+        authentication:
+          token:
+            from: serviceAccount
+        tls:
+          ca:
+            key: service-ca.crt
+            configMapName: openshift-service-ca.crt
+  pipelines:
+    - name: app-audit-infra
+      inputRefs:
+        {{- range .Values.clusterLogForwarder.inputs }}
+        - {{ . }}
+        {{- end }}
+      outputRefs:
+        - lokistack-output

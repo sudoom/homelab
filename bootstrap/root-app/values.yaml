@@ -149,6 +149,12 @@ applications:
     namespace: gatus
     syncWave: "5"
 
+  logging-stack:
+    enabled: true
+    path: components/cluster-config/logging-stack
+    namespace: openshift-logging
+    syncWave: "5"
+
   # Wave 6 — Applications
   media:
     enabled: true

@@ -1,0 +1,5 @@
+apiVersion: v2
+name: logging-stack
+description: LokiStack + ClusterLogForwarder, fed by Vector, backed by CephObjectStore
+version: 0.1.0
+type: application
