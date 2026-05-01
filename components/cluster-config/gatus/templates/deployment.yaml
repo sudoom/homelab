@@ -20,6 +20,10 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: gatus
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
       containers:
         - name: gatus
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
