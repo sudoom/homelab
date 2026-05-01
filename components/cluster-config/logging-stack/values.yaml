@@ -15,19 +15,20 @@ secretTranslator:
   destinationSecretName: loki-storage
   region: us-east-1
 
-# LokiStack — 1x.extra-small after read-path 504 chase at 1x.pico.
-# 1x.demo (singleton) leaves PDBs at ALLOWED DISRUPTIONS=0; 1x.small's
-# per-pod ingester (4 CPU / 20 GiB) doesn't fit on this 3-node cluster.
-# 1x.pico worked for the write path but the querier ↔ index-gateway
-# gRPC pool sat at DeadlineExceeded with the index-gateway logging
-# `distinct_users_len=0` (no tenants pre-warmed). Bumped to
-# 1x.extra-small to test whether it's a tier-specific operator wiring
-# quirk — adds ~7 CPU / ~15 GiB of *requests* (real CPU usage stays
-# tiny). Tradeoff: ingester replicas drop 3 → 2, so only 2 of 3
-# failure domains get an ingester (replication_factor=2 still HA).
+# LokiStack — 1x.pico is the smallest tier with HA replicas (the
+# 1x.demo tier is single-replica, leaves every PDB at ALLOWED
+# DISRUPTIONS=0, blocking node drains). Picked over 1x.small because
+# 1x.small's per-pod requests (4 CPU / 20 GiB ingester) don't fit
+# on this 3-node cluster. 1x.pico has identical 4 MB/s ingestion
+# target but ~5× lower resource footprint (~6.8 CPU / ~18 GiB
+# cluster-wide) and ships 3-replica ingesters that map cleanly onto
+# fd-a/b/c. Tested 1x.extra-small as part of the read-path 504 chase
+# (querier ↔ index-gateway gRPC pool DeadlineExceeded with the index-
+# gateway logging `distinct_users_len=0`) — same symptom at the
+# bigger tier, so the bug is structural, not tier-specific. Reverted.
 lokistack:
   name: logging-loki
-  size: 1x.extra-small
+  size: 1x.pico
   storageSchemaVersion: v13
   storageSchemaEffectiveDate: "2024-01-01"
   # Persistent storage class for ingester WAL + ruler — small RBD.
