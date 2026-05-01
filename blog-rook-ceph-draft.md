@@ -1050,6 +1050,39 @@ Lessons:
 - Rook's silent-on-EINVAL behavior for parameter sets means the operator can mark a reconcile "succeeded" while leaving a parameter unapplied. Worth knowing for future debugging — always cross-check the live pool state, not the CR observedGeneration.
 - `bulk: true` is supposed to let the autoscaler do this for you, but the autoscaler is broken here. Until the Squid 19.2.3 autoscaler quirk is fixed, manual pg_num bumps are the path.
 
+### Closed: `pg_num_min: 128` set on live pool (2026-05-01, late afternoon)
+
+Ran the command from the toolbox — parameter-only change, no data movement (pg_num was already 128, so the floor-equals-value invariant is satisfied trivially):
+
+```
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph osd pool ls detail | grep nvme-replicated
+pool 2 'nvme-replicated' replicated size 3 min_size 2 crush_rule 1 ...
+  pg_num 128 pgp_num 128 ... last_change 339 ... pg_num_min 32 ... bulk
+
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph osd pool set nvme-replicated pg_num_min 128
+set pool 2 pg_num_min to 128
+
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph osd pool ls detail | grep nvme-replicated
+pool 2 'nvme-replicated' replicated size 3 min_size 2 crush_rule 1 ...
+  pg_num 128 pgp_num 128 ... last_change 342 ... pg_num_min 128 ... bulk
+
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph -s
+  cluster:    health: HEALTH_OK
+  data:       2 pools, 129 pgs
+              objects: 15.11k objects, 58 GiB
+              usage:   175 GiB used, 1.2 TiB / 1.4 TiB avail
+  pgs:        129 active+clean
+```
+
+`last_change 339 → 342` is the parameter-set bump. Cluster stays HEALTH_OK throughout (the persistent BLUESTORE_SLOW_OP_ALERT had cleared earlier; this run shows clean health). 129 pgs active+clean unchanged.
+
+End state: operator (CR `parameters.pg_num_min: "128"`) + Ceph (`pg_num_min 128`) + autoscaler-floor (128) all agree. The CR `observedGeneration == generation` had been masking the drift since the chart change shipped — fixing the live state now makes the two consistent again, so future reconciles won't reintroduce the gap.
+
+This closes out the pg_num saga that started with "the autoscaler isn't bumping pg_num past 32 even with bulk: true." The autoscaler-empty-status bug is still open as a separate TODO.
+
 Validation pre-commit:
 
 ```

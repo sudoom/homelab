@@ -7,53 +7,80 @@ GitOps repository for a 3-node bare-metal OKD 4.20 homelab cluster managed by Ar
 ## Architecture
 
 ```
-Manual bootstrap (one-time)
-  └── ArgoCD Operator + Instance
-        └── Root App-of-Apps (Application)
-              ├── Wave 0: CatalogSources (operatorhubio-catalog)
-              ├── Wave 1: Operators (NMState, Rook-Ceph)
-              ├── Wave 2: Cluster Config (NMState NNCPs)
-              └── Wave 3: Storage (CephCluster, pools, StorageClasses)
+Manual bootstrap (one-time, bootstrap/phase0/)
+  └── CatalogSource + GitOps Operator + cluster-admin RBAC + root Application
+        └── Root App-of-Apps (bootstrap/root-app/, Helm chart)
+              ├── Wave 0: Cluster topology (node-labels, kubelet-config)
+              ├── Wave 1: Operators
+              │     └── NMState, cert-manager, Rook-Ceph, Grafana, sealed-secrets, CNPG
+              ├── Wave 2: Cluster config that depends on operator CRDs
+              │     └── NMState NNCPs, ClusterIssuer + Certificates
+              ├── Wave 3: TLS consumers + Storage
+              │     └── IngressController cert, APIServer cert, CephCluster
+              ├── Wave 4: Storage classes
+              │     └── Ceph BlockPool + StorageClass, NFS CSI
+              ├── Wave 5: Monitoring + observability
+              │     └── grafana-config (dashboards, datasources),
+              │         monitoring-config (UWM, alert routes),
+              │         smartctl-exporter, mikrotik-exporter, gatus
+              └── Wave 6: Applications
+                    └── media stack
 ```
 
 ## Bootstrap
 
-Only the ArgoCD operator installation is manual. Everything else is Argo-managed.
+Only the four numbered files in `bootstrap/phase0/` are applied manually. Everything past that is Argo-managed.
 
 ```bash
-# 1. Install ArgoCD operator
-oc apply -f bootstrap/argocd/templates/namespace.yaml
-oc apply -f bootstrap/argocd/templates/operatorgroup.yaml
-oc apply -f bootstrap/argocd/templates/subscription.yaml
+# 1. Apply the OLM catalog sources, OpenShift GitOps operator,
+#    cluster-admin RBAC, and the credential template
+oc apply -f bootstrap/phase0/01_catalog_source.yaml
+oc apply -f bootstrap/phase0/02_gitops_operator.yaml
+oc apply -f bootstrap/phase0/03_cluster_admin_rbac.yaml
+oc apply -f bootstrap/phase0/04_credential_template.yaml
 
-# 2. Wait for operator
-oc get csv -n openshift-gitops -w
-# Wait for Phase: Succeeded
+# 2. Wait for the GitOps operator + default ArgoCD instance
+oc get csv -n openshift-gitops -w           # wait for Phase: Succeeded
+oc get pods -n openshift-gitops -w          # wait for all pods Running
 
-# 3. Wait for default ArgoCD instance (the operator auto-creates one)
-oc get pods -n openshift-gitops -w
-# Wait for all pods Running
-
-# 4. Apply the root App-of-Apps
-oc apply -f bootstrap/root-app/root-application.yaml
+# 3. Apply the root App-of-Apps. ArgoCD then syncs everything else.
+oc apply -f bootstrap/phase0/05_root_application.yaml
 ```
+
+See `bootstrap/phase0/readme.md` for the full first-time bootstrap notes.
 
 ## Repo Structure
 
 ```
 bootstrap/
-  argocd/           # ArgoCD operator (manual apply, one-time)
-  root-app/         # Root Application pointing to all components
+  phase0/                  # One-time manual bootstrap (numbered files, applied in order)
+  root-app/                # Helm chart that renders one Application per managed component
 components/
-  catalog-sources/  # OLM CatalogSources (operatorhubio)
-  operators/
-    nmstate/        # NMState operator subscription
-    rook-ceph/      # Rook-Ceph operator via Helm
   cluster-config/
-    nmstate-nncp/   # Storage network NNCPs per node
+    node-labels/           # Wave 0 — failure-domain + role labels
+    kubelet-config/        # Wave 0 — kubelet tweaks (eviction thresholds, etc.)
+    nmstate-nncp/          # Wave 2 — storage backnet NNCPs per node
+    cert-manager-config/   # Wave 2 — ClusterIssuer (LE prod, DNS-01 Cloudflare) + Certificates
+    ingress-controller/    # Wave 3 — wildcard cert wired to openshift-ingress
+    api-server/            # Wave 3 — APIServer serving cert
+    grafana-config/        # Wave 5 — dashboards, datasources, Grafana CR
+    monitoring-config/     # Wave 5 — user-workload-monitoring + alert routing
+    smartctl-exporter/     # Wave 5 — NVMe + SATA SMART metrics DaemonSet
+    mikrotik-exporter/     # Wave 5 — mktxp / RouterOS metrics for the router + switch
+    gatus/                 # Wave 5 — uptime dashboard
+  operators/
+    nmstate/               # NMState operator (community-operators catalog)
+    cert-manager/          # cert-manager operator (okderators catalog)
+    rook-ceph/             # Rook-Ceph via upstream Helm chart
+    grafana/               # Grafana operator (operatorhubio-catalog)
+    sealed-secrets/        # Bitnami sealed-secrets controller
+    cnpg/                  # CloudNativePG operator (operatorhubio-catalog)
   storage/
-    ceph-cluster/   # CephCluster CR, toolbox
-    ceph-storage-classes/  # Block pools, StorageClasses
+    ceph-cluster/          # CephCluster CR, toolbox, RBD trash purge schedule Job, PrometheusRules
+    ceph-storage-classes/  # CephBlockPool + StorageClass (ceph-nvme-block)
+    nfs-csi/               # NFS CSI driver for legacy/external mounts
+  apps/
+    media/                 # Media stack (sample app)
 ```
 
 ## Cluster
@@ -74,8 +101,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 
 ### In flight
 - [ ] **Finish the PNY → PM9A1 swap (node5, then node6)** — osd.0 swapped 04/2026 and validated (lifetime `kv_commit_lat` ~4 ms vs PNY ~95 ms, ~20× speedup). 2× more PM9A1 ordered late 04/2026; swap node5 first (was the slower of the two PNYs under fio — commit_latency hit 3.2 s). Reuse `data/pre-swap/swap-runbook.md`. After node6 lands, re-run `tests/ceph-storage-test.yaml` and expect cluster-side fsync ~30 ms (vs current 9.25 s with 2 PNYs in path).
-- [ ] **Land `pg_num_min: 128` on `nvme-replicated`** — `pg_num` itself manually bumped 32 → 128 on 2026-05-01 after Rook's `pg_num_min: 128` set was rejected with `EINVAL: specified pg_num_min 128 > pg_num 32`. Split completed cleanly (`129 pgs active+clean`). Remaining gap: live pool still shows `pg_num_min 32`; operator declared the prior reconcile a success, so it won't retry without a nudge. Run `ceph osd pool set nvme-replicated pg_num_min 128` from toolbox or restart `rook-ceph-operator`. Target end state: `pg_num 128 pgp_num 128 pg_num_min 128`.
-- [ ] **Investigate why `pg_autoscaler` returns empty status** — `ceph osd pool autoscale-status` returns `[]` even with `bulk: true` set; bouncing the active mgr didn't help. Likely a Squid 19.2.3 quirk; confirm and file upstream if reproducible.
+- [ ] **Investigate why `pg_autoscaler` returns empty status** — `ceph osd pool autoscale-status` returns `[]` even with `bulk: true` set; bouncing the active mgr didn't help. Likely a Squid 19.2.3 quirk; confirm and file upstream if reproducible. With `pg_num_min: 128` now landed on the live pool, this is no longer load-bearing for `nvme-replicated` sizing — but it still matters for any future pool that grows organically.
 
 ### Queued — observability
 - [ ] **Loki logging stack (OKDerator)** — central log aggregation. Loki + Promtail (or the Vector alternative) deployed via the `loki-stack` Helm chart, backed by Ceph PVCs. Wire Grafana as the log datasource so logs and metrics live in one pane.
@@ -88,6 +114,9 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **OSD encryption at rest** — `encryptedDevice: true` on each OSD device entry; needs cluster-wide rolling redeploy of OSDs.
 - [ ] **Migrate `ceph-cluster` + `ceph-storage-classes` to the upstream `rook-ceph-cluster` Helm subchart** — would consolidate operator + cluster + pools + StorageClasses + PrometheusRules under one Helm release with chart-driven defaults; future Ceph upgrades become a chart version bump. Deferred until **after node5+node6 PNY→PM9A1 swaps complete** because (a) we're 3-OSD with no drain headroom and any rolling change risks an unplanned degraded window, (b) the subchart wants to own BlockPool/StorageClass/CephFilesystem definitions which are currently split across two of our charts, and (c) doing it during the drive migration makes regressions harder to attribute. Migration path: add `helm.sh/resource-policy: keep` to existing CephCluster/BlockPool/StorageClass before swapping, render with kubeconform, `oc diff` should show only label/annotation deltas. Removes the vendored `files/ceph-prometheus-rules.yaml` shipped 04/2026.
 - [ ] **PV cleanup when stuck `Released` / "image has watchers"** — separate from the periodic purge: occasionally a trashed RBD image refuses removal with `image has watchers`, meaning a CSI client (kernel rbd map on a node, or a leftover NodePlugin attachment) still holds it. Investigate the CSI delete flow; PVs accumulate finalizers (`external-provisioner`, `external-attacher`) and the underlying images become orphaned. One known stuck image as of 04/2026: `csi-vol-3af138f8-1b96-41e4-a05d-108896d26954` in `nvme-replicated`.
+
+### Queued — platform plumbing
+- [ ] **Drop `okd.sudops.pl` from the node-side DNS search list** — RHCOS nodes get `search okd.sudops.pl` in their `resolv.conf` from DHCP, so every name a host-side process resolves under `ndots:5` gets a `<name>.okd.sudops.pl` permutation tried first. This is what populates pi-hole's "Top Permitted Domains" with entries like `github.com.okd.sudops.pl` (141k) and `monitoring-plugin.openshift-monitoring.svc.cluster.local.okd.sudops.pl` (23k). `okd.sudops.pl` is a record domain (the cluster ingress), not a search domain; nothing legitimate should ever expand `<x>.okd.sudops.pl` from the host. Fix is a `MachineConfig` adjusting `NetworkManager` `dns-search`/`ignore-auto-dns` so the suffix doesn't land in node resolv.conf. Lower priority since pi-hole rate-limit is now off and the technetium migration is queued, but it's a permanent correctness fix that should outlive both.
 
 ### Queued — operators / catalog
 - [ ] **NMState operator: upstream PR for `okderators` ImageStream bug** — context in `nmstate-imagestream-bug.md`. Today we use `community-operators` as a workaround.
@@ -102,5 +131,4 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **CNPG follow-ups** — operator landed 2026-05-01 (Subscription-only, no clusters yet). Open work: (a) decide single-instance vs HA pattern per app — leaning `instances: 1` for everything until headroom audit, with Ceph 3-way replication as durability story; (b) backup target — interim `pg_dump` CronJobs to PVC until `CephObjectStore` lands, then flip CNPG `barmanObjectStore` config to S3 + WAL archiving; (c) first app to onboard (Immich is the obvious candidate once CephFS + swap are done).
 
 ### Documentation hygiene
-- [ ] **Refresh the rest of this README** — Architecture and Repo Structure sections list only the original components. Reality now includes `cluster-topology`, `kubelet-config`, `sealed-secrets`, `cert-manager`, monitoring/Grafana stack, ingress config, sample apps. Update both the wave list and the directory tree to match `bootstrap/root-app/values.yaml`.
 - [ ] **Repo public-readiness pass** — drafts at `blog-*-draft.md` and `nmstate-imagestream-bug.md` currently committed; review for anything that shouldn't be public before next push to GitHub.
