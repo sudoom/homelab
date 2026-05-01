@@ -152,3 +152,18 @@ spec:
   datasources:{{ $bindings }}
   grafanaCom:
     id: 13679
+---
+# CloudNativePG — Postgres clusters managed by the CNPG operator
+# Stays empty until a Cluster CR with monitoring.enablePodMonitor: true exists.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: cnpg
+  namespace: {{ .Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  grafanaCom:
+    id: 20417
