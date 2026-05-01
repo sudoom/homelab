@@ -295,6 +295,27 @@ Fix: bind `logcollector` to `logging-collector-logs-writer` *in addition to* the
 
 Lesson: the `collect-*-logs` naming is misleading if you assume one ClusterRole covers the whole pipeline. It doesn't. Read = `collect-*-logs`, write to gateway = `logging-collector-logs-writer`. Both are required.
 
+## Sizing — 1x.demo's PDB trap
+
+`1x.demo` is documented as a smoke-test tier — single replica per component, no resource requests. What's not flagged anywhere is the consequence for `PodDisruptionBudget`s:
+
+```
+$ oc -n openshift-logging get pdb
+NAME                          MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS
+logging-loki-distributor      1               N/A               0
+logging-loki-gateway          1               N/A               1
+logging-loki-index-gateway    1               N/A               0
+logging-loki-ingester         1               N/A               0
+logging-loki-querier          1               N/A               0
+logging-loki-query-frontend   1               N/A               0
+```
+
+`ALLOWED DISRUPTIONS: 0` everywhere except gateway (which has 2 replicas). That means a node drain for a kernel update — or any voluntary eviction — blocks indefinitely on every singleton.
+
+The smallest tier that fixes this is `1x.small`, which ships 2+ replicas for distributor/ingester/querier/query-frontend/index-gateway/ruler. Resource cost is meaningful (~15-20 GiB RAM cluster-wide, few CPU cores), but it's the price of a drainable cluster. The intermediate `1x.pico` and `1x.extra-small` tiers help with resource requests and chunk sizing but are still single-replica — they don't fix the PDB problem.
+
+Bumped to `1x.small` and let the operator scale up. The two-instance gateway already proved the PDB shape works once `ALLOWED DISRUPTIONS >= 1`.
+
 ## Wiring Loki into Grafana
 
 Three datasources, one per tenant, since the LokiStack gateway encodes tenant in the URL path:
@@ -321,11 +342,29 @@ Bound to a `grafana-loki` SA in the grafana namespace; static SA token Secret fe
 
 Pattern's identical to the existing Prometheus datasource (SA + token Secret + datasource CR), so no new shape to maintain.
 
+### Application tenant queries blocked by LOG-6894
+
+Audit and infrastructure tenants work — both are listed under the gateway's `--opa.skip-tenants=audit,infrastructure` arg, so OPA doesn't enforce SAR for them. Application tenant goes through OPA, and that's where Grafana hits a wall:
+
+```
+{"error":"You don't have permission to access this tenant","errorType":"observatorium-api","status":"error"}
+```
+
+A direct cluster-side `SubjectAccessReview` for the `grafana-loki` SA against `loki.grafana.com/application/logs` with `verb: get` returns `allowed: true`. The same SAR shape that Vector relies on for write access (with `verb: create`) works fine. But OPA still denies the read.
+
+This is Red Hat KCS-7113062 / bug **LOG-6894** — open at the time of writing, no public fix. The KCS suggests creating a `ClusterRoleBinding` to a `cluster-logging-application-view` ClusterRole, but that role isn't shipped in v6.3.0 and creating an equivalent doesn't change behavior — it's an OPA package bug, not a missing role.
+
+Workarounds available now:
+- Use `Loki (infrastructure)` and `Loki (audit)` datasources for system + audit logs.
+- For application logs, the OpenShift console plugin (`oc -n openshift-logging patch lokistack ... --type=merge --patch ... ` to enable, or via the ClusterLogForwarder's UI plugin path) goes through a different auth path tied to the user's OAuth session — those queries succeed.
+- Or run a non-OPA querier mTLS path internally for an admin pod — overkill for a homelab.
+
+Sticking with the three datasources. Application stays broken until the upstream bug ships a fix; revisit on the next loki-operator bump.
+
 ## Open follow-ups
 
-- **Console plugin.** `cluster-logging` ships a `ConsolePlugin` that adds a "Logs" tab to the OpenShift console UI. Not enabled by default. Decide later — the Grafana Loki datasource (now shipped) might be the better operator interface.
-- **Retention tuning.** `1x.demo` defaults to 24 h retention. Increase via `LokiStack.spec.limits.global.retention.days` once we know we want longer. Watch bucket size.
+- **Console plugin.** `cluster-logging` ships a `ConsolePlugin` that adds a "Logs" tab to the OpenShift console UI. Not enabled by default. Likely the easiest workaround for application logs while LOG-6894 is open — the console path uses OAuth, not SA tokens, and bypasses OPA's broken read SAR.
+- **Retention tuning.** `1x.small` defaults stay short (similar to demo). Increase via `LokiStack.spec.limits.global.retention.days` once we know we want longer. Watch bucket size.
 - **Bucket lifecycle.** Loki manages chunk + index lifecycle internally; we don't need RGW-side lifecycle rules. Confirm after a week of running.
 - **Audit log exclusions.** Right now we forward *everything*. Once we see what comes through, add `filter` blocks to drop noise (e.g. `system:serviceaccount:*:gatus` health probes if they're chatty).
-- **Bigger size tier.** `1x.demo` is single-replica per component; if log volume warrants it, bump to `1x.extra-small` (still single replica per component but with sane resource requests) or `1x.small` (replicas + HA). Re-evaluate after a week.
 - **OADP next.** Same operator-evaluation TODO calls for OADP/Velero with S3 destination — same `OBC + translator-Job` pattern will probably apply, with Velero's `BackupStorageLocation` consuming the OBC outputs directly (Velero's S3 plugin reads `aws-credentials` Secret format, slightly different shape from Loki's). Reuse the translator pattern, swap the Secret keys.
