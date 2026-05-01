@@ -54,13 +54,16 @@ config:
         - "[STATUS] == 200"
         - "[CERTIFICATE_EXPIRATION] > 168h"
 
+    # ingress canary uses passthrough TLS with its own self-signed cert,
+    # so the wildcard cert-expiry check doesn't apply here. Just check 200.
     - name: okd-ingress
       group: platform
       url: https://canary-openshift-ingress-canary.apps.okd.sudops.pl
       interval: 60s
+      client:
+        insecure: true
       conditions:
         - "[STATUS] == 200"
-        - "[CERTIFICATE_EXPIRATION] > 168h"
 
     # Cluster apps
     - name: argocd
@@ -72,7 +75,7 @@ config:
 
     - name: grafana
       group: cluster-apps
-      url: https://grafana-grafana.apps.okd.sudops.pl
+      url: https://grafana.apps.okd.sudops.pl
       interval: 60s
       conditions:
         - "[STATUS] == 200"
@@ -84,17 +87,20 @@ config:
       conditions:
         - "[STATUS] == 200"
 
-    # Network gear (frontnet)
+    # Network gear (frontnet) — TCP probes on the mktxp/RouterOS API port
+    # because OpenShift's restricted-v2 SCC denies CAP_NET_RAW, which
+    # disables Gatus's ICMP probe. Both devices already have tcp/8728
+    # open for the mktxp scrape.
     - name: mikrotik-router
       group: network
-      url: icmp://192.168.1.1
+      url: tcp://192.168.1.1:8728
       interval: 60s
       conditions:
         - "[CONNECTED] == true"
 
     - name: mikrotik-switch
       group: network
-      url: icmp://192.168.1.220
+      url: tcp://192.168.1.220:8728
       interval: 60s
       conditions:
         - "[CONNECTED] == true"
