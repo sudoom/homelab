@@ -257,10 +257,73 @@ This is meaningful workload, not a refactor:
 - **Object storage:** every chunk + index is written to the bucket. With default retention (24h on demo tier — short!) and our log volume, expect ~hundreds of MiB to single-digit GiB resident. No HDD pressure; this is well within NVMe headroom.
 - **No OSD/RGW changes.** The only Ceph-side activity is bucket creation and chunk writes. Existing `nvme-replicated` pool is untouched.
 
+## First post-rollout snag — Vector 403 Forbidden
+
+LokiStack came up green, OBC → Secret translator did its job, ClusterLogForwarder reconciled clean. Then Vector logs were a wall of:
+
+```
+ERROR sink{component_id=output_lokistack_output_application component_type=loki}:
+  vector::sinks::util::retries:
+  Non-retriable error; dropping the request.
+  error=Server responded with an error: 403 Forbidden
+```
+
+All three sinks (application/audit/infrastructure). Bucket data pool stayed at 0 B.
+
+The chart bound `logcollector` SA to `collect-application-logs`, `collect-audit-logs`, `collect-infrastructure-logs`. Looks right, isn't:
+
+```
+$ oc get clusterrole collect-application-logs -o yaml
+rules:
+  - apiGroups: [logging.openshift.io, observability.openshift.io]
+    resources: [logs]
+    verbs: [collect]
+```
+
+`verbs: [collect]` is the *collection* permission — read pods/namespaces, mount log paths, etc. The LokiStack gateway runs an OPA tenant authorizer that does TokenReview + SubjectAccessReview specifically for `loki.grafana.com/<tenant>` resource with verb `create`. Different API group entirely. The CLO ships a separate ClusterRole for that:
+
+```
+$ oc get clusterrole logging-collector-logs-writer -o yaml
+rules:
+  - apiGroups: [loki.grafana.com]
+    resourceNames: [logs]
+    resources: [application, audit, infrastructure]
+    verbs: [create]
+```
+
+Fix: bind `logcollector` to `logging-collector-logs-writer` *in addition to* the three `collect-*-logs` ones (collect-* still needed for the read-side). Single line in the chart's RBAC range.
+
+Lesson: the `collect-*-logs` naming is misleading if you assume one ClusterRole covers the whole pipeline. It doesn't. Read = `collect-*-logs`, write to gateway = `logging-collector-logs-writer`. Both are required.
+
+## Wiring Loki into Grafana
+
+Three datasources, one per tenant, since the LokiStack gateway encodes tenant in the URL path:
+
+```
+https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/<tenant>
+```
+
+Authentication is `Authorization: Bearer <SA-token>`. The same OPA authorizer in front of the gateway means Grafana's SA needs SAR-grantable read on the tenants. There's no built-in `cluster-logging-read-*-logs` role (write side has them; read side doesn't), so the chart ships its own:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: grafana-loki-reader
+rules:
+  - apiGroups: [loki.grafana.com]
+    resources: [application, audit, infrastructure]
+    resourceNames: [logs]
+    verbs: [get]
+```
+
+Bound to a `grafana-loki` SA in the grafana namespace; static SA token Secret feeds the GrafanaDatasource via `valuesFrom`. Three GrafanaDatasource CRs (`Loki (application)`, `Loki (infrastructure)`, `Loki (audit)`) with `tlsSkipVerify: true` — easier than mounting service-CA into the Grafana pod for now.
+
+Pattern's identical to the existing Prometheus datasource (SA + token Secret + datasource CR), so no new shape to maintain.
+
 ## Open follow-ups
 
-- **Console plugin.** `cluster-logging` ships a `ConsolePlugin` that adds a "Logs" tab to the OpenShift console UI. Not enabled by default. Decide later — the Grafana Loki datasource (next item) might be the better operator interface.
-- **Grafana Loki datasource.** Add a `Datasource` CR (grafana-operator) pointing at `http://logging-loki-gateway-http.openshift-logging.svc:8080`, tenant-scoped via the `X-Scope-OrgID` header set per dashboard. Then we can query app/audit/infra logs from Grafana.
+- **Console plugin.** `cluster-logging` ships a `ConsolePlugin` that adds a "Logs" tab to the OpenShift console UI. Not enabled by default. Decide later — the Grafana Loki datasource (now shipped) might be the better operator interface.
 - **Retention tuning.** `1x.demo` defaults to 24 h retention. Increase via `LokiStack.spec.limits.global.retention.days` once we know we want longer. Watch bucket size.
 - **Bucket lifecycle.** Loki manages chunk + index lifecycle internally; we don't need RGW-side lifecycle rules. Confirm after a week of running.
 - **Audit log exclusions.** Right now we forward *everything*. Once we see what comes through, add `filter` blocks to drop noise (e.g. `system:serviceaccount:*:gatus` health probes if they're chatty).

@@ -6,7 +6,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-{{- range $role := list "collect-application-logs" "collect-audit-logs" "collect-infrastructure-logs" }}
+{{- range $role := list "collect-application-logs" "collect-audit-logs" "collect-infrastructure-logs" "logging-collector-logs-writer" }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
