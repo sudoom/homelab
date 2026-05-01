@@ -168,6 +168,41 @@ No config-shape changes between v5.16 and v5.35 for the keys we use (`endpoints[
 
 Renovate will keep this current going forward — once the chart is in tree, future bumps come in as labeled PRs rather than us spotting "we're 19 minor versions behind" again.
 
+## External probes red — DNS hang on search-domain permutations (2026-05-01)
+
+After a few hours the dashboard was steady except for `external/github` and `external/sudops-blog`, both red, both showing ~10 s response time (gatus' default per-endpoint timeout). Other groups (`cluster-apps`, `platform`, `network`) all green at single-digit ms. Initial reaction was "external link broken upstream" — wrong.
+
+From the gatus pod's host node (`node4`):
+
+```
+curl https://github.com → http=200 t_total=0.290s t_connect=0.048s
+curl https://sudops.pl  → http=200 t_total=0.089s t_connect=0.021s
+```
+
+Internet works. From a fresh test pod in the **same `gatus` namespace** (so same pod-network egress + same DNS):
+
+```
+curl https://github.com → http=200 t_total=6.291s t_connect=6.050s
+curl https://sudops.pl  → http=200 t_total=6.100s t_connect=6.019s
+```
+
+`t_connect` ≈ 6 s — that's not TCP RTT, that's resolver latency. The pod sees the cluster DNS search list plus the host-inherited `okd.sudops.pl` plus `ndots:5`. For `github.com` (1 dot) the resolver tries every search-domain permutation before the bare name; the `github.com.okd.sudops.pl` permutation goes CoreDNS → host resolv.conf → pi-hole → NXDOMAIN, and that's where the seconds go. Same root cause as the existing TODO to drop `okd.sudops.pl` from the node-side DNS search list — it just surfaced as a per-pod symptom because Gatus is the only workload doing real-time external-name resolution every 30 s.
+
+Fix in the gatus deployment template:
+
+```yaml
+spec:
+  template:
+    spec:
+      dnsConfig:
+        options:
+          - { name: ndots, value: "1" }
+```
+
+`ndots:1` tells the resolver "any name with at least 1 dot is FQDN-ish, query directly first." `github.com` has 1 dot → matches → no search-domain walk → fast. The cluster-internal endpoints (`grafana.grafana.svc.cluster.local`-style or in-namespace `gatus.svc`) are unaffected because they're either fully qualified or single-label internal lookups that the in-cluster CoreDNS handles directly.
+
+Per-pod workaround until the global node-side search-list cleanup happens. Not a layered/parallel fix — both will live; the pod-level setting is robustness against any future case where the node leak comes back.
+
 ## Open follow-ups
 
 - **Alerting**: deferred. Gatus has webhook/Discord/Slack/email backends; once we decide on a notification channel (probably Discord for homelab), wire it via a SealedSecret holding the webhook URL and add `alerts:` blocks to the per-endpoint config.
