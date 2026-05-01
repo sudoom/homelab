@@ -41,9 +41,11 @@ components/operators/cnpg/
 
 ## Catalog and channel choice
 
-CNPG is published to OperatorHub.io's `community-operators` catalog (already wired into the cluster). The package name is `cloudnative-pg`.
+CNPG is published as the package `cloudnative-pg`. Two things to get right in the Subscription, both of which I got wrong on the first commit:
 
-Channel discovery via `oc get packagemanifest`:
+### Channel: `stable-v1`, not `stable-v1.24`
+
+Initial values had `channel: stable-v1.24` — a guess based on the upstream CNPG release line (1.24 is the current minor at time of writing). Wrong. The packagemanifest only exposes a single channel, `stable-v1`:
 
 ```
 $ oc get packagemanifest -n openshift-marketplace cloudnative-pg \
@@ -52,9 +54,38 @@ stable-v1
 stable-v1
 ```
 
-Initial values had `channel: stable-v1.24` (a guess based on the upstream CNPG release line). The packagemanifest only exposes `stable-v1` — corrected to that. Not catching this would have left the Subscription in an unresolvable state forever, with the operator never installing.
+OLM doesn't subscribe to a minor version; it subscribes to the release stream. Within `stable-v1`, OLM resolves to whatever the catalog currently bundles (today, `cloudnative-pg.v1.29.0` — see "Rollout" below).
 
-Lesson: always `oc get packagemanifest` for the channel before guessing. The OLM bundle metadata is the source of truth, not the upstream project's release naming.
+### CatalogSource: `operatorhubio-catalog`, not `community-operators`
+
+This was the more interesting mistake. The first Subscription had:
+
+```yaml
+spec:
+  source: community-operators
+  sourceNamespace: openshift-marketplace
+```
+
+…because that's the catalog name I expected, by analogy with cert-manager (which lives in the `okderators` catalog). The Subscription resolved with this error:
+
+```
+no operators found in package cloudnative-pg in the catalog referenced
+by subscription cloudnative-pg
+```
+
+The CSV never got created, the operator never installed, and the InstallPlan stayed empty. The fix is to ask the packagemanifest *which catalog* it actually came from:
+
+```
+$ oc get packagemanifest -n openshift-marketplace cloudnative-pg \
+    -o jsonpath='{.status.catalogSource}{"\n"}'
+operatorhubio-catalog
+```
+
+Two CatalogSources are wired into this cluster — `community-operators` and `operatorhubio-catalog`. Both are populated from upstream OperatorHub.io but they're different bundles maintained on slightly different schedules, and not every package shows up in both. CNPG is in `operatorhubio-catalog` but not `community-operators`.
+
+Fixed in commit `9c0133b` by setting `source: operatorhubio-catalog`. After that, OLM resolved the InstallPlan within seconds.
+
+Lesson, sharper than the channel one: the `oc get packagemanifest <pkg> -o jsonpath='{.status.catalogSource}'` query is the source of truth for which CatalogSource to point a Subscription at. Don't infer it from analogy with another operator. The OperatorHub UI in the OKD console hides this distinction; the YAML doesn't.
 
 ## OperatorGroup: cluster-scoped
 
@@ -142,12 +173,41 @@ $ helm template cnpg-operator components/operators/cnpg/ -n cnpg-system \
                               <- silent, all kinds OK
 ```
 
-Post-deploy verification (to fill in once OLM finishes):
+Post-deploy verification (after the catalog/channel fixes landed):
 
-- `Subscription cloudnative-pg` resolves and creates an `InstallPlan`.
-- `ClusterServiceVersion` reaches `Phase: Succeeded`.
-- `cnpg-controller-manager` deployment is `Ready 1/1` in `cnpg-system`.
-- `Cluster.postgresql.cnpg.io` CRD exists cluster-wide.
+```
+$ oc get subscription -n cnpg-system cloudnative-pg \
+    -o jsonpath='{.status.state}{"  "}{.status.currentCSV}{"\n"}'
+AtLatestKnown  cloudnative-pg.v1.29.0
+
+$ oc get csv -n cnpg-system cloudnative-pg.v1.29.0 \
+    -o jsonpath='{.status.phase}{"\n"}'
+Succeeded
+
+$ oc get deploy -n cnpg-system cnpg-controller-manager
+NAME                      READY   UP-TO-DATE   AVAILABLE   AGE
+cnpg-controller-manager   1/1     1            1           19m
+
+$ oc get crds | grep cnpg.io
+backups.postgresql.cnpg.io
+clusterimagecatalogs.postgresql.cnpg.io
+clusters.postgresql.cnpg.io
+databases.postgresql.cnpg.io
+failoverquorums.postgresql.cnpg.io
+imagecatalogs.postgresql.cnpg.io
+poolers.postgresql.cnpg.io
+publications.postgresql.cnpg.io
+scheduledbackups.postgresql.cnpg.io
+subscriptions.postgresql.cnpg.io
+```
+
+All ten CRDs present, controller running, CSV `Succeeded`. The cluster is now ready for the first `Cluster` CR — Immich's, when CephFS lands and the PNY swap completes.
+
+## Rollout interference: pi-hole DNS rate-limit
+
+Worth noting because it cost about ten minutes of staring at "stuck" Argo apps before realizing the apps weren't stuck — Argo's repo-server couldn't resolve `github.com`. Pi-hole at `192.168.1.12` (still authoritative for `cluster.local` until technetium migration) periodically rate-limits DNS queries from cluster nodes and starts returning SERVFAIL to bursty clients. The repo-server was logging `lookup github.com on 172.30.0.10:53: server misbehaving`.
+
+Not a CNPG problem; it's the recurring pi-hole rate-limit issue documented in `blog-pihole-draft.md`. Workaround: wait it out (rate-limit window resets after a couple minutes). Long-term fix is the technetium migration, which retires the 192.168.1.12 box. Cross-referenced here only because if a future me pulls up this draft after a similar rollout that "didn't sync," the pi-hole DNS path is the second thing to check after the catalog source.
 
 ## Open follow-ups
 

@@ -52,7 +52,7 @@ Curated to "things I'd want to know are down at 02:00":
 - **External / internet path:** `https://github.com` (sanity check — if this is down from inside the cluster, something at the egress is broken), `https://sudops.pl` (the blog itself, including a TLS expiry check `[CERTIFICATE_EXPIRATION] > 168h` — paged a week before expiry).
 - **OKD platform:** `api.okd.sudops.pl:6443/healthz` and the ingress canary route. Both with `[CERTIFICATE_EXPIRATION] > 168h` to catch cert-manager regressions early.
 - **Cluster apps:** ArgoCD, Grafana, Ceph dashboard. These are the three I actually open day-to-day.
-- **Network gear:** ICMP to the Mikrotik router (192.168.1.1) and switch (192.168.1.220). If either drops, half the cluster ops are about to be painful.
+- **Network gear:** TCP probes against the mktxp/RouterOS API port (`tcp://192.168.1.1:8728` for the router and `tcp://192.168.1.220:8728` for the switch). Originally drafted as ICMP — that didn't survive contact with OpenShift's `restricted-v2` SCC, see "Rollout findings" below. Both devices already have `tcp/8728` open for the mktxp scrape, so reusing it as a liveness probe is free.
 - **DNS:** UDP probe to pi-hole at 192.168.1.12. Tagged for replacement (technetium migration is queued), but until then it's load-bearing for cluster.local resolution from external machines, and seeing it red the moment it stops being authoritative is worth the line.
 
 The cert-expiry checks are the one thing I'd flag as non-obvious — Gatus's `[CERTIFICATE_EXPIRATION]` placeholder evaluates against the leaf cert presented during the HTTPS handshake. `> 168h` (one week) gives a comfortable lead on cert-manager renewal failures before the cert actually expires.
@@ -95,6 +95,59 @@ Post-deploy verification (to fill in once the rollout completes):
 - Dashboard reachable at `https://gatus.apps.okd.sudops.pl`.
 - All endpoint groups (external, platform, cluster-apps, network) showing green at first paint.
 - The cert-expiry condition rendering an actual remaining-time number, not a parse error.
+
+## Rollout findings
+
+Three things broke between "values.yaml looked right" and "every endpoint green," all worth writing down because the next time I add a Gatus probe I'll forget at least one.
+
+### ICMP doesn't work on `restricted-v2` SCC
+
+First-pass config used `icmp://192.168.1.1` and `icmp://192.168.1.220` for the Mikrotik gear. Gatus reported every probe as failed with no useful error in the logs — "down" with `[CONNECTED] == false`.
+
+Root cause: Gatus's ICMP probe uses `golang.org/x/net/icmp`, which needs `CAP_NET_RAW` to open the raw socket. OpenShift's `restricted-v2` SCC (default for any user-created namespace, including `gatus`) drops every Linux capability and disallows requesting them back. The pod runs but the syscall is denied — silent failure rather than an error message that points anywhere useful.
+
+Fix: TCP probes to a port that's already open. Both devices have `tcp/8728` open for the mktxp Prometheus scrape, so:
+
+```yaml
+url: tcp://192.168.1.1:8728
+conditions:
+  - "[CONNECTED] == true"
+```
+
+Doesn't tell you whether RouterOS is healthy at the application layer — just that the API socket is accepting connections. For a "is the network gear reachable from the cluster" check, that's what we want anyway.
+
+The alternative — running Gatus with a non-default SCC or a `SecurityContextConstraints` exception for `CAP_NET_RAW` — is more invasive than the value of literal ICMP for these probes. If we ever want true ICMP from the cluster, blackbox_exporter with the right SCC is the cleaner answer.
+
+### `grafana-grafana.apps...` is not the route
+
+Initial draft had `https://grafana-grafana.apps.okd.sudops.pl` for the Grafana endpoint — a guess based on the "service-name service-name" Argo pattern. The actual route is `grafana.apps.okd.sudops.pl` (created by the Grafana CR with an explicit short name).
+
+Lesson, slightly embarrassing in retrospect: always `oc get route -A | grep <app>` before writing the URL. Five seconds of verification beats a red endpoint at first paint.
+
+### The ingress canary doesn't speak the wildcard cert
+
+`canary-openshift-ingress-canary.apps.okd.sudops.pl` is the openshift-router self-canary. It runs with `tls.termination: passthrough` and serves its own self-signed cert — *not* the cert-manager wildcard that every other `*.apps...` route uses. The first config had `[CERTIFICATE_EXPIRATION] > 168h` on it, which evaluated against the canary's self-signed cert and produced a meaningless number.
+
+Fix: `client.insecure: true` (skip cert verification) and drop the cert-expiry condition. The platform-level cert-expiry check belongs on the API server endpoint (`api.okd.sudops.pl:6443`), which uses the actual cert-manager-issued cert. Kept that one.
+
+### Final state
+
+After the three fixes (commit `1229d65` for the endpoints, prior commit for the chart):
+
+```
+2026-05-01 11:10:06 endpoint=external/github                        success=true
+2026-05-01 11:10:06 endpoint=external/sudops-blog                   success=true
+2026-05-01 11:10:07 endpoint=platform/okd-api                       success=true
+2026-05-01 11:10:07 endpoint=platform/okd-ingress                   success=true
+2026-05-01 11:10:08 endpoint=cluster-apps/argocd                    success=true
+2026-05-01 11:10:08 endpoint=cluster-apps/grafana                   success=true
+2026-05-01 11:10:09 endpoint=cluster-apps/ceph-dashboard            success=true
+2026-05-01 11:10:09 endpoint=network/mikrotik-router                success=true
+2026-05-01 11:10:10 endpoint=network/mikrotik-switch                success=true
+2026-05-01 11:10:10 endpoint=network/pihole-dns                     success=true
+```
+
+All ten endpoints green. Cert-expiry placeholders rendered as actual remaining-time numbers (months, not parse errors). Pod is running with the OpenShift-assigned random UID; PVC bound on `ceph-nvme-block` and writes to SQLite are working.
 
 ## Open follow-ups
 
