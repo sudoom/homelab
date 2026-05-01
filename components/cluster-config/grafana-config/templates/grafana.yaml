@@ -98,3 +98,70 @@ spec:
       timeInterval: 15s
     secureJsonData:
       httpHeaderValue1: "Bearer ${token}"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-loki
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: grafana-loki-reader
+rules:
+  - apiGroups: [loki.grafana.com]
+    resources: [application, audit, infrastructure]
+    resourceNames: [logs]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grafana-loki-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: grafana-loki-reader
+subjects:
+  - kind: ServiceAccount
+    name: grafana-loki
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-loki-token
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/service-account.name: grafana-loki
+type: kubernetes.io/service-account-token
+{{- range $tenant := list "application" "infrastructure" "audit" }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: loki-{{ $tenant }}
+  namespace: {{ $.Values.namespace }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  valuesFrom:
+    - targetPath: secureJsonData.httpHeaderValue1
+      valueFrom:
+        secretKeyRef:
+          name: grafana-loki-token
+          key: token
+  datasource:
+    name: Loki ({{ $tenant }})
+    type: loki
+    access: proxy
+    url: https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/{{ $tenant }}
+    jsonData:
+      httpHeaderName1: Authorization
+      tlsSkipVerify: true
+      timeout: 60
+    secureJsonData:
+      httpHeaderValue1: "Bearer ${token}"
+{{- end }}
