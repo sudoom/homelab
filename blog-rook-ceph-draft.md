@@ -1607,3 +1607,63 @@ The headline conclusion for the eventual blog post: **the worn PNY was a single-
 
 Migration complete: cluster is at 3+0, `BLUESTORE_SLOW_OP_ALERT` cleared, latency profile is what real storage should look like. Will let the recent-crashes warning age out (or `ceph crash archive-all`); otherwise nothing else needs doing.
 
+### Post-migration bottleneck sweep — what does the cluster actually peak at?
+
+The 4k QD1 fsync test is one specific workload (the worst case BlueStore was bottlenecked on under the worn PNYs). Now that the hardware story is settled, walked through a broader sweep with `tests/ceph-storage-test-libaio.yaml` to map the cluster's ceilings across read/write × random/sequential × different queue depths.
+
+Earlier failure modes worth recording first because the answers are non-obvious:
+
+**Mistake 1: psync engine + `iodepth=32` doesn't actually queue.** First attempt of the bottleneck sweep used the same default `--ioengine=psync` (the psync engine fio uses by default) plus `iodepth=32`. fio prints a one-line warning and silently caps queue depth at 1:
+
+```
+note: both iodepth >= 1 and synchronous I/O engine are selected, queue depth will be capped at 1
+```
+
+The "QD32 random write" test then reported `IOPS=81000, BW=316 MiB/s, clat avg 12 µs (nanoseconds, mostly)` — which looks great until you realize those are kernel page-cache writes, not cluster acks. The actual cluster work is in `Disk stats: ios=462933 in 120s` = ~3.8 k IOPS hitting RBD via the writeback path. Misleading data point — discarded.
+
+Fix: `--ioengine=libaio --direct=1` for actual concurrency at the device, kernel page cache fully bypassed.
+
+**Mistake 2: re-running fio against a PVC that just had a buffered-write test killed leaves writeback contention that blocks the new test.** Killed a wedged test pod with `kubectl delete --force` while it had GBs of dirty pages, then mounted the same PVC into a fresh pod. The fresh pod's QD32 randwrite test reported `IOPS=0, BW=12B/s, runtime: 328708ms` — fio submitted 1 IO that took 5.5 minutes to complete. Disk stats showed `ios=0/905371` — the device was running flat-out at ~98% utilization, but on draining the previous pod's leftover dirty pages, not the new fio's IO.
+
+Fix: don't reuse PVCs across pod kills if writeback was buffered. Always start a fresh PVC for clean numbers, or wait for `ceph -s` client wr to drop to zero before re-running.
+
+**The clean 3+0 ceiling map** (from a fresh 50 GiB PVC, 30 GB pre-fill, libaio direct=1 throughout):
+
+| Workload                                | IOPS    | BW          | clat / sync p50 | Notes                                                  |
+|-----------------------------------------|--------:|------------:|----------------:|--------------------------------------------------------|
+| `dd` 100 GB seqwrite (buffered)         | —       | **273 MB/s**| —               | Kernel writeback batching; *peak* but partly synthetic |
+| 1M QD8 seqwrite (libaio direct=1)       | 164     | 173 MB/s    | 46 ms           | Direct, sustainable; replication path serialization    |
+| 1M QD8 seqread  (libaio direct=1)       | 168     | 177 MB/s    | 50 ms           | ~30 % bluestore cache hits; rest disk-bound            |
+| **4k QD32 randwrite** (libaio direct=1) | **2,078** | **8.5 MB/s** | **14.8 ms**   | **Per-op replication latency × QD; PG-lock serialized** |
+| 4k QD32 randread (libaio direct=1)      | 40,000  | 156 MB/s    | 1.0 ms          | No replication path; bimodal (cache vs disk)           |
+| 4k QD1 fsync randwrite (10 GB file)     | 67      | 272 KiB/s   | 14 ms           | RTT × 3 replicas + bluestore commit                    |
+| 4k QD1 fsync randwrite (100 GB file)    | 33      | 135 KiB/s   | 27 ms           | + working set spilling bluestore metadata cache        |
+
+Three things stand out.
+
+**1. The cluster is `size=3` replication-bound for writes, not network-bound.** Earlier I read a Mikrotik dashboard during dd and concluded "1 GbE backnet saturated" — wrong, the backnet is 10 GbE and was at ~20 % utilization. Frontnet (1 GbE router) was at ~60 % during dd. So neither network is the seqwrite bottleneck. The actual ceiling on QD8 1M seqwrite (173 MB/s direct) is per-op latency: each 1 MB write commits in ~46 ms (3 replicas + bluestore + RTT), so 8 in flight gives `8 / 46 ms ≈ 174 ops/s ≈ 174 MB/s`. Little's Law again.
+
+For dd buffered seqwrite, the kernel batches many writes into per-RBD-object 4 MiB chunks before submitting, so the effective concurrency is higher than 8 — that's how we get 273 MB/s with buffering vs 173 MB/s direct. Same physical cluster, different access pattern.
+
+**2. Random write IOPS scales linearly with queue depth up to ~2 k IOPS.** The QD1 fsync number (67 IOPS, 14 ms) and QD32 number (2 078 IOPS, 14.8 ms) are consistent: `32 / 14.8 ms = 2 162 IOPS` matches measured. Per-op latency is the floor. To exceed 2 k IOPS for 4 k random writes the cluster would need either:
+
+- **Lower per-op commit latency** — a PLP-class enterprise NVMe (Micron 7450 PRO, Kioxia CD8, Samsung PM9A3) commits fsyncs in ~0.5 ms vs PM9A1's ~3 ms. Fully replacing 3× PM9A1 with 3× PLP enterprise drives would push the cluster's `kv_commit_lat` from ~3 ms to ~0.5 ms and the QD32 ceiling to ~16 k IOPS.
+- **More OSDs** — adding nodes adds more PGs and breaks PG-level write serialization. From 3 OSDs to 6 (e.g. 2 OSDs per node) would roughly double random-write IOPS at the same QD.
+- **Higher QD** — going from QD32 to QD128 might extract another 2-4× until hitting per-OSD CPU or PG-lock saturation.
+
+For a homelab `nvme-replicated` pool serving RBD volumes, **2 k random IOPS is plenty** — typical applications running on K8s rarely sustain that.
+
+**3. Reads scale beautifully because there is no replication path.** 40 k random IOPS is in the same band as bare-metal PM9A1 random read perf — Ceph's read-side overhead is just the PG lookup + object metadata. The 1 ms p50 latency is dominated by the public-network RTT, not the disk. Reads are *cheap* in this cluster — workloads that are read-heavy (Loki queriers, Prometheus series queries, image-pull caches) will get much better performance than the write-heavy Loki ingesters and Prometheus WAL writers.
+
+**Practical takeaway for what this cluster can actually back:**
+
+- **Database WAL / journal volumes (Postgres, etcd-style)**: 4 k QD1 fsync = 67 IOPS / 14 ms p99 latency. Adequate for low-traffic dev/homelab; would be the bottleneck under serious DB load.
+- **General-purpose container storage (OS-image cache, app data, bulk file workloads)**: 173 MB/s seqwrite + 156 MB/s random read at QD8/32. More than adequate.
+- **Read-heavy cache / image registry / PV backing for stateless workloads**: 40 k random IOPS. Trivially handles homelab needs.
+- **Where it'll struggle**: a single-tenant service that fsyncs every operation and needs > 67 IOPS. Mitigate with PLP enterprise NVMe or an EBS-style fsync-batching write layer.
+
+Future work this characterization unlocks:
+- The deferred `blog-multus-ceph-migration-draft.md` (bonding frontnet + backnet via Multus) is now justifiable for *seqwrite throughput*, not random IOPS — random writes would still be ~2 k IOPS no matter the network.
+- A second OSD per node would more meaningfully improve random-write IOPS than network changes.
+- The CephFS plan from `CLAUDE.md` (separate NVMe-class and HDD-class pools) doesn't change any of these numbers — RBD vs CephFS use the same OSD path.
+

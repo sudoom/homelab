@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ceph-test-pvc-libaio
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ceph-nvme-block
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ceph-test-libaio
+  namespace: default
+spec:
+  containers:
+    - name: test
+      image: quay.io/ceph/ceph:v19.2.3
+      command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          dnf install -y fio
+          echo
+          echo "=== Pre-fill: dd 30GB (fast; spills bluestore metadata cache for valid measurements) ==="
+          time dd if=/dev/zero of=/data/testfile bs=1M count=30720 conv=fsync status=progress
+          echo
+          echo "=== fio: 4k QD32 randwrite (libaio direct=1), 60s — random write IOPS ceiling ==="
+          fio --name=qd32-randwrite --filename=/data/testfile \
+              --rw=randwrite --bs=4k --iodepth=32 --numjobs=1 \
+              --ioengine=libaio --direct=1 \
+              --time_based --runtime=60 --group_reporting
+          echo
+          echo "=== fio: 4k QD32 randread (libaio direct=1), 60s — random read IOPS ceiling ==="
+          fio --name=qd32-randread --filename=/data/testfile \
+              --rw=randread --bs=4k --iodepth=32 --numjobs=1 \
+              --ioengine=libaio --direct=1 \
+              --time_based --runtime=60 --group_reporting
+          echo
+          echo "=== fio: 1M QD8 seqwrite (libaio direct=1), 60s — write BW ceiling ==="
+          fio --name=qd8-seqwrite --filename=/data/testfile \
+              --rw=write --bs=1M --iodepth=8 --numjobs=1 \
+              --ioengine=libaio --direct=1 \
+              --time_based --runtime=60 --group_reporting
+          echo
+          echo "=== fio: 1M QD8 seqread (libaio direct=1), 60s — read BW ceiling ==="
+          fio --name=qd8-seqread --filename=/data/testfile \
+              --rw=read --bs=1M --iodepth=8 --numjobs=1 \
+              --ioengine=libaio --direct=1 \
+              --time_based --runtime=60 --group_reporting
+          echo
+          echo "=== Sleeping for dashboard inspection ==="
+          sleep 3600
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: ceph-test-pvc-libaio
