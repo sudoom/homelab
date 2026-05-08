@@ -1,14 +1,15 @@
 
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: vpn-creds
-  namespace: keepers
-data:
-  OPENVPN_USERNAME: R1BuUnhIQmpLQkxZN1hmS0JHd2c1NVRZ
-  OPENVPN_PASSWORD: eEpNVkdrZEI2QTluOFJDelhiajdMYmNp
-type: Opaque
+# `vpn-creds` Secret is intentionally NOT inlined here — must be created out-of-band
+# as a SealedSecret with NordVPN OpenVPN credentials, e.g.:
+#
+#   kubectl create secret generic vpn-creds -n keepers \
+#     --from-literal=OPENVPN_USERNAME='<user>' \
+#     --from-literal=OPENVPN_PASSWORD='<pass>' \
+#     --dry-run=client -o yaml | \
+#     kubeseal --controller-namespace sealed-secrets --format yaml \
+#     > sealed-vpn-creds.yaml
+#
+# The deployment below references it via `secretRef: name: vpn-creds`.
 
 ---
 apiVersion: v1
