@@ -557,3 +557,44 @@ Path 3 is what we'll try next session — it's the smallest blast radius and unb
 - **Bucket lifecycle.** Loki manages chunk + index lifecycle internally; we don't need RGW-side lifecycle rules. Confirm after a week of running.
 - **Audit log exclusions.** Right now we forward *everything*. Once we see what comes through, add `filter` blocks to drop noise (e.g. `system:serviceaccount:*:gatus` health probes if they're chatty).
 - **OADP next.** Same operator-evaluation TODO calls for OADP/Velero with S3 destination — same `OBC + translator-Job` pattern will probably apply, with Velero's `BackupStorageLocation` consuming the OBC outputs directly (Velero's S3 plugin reads `aws-credentials` Secret format, slightly different shape from Loki's). Reuse the translator pattern, swap the Secret keys.
+
+## 2026-05-08 evening — closure: read path works, with two cosmetic residuals
+
+After the DNS-search-list `MachineConfig` rolled (full chronology in `blog-rook-ceph-draft.md` correction note), bounced Grafana to drop the stale in-memory token cache and tested directly:
+
+```
+$ TOKEN=$(oc -n grafana get secret grafana-loki-token -o jsonpath='{.data.token}' | base64 -d)
+$ curl -sk -H "Authorization: Bearer $TOKEN" \
+    https://logging-loki-openshift-logging.apps.okd.sudops.pl/api/logs/v1/infrastructure/loki/api/v1/labels
+{"status":"success","data":["__stream_shard__","k8s_container_name","k8s_namespace_name", ...]}    # 200, 91 ms
+```
+
+`audit` tenant: same shape, 200 in 37 ms. `application` tenant: still 403 from observatorium-api OPA — that's the **separate, still-open LOG-6894** TODO; nothing today's work changed.
+
+Confirmed in Grafana UI: Explore panel against `Loki (infrastructure)` returns log lines for `{kubernetes_namespace_name="openshift-logging"}` — basic query works.
+
+### Two residual 404 toasts in the Grafana UI that are *not* a regression
+
+Grafana's Loki datasource plugin makes side-channel calls during a query that the Loki Operator gateway doesn't proxy:
+
+- `/api/datasources/uid/<uid>/resources/index/stats?...` → 404
+- `/api/datasources/uid/<uid>/resources/drilldown-limits` → 404
+
+The plugin uses these for query-stats panels and the drilldown UI hints. They're newer Loki HTTP API endpoints (`/loki/api/v1/index/stats`, etc.) that the **observatorium-api gateway in the Loki Operator stack allowlists selectively** — only the core paths needed for log ingestion + standard read (`query`, `query_range`, `labels`, `series`, `tail`, `push`) are routed; richer Loki API surface isn't exposed.
+
+Net effect:
+- Real log queries work fine.
+- The toasts flash on every query. Cosmetic, not functional.
+- Suppression options for later if the toasts get annoying:
+  - Grafana datasource setting → disable the "show query stats" feature (plugin stops calling `/index/stats`).
+  - Or wait for Loki Operator to allowlist those endpoints upstream — track in a future Red Hat KCS / loki-operator issue.
+
+Closing the read-path 504 saga. Final scoreboard on the three hypotheses we chased:
+
+| hypothesis | how it died |
+|---|---|
+| TSDB shipper blocking on slow PNY OSDs | survived the full PM9A1 swap to 3+0 (proven 2026-05-07 evening) |
+| Loki Operator `1x.pico` resource-limit bug | survived the swap too; symptom unchanged |
+| **`okd.sudops.pl` in pod search list + ndots:5 + 5 s gRPC dial deadline** | **fixed by MCO rolling reboot recreating all long-lived pods with the current (clean) host resolv.conf snapshot** |
+
+The dispatcher script we shipped is a defensive no-op today (host resolv.conf doesn't carry the suffix anyway under KNI prepender), kept in place against future regression. And the actual mechanism — pod recreation — is what closed the issue. **One reboot beats one careful sed**, this time.
