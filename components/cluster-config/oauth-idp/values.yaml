@@ -2,13 +2,13 @@ github:
   # OAuth client ID from the GitHub OAuth App registration. NOT a secret — fine
   # to commit. The matching clientSecret goes in templates/sealed-github-oauth-client-secret.yaml
   # via kubeseal (see README.md).
-  clientID: "Ov23liQAadorSTph0oxB"
+  clientID: "Ov23liQqd9kPTUq1G7XC"
 
   # Restrict logins to specific GitHub organizations. Required when using a
   # multi-tenant GitHub OAuth App; users not in any of these orgs are rejected
   # at login. Leave empty to allow any GitHub user (NOT RECOMMENDED).
   organizations:
-    - sudoom
+    - sudoom-homelab
 
   # Optional: further restrict to specific teams within the orgs above.
   # Format: ["<org>/<team-slug>"]. Empty = any member of an org above.
