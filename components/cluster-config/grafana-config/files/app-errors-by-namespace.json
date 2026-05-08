@@ -1,0 +1,60 @@
+{
+  "title": "Application errors by namespace",
+  "uid": "app-errors-by-ns",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "loki",
+        "current": { "text": "Loki (infrastructure)", "value": "Loki (infrastructure)" }
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "${datasource}" },
+        "query": "label_values(kubernetes_namespace_name)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Error/warn/fatal log lines per namespace (5m rate)",
+      "datasource": { "type": "loki", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (kubernetes_namespace_name) (rate({kubernetes_namespace_name=~\"$namespace\"} |~ \"(?i)(error|warn|fail|fatal|panic)\" [5m]))",
+          "legendFormat": "{{kubernetes_namespace_name}}"
+        }
+      ],
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "type": "logs",
+      "title": "Recent error log lines (top 100)",
+      "datasource": { "type": "loki", "uid": "${datasource}" },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "expr": "{kubernetes_namespace_name=~\"$namespace\"} |~ \"(?i)(error|fail|fatal|panic)\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}

@@ -1,4 +1,8 @@
 {{- $bindings := include "grafana-config.datasourceBindings" . | nindent 4 -}}
+# ---------------------------------------------------------------------------
+# Folder: metrics — everything that's a Prometheus-backed visualization.
+# Logs dashboards live in dashboards-logs.yaml under folder "logs".
+# ---------------------------------------------------------------------------
 # Ceph — Cluster overview
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
@@ -6,6 +10,7 @@ metadata:
   name: ceph-cluster
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
@@ -20,6 +25,7 @@ metadata:
   name: ceph-osd
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
@@ -34,6 +40,7 @@ metadata:
   name: ceph-pools
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
@@ -48,6 +55,7 @@ metadata:
   name: node-exporter
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
@@ -55,33 +63,53 @@ spec:
   grafanaCom:
     id: 1860
 ---
-# Kubernetes — cluster overview
+# Kubernetes — global / cluster view (kube-prometheus-stack mixin)
+# Replaces broken k8s-cluster (7249) and k8s-comprehensive (15661); 15757 ships
+# with kube-prom-stack and works against standard kube-state-metrics labels.
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
 metadata:
-  name: k8s-cluster
+  name: k8s-views-global
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
   datasources:{{ $bindings }}
   grafanaCom:
-    id: 7249
+    id: 15757
 ---
-# Kubernetes — pod resources
+# Kubernetes — pods view (kube-prometheus-stack mixin)
+# Replaces broken k8s-pods (6879).
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
 metadata:
-  name: k8s-pods
+  name: k8s-views-pods
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
   datasources:{{ $bindings }}
   grafanaCom:
-    id: 6879
+    id: 15760
+---
+# Kubernetes — namespaces view (kube-prometheus-stack mixin)
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: k8s-views-namespaces
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: metrics
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  grafanaCom:
+    id: 15758
 ---
 # CoreDNS
 apiVersion: grafana.integreatly.org/v1beta1
@@ -90,6 +118,7 @@ metadata:
   name: coredns
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
@@ -104,26 +133,13 @@ metadata:
   name: etcd
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
   datasources:{{ $bindings }}
   grafanaCom:
     id: 3070
----
-# Kubernetes — comprehensive dashboard
-apiVersion: grafana.integreatly.org/v1beta1
-kind: GrafanaDashboard
-metadata:
-  name: k8s-comprehensive
-  namespace: {{ .Values.namespace }}
-spec:
-  instanceSelector:
-    matchLabels:
-      dashboards: grafana
-  datasources:{{ $bindings }}
-  grafanaCom:
-    id: 15661
 ---
 # smartctl_exporter — NVMe/SATA SMART (wear, temp, media errors, data written)
 apiVersion: grafana.integreatly.org/v1beta1
@@ -132,6 +148,7 @@ metadata:
   name: smartctl-exporter
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
@@ -146,6 +163,7 @@ metadata:
   name: mikrotik-exporter
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana
@@ -161,6 +179,7 @@ metadata:
   name: cnpg
   namespace: {{ .Values.namespace }}
 spec:
+  folder: metrics
   instanceSelector:
     matchLabels:
       dashboards: grafana

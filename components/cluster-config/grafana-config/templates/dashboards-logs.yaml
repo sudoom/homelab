@@ -1,0 +1,58 @@
+{{- $bindings := include "grafana-config.datasourceBindings" . | nindent 4 -}}
+# ---------------------------------------------------------------------------
+# Folder: logs — Loki-backed visualizations.
+# The community "Loki Kubernetes Logs" (id 15141) was tried and didn't render
+# correctly in this stack, so it's intentionally omitted. If a usable
+# community Loki overview shows up, add it here with `folder: logs`.
+# ---------------------------------------------------------------------------
+
+# Loki — operational dashboard (community)
+# Distributor / ingester / querier / gateway health for the Loki stack itself.
+# Datasource: Prometheus (metrics-on-Loki, not logs-on-Loki).
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: loki-operational
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: logs
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  grafanaCom:
+    id: 13407
+---
+# Application errors by namespace (custom)
+# Two panels: 5m error/warn/fatal rate per namespace + recent error log table.
+# Datasource: Loki (infrastructure) by default; user can switch via the
+# datasource template variable in the dashboard.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: application-errors-by-namespace
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: logs
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  json: |
+{{ .Files.Get "files/app-errors-by-namespace.json" | indent 4 }}
+---
+# Audit events of interest (custom)
+# Mutating verbs by user, recent Secret + ConfigMap mutations, recent RBAC
+# changes. Useful for "who changed what" investigations.
+# Datasource: Loki (audit) — irrelevant against the other tenants.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: audit-events-of-interest
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: logs
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  json: |
+{{ .Files.Get "files/audit-events-of-interest.json" | indent 4 }}

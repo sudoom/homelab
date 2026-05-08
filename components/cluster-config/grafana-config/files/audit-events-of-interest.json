@@ -1,0 +1,67 @@
+{
+  "title": "Audit events of interest",
+  "uid": "audit-events-of-interest",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "loki",
+        "current": { "text": "Loki (audit)", "value": "Loki (audit)" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Mutating verbs (create/update/delete/patch) by user (5m rate)",
+      "datasource": { "type": "loki", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (user) (rate({log_type=\"audit\"} | json | verb=~\"create|update|delete|patch\" [5m]))",
+          "legendFormat": "{{user}}"
+        }
+      ],
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "type": "logs",
+      "title": "Recent Secret + ConfigMap mutations",
+      "datasource": { "type": "loki", "uid": "${datasource}" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "expr": "{log_type=\"audit\"} | json | verb=~\"create|update|delete|patch\" | objectRef_resource=~\"secrets|configmaps\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Recent RBAC changes (roles, clusterroles, bindings)",
+      "datasource": { "type": "loki", "uid": "${datasource}" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 21 },
+      "targets": [
+        {
+          "expr": "{log_type=\"audit\"} | json | verb=~\"create|update|delete|patch\" | objectRef_resource=~\"roles|clusterroles|rolebindings|clusterrolebindings\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}
