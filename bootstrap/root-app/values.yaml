@@ -80,6 +80,12 @@ applications:
     namespace: cert-manager
     syncWave: "2"
 
+  oauth-idp:
+    enabled: true
+    path: components/cluster-config/oauth-idp
+    namespace: openshift-config
+    syncWave: "2"
+
   # Wave 3 — TLS consumers (depends on certs being issued)
   ingress-controller:
     enabled: true
