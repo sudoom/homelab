@@ -115,7 +115,6 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **PV cleanup when stuck `Released` / "image has watchers"** — separate from the periodic purge: occasionally a trashed RBD image refuses removal with `image has watchers`, meaning a CSI client (kernel rbd map on a node, or a leftover NodePlugin attachment) still holds it. Investigate the CSI delete flow; PVs accumulate finalizers (`external-provisioner`, `external-attacher`) and the underlying images become orphaned. One known stuck image as of 04/2026: `csi-vol-3af138f8-1b96-41e4-a05d-108896d26954` in `nvme-replicated`.
 
 ### Queued — platform plumbing
-- [ ] **GitHub OAuth IdP for cluster auth** — chart at `components/cluster-config/oauth-idp/` (Helm + Argo-managed adoption of the singleton `OAuth/cluster` CR + GitHub IdP + cluster-admin RBAC). OAuth App registered, clientSecret sealed, values.yaml filled. Last remaining step: wire into `bootstrap/root-app/values.yaml` at syncWave 2 and push so Argo applies. Then verify with `oc login --username=<gh-user> --web`. `kubeadmin` stays available as the built-in fallback throughout (no htpasswd configured).
 
 ### Queued — operators / catalog
 - [ ] **NMState operator: upstream PR for `okderators` ImageStream bug** — context in `nmstate-imagestream-bug.md`. Today we use `community-operators` as a workaround.
