@@ -1,0 +1,75 @@
+# MachineConfig: drop `okd.sudops.pl` from /etc/resolv.conf search list on every node.
+#
+# Why this exists:
+#   - okd.sudops.pl is the cluster ingress wildcard (`*.apps.okd.sudops.pl`), not a
+#     search-domain suffix. RHCOS nodes inherit it from DHCP into /etc/resolv.conf,
+#     and pods inherit it via kubelet's resolv.conf merge under dnsPolicy=ClusterFirst.
+#   - `options ndots:5` (kubelet/pod default) means any host name with < 5 dots
+#     triggers search-list permutations BEFORE the FQDN is tried as-is. The fourth
+#     permutation (`<name>.okd.sudops.pl`) goes to pi-hole and stalls ~5 seconds
+#     because nothing legitimately resolves under that suffix.
+#   - gRPC clients (Loki querier ↔ index-gateway, Argo repo-server, etc.) use a
+#     default 5 s dial deadline. Every connection attempt to a service FQDN hits
+#     the search-list timeout before falling through to the working FQDN, so the
+#     gRPC client gives up before the gateway is ever contacted.
+#   - Verified 2026-05-08 from inside the Loki querier pod: FQDN connect 6003 ms,
+#     short-name connect 0.3 ms, direct pod-IP connect 0–0.4 ms.
+#   - Pi-hole "Top Permitted Domains" shows 250k+ hits for
+#     logging-loki-query-frontend-grpc.openshift-logging.svc.cluster.local.okd.sudops.pl
+#     and similar — all of those are spurious search-list permutations.
+#
+# How it works:
+#   - NetworkManager dispatcher script under /etc/NetworkManager/dispatcher.d/.
+#     NM fires this on every connection `up`, `dhcp4-change`, `dhcp6-change`.
+#     The script strips `okd.sudops.pl` from any `search` line in resolv.conf
+#     idempotently and in-place. Survives DHCP lease renewals.
+#   - MCO will roll the master pool (3 nodes) one at a time. Each node reboots →
+#     the same multus-pull cascade we lived through during the PNY→PM9A1 migration
+#     (~10–15 min per node). Plan the rollout during quiet IO; do not run two
+#     OSD-impacting changes concurrently. With size=3 and 3 OSDs the cluster goes
+#     degraded (not unavailable) during each node reboot.
+#
+# How to test before committing to GitOps:
+#   1. Apply this MC manually:
+#        oc apply -f tests/mc-nm-strip-okd-search.yaml
+#   2. Watch MCO progress:
+#        oc get mcp master --watch
+#      Expect MachineCount=3 → UpdatedMachineCount climbing 0→1→2→3 over ~30–45 min.
+#   3. After each node returns to Ready, validate the script ran:
+#        oc debug node/<node> --quiet -- chroot /host cat /etc/resolv.conf
+#      Should NOT contain `okd.sudops.pl` in the search line.
+#   4. From any pod (after MCO completes the master pool):
+#        oc -n openshift-logging exec deploy/rook-ceph-operator -- cat /etc/resolv.conf
+#      (or any pod) — should not contain okd.sudops.pl.
+#   5. The canonical reproducer:
+#        oc -n openshift-logging exec logging-loki-querier-... -- python3 -c '
+#          import socket, time
+#          s = socket.socket(); s.settimeout(5); t0 = time.time()
+#          s.connect(("logging-loki-index-gateway-grpc.openshift-logging.svc.cluster.local", 9095))
+#          print(f"OK in {(time.time()-t0)*1000:.1f} ms"); s.close()
+#        '
+#      Pre-fix: 6003 ms. Post-fix: < 5 ms.
+#   6. Loki TODO closes once Grafana queries against `Loki (infrastructure)` and
+#      `Loki (audit)` return data instead of 504.
+#
+# Once validated, move into a Helm chart under components/cluster-config/<name>/
+# and wire into bootstrap/root-app/values.yaml at syncWave 0 so Argo owns it
+# permanently. Until then it lives here as a manual-apply test artifact.
+#
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-master-nm-strip-okd-search
+  labels:
+    machineconfiguration.openshift.io/role: master
+spec:
+  config:
+    ignition:
+      version: 3.4.0
+    storage:
+      files:
+        - path: /etc/NetworkManager/dispatcher.d/99-strip-okd-search.sh
+          mode: 0755
+          overwrite: true
+          contents:
+            source: data:text/plain;charset=utf-8;base64,IyEvYmluL2Jhc2gKIyBTdHJpcCBva2Quc3Vkb3BzLnBsIGZyb20gL2V0Yy9yZXNvbHYuY29uZiBzZWFyY2ggbGlzdC4KIyBXaHk6IG9rZC5zdWRvcHMucGwgaXMgdGhlIGNsdXN0ZXIgaW5ncmVzcyB3aWxkY2FyZCwgbm90IGEgc2VhcmNoIGRvbWFpbi4KIyBuZG90czo1ICsgdGhpcyBpbiB0aGUgc2VhcmNoIGxpc3QgbWFrZXMgZXZlcnkgPCA1LWRvdCBsb29rdXAgdHJ5CiMgPG5hbWU+Lm9rZC5zdWRvcHMucGwgYWdhaW5zdCBwaS1ob2xlIGFuZCBzdGFsbCB+NSBzLCBicmVha2luZyBnUlBDIGNsaWVudHMuCklGQUNFPSIkMSIKRVZFTlQ9IiQyIgpjYXNlICIkRVZFTlQiIGluCiAgdXB8ZGhjcDQtY2hhbmdlfGRoY3A2LWNoYW5nZSkKICAgIFJFU09MVj0vZXRjL3Jlc29sdi5jb25mCiAgICBbWyAtZiAiJFJFU09MViIgXV0gfHwgZXhpdCAwCiAgICBpZiBncmVwIC1xRSAnXnNlYXJjaC4qXGJva2RcLnN1ZG9wc1wucGxcYicgIiRSRVNPTFYiOyB0aGVuCiAgICAgIHNlZCAtaSAtRSAnCiAgICAgICAgL15zZWFyY2ggLyB7CiAgICAgICAgICBzL1tbOnNwYWNlOl1dK29rZFwuc3Vkb3BzXC5wbFxiLy9nCiAgICAgICAgICBzL15zZWFyY2hbWzpzcGFjZTpdXStva2RcLnN1ZG9wc1wucGxcYltbOnNwYWNlOl1dKi8vCiAgICAgICAgICBzL1tbOnNwYWNlOl1dezIsfS8gL2cKICAgICAgICAgIHMvW1s6c3BhY2U6XV0rJC8vCiAgICAgICAgICAvXnNlYXJjaFtbOnNwYWNlOl1dKiQvZAogICAgICAgIH0KICAgICAgJyAiJFJFU09MViIKICAgIGZpCiAgICA7Owplc2FjCmV4aXQgMAo=

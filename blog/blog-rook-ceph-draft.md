@@ -1705,3 +1705,46 @@ Storage was never relevant to this problem. Two lessons:
 
 The Loki TODO is updated to point at the search-list cleanup as the actual fix; the PNY and `1x.pico` hypotheses are explicitly listed as wrong.
 
+### 2026-05-08 (later same evening) — fix validated, with a twist
+
+Shipped the `MachineConfig` (`tests/mc-nm-strip-okd-search.yaml` → applied to MCP master). MCO drained + rebooted all three master nodes serially, ~30 min total — same shape as the swap-day cascade, only one OSD ever down at a time. Final rendered config: `rendered-master-72361e71434ff638b25ff5b9762c11cb`.
+
+Post-rollout reproducer on a fresh querier pod:
+
+```
+$ oc -n openshift-logging exec logging-loki-querier-78999577cd-92xzm -- \
+    cat /etc/resolv.conf
+search openshift-logging.svc.cluster.local svc.cluster.local cluster.local
+nameserver 172.30.0.10
+options ndots:5
+
+$ oc -n openshift-logging exec logging-loki-querier-78999577cd-92xzm -- python3 -c '
+    import socket, time
+    for host, port in [
+        ("logging-loki-index-gateway-grpc.openshift-logging.svc.cluster.local", 9095),
+        ("logging-loki-index-gateway-grpc", 9095),
+    ]:
+        s = socket.socket(); s.settimeout(5); t0 = time.time()
+        s.connect((host, port))
+        print(f"OK {host}:{port}  in {(time.time()-t0)*1000:.1f} ms"); s.close()
+'
+OK logging-loki-index-gateway-grpc.openshift-logging.svc.cluster.local:9095  in 1.7 ms
+OK logging-loki-index-gateway-grpc:9095                                       in 0.3 ms
+
+$ oc -n openshift-logging logs --since=10m logging-loki-querier-78999577cd-92xzm | grep -c pool.go:250
+0
+```
+
+| metric | pre-fix (2026-05-08 morning) | post-fix (same evening) | delta |
+|---|---:|---:|---|
+| FQDN connect latency | 6003 ms | **1.7 ms** | ~3500× faster |
+| `pool.go:250` evictions / 10 min | continuous (every ~10 s) | **0** | flat |
+| pod resolv.conf includes `okd.sudops.pl` | yes | **no** | resolved |
+
+**The twist**: the host's `/etc/resolv.conf` never actually carried `okd.sudops.pl` once the KNI resolv-prepender finished — it writes only nameserver entries, no search. So the dispatcher script I shipped strips a string that wasn't present. The fix actually came from **MCO recreating every pod during the rolling reboot**: long-lived pods (querier, index-gateway, etc.) had been carrying a months-old resolv.conf snapshot from a node-state that *did* once include `okd.sudops.pl`, and pod resolv.conf is captured at pod creation, not refreshed thereafter. Rebooting the nodes recycled all pods → they got the current (clean) resolv.conf composed from the current host state.
+
+The dispatcher script stays in place as a defensive no-op: if anything in the future reintroduces `okd.sudops.pl` to host `/etc/resolv.conf` (DHCP option change, NM profile drift, etc.), the dispatcher will strip it on the next NM event before kubelet has a chance to bake it into a pod's resolv.conf. Cost: 0. Value when the regression happens: identical to what we just verified.
+
+**Lesson, again, with feeling**: the empirical test (Python `socket.connect` from inside a pod) was decisive. Earlier today I'd written off the dispatcher as the fix and would have been done — but having the *post-state* confirmation lets me say "the dispatcher script is no-op today *and* the actual cause was something else entirely." Without the after-state test, I'd have left a runbook entry that says "if you see this 504 again, ship the dispatcher script" — and it would have done nothing, because the symptom-removal mechanism is "reboot all pods that were created when the host had the bad search list." Naming the actual mechanism beats naming a credible-sounding mechanism.
+
+Both linked TODOs close: the search-list cleanup (which is now in place defensively, even if not load-bearing today), and the Loki 504 (queries return data instead of `DeadlineExceeded`).
