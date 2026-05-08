@@ -81,7 +81,7 @@ For operators bringing CRDs, use **intra-chart** sync-wave annotations: `Subscri
 - The DNS-01 resolver uses public nameservers (`1.1.1.1`, `8.8.8.8`) — cluster DNS can't resolve external domains, and without this override the challenge fails.
 - Wildcard cert `*.apps.okd.sudops.pl` → `openshift-ingress`.
 - API cert `api.okd.sudops.pl` → `openshift-config`.
-- Cloudflare API token is created **manually** today. Planned migration: ESO + Bitwarden.
+- Cloudflare API token is provisioned via the SealedSecret in `components/cluster-config/cert-manager-config/templates/sealed-cloudflare-api-token.yaml`. Rotation = re-`kubeseal` + commit (one-liner in that chart's `values.yaml`).
 
 ## Storage (Rook-Ceph)
 
@@ -94,12 +94,10 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - **Mons:** 3-of-3, one per node. Same topology constraint applies.
 - **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication. Multus migration drafted in `blog/blog-multus-ceph-migration-draft.md` but **not pursued for throughput** — Mikrotik traffic data showed the bottleneck is media, not switch.
 
-### Hardware migration in flight (PNY → PM9A1)
+### Hardware: 3× Samsung PM9A1 512GB
 
-- Original 3× PNY consumer NVMes had pathological commit latency (~95 ms `kv_commit_lat` lifetime average; observed cluster-side fsync latency in seconds). One PM9A1 swap on node4 (osd.0) validated 04/2026: **~20× speedup** to ~4 ms `kv_commit_lat`.
-- 2× more PM9A1 ordered late 04/2026; node5 swaps next (it was the worse of the two remaining PNYs under fio), then node6.
-- `BLUESTORE_SLOW_OP_ALERT` HEALTH_WARN is **hardware-bound** on the PNYs — won't clear until the swap finishes. Do not propose tuning, deep-scrub adjustments, or pool-config changes to "fix" it; the only fix is the swap.
-- Defer big storage refactors (subchart migration, OSD encryption, large topology changes) until **after** node5 + node6 swaps complete.
+- Migration from PNY CS1030 → PM9A1 completed 2026-05-07. Per-OSD `kv_commit_lat` dropped from ~95 ms (worn PNY lifetime) to ~3 ms (PM9A1). `BLUESTORE_SLOW_OP_ALERT` cleared and stays clear at the new hardware. Full chronology + bottleneck sweep in `blog/blog-rook-ceph-draft.md`.
+- For future drive purchases at this cluster scale, stay on PM9A1-class consumer NVMe — full PLP enterprise (Micron 7450 PRO etc.) is not justified by the workload. The bottleneck post-swap is replication-amplification at `size=3`, not per-drive fsync latency.
 
 ### Pools and pg_num
 
