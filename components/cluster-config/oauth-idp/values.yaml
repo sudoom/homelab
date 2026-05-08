@@ -2,7 +2,7 @@ github:
   # OAuth client ID from the GitHub OAuth App registration. NOT a secret — fine
   # to commit. The matching clientSecret goes in templates/sealed-github-oauth-client-secret.yaml
   # via kubeseal (see README.md).
-  clientID: ""
+  clientID: "Ov23liQAadorSTph0oxB"
 
   # Restrict logins to specific GitHub organizations. Required when using a
   # multi-tenant GitHub OAuth App; users not in any of these orgs are rejected
@@ -17,11 +17,7 @@ github:
   # GitHub username (case-sensitive) that gets cluster-admin once login works.
   # The ClusterRoleBinding template grants cluster-admin to this user.
   # Add more users by editing templates/clusterrolebinding-github.yaml.
-  clusterAdminUser: ""
+  clusterAdminUser: "sudoom"
 
-# Break-glass htpasswd IdP. Stays usable if GitHub OAuth, GitHub itself, or the
-# kubeadmin user is unavailable. Optional — kubeadmin alone is usually enough
-# for a homelab.
-htpasswd:
-  enabled: false
-  username: "breakglass"
+# Break-glass: kubeadmin remains the built-in fallback (not gated by
+# OAuth.spec.identityProviders), so no additional htpasswd IdP is configured.

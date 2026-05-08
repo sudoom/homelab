@@ -29,11 +29,3 @@ spec:
 {{- toYaml . | nindent 10 }}
 {{- end }}
 {{- end }}
-{{- if .Values.htpasswd.enabled }}
-    - name: htpasswd
-      mappingMethod: claim
-      type: HTPasswd
-      htpasswd:
-        fileData:
-          name: htpasswd-secret
-{{- end }}

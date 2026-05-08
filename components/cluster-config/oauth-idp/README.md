@@ -1,13 +1,12 @@
 # oauth-idp
 
-Adopts the singleton `OAuth/cluster` CR and adds two identity providers:
-**GitHub OAuth** (primary) and **htpasswd** (optional break-glass). Plus the
-ClusterRoleBinding that grants `cluster-admin` to the GitHub user(s) you
-choose.
+Adopts the singleton `OAuth/cluster` CR and adds **GitHub OAuth** as the
+primary identity provider, plus the ClusterRoleBinding that grants
+`cluster-admin` to the GitHub user(s) you choose.
 
-`kubeadmin` keeps working alongside this — the built-in admin account isn't
-gated by `OAuth.spec.identityProviders`, so it remains available as the
-ultimate break-glass.
+`kubeadmin` is the break-glass — the built-in admin account isn't gated by
+`OAuth.spec.identityProviders`, so it remains available regardless of
+GitHub OAuth state.
 
 ## One-time setup runbook
 
@@ -54,31 +53,7 @@ github:
   clusterAdminUser: "<your-github-username>"
 ```
 
-### 4. (Optional) Seal an htpasswd break-glass user
-
-Skip this if `kubeadmin` is sufficient as your fallback.
-
-```sh
-htpasswd -c -B -b /tmp/users.htpasswd 'breakglass' '<strong-password>'
-
-oc -n openshift-config create secret generic htpasswd-secret \
-  --from-file=htpasswd=/tmp/users.htpasswd \
-  --dry-run=client -o yaml | \
-kubeseal --controller-namespace sealed-secrets --format yaml \
-  > components/cluster-config/oauth-idp/templates/sealed-htpasswd.yaml
-
-rm /tmp/users.htpasswd
-```
-
-Then in `values.yaml`:
-
-```yaml
-htpasswd:
-  enabled: true
-  username: "breakglass"
-```
-
-### 5. Validate the chart locally before turning it on
+### 4. Validate the chart locally before turning it on
 
 ```sh
 helm lint components/cluster-config/oauth-idp/
@@ -86,11 +61,10 @@ helm template oauth-idp components/cluster-config/oauth-idp/ \
   -f components/cluster-config/oauth-idp/values.yaml
 ```
 
-The rendered output should show the `OAuth/cluster` CR with your IdP block,
-two SealedSecrets (or one if you skipped htpasswd), and the
-ClusterRoleBinding(s).
+The rendered output should show the `OAuth/cluster` CR with the GitHub IdP
+block, the SealedSecret, and the ClusterRoleBinding.
 
-### 6. Enable the chart in the root app
+### 5. Enable the chart in the root app
 
 In `bootstrap/root-app/values.yaml`, add:
 
@@ -110,7 +84,7 @@ oc -n openshift-authentication get pods -w
 oc get oauth cluster -o yaml
 ```
 
-### 7. Test login end-to-end before disabling kubeadmin (recommended: don't)
+### 6. Test login end-to-end before disabling kubeadmin (recommended: don't)
 
 ```sh
 oc login --username='<your-github-username>' --web
@@ -124,27 +98,28 @@ oc whoami
 oc auth can-i '*' '*' --all-namespaces   # should print "yes"
 ```
 
-### 8. Optional: disable kubeadmin
+### 7. Optional: disable kubeadmin
 
 `kubeadmin` is intentionally still active even after IdPs are configured —
-it's the documented break-glass for OpenShift. Most homelabs leave it on.
-If you want it gone:
+it's the documented break-glass for OpenShift. Recommended: leave it on.
+If you really want it gone:
 
 ```sh
 oc -n kube-system delete secret kubeadmin
 ```
 
-Reversible only by recreating the Secret; consider keeping the htpasswd IdP
-above as your second factor before doing this.
+Reversible only by recreating the Secret. Don't do this unless GitHub OAuth
+has been working reliably for a while and you have a separate path back into
+the cluster (kubeconfig with cluster-admin token from your own GitHub login,
+saved offline).
 
 ## What's in the chart
 
 | File | What it does |
 |---|---|
-| `templates/oauth-cluster.yaml` | Owns the `OAuth/cluster` singleton; renders identityProviders for GitHub (always when clientID set) and htpasswd (if enabled) |
-| `templates/sealed-github-oauth-client-secret.yaml` | SealedSecret for the GitHub OAuth client secret. Stub until you replace via kubeseal |
-| `templates/sealed-htpasswd.yaml` | SealedSecret for the htpasswd file content. Renders only when htpasswd.enabled |
-| `templates/clusterrolebinding-github.yaml` | Grants `cluster-admin` to `github.clusterAdminUser` (and `htpasswd.username` if enabled) |
+| `templates/oauth-cluster.yaml` | Owns the `OAuth/cluster` singleton; renders the GitHub identityProvider when `github.clientID` is set |
+| `templates/sealed-github-oauth-client-secret.yaml` | SealedSecret for the GitHub OAuth client secret |
+| `templates/clusterrolebinding-github.yaml` | Grants `cluster-admin` to `github.clusterAdminUser` |
 
 ## Rotating the GitHub client secret
 
