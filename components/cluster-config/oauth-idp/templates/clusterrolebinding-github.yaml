@@ -1,0 +1,34 @@
+{{- if .Values.github.clusterAdminUser }}
+# Cluster-admin grant for the GitHub user above.
+# Add more bindings (one per user) by appending entries below or copying this
+# YAML and renaming. Or use a Group instead — `oc adm groups new` creates
+# Groups and `oc adm groups add-users` populates them, then bind cluster-admin
+# to the Group.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: github-{{ .Values.github.clusterAdminUser | lower }}-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: {{ .Values.github.clusterAdminUser | quote }}
+{{- end }}
+{{- if .Values.htpasswd.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: htpasswd-{{ .Values.htpasswd.username | lower }}-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: {{ .Values.htpasswd.username | quote }}
+{{- end }}

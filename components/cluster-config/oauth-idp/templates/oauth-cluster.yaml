@@ -1,0 +1,39 @@
+# OAuth/cluster is a singleton OpenShift CR — by adopting it via this chart,
+# Argo becomes the source of truth. Anything previously configured in the
+# OAuth/cluster object that's NOT represented here gets wiped on first sync.
+# A bare cluster has identityProviders empty (only kubeadmin works), which is
+# exactly what this chart preserves except for the additions below.
+#
+# kubeadmin remains usable regardless of identityProviders contents — it's a
+# built-in account, not gated by this CR.
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+{{- if .Values.github.clientID }}
+    - name: github
+      mappingMethod: claim
+      type: GitHub
+      github:
+        clientID: {{ .Values.github.clientID | quote }}
+        clientSecret:
+          name: github-oauth-client-secret
+{{- with .Values.github.organizations }}
+        organizations:
+{{- toYaml . | nindent 10 }}
+{{- end }}
+{{- with .Values.github.teams }}
+        teams:
+{{- toYaml . | nindent 10 }}
+{{- end }}
+{{- end }}
+{{- if .Values.htpasswd.enabled }}
+    - name: htpasswd
+      mappingMethod: claim
+      type: HTPasswd
+      htpasswd:
+        fileData:
+          name: htpasswd-secret
+{{- end }}

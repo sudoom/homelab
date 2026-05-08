@@ -1,0 +1,4 @@
+apiVersion: v2
+name: oauth-idp
+description: OAuth/cluster identity providers (GitHub + optional htpasswd break-glass) and cluster-admin RBAC
+version: 0.1.0
