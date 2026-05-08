@@ -1667,3 +1667,41 @@ Future work this characterization unlocks:
 - A second OSD per node would more meaningfully improve random-write IOPS than network changes.
 - The CephFS plan from `CLAUDE.md` (separate NVMe-class and HDD-class pools) doesn't change any of these numbers — RBD vs CephFS use the same OSD path.
 
+### 2026-05-08 — correction: the storage swap did *not* fix the Loki 504
+
+The original logging-stack TODO (and the README entry, and casual remarks in this draft) carried the hypothesis that the Loki querier↔index-gateway gRPC `DeadlineExceeded` errors were "the index-gateway TSDB shipper blocking on slow Ceph reads — resolves with the PM9A1 swap." That was wrong. The day after the full migration to 3+0 PM9A1, queries against `Loki (infrastructure)` were still returning 504, and the querier log still showed:
+
+```
+caller=pool.go:250 index-store=tsdb-2024-01-01 msg="removing index gateway failing healthcheck"
+addr=dns:///logging-loki-index-gateway-grpc.openshift-logging.svc.cluster.local:9095
+reason="rpc error: code = DeadlineExceeded desc = context deadline exceeded"
+```
+
+A connectivity sweep from inside the querier pod isolated the actual failure mode:
+
+| target | result | time |
+|---|---|---:|
+| `logging-loki-index-gateway-grpc.openshift-logging.svc.cluster.local:9095` (FQDN) | OK | **6003 ms** |
+| `logging-loki-index-gateway-grpc:9095` (short) | OK | 0.3 ms |
+| `10.129.0.16:9095` (pod IP, IG-1) | OK | 0.0 ms |
+| `10.130.0.11:9095` (pod IP, IG-0) | OK | 0.4 ms |
+
+TCP connect to the FQDN succeeds eventually but takes **6 seconds** because of the same `okd.sudops.pl`-in-search-list problem already documented in `blog-loki-logging-draft.md`. Pod resolv.conf:
+
+```
+search openshift-logging.svc.cluster.local svc.cluster.local cluster.local okd.sudops.pl
+options ndots:5
+```
+
+The FQDN has 4 dots (less than `ndots:5`), so glibc tries the search list first. The fourth permutation, `<FQDN>.okd.sudops.pl`, goes to pi-hole / upstream and stalls for ~5 s. Eventually glibc gives up on search and tries the FQDN as-is, which resolves instantly.
+
+For the gRPC client this is fatal: the default dial deadline is 5 s. Every connection attempt hits the search-list timeout before falling through to the working resolution, the gRPC `dns://` resolver evicts the gateway from the pool with `DeadlineExceeded`, and the cycle repeats forever. The query never gets to the index-gateway because the gateway gets *evicted before the client uses it*.
+
+Storage was never relevant to this problem. Two lessons:
+
+1. **A "performance hypothesis" without a controlled test isn't a hypothesis.** I noted in this draft that "the cluster shouldn't be slow enough to break index-gateway gRPC anymore," but the diagnosis chained that into "PNYs are causing the 504" without ever instrumenting actual storage latency from the index-gateway pod. A simple `oc -n openshift-logging exec ... -- python3 -c "import socket; ..."` would have shown 6-second TCP connects on day one and made the DNS issue obvious.
+
+2. **`okd.sudops.pl` in the search list keeps showing up as the actual root cause.** The pi-hole "Top Permitted Domains" anomaly that prompted the original `Drop okd.sudops.pl from the node-side DNS search list` TODO was a *symptom*; this Loki 504 is the *consequence*. Any homelab cluster that uses its ingress domain as `cluster_baseDomain` and does *not* exclude that domain from `dns-search` is at risk of this exact bug. Promoting that TODO from `Queued — platform plumbing` to `In flight` (2026-05-08).
+
+The Loki TODO is updated to point at the search-list cleanup as the actual fix; the PNY and `1x.pico` hypotheses are explicitly listed as wrong.
+
