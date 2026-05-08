@@ -119,7 +119,6 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 
 ### Queued — operators / catalog
 - [ ] **NMState operator: upstream PR for `okderators` ImageStream bug** — context in `nmstate-imagestream-bug.md`. Today we use `community-operators` as a workaround.
-- [ ] **Cloudflare API token → sealed-secrets** — currently created manually. Convert to a sealed-secret committed via the cert-manager component chart so token rotation is a re-seal+commit instead of an out-of-band kubectl. Decided against ESO+Bitwarden for now: sealed-secrets is already deployed and sufficient at this scale; ESO is overkill until there are many more credentials to centralize.
 - [ ] **OADP (OpenShift API for Data Protection, OKDerator)** — Velero-based PV + Kubernetes-resource backups to S3. Backs up app PVCs (CNPG dumps + WAL once that's wired, Loki chunks once that's running, future apps like Immich). Blocked on the same `CephObjectStore` rollout as the logging stack; install both operators in the same wave-1 batch and have OADP ready to take backups once the bucket exists.
 
 ### Queued — platform expansion

@@ -1,9 +1,22 @@
 email: "submenu.prow-1o@icloud.com"
 cloudflare:
-  # Secret must be created manually until ESO + Bitwarden is in place:
-  # oc create secret generic cloudflare-api-token \
-  #   -n cert-manager \
-  #   --from-literal=api-token=<your-cloudflare-api-token>
+  # The cloudflare-api-token Secret is provisioned via the SealedSecret in
+  # templates/sealed-cloudflare-api-token.yaml — Argo applies the sealed
+  # blob, the sealed-secrets controller in the cluster decrypts it to a
+  # regular Secret named below, and cert-manager's DNS-01 issuer reads it.
+  #
+  # To rotate the token: regenerate at Cloudflare, then re-seal locally
+  # (kubeseal must run against the live sealed-secrets controller in this
+  # cluster, since the public key is per-controller):
+  #
+  #   oc -n cert-manager create secret generic cloudflare-api-token \
+  #     --from-literal=api-token='<new-token>' \
+  #     --dry-run=client -o yaml | \
+  #   kubeseal --controller-namespace sealed-secrets --format yaml \
+  #     > components/cluster-config/cert-manager-config/templates/sealed-cloudflare-api-token.yaml
+  #
+  # Commit the new sealed blob; Argo applies it and sealed-secrets rolls
+  # the underlying Secret in place.
   secretName: cloudflare-api-token
   secretKey: api-token
 
