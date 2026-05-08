@@ -92,7 +92,7 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - **3 OSDs total**, one per node, each on a single NVMe device. Failure domain is `host` (the failure-domain labels are `fd-a/fd-b/fd-c`, one per node).
 - **No drain headroom.** Any rolling change to OSDs (rebuild, encrypt-at-rest, redeploy) goes through a degraded window — there is no fourth node to absorb the missing OSD. Plan accordingly: schedule during quiet IO, never run two OSD-impacting changes at once, never propose `oc cordon node{4,5,6}` without an explicit ask.
 - **Mons:** 3-of-3, one per node. Same topology constraint applies.
-- **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication. Multus migration drafted in `blog-multus-ceph-migration-draft.md` but **not pursued for throughput** — Mikrotik traffic data showed the bottleneck is media, not switch.
+- **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication. Multus migration drafted in `blog/blog-multus-ceph-migration-draft.md` but **not pursued for throughput** — Mikrotik traffic data showed the bottleneck is media, not switch.
 
 ### Hardware migration in flight (PNY → PM9A1)
 
@@ -132,7 +132,7 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 Storage is the most load-bearing, hardest-to-roll-back part of this cluster. **Every storage action must be captured in a blog draft — no judgement call, no "is this big enough to write up."** This is stricter than the general "Blog notes" rule below: storage doesn't get the "non-trivial" qualifier.
 
 - **Scope:** any change to `components/storage/`, any `ceph` / `rbd` / `rados` command beyond pure read-only inspection, any pool/CRUSH/StorageClass/CephFilesystem edit, any OSD operation, any hardware swap, any CSI / SealedSecret change touching storage credentials.
-- **Drafts:** prefer to extend the existing topical draft (`blog-rook-ceph-draft.md`, `blog-multus-ceph-migration-draft.md`) over creating a new one. Create a new draft only when the topic is genuinely new (e.g. CephFS rollout when it lands).
+- **Drafts:** prefer to extend the existing topical draft (`blog/blog-rook-ceph-draft.md`, `blog/blog-multus-ceph-migration-draft.md`) over creating a new one. Create a new draft only when the topic is genuinely new (e.g. CephFS rollout when it lands).
 - **What to capture:** the exact `ceph -s` / `ceph osd pool ls detail` / `rbd trash ls` output that drove the decision, the exact mutation command, the post-state output, and the *why*. Storage debugging six months later relies on this — paraphrase doesn't survive.
 - **No exceptions for "small" actions.** A `ceph mgr fail` to refresh orchestrator inventory is small but it's still a mutation on the storage layer; write it up. Future-you will thank current-you when an unrelated symptom turns out to be the same root cause.
 
@@ -209,13 +209,22 @@ Claude should refuse these actions and explain why briefly:
 - Cite OKD, Helm, ArgoCD, or cert-manager docs by version when version-specific behavior matters.
 - Prefer a short correct answer with one follow-up question over a long answer that guessed at my intent.
 
+## MCP servers
+
+`.mcp.json` declares two project-scoped MCP servers. They auto-launch via `npx -y` when Claude Code starts in this repo.
+
+- **`kubernetes`** (`mcp-server-kubernetes`) — structured `kubectl_get` / `kubectl_describe` / `kubectl_logs` / `kubectl_explain` / `kubectl_diff` tools that talk to whatever cluster is in `~/.kube/config` (i.e. the OKD cluster after `oc login`). Prefer these over shelling out to `oc` for read-only inspection — fewer permission prompts (allowlist already covers `kubectl_*` reads), and the model gets structured JSON instead of parsing terminal output.
+- **`github`** (`@modelcontextprotocol/server-github`) — read-only access to the `sudoom/homelab` repo and any other GitHub repo (good for cross-referencing upstream Rook / cert-manager / loki-operator issues). Requires `GITHUB_PERSONAL_ACCESS_TOKEN` exported in the shell before `claude` launches; minimum scope `public_repo` + `read:org`. Allowlisted: `mcp__github__get_*`, `mcp__github__list_*`, `mcp__github__search_*`. Mutations (`create_*`, `update_*`, `delete_*`, `merge_*`, `push_*`) are NOT allowlisted — they'll prompt; never approve them without an explicit user request.
+
+For mutations against the cluster (apply/delete/patch/scale, etc.), still go through the user — `kubectl_apply` and friends from the kubernetes MCP are denied by the same guardrails as `oc apply` in plain Bash.
+
 ## Session hygiene
 
 - Before the context window is compacted, run `/export` to preserve the full conversation.
 - When diagnosing a live issue, paste real `oc` / `argocd` output into chat rather than describing it — diagnoses from raw output are much better than from paraphrase.
 - **At session start and immediately after a context compaction**, re-read the markdown files that carry working state, in this order — don't rely on the post-compaction summary alone:
   1. `CLAUDE.md` (this file) — rules may have tightened since the snapshot.
-  2. Any `blog-*-draft.md` files at the repo root that are relevant to the work in flight — these are the chronological notes for what was tried, what worked, and what's still open.
+  2. Any `blog/blog-*-draft.md` files relevant to the work in flight — these are the chronological notes for what was tried, what worked, and what's still open.
   3. The TODO list at the bottom of `README.md` — confirm what's still queued vs. shipped.
   4. Auto-memory `MEMORY.md` (loaded automatically) plus the linked memory files — re-skim before assuming a remembered fact still holds.
 
@@ -225,7 +234,7 @@ Claude should refuse these actions and explain why briefly:
 
 Every session that diagnoses an issue, changes infrastructure, or runs a non-trivial benchmark should be captured in a blog-style draft at the repo root. These drafts are the working memory for future write-ups.
 
-- **File naming:** `blog-<topic>-draft.md` at the repo root (e.g. `blog-rook-ceph-draft.md`, `blog-cert-manager-draft.md`). One file per topic, appended over time.
+- **File naming:** `blog/blog-<topic>-draft.md` (e.g. `blog/blog-rook-ceph-draft.md`, `blog/blog-cert-manager-draft.md`). One file per topic, appended over time.
 - **If a relevant draft exists:** update it. Add new sections rather than rewriting old ones, so the chronology survives.
 - **If no relevant draft exists:** create one. Lead with a one-paragraph framing, then the technical content.
 - **What to capture:**
