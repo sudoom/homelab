@@ -238,6 +238,25 @@ For mutations against the cluster (apply/delete/patch/scale, etc.), still go thr
 
   Compaction summaries are lossy by design; the markdown is the source of truth.
 
+## Ending a session ("call it")
+
+When the user says **"call it"**, **"call it for the night"**, **"wrap up"**, **"end of session"**, or anything semantically equivalent, treat it as a trigger to do a final pass *before* the goodbye summary — don't just summarize and stop. Two things, in order:
+
+1. **Doublecheck docs for drift from today's work.**
+   - `README.md` TODO: every shipped item removed; every newly-discovered item added; every still-queued item refreshed (rationale, blockers, status) if today changed it.
+   - `CLAUDE.md`: any subsystem that today's work made load-bearing or whose constraints changed should be reflected here. Today's stack-shape changes belong here, not buried in the blog.
+   - Per-chart `README.md` files for any chart touched: commands, paths, file tables match `git ls-files` reality.
+   - Blog drafts: the relevant `blog/blog-*-draft.md` has a section covering today's work; "to be filled in once X reconciles" placeholders are filled in with actual observed state.
+   - Run a targeted grep for the kinds of staleness today's commits would create — phrases like `blocked on <thing-that-just-shipped>`, `<thing> is queued`, old resource names, old field names.
+2. **Clean up the repo.**
+   - Stale comments in code / templates / values files (e.g. `# TODO ...` that's now done, `# old: ...` markers, debug commentary).
+   - Unused `values.yaml` keys that no template references; dead Helm template branches behind `if` conditions that can never be true given current values.
+   - Temporary experiment files / one-off scripts / dump artifacts left in the repo root or `tests/` that shouldn't be checked in long-term — propose deletion with rationale, don't silently delete.
+   - Unused imports, dead-letter Kustomize patches, etc.
+   - Use `git status --short` + `git ls-files --others --exclude-standard` to check for tracked-but-orphaned and untracked files.
+
+Both passes are *additional* commits on top of whatever the session shipped. End with a one-paragraph session ledger (commits + final state) — that part stays as-is.
+
 ## Blog notes — keep them current
 
 Every session that diagnoses an issue, changes infrastructure, or runs a non-trivial benchmark should be captured in a blog-style draft at the repo root. These drafts are the working memory for future write-ups.
