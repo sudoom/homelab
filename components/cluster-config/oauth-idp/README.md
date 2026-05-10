@@ -50,8 +50,15 @@ github:
   organizations:
     - sudoom                      # already set
   teams: []                       # or ["sudoom/admins"] to restrict
-  clusterAdminUser: "<your-github-username>"
+  clusterAdminUsers:
+    - "<your-github-username>"    # add more users here as the team grows
 ```
+
+Each entry in `clusterAdminUsers` is added to an OpenShift `Group` named
+`cluster-admins`, which is bound to the `cluster-admin` ClusterRole. The
+same Group name matches the `g, cluster-admins, role:admin` rule the
+OpenShift GitOps operator pre-bakes into `argocd-rbac-cm`, so listed users
+also get admin access to the Argo UI on next login — no Argo CR surgery.
 
 ### 4. Validate the chart locally before turning it on
 
@@ -119,7 +126,8 @@ saved offline).
 |---|---|
 | `templates/oauth-cluster.yaml` | Owns the `OAuth/cluster` singleton; renders the GitHub identityProvider when `github.clientID` is set |
 | `templates/sealed-github-oauth-client-secret.yaml` | SealedSecret for the GitHub OAuth client secret |
-| `templates/clusterrolebinding-github.yaml` | Grants `cluster-admin` to `github.clusterAdminUser` |
+| `templates/group-cluster-admins.yaml` | OpenShift `Group/cluster-admins` populated from `github.clusterAdminUsers` — drives both K8s RBAC (via the CRB below) and Argo UI RBAC (via the operator-baked `g, cluster-admins, role:admin` rule) |
+| `templates/clusterrolebinding-github.yaml` | Binds `Group/cluster-admins` to the `cluster-admin` ClusterRole |
 
 ## Rotating the GitHub client secret
 

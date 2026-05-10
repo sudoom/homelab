@@ -14,10 +14,17 @@ github:
   # Format: ["<org>/<team-slug>"]. Empty = any member of an org above.
   teams: []
 
-  # GitHub username (case-sensitive) that gets cluster-admin once login works.
-  # The ClusterRoleBinding template grants cluster-admin to this user.
-  # Add more users by editing templates/clusterrolebinding-github.yaml.
-  clusterAdminUser: "sudoom"
+  # GitHub usernames (case-sensitive, must match the OpenShift User name —
+  # OpenShift uses the GitHub login as-is by default thanks to mappingMethod:
+  # claim) that get cluster-admin once login works.
+  #
+  # These are placed in an OpenShift Group named `cluster-admins`, which is
+  # then bound to the cluster-admin ClusterRole. The same Group name matches
+  # the existing `g, cluster-admins, role:admin` rule in argocd-rbac-cm, so
+  # listed users get admin access to the Argo UI as well — without having to
+  # patch the ArgoCD CR's RBAC policy.
+  clusterAdminUsers:
+    - "sudoom"
 
 # Break-glass: kubeadmin remains the built-in fallback (not gated by
 # OAuth.spec.identityProviders), so no additional htpasswd IdP is configured.

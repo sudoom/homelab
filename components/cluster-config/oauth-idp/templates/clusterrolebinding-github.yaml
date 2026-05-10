@@ -1,19 +1,18 @@
-{{- if .Values.github.clusterAdminUser }}
-# Cluster-admin grant for the GitHub user above.
-# Add more bindings (one per user) by appending entries below or copying this
-# YAML and renaming. Or use a Group instead — `oc adm groups new` creates
-# Groups and `oc adm groups add-users` populates them, then bind cluster-admin
-# to the Group.
+{{- if .Values.github.clusterAdminUsers }}
+# Cluster-admin grant for the GitHub-authenticated users above, via the
+# `cluster-admins` Group rendered in group-cluster-admins.yaml. Group-bound
+# (rather than per-User) so adding a user is a one-line edit in values.yaml,
+# and so the same Group can drive Argo's group-keyed RBAC.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: github-{{ .Values.github.clusterAdminUser | lower }}-cluster-admin
+  name: github-cluster-admins
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cluster-admin
 subjects:
-  - kind: User
+  - kind: Group
     apiGroup: rbac.authorization.k8s.io
-    name: {{ .Values.github.clusterAdminUser | quote }}
+    name: cluster-admins
 {{- end }}

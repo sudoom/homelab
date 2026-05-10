@@ -1,0 +1,16 @@
+{{- with .Values.github.clusterAdminUsers }}
+# OpenShift Group `cluster-admins` — listed users get cluster-admin via the
+# ClusterRoleBinding rendered in clusterrolebinding-github.yaml, *and*
+# admin access to Argo's UI via the existing `g, cluster-admins, role:admin`
+# rule baked into argocd-rbac-cm by the OpenShift GitOps operator.
+#
+# Dex (with openShiftOAuth: true) emits the OpenShift User's groups in the
+# JWT it hands to Argo; once a user lands in this Group, Argo's group-keyed
+# RBAC matches them on next login.
+apiVersion: user.openshift.io/v1
+kind: Group
+metadata:
+  name: cluster-admins
+users:
+{{- toYaml . | nindent 2 }}
+{{- end }}

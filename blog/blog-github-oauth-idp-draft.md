@@ -37,13 +37,16 @@ github:
   organizations:
     - sudoom-homelab
   teams: []
-  clusterAdminUser: "sudoom"
+  clusterAdminUsers:
+    - "sudoom"
 ```
 
 `organizations` is required for security — without it any GitHub user with a
 valid token can authenticate. `teams` is optional and not used here.
-`clusterAdminUser` drives a `ClusterRoleBinding` granting cluster-admin to
-that exact GitHub username (case-sensitive).
+`clusterAdminUsers` populates an OpenShift `Group` named `cluster-admins`
+and a single Group-bound `ClusterRoleBinding` to `cluster-admin` — see the
+"Argo UI RBAC gap" section below for why the indirection through a Group
+matters.
 
 The client secret lands in `templates/sealed-github-oauth-client-secret.yaml`
 via the standard kubeseal flow:
@@ -149,8 +152,9 @@ needed.
 |---|---|
 | `templates/oauth-cluster.yaml` | Owns the singleton `OAuth/cluster`; renders the GitHub identityProvider |
 | `templates/sealed-github-oauth-client-secret.yaml` | SealedSecret for the OAuth client secret in `openshift-config` |
-| `templates/clusterrolebinding-github.yaml` | Grants `cluster-admin` to `github.clusterAdminUser` |
-| `values.yaml` | `clientID`, `organizations`, `teams`, `clusterAdminUser` |
+| `templates/group-cluster-admins.yaml` | OpenShift `Group/cluster-admins` populated from `github.clusterAdminUsers` |
+| `templates/clusterrolebinding-github.yaml` | Binds `Group/cluster-admins` → `cluster-admin` ClusterRole |
+| `values.yaml` | `clientID`, `organizations`, `teams`, `clusterAdminUsers` |
 | `README.md` | Step-by-step runbook, including rotation instructions |
 
 ## Rotation runbook (for future me)
@@ -170,6 +174,119 @@ When the GitHub OAuth client secret expires or needs rotation:
    underlying Secret, oauth-openshift picks it up on next read (no restart
    strictly needed, but bouncing `oc -n openshift-authentication delete pod -l app=oauth-openshift`
    forces an immediate refresh).
+
+## Update 2026-05-10: the Argo UI RBAC gap
+
+Two days after the IdP shipped, attempting to log into Argo via the OpenShift
+button (Dex `openShiftOAuth: true`) revealed the missed half of the work:
+auth worked, but the user landed in a "no apps visible, no actions allowed"
+view. `oc whoami` was happy, `oc auth can-i '*' '*' --all-namespaces` printed
+`yes` — so the K8s side was fine. Argo's UI was the regression.
+
+### Why it happened
+
+`argocd-rbac-cm` (operator-managed; lives at `openshift-gitops/argocd-rbac-cm`)
+ships with this default policy from the OpenShift GitOps operator:
+
+```
+g, system:cluster-admins, role:admin
+g, cluster-admins, role:admin
+policy.default: ""
+scopes: '[groups]'
+```
+
+The first rule is a virtual group OpenShift only assigns to `kube:admin`,
+not to users with cluster-admin via a regular ClusterRoleBinding. The second
+rule keys on a real OpenShift `Group` named `cluster-admins` — but no such
+Group existed on this cluster. `policy.default: ""` denies everything else.
+
+When `sudoom` logged in, Dex emitted a JWT carrying the OpenShift User's
+`groups` claim. `oc get user sudoom -o yaml` showed the smoking gun:
+
+```yaml
+apiVersion: user.openshift.io/v1
+fullName: Vadzim Dziadziulia
+groups: null            # ← nothing
+identities:
+  - github:32463123
+kind: User
+name: sudoom
+```
+
+`groups: null`. The `cluster-admin` ClusterRoleBinding the IdP chart shipped
+was bound to `User: sudoom` directly, which was the right answer for K8s
+RBAC but invisible to Argo's group-keyed policy. Argo got `groups: []` from
+Dex, matched neither admin rule, fell through to `policy.default`, and
+silently denied everything.
+
+This is the textbook "two RBAC layers, one configured, one forgotten"
+mistake. K8s RBAC was complete on day 1; Argo RBAC was untouched.
+
+### The fix
+
+Three options surfaced:
+
+1. **Patch `argocd-rbac-cm` directly with `g, sudoom, role:admin`.** Simplest
+   on paper, but `argocd-rbac-cm` is owned by the operator-managed `ArgoCD`
+   CR, so the patch has to land on the CR's `spec.rbac.policy` field — which
+   means GitOps-adopting a CR that the operator already created. Doable with
+   ServerSideApply, but it's architectural surface for a one-line config.
+2. **Loosen `policy.default` to `role:admin`.** Authenticated → admin. Defen-
+   sible here because the GitHub IdP already gates auth to the
+   `sudoom-homelab` org, but it's the most permissive option and any future
+   "give a non-admin a read-only login" need would force a redesign.
+3. **Add an OpenShift `Group/cluster-admins` containing the configured
+   users.** Reuses the `g, cluster-admins, role:admin` rule already in
+   `argocd-rbac-cm` — no Argo-CR surgery, the IdP chart stays self-contained,
+   and adding a user is a one-line edit in `values.yaml`.
+
+Picked option 3 — it's small, GitOps-clean, and turns out to align with
+exactly what the operator's default policy was assuming. Concretely:
+
+- `values.yaml`: rename `clusterAdminUser: "sudoom"` to a list:
+  `clusterAdminUsers: ["sudoom"]`.
+- New template `templates/group-cluster-admins.yaml` rendering an OpenShift
+  `Group/cluster-admins` with `users: <list>`.
+- Update the existing `templates/clusterrolebinding-github.yaml` to bind
+  `Group/cluster-admins` → `cluster-admin` (instead of `User: sudoom`),
+  renaming the CRB to `github-cluster-admins` to reflect the new shape.
+
+The CRB rename is technically a delete-then-create transition — there's a
+sub-second window during sync where neither the old User-bound CRB nor the
+new Group-bound CRB exists. Acceptable here because (a) the kubeadmin
+break-glass remains active, (b) tokens already issued to `sudoom` are
+authenticated independent of CRB state — only authz fails during the gap,
+and only for the milliseconds Argo takes to apply the new CRB after pruning
+the old one.
+
+### Rendered diff
+
+`oc diff` showed three deltas:
+
+```
++ Group/cluster-admins                        users: [sudoom]
++ ClusterRoleBinding/github-cluster-admins    subjects: Group cluster-admins → cluster-admin
+- ClusterRoleBinding/github-sudoom-cluster-admin   (pruned by Argo on sync)
+```
+
+(Plus two cosmetic `argocd.argoproj.io/tracking-id` re-annotations on the
+already-tracked `OAuth/cluster` and `SealedSecret`. Argo re-adds them on
+sync.)
+
+### Lesson
+
+Whenever a chart configures *authentication* into a stack with its own
+*authorization* layer, do the second half. For OpenShift GitOps in
+particular: the operator's default policy is the cheat sheet — it tells
+you exactly which groups it expects to see (`cluster-admins`), and shipping
+that Group via the IdP chart is cheaper than fighting the operator-managed
+ConfigMap.
+
+If a future cluster needs more granular roles (e.g. a `developers` Group
+with `role:readonly`), the same pattern extends: list the groups in
+`values.yaml`, render the matching `Group` resources, ensure the
+operator-managed `argocd-rbac-cm` rules cover them or extend
+`spec.rbac.policy` on the ArgoCD CR.
 
 ## What I'd do differently
 
