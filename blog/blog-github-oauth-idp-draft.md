@@ -273,6 +273,49 @@ the old one.
 already-tracked `OAuth/cluster` and `SealedSecret`. Argo re-adds them on
 sync.)
 
+### Verification: User.groups vs computed groups
+
+A near-miss after sync. `oc get user sudoom -o yaml` still showed
+`groups: null` — the static User.groups field is the snapshot from the
+last login. I worried for a moment that Dex would emit `groups: []`
+regardless of the new `Group/cluster-admins` because the User CR didn't
+reflect it.
+
+The truth is better. OpenShift exposes a *computed* group endpoint at
+`/apis/user.openshift.io/v1/users/~` that merges User.groups with
+membership in any `Group` listing the user. Querying it as `sudoom`:
+
+```
+$ oc get --raw '/apis/user.openshift.io/v1/users/~' | jq '{name,groups,identities}'
+{
+  "name": null,
+  "groups": [
+    "cluster-admins",
+    "system:authenticated",
+    "system:authenticated:oauth"
+  ],
+  "identities": ["github:32463123"]
+}
+```
+
+`cluster-admins` shows up dynamically — the User CR's static field stays
+null, but the live endpoint Dex actually uses returns the merged set.
+This means the Group-only fix is sufficient: no `oc adm groups add-users`
+bootstrap, no User CR mutation, no re-login at the OpenShift layer.
+
+### Confirmed
+
+After Argo synced (`oauth-idp` app on `d0b43ca`, `Synced/Healthy`),
+opening Argo's UI in an incognito window → **Log in via OpenShift** →
+GitHub authorize → landed in Argo with all Applications visible, sync /
+refresh / hard-refresh enabled. The fix took on first login.
+
+One caveat captured in the chart README: **existing browser sessions
+held stale JWTs** issued before `Group/cluster-admins` existed. Argo
+doesn't re-evaluate group membership until a fresh token is issued, so
+old sessions need a logout + login (or a private window) once. Same
+applies after any rebuild that recreates the Group.
+
 ### Lesson
 
 Whenever a chart configures *authentication* into a stack with its own

@@ -105,6 +105,25 @@ oc whoami
 oc auth can-i '*' '*' --all-namespaces   # should print "yes"
 ```
 
+Then log into the Argo UI:
+
+```
+https://openshift-gitops-server-openshift-gitops.apps.okd.sudops.pl/
+```
+
+Click **Log in via OpenShift** → GitHub → authorize → land in Argo. You
+should see all Applications and have full admin (sync / refresh / hard-refresh
+buttons enabled). Membership in `Group/cluster-admins` propagates dynamically
+via OpenShift's `/apis/user.openshift.io/v1/users/~` endpoint, which Dex
+queries when building Argo's JWT — no User-CR mutation or re-login at the
+OpenShift layer is needed.
+
+**If you had an Argo browser session open before this chart shipped**, log
+out + back in once. The pre-existing JWT was issued before `Group/cluster-admins`
+existed and is stale; Argo won't re-evaluate group membership until you get
+a fresh token. Same caveat applies after a cluster rebuild: clear cookies
+or use a private window for the first login.
+
 ### 7. Optional: disable kubeadmin
 
 `kubeadmin` is intentionally still active even after IdPs are configured —
