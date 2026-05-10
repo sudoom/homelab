@@ -142,3 +142,61 @@ PG-count delta: ~32 (metadata) + ~32 (data) = +64 PGs cluster-wide, going from 1
 - **OADP adoption** — independent of Loki, same wave-1 Subscription pattern, plus a `DataProtectionApplication` CR at wave 5 referencing a separate user/bucket. Wait until logs are landing before we worry about backups.
 - **HDD migration** — when bulk drives land, single-line PR: `dataPool.deviceClass: nvme` → `hdd`. Watch the rebalance complete. Capture before/after Loki query latency for the write-up; expect modestly higher write latency on HDD but that's intended (logs are cold-ish).
 - **PG-count adjustment** — if log volume drives the data pool past comfortable use of 32 PGs (the autoscaler-empty bug means we can't trust auto-grow), bump `pg_num` manually via toolbox. Same pattern used to fix `nvme-replicated`.
+
+## Update 2026-05-10: floor data pool at pg_num_min=32
+
+A health-check 9 days post-deploy turned up the predictable autoscaler-empty bite. `ceph-objectstore.rgw.buckets.data` was sitting at `pg_num=1` despite holding 33 GiB / 53.76k Loki chunks — every RGW write funnelling through one PG → one primary OSD. `read_balance_score` of `3.00` (worst possible: all replicas on one OSD).
+
+Same root cause as the `nvme-replicated` 1→128 fix: with `ceph osd pool autoscale-status` returning `[]` on this Squid 19.2.3 cluster, no auto-grow ever fires. Fix is the same shape — explicit floor.
+
+**Chart change** (commit `32b2e64`):
+
+```yaml
+dataPool:
+  failureDomain: host
+  deviceClass: nvme
+  replicated:
+    size: 3
+  parameters:
+    pg_num_min: "32"
+```
+
+Argo synced via webhook in seconds. Rook saw the spec change (`generation 3 → 4`, `observedGeneration` followed) and tried to apply it:
+
+```
+I | cephclient: setting pool property "pg_num_min" to "32" on pool "ceph-objectstore.rgw.buckets.data"
+E | cephclient: failed to set property "pg_num_min" ... Error EINVAL: specified pg_num_min 32 > pg_num 1
+```
+
+Ceph rejects `pg_num_min > pg_num`. The chart-only path is the chicken-and-egg loop: `pg_num` stays at 1 because the autoscaler is broken, `pg_num_min` can't be raised because it'd exceed `pg_num`. Rook applies the parameters but doesn't bump `pg_num` to satisfy them.
+
+**Manual unstick via toolbox:**
+
+```
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph osd pool set ceph-objectstore.rgw.buckets.data pg_num 32
+set pool 10 pg_num to 32
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph osd pool set ceph-objectstore.rgw.buckets.data pgp_num 32
+set pool 10 pgp_num to 32
+```
+
+PGs split immediately — one iteration of `1.818% pgs not active` while peering, then everything back to `active+clean` within ~20s. Cluster total PGs: 189 → 220 (+31 as predicted).
+
+Then directly set the floor (same effect as waiting for Rook's next reconcile, but immediate):
+
+```
+$ ceph osd pool set ceph-objectstore.rgw.buckets.data pg_num_min 32
+set pool 10 pg_num_min to 32
+```
+
+**Final state:**
+
+```
+pool 10 'ceph-objectstore.rgw.buckets.data' replicated size 3 min_size 2
+  pg_num 32 pgp_num 32 ... pg_num_min 32 ... read_balance_score 1.22
+```
+
+`read_balance_score 1.22` (down from 3.00) — replicas now properly spread across OSDs. `HEALTH_OK`, 220 PGs all `active+clean`, no SLOW_OPS during the split. PG-per-OSD ~73 (was 63), still well below the warning threshold.
+
+**Lesson for future RGW pools / new pool types:** Rook's `parameters.pg_num_min` is a passive constraint, not an autoscale trigger. On clusters where the autoscaler is healthy, the chart-only path is sufficient — Rook/Ceph will grow `pg_num` toward `pg_num_min`. On clusters where it isn't (us, Squid 19.2.3), expect to do a one-time toolbox `pg_num` bump to bootstrap. The chart's `pg_num_min` then enforces the floor going forward, so this isn't a recurring chore — only a first-fill artefact.
