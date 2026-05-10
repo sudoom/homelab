@@ -775,7 +775,7 @@ In rough order of impact-per-effort:
 2. **`pg_num_min: "32"` on the pool** — follow-up. The autoscaler is bailing out for reasons I haven't fully traced, so force the floor explicitly. Setting `pg_num_min` is a documented Rook parameter that gets passed straight to `ceph osd pool set`. This skips the autoscaler entirely and gets us to ~32 PGs in one reconcile.
 3. **Multus migration for CSI** — add `NetworkAttachmentDefinition` resources for public/cluster, flip `network.provider: multus`, do another rolling daemon restart. Cleaner architecture (removes the `public_network` workaround), but per the switch data it's no longer expected to lift throughput — the 1G link wasn't actually the constraint.
 3. **CephFS storage class** for ReadWriteMany workloads.
-4. **S3-compatible object storage** via CephObjectStore for backups.
+4. **S3-compatible object storage** via CephObjectStore — shipped 2026-05-01 (see `blog-ceph-object-store-draft.md`); Loki adopted it as its chunk store at the same time.
 5. **Alerting rules** for OSD down, PG degraded, and nearfull warnings.
 6. **Encryption at rest** for the OSD volumes.
 

@@ -91,14 +91,40 @@ $ helm template ... | oc diff -f -
                               <- only the new CephObjectStore + Route, no drift
 ```
 
-Post-deploy verification (to fill in once Rook reconciles):
+Post-deploy verification (captured 9 days post-rollout, with Loki actively writing):
 
-- `oc get cephobjectstore -n rook-ceph ceph-objectstore` reaches `PHASE: Ready`.
-- `oc get pool -A | grep ceph-objectstore` shows the two created pools (`*.rgw.meta.root` family + the data pool).
-- `oc get pod -n rook-ceph -l app=rook-ceph-rgw` shows one running RGW pod.
-- `oc get svc -n rook-ceph rook-ceph-rgw-ceph-objectstore` exposes port 80.
-- `curl -sv https://s3.apps.okd.sudops.pl/` returns the RGW XML "anonymous" listing response (HTTP 200 with an empty `<ListAllMyBucketsResult>`-style body) — confirms TLS termination + Service routing + RGW liveness.
-- `ceph -s` shows new pools but pgs still `active+clean` (no rebalance — it's empty).
+```
+$ oc get cephobjectstore -n rook-ceph
+NAME               PHASE   ENDPOINT                                                 AGE
+ceph-objectstore   Ready   http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80   9d
+
+$ oc get pod -n rook-ceph -l app=rook-ceph-rgw
+NAME                                                READY   STATUS    RESTARTS   AGE
+rook-ceph-rgw-ceph-objectstore-a-6d5f7d86f6-8rvp6   1/1     Running   0          2d1h
+
+$ oc get svc -n rook-ceph rook-ceph-rgw-ceph-objectstore
+NAME                             TYPE        CLUSTER-IP       PORT(S)   AGE
+rook-ceph-rgw-ceph-objectstore   ClusterIP   172.30.160.121   80/TCP    9d
+
+$ oc get route -n rook-ceph ceph-objectstore-s3
+NAME                  HOST/PORT                 SERVICES                         TERMINATION
+ceph-objectstore-s3   s3.apps.okd.sudops.pl     rook-ceph-rgw-ceph-objectstore   edge/Redirect
+```
+
+Pool layout from `ceph df` after Loki adoption (data pool actively used; metadata family stays light):
+
+```
+ceph-objectstore.rgw.control          0 B    8 objs
+ceph-objectstore.rgw.meta             2.4 KiB    11 objs
+ceph-objectstore.rgw.log              81 KiB    373 objs
+ceph-objectstore.rgw.buckets.index    9.5 MiB    11 objs
+ceph-objectstore.rgw.buckets.non-ec   0 B
+ceph-objectstore.rgw.otp              0 B
+ceph-objectstore.rgw.buckets.data     33 GiB / 100 GiB raw   53.76k objs   ← Loki chunks
+.rgw.root                             6.9 KiB    22 objs
+```
+
+`ceph -s` is clean: 13 pools, 189 PGs (up from 129 pre-rollout — +60 PGs as predicted), all `active+clean`. Cluster `HEALTH_OK`, well below the `mon_max_pg_per_osd` warning threshold.
 
 ## Impact on the degraded window: none
 

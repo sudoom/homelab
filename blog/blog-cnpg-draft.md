@@ -112,7 +112,7 @@ spec:
     initdb:
       database: immich
       owner: immich
-  # backup: ... (deferred until CephObjectStore exists)
+  # backup: ... (wire barmanObjectStore at first-cluster time — see below)
 ```
 
 CNPG creates the StatefulSet, generates the user/admin Secrets, and exposes `<name>-rw` (primary) / `<name>-ro` (replicas) Services. The app references `<name>-app` for the application credentials.
@@ -129,13 +129,11 @@ So: `instances: 1` per cluster, lean on Ceph for durability. The trade-off is RT
 
 If a workload turns up where 30–60s of downtime per pod kill is too much, that specific Cluster gets `instances: 2` and CNPG will run a synchronous standby. Not a global decision.
 
-## Backup story: PVC-only first, S3 later
+## Backup story: barmanObjectStore against the in-cluster RGW
 
-CNPG's killer feature is the WAL archiving + base backup story to S3-compatible storage with PITR. We don't have S3 yet — `CephObjectStore` is queued and HDD-blocked.
+CNPG's killer feature is WAL archiving + base backup to S3-compatible storage with PITR. The `CephObjectStore` shipped 2026-05-01 (see `blog-ceph-object-store-draft.md`), so the first CNPG `Cluster` can wire `barmanObjectStore` directly — no `pg_dump`-to-PVC interim needed.
 
-Interim plan: `pg_dump` + retention via a CronJob that lands dumps on a Ceph PVC. Restore = `pg_restore` from the dump volume. No PITR, no operator-level backup CR, but recoverable.
-
-Once `CephObjectStore` lands:
+Pattern for the first cluster:
 
 ```yaml
 spec:
@@ -151,7 +149,7 @@ spec:
     retentionPolicy: "30d"
 ```
 
-Adds WAL streaming + scheduled base backups + PITR. That's the target end state.
+The S3 keys ride in a `CephObjectStoreUser` (one per cluster, scoped to its own bucket prefix), then a small ObjectBucketClaim → SealedSecret pipeline lands the access keys in the cluster's namespace. Same pattern Loki uses; reuse the existing secret-translator approach in `components/cluster-config/logging-stack/`.
 
 ## Grafana dashboard
 
@@ -212,6 +210,6 @@ Not a CNPG problem; it's the recurring pi-hole rate-limit issue documented in `b
 ## Open follow-ups
 
 - **First app onboarding (Immich)**: queued behind CephFS + PNY swap. The CNPG operator is already a noun; Immich just declares against it.
-- **Backup target**: blocked on `CephObjectStore` (HDD-dependent). Until then, per-cluster `pg_dump` CronJobs on PVC.
+- **Backup target**: `CephObjectStore` is live (shipped 2026-05-01). First `Cluster` ships with `barmanObjectStore` pointing at a per-cluster bucket on the existing RGW; no PVC-dump interim.
 - **Operator metrics scraping**: not done. Low priority; revisit if reconcile latency or error rates ever need investigating.
 - **Cluster sizing defaults**: keep `instances: 1` as the default for all apps; bump only the specific Cluster where 30–60s of downtime per pod kill matters.
