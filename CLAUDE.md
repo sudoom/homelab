@@ -101,9 +101,19 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 
 ### Pools and pg_num
 
-- Primary pool: `nvme-replicated` (`size=3`, `min_size=2`, CRUSH rule on `device_class=nvme`, `bulk: true`). Backs the only StorageClass today (`ceph-nvme-block`, RBD provisioner).
-- **Target `pg_num` is 128** for `nvme-replicated`: 100 PGs/OSD × 3 OSDs / replication 3 = 100 → next pow2 = 128. Use `pg_num_min: 128` in the BlockPool to enforce — the autoscaler is **not** applying the `bulk` hint correctly (sits at 32 because data utilization is ~4% and `ceph osd pool autoscale-status` returns `[]`; root cause likely a Squid 19.2.3 quirk, tracked as an open TODO).
+- Primary pool: `nvme-replicated` (`size=3`, `min_size=2`, CRUSH rule on `device_class=nvme`, `bulk: true`). Backs the only block StorageClass today (`ceph-nvme-block`, RBD provisioner).
+- **Target `pg_num` is 128** for `nvme-replicated`: 100 PGs/OSD × 3 OSDs / replication 3 = 100 → next pow2 = 128. Use `pg_num_min: 128` in the BlockPool to enforce — the autoscaler is **not** applying the `bulk` hint correctly (`ceph osd pool autoscale-status` returns `[]`; root cause likely a Squid 19.2.3 quirk, tracked as an open TODO). Same quirk hit the RGW data pool on 2026-05-10; same fix shape.
 - When proposing pool changes: floor with `pg_num_min`, don't disable autoscale. Don't suggest manual `pg_num` bumps unless paired with the autoscaler diagnosis.
+- **`pg_num_min` chicken-and-egg:** Ceph rejects `pg_num_min > current pg_num` with `EINVAL`. Pure-GitOps `pg_num_min` enforcement requires a **one-time toolbox bump** of `pg_num` to bootstrap each new pool past 1 (`ceph osd pool set <pool> pg_num <floor>; ceph osd pool set <pool> pgp_num <floor>`); the chart's `pg_num_min` then enforces the floor going forward. Confirmed twice (`nvme-replicated` originally, RGW data pool 2026-05-10). Capture the exact toolbox commands in the topical blog draft.
+
+### Object storage (RGW)
+
+- **`CephObjectStore` `ceph-objectstore` shipped 2026-05-01** — chart at `components/storage/ceph-object-store/`, single RGW gateway (`gateway.instances: 1`), HTTP-only on port 80; TLS terminated at the OpenShift Route `s3.apps.okd.sudops.pl`. **In-cluster S3 clients should use the in-cluster Service `rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80`** — bypasses Route + edge TLS, faster + more reliable.
+- **Pool tiers:** `metadataPool.deviceClass: nvme` permanently; `dataPool.deviceClass: nvme` interim, flips to `hdd` when bulk drives land (single-line CRUSH-rule change in `values.yaml`; rebalance is automatic, RGW endpoint + bucket names + client config unchanged).
+- **`pg_num_min: "32"` floored on the data pool** (commit `32b2e64`); metadata pool stays at the chart-default 8 PGs (it's tiny and not on the hot path).
+- **Active consumers:** Loki (33+ GiB / 53k+ chunks in `ceph-objectstore.rgw.buckets.data` as of 2026-05-10). OADP queued; CNPG `barmanObjectStore` will land on the same RGW with a separate `CephObjectStoreUser` per cluster.
+- **Bucket-creds plumbing precedent:** Loki's `logging-stack` chart uses an `ObjectBucketClaim` + secret-translator pattern to land RGW credentials in a SealedSecret-shaped Secret. Reuse that pattern for OADP / CNPG / future S3 consumers — don't ship `CephObjectStoreUser` + manual SealedSecret.
+- **Toolbox gotcha:** `radosgw-admin user list` / `bucket list` from the toolbox default to the orphan `default` zone (a leftover from RGW first-bring-up; cosmetic-cleanup TODO). Real data lives in the `ceph-objectstore` zone — pass `--rgw-realm=ceph-objectstore --rgw-zonegroup=ceph-objectstore --rgw-zone=ceph-objectstore` to inspect it, or just look at `ceph-objectstore.rgw.*` pools in `ceph df`.
 
 ### CephFS plan (not yet shipped)
 
