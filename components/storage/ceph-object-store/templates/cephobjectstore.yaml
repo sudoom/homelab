@@ -10,12 +10,24 @@ spec:
     replicated:
       size: {{ .Values.objectStore.metadataPool.replicated.size }}
       requireSafeReplicaSize: true
+    {{- with .Values.objectStore.metadataPool.parameters }}
+    parameters:
+      {{- range $k, $v := . }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+    {{- end }}
   dataPool:
     failureDomain: {{ .Values.objectStore.dataPool.failureDomain }}
     deviceClass: {{ .Values.objectStore.dataPool.deviceClass }}
     replicated:
       size: {{ .Values.objectStore.dataPool.replicated.size }}
       requireSafeReplicaSize: true
+    {{- with .Values.objectStore.dataPool.parameters }}
+    parameters:
+      {{- range $k, $v := . }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+    {{- end }}
   preservePoolsOnDelete: {{ .Values.objectStore.preservePoolsOnDelete }}
   gateway:
     port: {{ .Values.objectStore.gateway.port }}

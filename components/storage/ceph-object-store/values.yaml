@@ -17,6 +17,13 @@ objectStore:
     deviceClass: nvme
     replicated:
       size: 3
+    # Floor PGs at 32. The pg_autoscaler returns [] on this cluster (Squid
+    # 19.2.3 quirk), so without an explicit floor the data pool sits at
+    # pg_num=1 — every RGW write funnels through one primary OSD. Same
+    # workaround we use on nvme-replicated. Bump if log volume grows past
+    # what 32 PGs comfortably holds.
+    parameters:
+      pg_num_min: "32"
 
   # Preserve the pools+CR if the chart is uninstalled. RGW data isn't
   # a thing you accidentally delete — same posture as ceph-cluster.
