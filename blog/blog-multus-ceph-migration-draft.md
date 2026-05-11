@@ -339,6 +339,26 @@ NetworkManager has to re-apply the storage interface's connection profile per no
 
 Per the 3-OSD-no-drain rule, schedule during quiet IO. There's no fourth node to absorb a hiccup.
 
+### Side-finding during Phase 2 apply: nmstate-handler SCC regression
+
+When the shim NNCP commit hit master, ArgoCD reconciled, and `nmstate-nncp` advanced to gen=2 on **node5 and node6 only**. node4's NNCP went to `Available=False, reason=NoMatchingNode`.
+
+Diagnosis: the `nmstate-handler` DaemonSet in the `nmstate` namespace reports `DESIRED 3 / CURRENT 2 / READY 2` — node4 has no handler pod, and the DS controller has been retrying for ~4 hours (55 attempts pre-discovery) with:
+
+```
+Error creating: pods "nmstate-handler-" is forbidden:
+  unable to validate against any security context constraint
+  ... provider "privileged": Forbidden: not usable by user or serviceaccount
+```
+
+`nmstate-handler` ClusterRole has rules for the operator's CRs, pods/nodes/namespaces, secrets/configmaps, webhook configs, and TokenReview / SubjectAccessReview — but **no rule granting `use` on `securitycontextconstraints/privileged`**. The currently-running pods on node5/node6 (15 days old) were admitted when the SCC binding evidently still existed; SCC admission only runs at pod creation, so they're grandfathered. When node4's pod was lost at some point, the recreate path failed because the SA can no longer obtain the privileged SCC.
+
+This is **pre-existing**, not introduced by today's commits. The Multus migration just surfaced it: under the old gen=1 NNCP nothing was changing on disk, so the DS retry-loop was invisible. The gen=2 apply needs the handler to actually be running on node4 — exposing the broken state.
+
+Fix shipped as part of this session: add a `ClusterRoleBinding` in `components/operators/nmstate/templates/handler-scc-binding.yaml` that grants the auto-generated `system:openshift:scc:privileged` ClusterRole to `system:serviceaccount:nmstate:nmstate-handler`. Sync wave 1, alongside the Subscription. The community-operators CSV doesn't ship this binding, so we ship it as a static manifest in the operator chart. Standalone follow-up: upstream the missing binding to the community-operators CSV (separate work — see README TODO).
+
+After the binding lands, the DS controller's next retry should succeed, the handler pod schedules on node4, the gen=2 NNCP reconciles, and the storage backnet flips through the same brief blip that node5 and node6 already absorbed.
+
 ### Rendered diff summary (pre-commit)
 
 `oc diff` after `helm template` on both charts:

@@ -1,0 +1,29 @@
+# Grants the nmstate-handler ServiceAccount permission to use the
+# 'privileged' SCC. The handler DaemonSet requires hostNetwork +
+# hostPath volumes + privileged containers to manipulate NetworkManager
+# on each node. The upstream community-operators CSV does not ship this
+# binding; without it, the SCC admission plugin rejects new handler pods
+# with "provider 'privileged': Forbidden: not usable by user or
+# serviceaccount" (observed when node4's handler pod was lost and the
+# DS controller could not recreate it).
+#
+# Note: the handler runs in the 'nmstate' namespace (separate from the
+# operator's 'openshift-nmstate' namespace). The binding references the
+# handler SA in that namespace; Kubernetes accepts ClusterRoleBindings
+# whose subjects don't exist yet, so this can apply before the operator
+# creates the SA.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nmstate-handler-scc-privileged
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - kind: ServiceAccount
+    name: nmstate-handler
+    namespace: nmstate

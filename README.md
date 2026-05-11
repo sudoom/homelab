@@ -119,6 +119,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 
 ### Queued — operators / catalog
 - [ ] **NMState operator: upstream PR for `okderators` ImageStream bug** — context in `nmstate-imagestream-bug.md`. Today we use `community-operators` as a workaround.
+- [ ] **Upstream the nmstate-handler `privileged` SCC binding to community-operators CSV** — the operator's `nmstate-handler` ClusterRole has no `use` grant on the `privileged` SCC. New handler pods can't be admitted (existing pods are grandfathered via 15-day-old SCC validation). Surfaced 2026-05-11 when node4's handler was lost and the DS controller failed 55 retries. Working around it locally with a static `ClusterRoleBinding` in `components/operators/nmstate/templates/handler-scc-binding.yaml`. Proper fix is in the CSV's `clusterPermissions`; file upstream when there's slack.
 - [ ] **OADP (OpenShift API for Data Protection, OKDerator)** — Velero-based PV + Kubernetes-resource backups to S3. Backs up app PVCs and Kubernetes manifests; target is a dedicated bucket on the existing `ceph-objectstore` RGW (separate `CephObjectStoreUser` from Loki). Subscription at wave 1, `DataProtectionApplication` CR at wave 5 referencing a SealedSecret with the user's S3 keys. Loki's bucket-creation pattern (OBC + secret-translator) is the precedent to follow.
 
 ### Queued — platform expansion
