@@ -1667,6 +1667,27 @@ Future work this characterization unlocks:
 - A second OSD per node would more meaningfully improve random-write IOPS than network changes.
 - The CephFS plan from `CLAUDE.md` (separate NVMe-class and HDD-class pools) doesn't change any of these numbers — RBD vs CephFS use the same OSD path.
 
+### Pre-Multus baseline (2026-05-11)
+
+Re-ran the same `tests/ceph-storage-test-libaio.yaml` profile right before flipping the CephCluster to `provider: multus`, so the post-flip comparison has a fresh t=0. Four days of normal cluster traffic since 2026-05-07 — Loki has shipped ~33 GiB to RGW, RGW data pool was unstuck from `pg_num=1` to `pg_num=32` on 2026-05-10, and the macvlan NADs + per-node `ceph-shim` are live but not yet wired into the CephCluster (so the data path is unchanged from the 05-07 run).
+
+| Workload                                 | 2026-05-07     | **2026-05-11 pre-Multus** | Δ        | Multus projection |
+|------------------------------------------|----------------|---------------------------|---------:|-------------------|
+| `dd` 30 GB seqwrite (buffered, pre-fill) | 273 MB/s       | **177 MB/s**              | −35 %    | ~700 MB/s (frontnet → 10 GbE backnet) |
+| 1M QD8 seqwrite (libaio direct=1)        | 173 MB/s (164 IOPS) | **150 MB/s (143 IOPS)** | −13 %  | ~700 MB/s |
+| 1M QD8 seqread  (libaio direct=1)        | 177 MB/s (168 IOPS) | **180 MB/s (172 IOPS)** | +2 %  | ~700 MB/s (similar uplift) |
+| 4k QD32 randwrite (libaio direct=1)      | 8.5 MB/s (2,078 IOPS) | **7.3 MB/s (1,834 IOPS)** | −12 % | unchanged (replication-bound floor) |
+| 4k QD32 randread  (libaio direct=1)      | 156 MB/s (40 k IOPS) | **160 MB/s (39.1 k IOPS)** | flat | ~100 k IOPS |
+
+Reads are flat-to-slightly-up — read path has no replication serialization, so as long as the cluster is healthy the floor doesn't drift. Writes are all 10–35 % lower than the 05-07 reading, with the buffered-`dd` and QD8 seqwrite seeing the biggest dip. Two non-exclusive explanations:
+
+1. **Frontnet contention from Loki + RGW.** The Mikrotik traffic graph during the previous benchmark showed the 1 GbE router at ~60 % utilization on `dd`; the same router now also carries Loki's S3 ingest path (Loki → RGW HTTPS Route) plus normal cluster chatter. Eating 10–15 % of frontnet bandwidth would land us exactly where the dip is.
+2. **Run-to-run variance.** A single 60 s seq run on a 3-OSD cluster has visible jitter depending on which OSD's `kv_commit_lat` spikes during the window. The 05-07 numbers were single runs too; a triple-replicate measurement would tighten the comparison.
+
+Either way: this is the locked-in *pre-Multus* row in the comparison table. The post-Multus run (after the CephCluster `provider: multus` flip + mon/OSD roll) will go here as a third column. The two-of-four numbers expected to move materially are the QD8 seqwrite and the QD32 randread — both currently throttled by the 1 GbE client link. QD32 randwrite and QD1 fsync are *not* projected to move (per-op replication latency is the floor, network is <5 % of it).
+
+Bench artifacts: `tests/ceph-storage-test-libaio.yaml` (PVC `ceph-test-pvc-libaio`, pod `ceph-test-libaio`, 50 Gi on `ceph-nvme-block`). Cleaned up immediately after the four fio profiles completed — the test image lands in the RBD trash and gets purged on the scheduled cadence.
+
 ### 2026-05-08 — correction: the storage swap did *not* fix the Loki 504
 
 The original logging-stack TODO (and the README entry, and casual remarks in this draft) carried the hypothesis that the Loki querier↔index-gateway gRPC `DeadlineExceeded` errors were "the index-gateway TSDB shipper blocking on slow Ceph reads — resolves with the PM9A1 swap." That was wrong. The day after the full migration to 3+0 PM9A1, queries against `Loki (infrastructure)` were still returning 504, and the querier log still showed:
