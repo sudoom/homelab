@@ -181,12 +181,66 @@ NADs left in place after rollback are harmless — nothing references them.
 - Encryption-on-the-wire (Ceph msgr2 secure mode) — orthogonal, can layer on after Multus.
 - IPv6 — not enabled on the storage VLAN, no plan to add.
 
-## What I still need to verify before starting
+## Pre-flight — 2026-05-11
 
-1. `oc get pods -n openshift-multus` — Multus operational.
-2. `oc get pods -A | grep -i whereabouts` — whereabouts installed, or pick an alternative.
-3. `ip link show enp1s0f0np0` on each node — confirm MTU; match in NAD config.
-4. Read latest Rook docs for v1.19 specifically on the multus selector syntax (the field name has shifted between versions).
-5. Confirm OKD 4.20 + OVN-Kubernetes + Multus + macvlan combination is supported (no SDN-specific gotcha).
+All five gates from the previous section came up green; capturing the exact observations here.
 
-Once those are answered: build the NAD chart, smoke-test, then plan the maintenance window for the daemon roll.
+**1. Multus operational.** `oc get pods -n openshift-multus -o wide`:
+
+```
+multus-{4pgpr,gndgl,nxxpf}                       1/1 Running   node{4,5,6} (host-net)
+multus-additional-cni-plugins-{hl8dx,n8tvh,qpffp} 1/1 Running   node{4,5,6}
+multus-admission-controller-756dbc4cc-{2x76t,6crpr} 2/2 Running
+network-metrics-daemon-{db7r5,rkjfx,s9bvr}       2/2 Running
+```
+
+3-node DaemonSet up, admission controller healthy. The `multus-additional-cni-plugins` DS is what ships the macvlan + whereabouts binaries onto each node on OpenShift — there is no standalone `whereabouts` DaemonSet on OKD; the CNI binary lives under `/var/lib/cni/bin` after the additional-plugins pod runs once.
+
+**2. Whereabouts present.** No DS, but the CRDs are installed (`oc get crd | grep whereabouts`):
+
+```
+ippools.whereabouts.cni.cncf.io                 2026-04-03T11:54:58Z
+nodeslicepools.whereabouts.cni.cncf.io          2026-04-03T11:54:58Z
+overlappingrangeipreservations.whereabouts.cni.cncf.io  2026-04-03T11:54:58Z
+```
+
+Installed at cluster bring-up. `"type": "whereabouts"` in the NAD config will resolve.
+
+**3. MTU.** `oc get nodenetworkstate node4.okd.sudops.pl -o json | jq` showed `enp1s0f0np0` at MTU 1500. NMState NNCP at `components/cluster-config/nmstate-nncp/templates/nncp.yaml` doesn't set MTU explicitly, so all three nodes inherit the NIC default (1500). Macvlan default is also 1500 — no MTU adjustment needed. Jumbo frames on the 10G backnet would be a nice future optimization but it's out of scope for this migration (separate NNCP change, separate risk).
+
+**4. Rook v1.19 selector syntax.** Confirmed against <https://rook.io/docs/rook/v1.19/CRDs/Cluster/network-providers/>:
+
+```yaml
+network:
+  provider: multus
+  selectors:
+    public:  <namespace>/<name>     # e.g. rook-ceph/ceph-public
+    cluster: <namespace>/<name>
+  addressRanges:
+    public:  ["192.168.10.0/24"]
+    cluster: ["192.168.10.0/24"]
+```
+
+Matches the target topology in this draft. Critical prerequisite from the docs: *"No IP address assigned to a node can overlap with any IP address assigned to a pod on the Multus public network"* — the whereabouts `exclude` for `.2/.3/.4` already handles this.
+
+**5. OKD 4.20 + OVN-Kubernetes + Multus + macvlan.** No SDN-specific gotcha: NADs in user/operator namespaces with `type: macvlan` are first-class on OpenShift's Multus stack; the `multus-admission-controller` is what gates them. `network.operator.openshift.io/cluster` does not need an `additionalNetworks` entry for user-namespace NADs.
+
+**Bonus useful nugget:** Rook ships a `rook multus validation` CLI tool that exercises NAD plumbing across all relevant nodes. Plan to run it between Phase 1 (NADs land) and Phase 2 (CephCluster flip) as an extra gate.
+
+## Phase 1 — NAD chart shipped (2026-05-11)
+
+Chart at `components/cluster-config/ceph-network-attachments/`. Two NADs (`ceph-public`, `ceph-cluster`) in `rook-ceph` ns, both macvlan over `enp1s0f0np0`, mode `bridge`, MTU 1500, whereabouts IPAM in `192.168.10.0/24` excluding the host static IPs (.2/.3/.4), allocation range `.100–.199`.
+
+**Important detail: shared `network_name: ceph-storage`.** Both NADs draw from the same logical whereabouts allocation pool. Without this, two NADs sharing a CIDR could each hand out the same IP to a pod from each NAD — collision on the wire. With `network_name` shared, whereabouts dedupes across both NADs. This matters even before we point Rook at the NADs, because OSD pods get both attachments simultaneously.
+
+Wired into `bootstrap/root-app/values.yaml` at `syncWave: "2"` (alongside `nmstate-nncp`, `cert-manager-config`, `oauth-idp`), namespace `rook-ceph` (already exists from the operator install).
+
+Validation gates all green:
+
+- `helm lint`: 1 chart linted, 0 failed.
+- `helm template` renders cleanly, two NADs with identical config except `metadata.name`.
+- `kubeconform -summary`: `2 resources found parsing stdin - Valid: 2, Invalid: 0, Errors: 0, Skipped: 0`.
+- `oc diff -f -` against the live cluster: purely additive, both NADs new (cluster has zero NADs in `rook-ceph` today).
+- `helm template root-app …` shows the new `Application` with `argocd.argoproj.io/sync-wave: "2"`, retry policy + sync options inherited from the defaults.
+
+Phase 2 (CephCluster flip + mon/OSD roll) is a separate session — it's the degraded-window step and wants quiet IO, plus a `rook multus validation` run first.
