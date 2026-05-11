@@ -1,0 +1,39 @@
+# Smoke-test for the Phase 1 NetworkAttachmentDefinitions in rook-ceph.
+# Validates: macvlan attaches over enp1s0f0np0, whereabouts hands out IPs
+# in 192.168.10.100-.199, host static IPs (.2/.3/.4) are excluded, both
+# NADs draw from the shared network_name=ceph-storage pool (no collision),
+# and the secondary interfaces can reach the host storage IPs.
+#
+# Usage:
+#   oc apply -f tests/multus-nad-smoke.yaml
+#   oc wait --for=condition=Ready pod/multus-nad-smoke -n rook-ceph --timeout=60s
+#   oc exec -n rook-ceph multus-nad-smoke -- ip -4 addr show
+#   oc exec -n rook-ceph multus-nad-smoke -- ping -c 3 192.168.10.2
+#   oc exec -n rook-ceph multus-nad-smoke -- ping -c 3 192.168.10.3
+#   oc exec -n rook-ceph multus-nad-smoke -- ping -c 3 192.168.10.4
+#   oc delete -f tests/multus-nad-smoke.yaml
+#
+# Expected: net1 has a 192.168.10.1xx IP, net2 has a *different* 192.168.10.1xx IP,
+# all three node storage IPs are reachable.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: multus-nad-smoke
+  namespace: rook-ceph
+  annotations:
+    k8s.v1.cni.cncf.io/networks: ceph-public,ceph-cluster
+spec:
+  restartPolicy: Never
+  tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/control-plane
+      operator: Exists
+  containers:
+    - name: nettools
+      image: nicolaka/netshoot:latest
+      command: ["/bin/bash", "-c", "sleep 1800"]
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "64Mi"

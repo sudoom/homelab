@@ -244,3 +244,58 @@ Validation gates all green:
 - `helm template root-app …` shows the new `Application` with `argocd.argoproj.io/sync-wave: "2"`, retry policy + sync options inherited from the defaults.
 
 Phase 2 (CephCluster flip + mon/OSD roll) is a separate session — it's the degraded-window step and wants quiet IO, plus a `rook multus validation` run first.
+
+## Smoke test — 2026-05-11 (Phase 1 verification)
+
+Pod manifest at `tests/multus-nad-smoke.yaml`: single pod in `rook-ceph` annotated `k8s.v1.cni.cncf.io/networks: ceph-public,ceph-cluster`, scheduled on `node4`. First run used `quay.io/ceph/ceph:v19.2.3` but that image lacks `ip` / `ping` — swapped to `nicolaka/netshoot` for the actual reachability checks.
+
+### What worked
+
+`network-status` annotation:
+
+```
+ovn-kubernetes  eth0  10.130.0.59
+ceph-public     net1  192.168.10.100  6a:c5:a7:b2:cd:c3
+ceph-cluster    net2  192.168.10.101  c6:19:96:a0:7e:b8
+```
+
+- **Distinct IPs from a shared pool.** `network_name=ceph-storage` dedup is working as designed — without it, both NADs sharing `192.168.10.0/24` could have handed out the same IP.
+- **Distinct MACs** confirm macvlan creates a per-attachment virtual NIC, not just an IP alias.
+- **Routes** look right: `192.168.10.0/24 dev net1 src 192.168.10.100` and `192.168.10.0/24 dev net2 src 192.168.10.101`, plus the default via OVN SDN unchanged.
+- **Cross-host reachability** is line-rate: `ping -I net1 192.168.10.3` → 0.17 ms, `192.168.10.4` → 0.13 ms.
+
+### What broke — Phase 2 blocker
+
+`ping -I net1 192.168.10.2` (pod's own host node4): **Destination Host Unreachable, 100 % loss.**
+
+This is the macvlan **same-host loopback restriction** — well-documented Linux kernel behaviour in bridge mode. When a macvlan pod tries to talk to its own host's primary IP on the same physical NIC, the bridge code drops the frame because the destination MAC equals the source-side master MAC. Pod↔pod (same or different host) works, pod↔other-host works, pod↔own-host does not.
+
+I missed this in the original pre-flight. The smoke test caught it before Phase 2 made it expensive.
+
+**Why this matters for Ceph specifically:** The Rook CSI plugin runs as a host-network DaemonSet and uses the **host kernel's** `rbd` module to map RBD volumes. When the kernel resolves a mon's address and that mon happens to be on the same node as the CSI plugin (in a 3-mon / 3-node topology this is always the case for one of the three mons), the kernel tries pod-IP→host-loopback and gets ENETUNREACH. Result: mounting PVCs intermittently fails depending on which mon the client connects to.
+
+Pod-to-pod replication traffic (OSD↔OSD on different hosts) is unaffected. The block is specifically the kernel-on-host side of the CSI mount path.
+
+### Resolution options
+
+Two known fixes; deferring the decision to a separate session:
+
+**A. Macvlan host-shim per node.** Documented in Rook's network-providers page. Adds a second macvlan sub-interface on the host that lives in the same /24 (or a parallel range), plus a route directing pod-IPs through the shim. Bypasses the kernel's hairpin drop because the shim has a different MAC than the master interface.
+- Implementation: extend `components/cluster-config/nmstate-nncp/templates/nncp.yaml` with a per-node shim interface (e.g. `enp1s0f0np0.shim` macvlan over `enp1s0f0np0`, IP `192.168.10.{20,21,22}/24` or similar). NMState handles the creation declaratively.
+- Pros: stays on macvlan, no NAD config change, isolated to NMState.
+- Cons: extra interface per node, IP allocation discipline (must not clash with whereabouts range).
+
+**B. Switch to ipvlan L2.** Replace `"type": "macvlan"` with `"type": "ipvlan", "mode": "l2"` in both NADs. ipvlan shares the host's MAC and has no hairpin drop — pod-to-own-host works directly.
+- Pros: single-line NAD change, no host-side state, no NMState NNCP edit.
+- Cons: all pod traffic egresses with the host's MAC; switches doing port-security/anti-spoof would block this. Mikrotik on the storage VLAN isn't doing port-security in this lab, so it's a non-issue here.
+- Subtle: ipvlan in L2 mode does not support DHCP (irrelevant — we use whereabouts) and cannot do MAC-based filtering downstream (irrelevant).
+
+**Leaning B.** Less moving parts, less host-side state, less coordination with the NMState chart. The MAC-sharing concern doesn't apply to our environment. Will validate with the same smoke pod after flipping the NADs.
+
+### State of Phase 1 after the smoke test
+
+Phase 1 NADs (macvlan, `network_name=ceph-storage`, range `.100-.199`) are committed and live, but **must be reshaped before Phase 2** — either by flipping to ipvlan or by adding the host shim. The current NADs aren't *wrong*, they just won't carry the CSI mount path correctly. Leaving them in place to keep the chart shape and ArgoCD reconciliation tested while the decision is made.
+
+### Validation pod manifest
+
+Kept at `tests/multus-nad-smoke.yaml` for re-runs after each NAD change. Re-run pattern: `oc apply` → `oc wait Ready` → `ping -I net1` to each storage IP → `oc delete`.
