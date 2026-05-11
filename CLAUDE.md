@@ -92,7 +92,7 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - **3 OSDs total**, one per node, each on a single NVMe device. Failure domain is `host` (the failure-domain labels are `fd-a/fd-b/fd-c`, one per node).
 - **No drain headroom.** Any rolling change to OSDs (rebuild, encrypt-at-rest, redeploy) goes through a degraded window — there is no fourth node to absorb the missing OSD. Plan accordingly: schedule during quiet IO, never run two OSD-impacting changes at once, never propose `oc cordon node{4,5,6}` without an explicit ask.
 - **Mons:** 3-of-3, one per node. Same topology constraint applies.
-- **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication. Multus migration drafted in `blog/blog-multus-ceph-migration-draft.md` but **not pursued for throughput** — Mikrotik traffic data showed the bottleneck is media, not switch.
+- **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication. Multus migration in flight (2026-05-11): NADs + per-node macvlan host-shim (`ceph-shim`, IPs `.16/.17/.18`) shipped, pod range shifted to `192.168.10.128/25` with an explicit `/25 dev ceph-shim` route for the kernel-RBD-client hairpin fix. **CephCluster spec flip + mon/OSD roll still pending** (degraded-window event). Full design + ops history in `blog/blog-multus-ceph-migration-draft.md`. **Don't touch `enp1s0f0np0`, `ceph-shim`, or `192.168.10.0/24` routing without checking that draft first** — the routing setup is load-bearing: `/24 master metric 100`, `/24 shim metric 410`, `/25 dev shim static`. Reordering or simplifying breaks pod↔host reachability.
 
 ### Hardware: 3× Samsung PM9A1 512GB
 
