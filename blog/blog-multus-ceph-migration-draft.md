@@ -374,6 +374,42 @@ Second workaround shipped alongside the SCC binding: `components/operators/nmsta
 
 Lesson for future fresh-pod regressions on this operator: the 15-day-old grandfathered pods are hiding multiple missing bindings. If a third missing permission shows up at the next code path, it's likely from the same lost binding set. Worth doing a wider audit if any more handler pod needs to be recreated.
 
+## Post-shim smoke test — 2026-05-11 (Phase 2 prerequisite validated)
+
+After all three NNCPs reached `gen=2 / TrueSuccessfullyConfigured`, re-ran the smoke pod with the new pod range. Pod scheduled on node4, got `net1=192.168.10.128` (ceph-public) and `net2=192.168.10.129` (ceph-cluster) — first two addresses of the shifted whereabouts range. Same dual-attachment annotation as the prior test.
+
+**Two reachability paths tested**:
+
+1. Pod → other-host primary IP (sanity, was already working):
+   ```
+   ping -I net1 192.168.10.3 from pod
+   → 0.062–0.123 ms, 0% loss
+   ```
+
+2. **Host on `node4` → pod's `net1` (`192.168.10.128`) — the path that previously failed**:
+   ```
+   oc debug node/node4 -- chroot /host ping 192.168.10.128
+   → 0.030–0.055 ms, 0% loss
+   ```
+
+This is the host→pod direction Rook's CSI plugin uses when the kernel `rbd` module on a node talks to a mon pod on that same node. Previously it returned `Destination Host Unreachable` because of the macvlan hairpin drop on the master interface. With the shim in place and the kernel selecting it for the `/25` pod range, the frame egresses with the shim's MAC and macvlan bridges between the two children on the same master. Works as designed.
+
+Route table state on each node (uniform across node4/5/6, modulo the shim IP):
+
+```
+192.168.10.0/24 dev enp1s0f0np0 proto kernel scope link src 192.168.10.2 metric 100
+192.168.10.0/24 dev ceph-shim   proto kernel scope link src 192.168.10.16 metric 410
+192.168.10.128/25 dev ceph-shim proto static scope link
+```
+
+Three routes deliberately:
+
+- `/24 via master, metric 100` — host-to-other-host primary IPs (`.3`, `.4`) keep using the master.
+- `/24 via ceph-shim, metric 410` — the shim's auto-installed connected route; lower preference than master so it doesn't intercept host-to-host traffic.
+- `/25 via ceph-shim, static` — explicit, more specific, wins via longest-prefix-match for any destination in `192.168.10.128–.254` (the pod range).
+
+Phase 2 prerequisites are now fully satisfied. The remaining step is the CephCluster spec flip itself + the mon/OSD roll — that's the actual degraded-window operation and worth scheduling as a dedicated session with a quiet IO window and a `rook multus validation` pre-flight.
+
 ### Rendered diff summary (pre-commit)
 
 `oc diff` after `helm template` on both charts:
