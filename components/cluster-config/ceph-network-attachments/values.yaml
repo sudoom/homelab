@@ -1,0 +1,18 @@
+namespace: rook-ceph
+
+masterInterface: enp1s0f0np0
+mtu: 1500
+
+ipam:
+  range: 192.168.10.0/24
+  rangeStart: 192.168.10.100
+  rangeEnd: 192.168.10.199
+  exclude:
+    - 192.168.10.2/32
+    - 192.168.10.3/32
+    - 192.168.10.4/32
+  networkName: ceph-storage
+
+attachments:
+  - ceph-public
+  - ceph-cluster

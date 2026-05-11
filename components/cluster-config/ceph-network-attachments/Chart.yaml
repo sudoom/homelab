@@ -1,0 +1,5 @@
+apiVersion: v2
+name: ceph-network-attachments
+description: NetworkAttachmentDefinitions for Rook-Ceph Multus migration (storage backnet)
+version: 1.0.0
+type: application
