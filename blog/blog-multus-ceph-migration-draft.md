@@ -299,3 +299,55 @@ Phase 1 NADs (macvlan, `network_name=ceph-storage`, range `.100-.199`) are commi
 ### Validation pod manifest
 
 Kept at `tests/multus-nad-smoke.yaml` for re-runs after each NAD change. Re-run pattern: `oc apply` → `oc wait Ready` → `ping -I net1` to each storage IP → `oc delete`.
+
+## Picking macvlan + host-shim (Option A) over ipvlan L2 (Option B) — 2026-05-11
+
+Fetched the v1.19 network-providers doc end-to-end. The relevant quote, verbatim:
+
+> "CNI type macvlan is highly recommended. It has less CPU and memory overhead compared to traditional Linux bridge configurations."
+
+ipvlan is **not mentioned anywhere** in Rook's network-providers documentation. Not a deprecation, not a "use at your own risk" — it's simply outside Rook's documented and tested path. For a 3-OSD, no-drain-headroom storage layer, going off-doc to save one NMState edit isn't worth it. Going with **Option A: macvlan + per-node host shim**.
+
+Also surfaced from the doc, separately worth flagging:
+
+> "Daemons leveraging Kubernetes service IPs (Monitors, Managers, Rados Gateways) are not listening on the NAD specified in the selectors... There is work in progress to fix this issue."
+
+So the RGW/mgr/mon-via-Service paths continue to ride the OVN SDN even after Phase 2. The seqwrite/random-read throughput projection only applies to RBD direct traffic (OSD ↔ client) and OSD-to-OSD replication. In-cluster S3 clients hitting `rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80` (Loki + future CNPG/OADP) won't see the uplift — RGW frontend listens on a Service IP, not the NAD.
+
+### Shim design
+
+The Rook canonical example uses `/22` for the shim and a wide `/16` route, with the shim and pods in a subnet that doesn't overlap the host's master interface. Our master sits at `192.168.10.{2,3,4}/24` on the same `/24` that pod allocations would live on. Two ways to make this coexist:
+
+1. Move pods to a different subnet (router-side change on the Mikrotik) — too heavy for tonight.
+2. **Split the storage `/24` into two `/25`s.** Master + shim in the lower half (`.0–.127`), pods in the upper half (`.128–.254`). Per-node route `192.168.10.128/25 dev ceph-shim` is more specific than the master's `/24` connected route, so longest-prefix-match unambiguously sends pod traffic through the shim while host-to-host replication keeps using the master.
+
+Going with option 2. No router config change required.
+
+Concrete assignments:
+
+| Node  | Master IP            | Shim IP              | Pod range          |
+|-------|----------------------|----------------------|--------------------|
+| node4 | 192.168.10.2/24      | 192.168.10.16/24     | 192.168.10.128–.254 (shared) |
+| node5 | 192.168.10.3/24      | 192.168.10.17/24     | (whereabouts pool) |
+| node6 | 192.168.10.4/24      | 192.168.10.18/24     | (whereabouts pool) |
+
+Shim is a `mac-vlan` type interface in NMState, parented to `enp1s0f0np0`, mode `bridge`, `promiscuous: true`. Route added in the same NNCP under `routes.config`.
+
+### Applying the NNCP — operational impact
+
+NetworkManager has to re-apply the storage interface's connection profile per node to bring the new macvlan child up. The nmstate operator sequences NNCP applications one node at a time. Expected blip per node: ~1–3 s on the storage backnet while NM reconfigures. OSDs use this interface for replication — expect a few seconds of heartbeat hiccups and possibly a `slow ops` flag, but not a full OSD restart. Total degraded window across three NNCP reconciles: ~5–10 s in three short bursts, not contiguous (each NNCP waits for the previous to settle).
+
+Per the 3-OSD-no-drain rule, schedule during quiet IO. There's no fourth node to absorb a hiccup.
+
+### Rendered diff summary (pre-commit)
+
+`oc diff` after `helm template` on both charts:
+
+- **NNCP** (per node): adds `ceph-shim` mac-vlan interface and the `192.168.10.128/25 dev ceph-shim` route. Master interface config untouched. `generation` bumps 1→2.
+- **NAD** (per attachment): `range_start` `.100→.128`, `range_end` `.199→.254`, `exclude` `[.2,.3,.4]→[]` (host IPs now sit outside the pod range, no exclude needed). `network_name=ceph-storage` and macvlan config unchanged. `generation` bumps 1→2.
+
+Both changes intended to land together so the route exists before any pod could be allocated in the upper `/25`. After commit, smoke-test pattern shifts to:
+
+1. From a host shell on node4 (e.g. `oc debug node/node4`), `ping 192.168.10.128` (a known pod IP) — should succeed via `ceph-shim`. This is the direction Rook's CSI plugin needs (kernel-RBD client → mon pod).
+2. From inside the test pod, `ping -I net1 192.168.10.3/.4` (other-host master IPs) — should still succeed at line rate.
+3. Pod → own-host (`ping -I net1 192.168.10.2`) may still fail with destination-unreachable. That's fine — Rook's CSI client side is always host-network, so the missing direction is HOST→POD, which the shim solves.
