@@ -359,6 +359,21 @@ Fix shipped as part of this session: add a `ClusterRoleBinding` in `components/o
 
 After the binding lands, the DS controller's next retry should succeed, the handler pod schedules on node4, the gen=2 NNCP reconciles, and the storage backnet flips through the same brief blip that node5 and node6 already absorbed.
 
+**Second pre-existing RBAC gap discovered immediately after.** The SCC fix let the new handler pod admit. It then crashed on startup with:
+
+```
+unable to fetch TLS configuration ... apiservers.config.openshift.io
+"cluster" is forbidden: User "system:serviceaccount:nmstate:nmstate-handler"
+cannot get resource "apiservers" in API group "config.openshift.io"
+at the cluster scope
+```
+
+The handler reads the cluster's TLS profile from `apiservers/cluster` at startup. The CSV doesn't grant `get apiservers` to the handler SA either. Existing pods on node5/node6 (15 days old, 20+/36 restarts) survived this code path long enough to enter their watch loop, which doesn't need the permission — so the gap was invisible until a fresh handler pod tried to start.
+
+Second workaround shipped alongside the SCC binding: `components/operators/nmstate/templates/handler-apiserver-rbac.yaml` adds a small ClusterRole granting `get/list/watch apiservers.config.openshift.io` and a ClusterRoleBinding to the handler SA. Same upstreaming note as before — both should land in the community-operators CSV.
+
+Lesson for future fresh-pod regressions on this operator: the 15-day-old grandfathered pods are hiding multiple missing bindings. If a third missing permission shows up at the next code path, it's likely from the same lost binding set. Worth doing a wider audit if any more handler pod needs to be recreated.
+
 ### Rendered diff summary (pre-commit)
 
 `oc diff` after `helm template` on both charts:

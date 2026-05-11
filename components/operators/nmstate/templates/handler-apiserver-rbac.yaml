@@ -1,0 +1,37 @@
+# Grants the nmstate-handler ServiceAccount read access to
+# config.openshift.io/apiservers/cluster. The handler reads the
+# cluster's TLS profile from this object at startup; without the
+# permission, it crashes with:
+#
+#   unable to fetch TLS configuration ... apiservers.config.openshift.io
+#   "cluster" is forbidden
+#
+# Like the SCC binding shipped alongside this manifest, the upstream
+# community-operators CSV doesn't include this rule. Tracked in the
+# README TODO for upstreaming. Pairs with handler-scc-binding.yaml.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nmstate-handler-apiserver-reader
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+  - apiGroups: ["config.openshift.io"]
+    resources: ["apiservers"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nmstate-handler-apiserver-reader
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nmstate-handler-apiserver-reader
+subjects:
+  - kind: ServiceAccount
+    name: nmstate-handler
+    namespace: nmstate
