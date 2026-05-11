@@ -5,12 +5,13 @@ mtu: 1500
 
 ipam:
   range: 192.168.10.0/24
-  rangeStart: 192.168.10.100
-  rangeEnd: 192.168.10.199
-  exclude:
-    - 192.168.10.2/32
-    - 192.168.10.3/32
-    - 192.168.10.4/32
+  # Pods live in the upper /25 (192.168.10.128 – .254). The matching per-node
+  # route 192.168.10.128/25 dev ceph-shim in nmstate-nncp directs host→pod
+  # traffic through the macvlan shim, avoiding the bridge-mode hairpin drop
+  # that breaks pod↔own-host reachability on the master interface.
+  rangeStart: 192.168.10.128
+  rangeEnd: 192.168.10.254
+  exclude: []
   networkName: ceph-storage
 
 attachments:

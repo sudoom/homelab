@@ -27,4 +27,24 @@ spec:
           enabled: false
         ipv6:
           enabled: false
+      - name: {{ $.Values.shimInterface }}
+        type: mac-vlan
+        state: up
+        mac-vlan:
+          base-iface: {{ $.Values.storageInterface }}
+          mode: bridge
+          promiscuous: true
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: {{ .shimIp }}
+              prefix-length: {{ .prefix }}
+        ipv6:
+          enabled: false
+    routes:
+      config:
+        - destination: {{ $.Values.podRangeCidr }}
+          next-hop-interface: {{ $.Values.shimInterface }}
+          table-id: 254
 {{- end }}

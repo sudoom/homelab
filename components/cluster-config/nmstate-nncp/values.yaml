@@ -1,16 +1,29 @@
 storageInterface: enp1s0f0np0
 unusedInterface: enp1s0f1np1
 
+# Macvlan host-shim — required when CephCluster runs with network.provider: multus
+# over macvlan, because the kernel's bridge code drops same-host pod↔host frames.
+# The shim provides a second L2 endpoint on the storage NIC with a different MAC,
+# and an explicit /25 route directs pod-bound traffic through it.
+# Pod range lives in the upper /25 (192.168.10.128/25); shim + host primary IPs
+# stay in the lower /25 so host-to-host replication traffic keeps using the
+# master interface.
+shimInterface: ceph-shim
+podRangeCidr: 192.168.10.128/25
+
 nodes:
   - name: node4
     hostname: node4.okd.sudops.pl
     ip: 192.168.10.2
     prefix: 24
+    shimIp: 192.168.10.16
   - name: node5
     hostname: node5.okd.sudops.pl
     ip: 192.168.10.3
     prefix: 24
+    shimIp: 192.168.10.17
   - name: node6
     hostname: node6.okd.sudops.pl
     ip: 192.168.10.4
     prefix: 24
+    shimIp: 192.168.10.18
