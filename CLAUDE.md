@@ -62,6 +62,7 @@ Pin these when generating manifests or commands — mismatched versions are the 
 - **All-builtin invariant**: `ansible/` playbooks use `ansible.builtin.*` modules only — no `community.general` / `ansible.posix` / etc. Keeps the operator workstation setup to a single `ansible-core` install.
 - Secrets live in `vars/vault.yml` (Ansible Vault encrypted, gitignored). A `vars/vault.yml.example` template is committed alongside.
 - **Vault password is interactive each run** (`--ask-vault-pass`). No `--vault-password-file`, no env-var, no on-disk password file — deliberate. Practical consequence for Claude: **I can't run vault-requiring playbooks** (`playbook.yml`, `upgrade.yml`) on the user's behalf via Bash, because Bash tool calls aren't interactive. The operator runs those manually. Claude *can* run `base-only.yml` (validates SSH + sudo + base role end-to-end without the vault) and `--syntax-check` on anything; that's the scoped subset.
+- **Code-only changes — never propose web UI / manual fixes for `ansible/`-managed boxes.** If a change needs to happen on `dns-master` (or any future Ansible-managed host), it goes through the Ansible role + a playbook re-run. Don't suggest "fix it in the Technitium web UI now" as a quick path — even when it's faster — because the next playbook run won't preserve the manual change unless it's also in the role. If the playbook isn't doing what's expected, debug the role; don't bypass it. Same principle as ArgoCD for the cluster: code is the source of truth.
 
 ## Architecture
 
