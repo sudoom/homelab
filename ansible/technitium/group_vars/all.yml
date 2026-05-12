@@ -34,6 +34,17 @@ technitium_blocked_zones:
   - cluster.local
   - svc.cluster.local.okd.sudops.pl
 
+# ---- Conditional forwarder zones (LAN-local zones the MikroTik serves) ----
+# Pre-cutover, pi-hole forwarded `home.lab` and `homelab.net` to gw.home.lab
+# (192.168.1.1), which had static A records like `kube-cp.homelab.net →
+# 192.168.1.200` (old-cluster API VIP). Technitium does recursive resolution
+# by default, so without these Forwarder zones the LAN's local names hit
+# public Cloudflare and return NXDOMAIN — broke the old cluster's kubelet
+# discovery 2026-05-12 evening.
+technitium_forwarder_zones:
+  - { zone: "homelab.net", forwarder: "192.168.1.1", protocol: "Udp" }
+  - { zone: "home.lab",    forwarder: "192.168.1.1", protocol: "Udp" }
+
 # ---- Rate limiting ----
 # Technitium rate-limits by client subnet (QPM = queries per minute, per-prefix).
 # Pi-hole's per-client REFUSE storm bit node6 in April; technitium's approach

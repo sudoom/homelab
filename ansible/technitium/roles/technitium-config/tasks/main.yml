@@ -163,6 +163,25 @@
     label: "{{ item }}"
   tags: [config, blocked]
 
+# ---- Conditional forwarder zones (delegate LAN-local zones to MikroTik) ----
+- name: Ensure conditional forwarder zones exist
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/create"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item.zone }}"
+      type: Forwarder
+      initializeForwarder: "true"
+      protocol: "{{ item.protocol | default('Udp') }}"
+      forwarder: "{{ item.forwarder }}"
+    status_code: 200
+  loop: "{{ technitium_forwarder_zones }}"
+  loop_control:
+    label: "{{ item.zone }} → {{ item.forwarder }} ({{ item.protocol | default('Udp') }})"
+  tags: [config, forwarders]
+
 # ---- Force-refresh block list cache now -----------------------------------
 - name: Force update of block list cache
   ansible.builtin.uri:
