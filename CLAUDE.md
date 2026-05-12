@@ -129,11 +129,35 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - Need a periodic `rbd trash purge schedule` (use Ceph's built-in scheduler, not a CronJob — it lives in mgr config).
 - Occasionally an image refuses removal with `image has watchers` — usually a stuck CSI nodeplugin attachment; investigate the node, don't force-delete the image.
 
+### Network provider — locked on `host`, do not attempt `multus` migration
+
+The `CephCluster.spec.network.provider` is `host` and **must stay there** until the cluster has drain headroom (4+ OSDs). A 2026-05-12 attempt to follow Rook's documented `host → "" → multus` two-step path failed cleanly and required a manual rollback. The failure mode is reproducible on this topology and is not a one-off; future sessions should not retry the same shape. Full chronology in `blog/blog-multus-ceph-migration-draft.md` (Phase 2 section).
+
+What actually breaks:
+
+1. Rook's admission webhook refuses a direct `host → multus` transition (`network provider must be disabled (reverted to empty string) before a new provider is enabled`). The documented escape is the two-step.
+2. During the intermediate `provider: ""` state, the first-rolled OSD goes onto the pod network while the other two stay on host network. **PG peering hangs indefinitely under that mixed-network shape** — 220/220 PGs stuck `peering`, slow ops climbing monotonically, client I/O blocked. The connectivity exists (OVN passes pod↔host traffic) but msgr2 session establishment between asymmetric-address peers stalls.
+3. Rook's own `ceph osd ok-to-stop` safety check then refuses to roll any OSD because peering is hung — including the one that needs to roll back to host network to fix the situation. **Chicken-and-egg deadlock with no Rook-native escape.**
+4. Bonus snag: the operator updates Deployment shape on a provider change but does **not** clear `public_network` from the Ceph config DB. The first OSD on the new shape then crashloops because it can't find an interface matching the stale CIDR. Has to be cleared manually from the toolbox.
+
+Recovery from that state required `oc patch` directly on the OSD-0 Deployment to set `hostNetwork: true`, bypassing Rook's safety check. That's a direct GitOps-owner-bypassing mutation — only justifiable here because Rook was deadlocked applying its *own* desired state. Don't ever do that to "speed up" a non-stuck reconciliation.
+
+**Rule:** do not change `network.provider` away from `host` on this cluster. If a future session is tempted, this paragraph is the answer. Revisit when a 4th OSD exists or a non-empty-intermediate path is found upstream.
+
+### `CephCluster` SSA gotcha — `managedFields: []` makes field removal sticky
+
+The live `CephCluster/rook-ceph` resource has empty `metadata.managedFields` (it was created via non-SSA apply originally, never migrated). Server-side apply removes fields only for the manager that *owns* them — with no ownership tracked, fields rendered out of the Helm manifest **don't get removed from the live spec** on apply. ArgoCD's `selfHeal` may eventually clear them on a re-establish-ownership cycle, but timing is unpredictable (minutes, not seconds).
+
+Practical implication: when a chart change *removes* a field from the rendered `CephCluster` spec, expect the live spec to keep the old value. `oc diff` will look empty even though the manifest no longer contains the field, which is confusing. The 2026-05-12 Multus attempt hit this with `addressRanges`.
+
+If a future spec change needs guaranteed field removal: either re-establish SSA ownership first (`oc apply --server-side --force-conflicts -f -` on a hand-rendered manifest, once, to make ArgoCD the canonical owner) or do a direct `oc patch --type=json` `op: remove` (after confirming nothing else depends on the field). Plain Helm-template-removal alone is not reliable.
+
 ### When proposing storage changes
 
 - Always state the impact on the degraded window first. "Rolling restart of OSDs" = degraded cluster, not a free operation.
 - For pool/CRUSH changes: `helm template … | oc diff -f -` against the live `CephCluster` / `CephBlockPool` so the deltas are inspected before commit.
 - The toolbox is `oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph …`. Read-only `ceph` commands are fine; Ceph-internal mutations (e.g. `ceph mgr fail`, `ceph orch ...`, `rbd trash purge schedule add`) are different from K8s mutations and may be appropriate — but flag them and confirm before running.
+- **Observability stack is on Ceph-RBD PVCs** (Prometheus TSDB, Grafana, Loki, ArgoCD repo cache). When Ceph I/O hangs, all dashboards go dark — confirmed by the 2026-05-12 incident. Don't rely on Grafana to debug a storage incident; use the toolbox + `oc -n rook-ceph logs/exec` directly. If observability is dark during an incident, that's a *symptom* of the storage problem, not a separate failure to chase.
 
 ### Storage actions are always blog-worthy
 
