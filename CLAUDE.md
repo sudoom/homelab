@@ -42,10 +42,26 @@ Pin these when generating manifests or commands — mismatched versions are the 
 │   ├── operators/           # Wave 1 — OLM Subscriptions (cert-manager, NMState)
 │   ├── cluster-config/      # Wave 2 — ClusterIssuer, Certificates, NNCPs
 │   └── storage/             # Wave 3+ — storage + TLS consumers
+├── ansible/                 # Non-cluster home infra, NOT ArgoCD-managed (see below)
+│   └── technitium/          # Technitium DNS Server (replaces pi-hole; RPi 3B+ on the LAN)
 ├── *-values.yaml            # Helm values for tools installed OUTSIDE the root app
 │                            # (Cilium, Istio, Prometheus, ArgoCD itself, Kiali)
+├── blog/                    # Working notes / draft posts — see "Blog notes" rule below
+├── bugs/                    # Drafted upstream-issue bodies (filing-ready)
+├── tests/                   # Manual-apply test artifacts not yet promoted to a chart
+├── data/                    # Captured benchmark / SMART / log artifacts referenced from blog drafts
 └── CLAUDE.md
 ```
+
+### Non-cluster infrastructure — when to use `ansible/` vs `components/`
+
+- `components/` and `bootstrap/` are for things ArgoCD applies to the OKD cluster. Single source of truth, automated sync, selfHeal, etc.
+- `ansible/` is for things that live **outside the cluster** but still need version-controlled, idempotent configuration — e.g. the home DNS server (`technitium/dns-master` on an RPi 3B+ on the LAN).
+- **Why split this way:** DNS (and similar foundational LAN services) must not be circularly dependent on the OKD cluster being up. If the cluster's storage hangs (2026-05-12 incident), the dashboards go dark — losing DNS at the same time would compound the outage.
+- Each `ansible/<topic>/` directory is a self-contained Ansible playbook: `inventory.yml`, `playbook.yml`, role dirs, and a `README.md` with the bootstrap walkthrough + day-2 flow. Apply manually from a workstation; do not wire into ArgoCD.
+- **All-builtin invariant**: `ansible/` playbooks use `ansible.builtin.*` modules only — no `community.general` / `ansible.posix` / etc. Keeps the operator workstation setup to a single `ansible-core` install.
+- Secrets live in `vars/vault.yml` (Ansible Vault encrypted, gitignored). A `vars/vault.yml.example` template is committed alongside.
+- **Vault password is interactive each run** (`--ask-vault-pass`). No `--vault-password-file`, no env-var, no on-disk password file — deliberate. Practical consequence for Claude: **I can't run vault-requiring playbooks** (`playbook.yml`, `upgrade.yml`) on the user's behalf via Bash, because Bash tool calls aren't interactive. The operator runs those manually. Claude *can* run `base-only.yml` (validates SSH + sudo + base role end-to-end without the vault) and `--syntax-check` on anything; that's the scoped subset.
 
 ## Architecture
 
