@@ -1,0 +1,30 @@
+---
+# technitium DNS server inventory.
+#
+# Primary: RPi 3B+ at 192.168.1.12 (the host currently running pi-hole; we'll
+# rebuild it on a spare SD card as `technitium`, swap SD cards, keep the IP).
+# Secondary: RPi Zero 2W, not yet procured — placeholder commented out below.
+#
+# Bootstrap order: stand up primary on a spare SD card with a temporary IP
+# first, validate via this playbook, then physically swap SD cards on the
+# RPi 3B+ to take over 192.168.1.12.
+
+all:
+  hosts:
+    technitium-primary:
+      ansible_host: 192.168.1.12          # final IP — change to temp IP during bootstrap
+      ansible_user: pi                    # default RPi OS Lite user; revisit if a different user is created
+      ansible_python_interpreter: /usr/bin/python3
+      technitium_role: primary
+
+    # technitium-secondary:
+    #   ansible_host: 192.168.1.13
+    #   ansible_user: pi
+    #   ansible_python_interpreter: /usr/bin/python3
+    #   technitium_role: secondary
+    #   technitium_primary_host: 192.168.1.12
+
+  vars:
+    # become for system-level tasks (apt, systemd, /etc/dns/*)
+    ansible_become: true
+    ansible_become_method: sudo

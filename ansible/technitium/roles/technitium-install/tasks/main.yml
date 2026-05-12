@@ -1,0 +1,54 @@
+---
+# Install (or upgrade) Technitium DNS Server via the upstream installer.
+# Idempotent: skips download/install when the systemd unit `dns.service` is
+# already present and enabled. For an upgrade pass, set
+# `technitium_force_reinstall: true` on the CLI to re-run the installer.
+
+- name: Check if Technitium is already installed (systemd unit present)
+  ansible.builtin.stat:
+    path: /etc/systemd/system/dns.service
+  register: technitium_unit
+
+- name: Download + install Technitium DNS Server
+  when: not technitium_unit.stat.exists or (technitium_force_reinstall | default(false))
+  block:
+    - name: Fetch the official Technitium installer
+      ansible.builtin.get_url:
+        url: "{{ technitium_install_url }}"
+        dest: /tmp/technitium-install.sh
+        mode: "0755"
+        timeout: 60
+
+    - name: Run the Technitium installer
+      ansible.builtin.command:
+        cmd: bash /tmp/technitium-install.sh
+      register: technitium_install_run
+      changed_when: "'Technitium DNS Server is installed successfully' in technitium_install_run.stdout
+                     or 'Technitium DNS Server is updated successfully' in technitium_install_run.stdout"
+
+    - name: Remove the installer script
+      ansible.builtin.file:
+        path: /tmp/technitium-install.sh
+        state: absent
+  tags: [install]
+
+- name: Ensure dns.service is enabled and started
+  ansible.builtin.systemd:
+    name: dns.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: [install]
+
+- name: Verify Technitium HTTP API is listening
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ technitium_http_port }}"
+    timeout: 30
+  tags: [install, verify]
+
+# Note: on a brand-new install Technitium asks the operator to set the admin
+# password on first UI visit (http://<host>:5380). After that, store the same
+# password in vars/vault.yml so the technitium-config role can authenticate.
+# This task does NOT set the password — it expects the operator to have done
+# it manually for the initial bootstrap.

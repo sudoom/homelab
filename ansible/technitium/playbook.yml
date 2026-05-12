@@ -1,0 +1,28 @@
+---
+# Top-level playbook for the technitium DNS server.
+#
+# Usage from a workstation with this repo cloned:
+#   cd ansible/technitium
+#   ansible-playbook -i inventory.yml playbook.yml \
+#     --ask-vault-pass \
+#     --limit technitium-primary
+#
+# (or --limit technitium-secondary when that lands)
+#
+# Roles run in order; each is idempotent — re-running converges state.
+
+- name: Configure technitium DNS server
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars_files:
+    # Vault-encrypted file containing technitium_admin_password and any other secrets.
+    # Create with: ansible-vault create vars/vault.yml
+    - vars/vault.yml
+
+  roles:
+    - role: base                  # OS hardening: unattended-upgrades, timezone, ssh-key auth, fail2ban
+    - role: technitium-install    # Install (or upgrade in place) Technitium DNS Server
+    - role: technitium-config     # Server settings + zones + blocklists via Technitium HTTP API
+    - role: technitium-cluster    # Primary/secondary replication (only fires when secondary is enabled)

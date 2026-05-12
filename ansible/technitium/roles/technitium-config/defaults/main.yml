@@ -1,0 +1,4 @@
+---
+# Role-level defaults for technitium-config. Most real config comes from
+# group_vars/all.yml — this file exists so the role's defaults dir isn't empty
+# and to capture role-specific overrides as they come up.

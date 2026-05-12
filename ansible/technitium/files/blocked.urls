@@ -1,0 +1,12 @@
+# Block-list URLs — one per line.
+# Lines starting with `#` or blank are ignored.
+#
+# TODO: pull current adlist from the running pi-hole and check it in here:
+#   ssh pi@192.168.1.12 'pihole -a -l'
+# …or…
+#   ssh pi@192.168.1.12 'cat /etc/pihole/adlists.list'
+#
+# Likely starting set (Pi-hole defaults + common community lists). Verify
+# against what the box actually has before committing as truth.
+https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+https://o0.pages.dev/Pro/hosts.txt

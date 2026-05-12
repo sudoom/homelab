@@ -81,6 +81,8 @@ components/
     nfs-csi/               # NFS CSI driver for legacy/external mounts
   apps/
     media/                 # Media stack (sample app)
+ansible/                   # Non-OKD home infra managed by Ansible (outside ArgoCD)
+  technitium/              # Technitium DNS Server (replaces pi-hole) — primary + future secondary
 ```
 
 ## Cluster

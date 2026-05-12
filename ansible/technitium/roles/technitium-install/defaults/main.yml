@@ -1,0 +1,5 @@
+---
+# Toggle: force re-running the upstream installer even if dns.service exists.
+# Use for in-place upgrades:
+#   ansible-playbook ... -e technitium_force_reinstall=true
+technitium_force_reinstall: false

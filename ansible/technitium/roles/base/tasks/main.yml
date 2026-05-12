@@ -1,0 +1,49 @@
+---
+# Base OS hygiene for the technitium box.
+# Keep this minimal — the box's only job is DNS; don't pile on.
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  tags: [base, hostname]
+
+- name: Ensure /etc/hosts has the canonical 127.0.1.1 entry for our hostname
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "127.0.1.1\t{{ inventory_hostname }}"
+    state: present
+  tags: [base, hostname]
+
+- name: Set timezone to Europe/Warsaw
+  community.general.timezone:
+    name: Europe/Warsaw
+  tags: [base, timezone]
+  # If community.general isn't installed: `ansible-galaxy collection install community.general`
+  # Or replace with: ansible.builtin.command: timedatectl set-timezone Europe/Warsaw  (non-idempotent)
+
+- name: Install required packages
+  ansible.builtin.apt:
+    name:
+      - curl                # Technitium installer pulls itself via curl
+      - ca-certificates
+      - python3             # for Ansible itself
+      - python3-requests    # for the uri module's HTTP calls (more robust than urllib)
+      - unattended-upgrades # auto-apply security patches
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [base, packages]
+
+- name: Configure unattended-upgrades for security updates only
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+  tags: [base, packages]
+
+# TODO (when ready): fail2ban for ssh, ssh-key-only auth (PasswordAuthentication no),
+# disable root login, etc. Out of scope for the first scaffold pass.

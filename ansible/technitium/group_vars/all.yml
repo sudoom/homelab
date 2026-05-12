@@ -1,0 +1,50 @@
+---
+# Common variables for both primary and (future) secondary technitium boxes.
+# Sensitive values (admin password, vault secrets) live in vars/vault.yml.
+
+# ---- Technitium runtime ----
+technitium_install_url: "https://download.technitium.com/dns/install.sh"
+technitium_admin_user: admin
+# technitium_admin_password defined in vars/vault.yml (vault-encrypted)
+technitium_api_base: "http://127.0.0.1:5380"   # always call the API on the local box
+
+# Web UI / API port (Technitium default 5380)
+technitium_http_port: 5380
+
+# ---- Authoritative split-horizon zone for okd.sudops.pl ----
+# Records that technitium serves authoritatively to LAN clients.
+# These mirror the on-host CoreDNS templates inside the cluster — same answers,
+# different authoritative server. The cluster's internal DNS path is unchanged.
+okd_zone_name: okd.sudops.pl
+okd_api_vip: 192.168.1.240
+okd_ingress_vip: 192.168.1.241
+okd_nodes:
+  - { name: node4, ip: 192.168.1.7 }
+  - { name: node5, ip: 192.168.1.8 }
+  - { name: node6, ip: 192.168.1.9 }
+
+# ---- Blocked zones (return NXDOMAIN locally, never recurse) ----
+# Carry-over from pi-hole's `local=/.../` dnsmasq directives.
+# `cluster.local` catches any host-side process that tries to resolve a
+# `<svc>.cluster.local` name through the LAN resolver.
+# `svc.cluster.local.okd.sudops.pl` catches the search-suffix-leak shape from
+# cluster pods with ndots:5 (until/unless `tests/mc-nm-strip-okd-search.yaml`
+# lands and removes the search suffix at the source).
+technitium_blocked_zones:
+  - cluster.local
+  - svc.cluster.local.okd.sudops.pl
+
+# ---- Rate limiting ----
+# Pi-hole's default was REFUSING node6 in April. Bump well above the cluster's
+# peak burst (post-restart memberlist re-resolution).
+technitium_rate_limit_per_client_per_minute: 10000
+
+# ---- Recursion + DNSSEC ----
+technitium_recursion_mode: "AllowOnlyForPrivateNetworks"  # not "Allow" — don't be an open resolver
+technitium_dnssec_validation: true
+
+# ---- Block lists ----
+# URLs in files/blocked.urls (one per line). Carry-over from pi-hole + curated.
+# Pull current pi-hole list with `pihole -a -l` or `cat /etc/pihole/adlists.list`
+# and check the result into files/blocked.urls.
+technitium_blocklist_update_hour: 4   # rebuild local blocklist cache at 04:00 daily

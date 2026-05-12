@@ -1,0 +1,37 @@
+---
+# Configure primary/secondary replication.
+#
+# Only fires when the host has a `technitium_role` set in inventory (primary
+# or secondary). Until the RPi Zero 2W secondary exists, this role is a
+# placeholder — running the playbook against just the primary is a no-op here.
+#
+# Technitium supports zone-level replication via its "Secondary" zone type:
+#   - On the primary: nothing special; primary just hosts the authoritative
+#     zone with NOTIFY enabled.
+#   - On the secondary: create a Secondary zone pointing at the primary's IP;
+#     the secondary pulls via AXFR/IXFR and tracks NOTIFY for updates.
+#
+# Skeleton below — wire up when the secondary lands.
+
+- name: Cluster role tasks for primary
+  ansible.builtin.debug:
+    msg: |
+      Primary node — no cluster-specific tasks at this stage.
+      When the secondary lands, this role will:
+        - Enable NOTIFY on the okd.sudops.pl zone, listing the secondary's IP
+        - Optionally configure DNSSEC zone signing here so secondaries inherit
+  when: technitium_role | default('') == 'primary'
+  tags: [cluster]
+
+- name: Cluster role tasks for secondary
+  ansible.builtin.debug:
+    msg: |
+      TODO when secondary lands (RPi Zero 2W):
+        - Create a Secondary zone for okd.sudops.pl pointing at
+          {{ technitium_primary_host | default('192.168.1.12') }}
+        - Sync blocklist URLs from the primary (or apply the same list
+          independently — both work)
+        - Same server settings as primary (recursion, DNSSEC, rate limit)
+        - Verify zone transfer with `dig @<secondary> AXFR okd.sudops.pl`
+  when: technitium_role | default('') == 'secondary'
+  tags: [cluster]
