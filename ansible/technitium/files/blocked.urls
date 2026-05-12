@@ -1,12 +1,15 @@
-# Block-list URLs — one per line.
-# Lines starting with `#` or blank are ignored.
+# Block-list URLs — one per line. Lines starting with `#` and blank lines are ignored.
 #
-# TODO: pull current adlist from the running pi-hole and check it in here:
-#   ssh pi@192.168.1.12 'pihole -a -l'
-# …or…
-#   ssh pi@192.168.1.12 'cat /etc/pihole/adlists.list'
+# StevenBlack/hosts is a meta-list that already merges several reputable
+# upstream lists (AdAway, MVPS, Disconnect, etc.). Single source of truth
+# for now; add more lists here later if a specific gap shows up (e.g. via
+# a "this domain wasn't blocked" report from Technitium).
 #
-# Likely starting set (Pi-hole defaults + common community lists). Verify
-# against what the box actually has before committing as truth.
+# Validated 2026-05-12: ~82,623 blocked entries, standard /etc/hosts format
+# (`0.0.0.0 <domain>`), last upstream commit 2026-05-08.
+#
+# Format note: Technitium auto-detects the upstream format (hosts file,
+# domain-only list, ABP/AdBlock filter syntax); no transformation needed
+# in the Ansible role.
+
 https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
-https://o0.pages.dev/Pro/hosts.txt
