@@ -58,18 +58,25 @@ The playbook is idempotent — re-run after every config change. Day-2 flow:
 3. Commit to Git.
 4. Re-run the playbook.
 
-## Upgrading Technitium
+## Upgrading the host (OS + Technitium)
 
-Re-run the playbook with the install role forcing a re-run:
+A separate playbook `upgrade.yml` handles periodic maintenance — OS package upgrades and Technitium DNS Server in-place upgrade together:
 
 ```
-ansible-playbook -i inventory.yml playbook.yml \
+ansible-playbook -i inventory.yml upgrade.yml \
   --ask-vault-pass \
-  --limit technitium-primary \
-  -e technitium_force_reinstall=true
+  --limit technitium-primary
 ```
 
-Technitium's installer is in-place; config under `/etc/dns/config/` is preserved.
+What it does:
+1. `apt update` + `apt full-upgrade --autoremove --autoclean` (OS layer)
+2. If `/var/run/reboot-required` exists after the upgrades: reboot, wait up to 5 min for the box to come back, and verify `dns.service` is active before continuing
+3. Re-run Technitium's upstream installer (in-place upgrade; preserves `/etc/dns/config/`)
+4. Post-checks: `dns.service` active + Technitium API responding
+
+Expected DNS downtime: **~30 s if a reboot fires**, **~10 s if not** (the Technitium installer restarts the service). Once the RPi Zero 2W secondary is in service, run `upgrade.yml` against the secondary first, verify it's healthy, then the primary — keeps the LAN's DNS answered throughout.
+
+Cadence suggestion: **monthly**, or on demand when a CVE for Technitium / glibc / kernel lands. Cron-it later if drift becomes a concern.
 
 ## What's NOT done yet
 

@@ -1,0 +1,102 @@
+---
+# Upgrade playbook for the technitium DNS box.
+#
+# Scope:
+#   1. Update apt package cache + apply all pending package upgrades (OS layer).
+#   2. Reboot if the OS upgrade marks the box as needing it (kernel/glibc/etc.).
+#   3. Re-run the Technitium installer in place (upgrades Technitium DNS Server
+#      to the latest version; preserves /etc/dns/config/).
+#
+# Usage:
+#   cd ansible/technitium
+#   ansible-playbook -i inventory.yml upgrade.yml \
+#     --ask-vault-pass \
+#     --limit technitium-primary
+#
+# Expected impact: ~30 s DNS downtime if a reboot fires, ~10 s if not.
+# Once the RPi Zero 2W secondary is in service, run upgrade.yml against the
+# secondary first, verify it's healthy, then upgrade the primary (DNS stays
+# answered by the secondary during the primary's brief restart window).
+
+- name: Upgrade technitium host — OS packages + Technitium DNS Server
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - vars/vault.yml
+
+  vars:
+    # Force the technitium-install role to re-run its installer step
+    # (otherwise it short-circuits when dns.service already exists).
+    technitium_force_reinstall: true
+
+  pre_tasks:
+    - name: Update apt package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+      tags: [upgrade, os]
+
+    - name: Apply all pending package upgrades
+      ansible.builtin.apt:
+        upgrade: full
+        autoremove: true
+        autoclean: true
+      register: apt_upgrade
+      tags: [upgrade, os]
+
+    - name: Check whether a reboot is required after upgrades
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+      tags: [upgrade, os]
+
+    - name: Reboot if required, then wait for dns.service back up
+      ansible.builtin.reboot:
+        msg: "Reboot from ansible upgrade.yml (technitium DNS box)"
+        connect_timeout: 5
+        reboot_timeout: 300
+        pre_reboot_delay: 0
+        post_reboot_delay: 15
+        test_command: systemctl is-active dns
+      when: reboot_required.stat.exists
+      tags: [upgrade, os, reboot]
+
+  roles:
+    # Re-runs the upstream Technitium installer — idempotent in-place upgrade.
+    # Config under /etc/dns/config/ is preserved.
+    - role: technitium-install
+      tags: [upgrade, technitium]
+
+  post_tasks:
+    - name: Confirm dns.service is active after the upgrade
+      ansible.builtin.systemd:
+        name: dns.service
+        state: started
+      register: dns_state
+      tags: [upgrade, verify]
+
+    - name: Verify Technitium API still responds on the local box
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/user/login"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          user: "{{ technitium_admin_user }}"
+          pass: "{{ technitium_admin_password }}"
+          includeInfo: "false"
+        status_code: 200
+        timeout: 10
+      register: post_upgrade_ping
+      no_log: true
+      tags: [upgrade, verify]
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "apt upgrades applied: {{ apt_upgrade.changed }}"
+          - "reboot fired: {{ reboot_required.stat.exists | default(false) }}"
+          - "dns.service: {{ dns_state.status.ActiveState | default('unknown') }}"
+          - "Technitium API responding: {{ post_upgrade_ping.status == 200 }}"
+      tags: [upgrade, verify]
