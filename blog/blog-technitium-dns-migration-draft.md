@@ -145,6 +145,68 @@ Technitium's built-in zone-replication makes this almost free. Future shape when
 
 Open question for the secondary build: same OS image (presumably Raspberry Pi OS Lite)? Same Technitium version? Bootstrap with an Ansible playbook so primary + secondary stay in sync.
 
+## OS + install method
+
+**OS confirmed (2026-05-12)** via `uname -a` on the running pi-hole box: `Raspberry Pi OS Lite`, kernel `6.12.75+rpt-rpi-v8` (Bookworm-based, build 2026-03-11), `aarch64`. The same image goes on the spare SD card for technitium — no OS migration concern.
+
+**Install method: native via Technitium's installer script.** Not Docker. Reasons:
+
+- The future secondary lives on an RPi Zero 2W (512 MB RAM). Docker's resident overhead (~50-100 MB plus daemon) is meaningful on that box; native runs leaner.
+- Homogeneous install across primary + secondary simplifies the Ansible playbook (see below). One set of steps, not two.
+- Technitium ships a portable single-process binary bundled with its own .NET runtime — no separate `apt install dotnet` step.
+
+If Docker becomes preferred later (snapshot/rollback ergonomics), swapping is reversible — Technitium's config lives under `/etc/dns/config/` and can map straight into a Docker volume.
+
+**Install steps on a fresh RPi OS Lite SD card:**
+
+```bash
+# 1. Standard first-boot setup: SSH on, locale, change pi password.
+#    Set hostname `technitium`. Static IP via DHCP reservation on gw.home.lab.
+sudo raspi-config
+sudo hostnamectl set-hostname technitium
+
+# 2. Technitium installer (downloads portable build + creates systemd unit `dns.service`):
+curl -sSL https://download.technitium.com/dns/install.sh | sudo bash
+
+# 3. Verify it's up:
+systemctl status dns
+ss -tnlp | grep -E ':(53|5380|853|443)\b'
+
+# 4. Web UI: http://<rpi-ip>:5380 — set admin password on first visit.
+```
+
+**Upgrades:** re-run the installer (`sudo bash -c "$(curl -sSL https://download.technitium.com/dns/install.sh)"`). It does an in-place upgrade and preserves `/etc/dns/config/`.
+
+## Config management — Ansible
+
+Config + day-2 maintenance go through an Ansible playbook in the homelab repo under a new `ansible/technitium/` directory. The OKD GitOps content stays in `components/` and `bootstrap/`; non-cluster home infra lives alongside but isn't ArgoCD-managed.
+
+Playbook responsibilities (sketch — refine when building):
+
+```
+ansible/technitium/
+├── inventory.yml          # technitium-primary (RPi 3B+), technitium-secondary (RPi Zero 2W, future)
+├── playbook.yml           # main entrypoint
+├── roles/
+│   ├── base/              # RPi OS hardening: unattended-upgrades, fail2ban, ssh-key auth, timezone
+│   ├── technitium-install/  # idempotent Technitium install (skip if already present at expected version)
+│   ├── technitium-config/   # render dns.config from a Jinja template; copy zones/, blocked.config etc.
+│   └── technitium-cluster/  # configure primary/secondary replication (when secondary lands)
+└── files/
+    ├── zones/okd.sudops.pl.zone       # authoritative split-horizon zone records
+    ├── blocked.urls                   # block-list URLs (carry-over from pi-hole + curated)
+    └── allowed.exceptions             # allowlist overrides
+```
+
+The playbook is **idempotent and pull-based** — running it against either node converges that node to the desired state. Primary and secondary differ only in role-level params (replication mode, peer address). The user runs `ansible-playbook -i inventory.yml playbook.yml --limit technitium-primary` (or `--limit technitium-secondary`) from a workstation.
+
+Day-2 changes (new block list, new zone record, rate-limit tweak) → edit the files in `ansible/technitium/files/`, commit to Git, re-run the playbook. Same flow as everything else, just outside ArgoCD's purview.
+
+Why not put Technitium under ArgoCD too? Because:
+- Technitium runs outside the OKD cluster (on an RPi 3B+ on the LAN), so ArgoCD can't reach it
+- DNS being the bootstrap dependency for everything else means it should NOT have a circular dependency on the cluster being up
+- Ansible-pull from the box (via cron or systemd-timer) is an option later if "must SSH from workstation to apply" becomes annoying — for now the manual `ansible-playbook` invocation is fine and explicit
+
 ## Cutover plan — sequence
 
 Goal: replace the running pi-hole on `.12` with Technitium on `.12` with minimal LAN-wide downtime.
@@ -160,7 +222,7 @@ Goal: replace the running pi-hole on `.12` with Technitium on `.12` with minimal
 The MachineConfig that strips `okd.sudops.pl` from host resolv.conf is a parallel — and arguably bigger-leverage — fix. If it lands first:
 
 - The cluster nodes stop emitting `<...>.svc.cluster.local.okd.sudops.pl` queries entirely (no more search-suffix expansion through `okd.sudops.pl`).
-- Technetium's `svc.cluster.local.okd.sudops.pl` NXDOMAIN block becomes academic — no clients hit it.
+- Technitium's `svc.cluster.local.okd.sudops.pl` NXDOMAIN block becomes academic — no clients hit it.
 - The pi-hole rate-limit pain that bit node6 in April becomes nearly impossible to reproduce (most of the volume was the search-suffix leak).
 
 If technitium lands first: pi-hole's failure modes are resolved (Technitium answers authoritatively for `okd.sudops.pl`, no timeouts, no rate-limit refusals at 10 k/min). Track B is still desirable for cluster cleanliness — pods shouldn't be emitting bogus queries even if the downstream resolver handles them gracefully — but it stops being urgent.
@@ -169,9 +231,17 @@ Recommended sequencing: **technitium first, Track B when there's a quiet day for
 
 ## Open items / TODOs
 
-- [ ] Confirm Technitium version + install path on Raspberry Pi OS Lite. Latest stable is what we want.
-- [ ] Pull the active block list URLs from the running pi-hole and capture them here.
-- [ ] Decide whether `gw.home.lab`'s current conditional-forwarder rule for `okd.sudops.pl` (if any — needs confirming on the MikroTik) needs to change after technitium becomes authoritative on the LAN view. Probably: remove the conditional forwarder on the gateway entirely, since technitium will answer for that zone directly.
-- [ ] Define the JSON / Ansible playbook for configuring Technitium — once we know the install shape, this should be repo-tracked so the secondary can be bootstrapped identically.
-- [ ] Decide on monitoring: Technitium has a stats UI; should we also Prometheus-scrape it? (Probably yes — there's a community exporter, or a simple curl-to-textfile-collector approach.)
-- [ ] Plan the actual swap window with the rest of the house — LAN clients (TV, IoT) will lose DNS for ~1 min during the swap.
+Closed during 2026-05-12 design session:
+
+- ✅ OS confirmed — RPi OS Lite aarch64 (kernel 6.12.75, Bookworm-based, build 2026-03-11). Same image for primary + future secondary.
+- ✅ Install method decided — native via Technitium's installer script. Not Docker.
+- ✅ Config management approach — Ansible playbook under `ansible/technitium/`, applied manually from a workstation. Not under ArgoCD (DNS shouldn't depend on the cluster being up).
+
+Still open:
+
+- [ ] Pull the active block list URLs from the running pi-hole and check them into `ansible/technitium/files/blocked.urls`. (`pihole -a -l` from the pi-hole box, or `cat /etc/pihole/adlists.list`.)
+- [ ] Confirm `gw.home.lab` (MikroTik) currently has a conditional-forwarder rule for `okd.sudops.pl` and where it points. After technitium becomes authoritative on the LAN view, the gateway's forwarder rule should either be removed, or — if anything besides pi-hole still queries the gateway for cluster names — repointed at technitium directly. Verify before cutover.
+- [ ] Decide on monitoring: Technitium exposes stats via its HTTP API (and there's a community Prometheus exporter at github.com/javapride/technitium-dns-exporter or similar). Probably scrape from the existing OKD Prometheus into a dashboard. Lower priority — get the box working first.
+- [ ] Plan the actual swap window with the rest of the house — LAN clients (TV, IoT) lose DNS for ~1 min during the IP move. Quiet evening, ideally.
+- [ ] Build the Ansible playbook (scaffold first — empty roles + inventory — then fill in as the primary install reveals what needs templating).
+- [ ] Procurement: the RPi Zero 2W for the secondary. Not blocking; primary works standalone with no HA until the Zero 2W lands.
