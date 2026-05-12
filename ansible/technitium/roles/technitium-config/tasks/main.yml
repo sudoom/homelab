@@ -164,6 +164,11 @@
   tags: [config, blocked]
 
 # ---- Conditional forwarder zones (delegate LAN-local zones to MikroTik) ----
+# NOTE: prior version of this task silently no-op'd because Technitium returns
+# HTTP 200 with `"status": "error"` in the body when the zone create has any
+# problem — we were checking HTTP status only, not the JSON status field.
+# Now register the response and fail if status isn't "ok", except for the
+# already-exists case (so re-runs are idempotent).
 - name: Ensure conditional forwarder zones exist
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/zones/create"
@@ -173,10 +178,14 @@
     body:
       zone: "{{ item.zone }}"
       type: Forwarder
-      initializeForwarder: "true"
       protocol: "{{ item.protocol | default('Udp') }}"
       forwarder: "{{ item.forwarder }}"
     status_code: 200
+    return_content: true
+  register: forwarder_zone_responses
+  failed_when:
+    - forwarder_zone_responses.json.status != "ok"
+    - "'already exists' not in (forwarder_zone_responses.json.errorMessage | default(''))"
   loop: "{{ technitium_forwarder_zones }}"
   loop_control:
     label: "{{ item.zone }} → {{ item.forwarder }} ({{ item.protocol | default('Udp') }})"
