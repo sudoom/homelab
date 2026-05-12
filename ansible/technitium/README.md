@@ -34,7 +34,7 @@ ansible/technitium/
    curl -sSL https://download.technitium.com/dns/install.sh | sudo bash
    ```
 5. **Browse to `http://<box-ip>:5380`** and set the admin password (Technitium forces this on first visit).
-6. **Workstation**: install Ansible (`brew install ansible` / `apt install ansible`) and the `community.general` collection (`ansible-galaxy collection install community.general`).
+6. **Workstation**: install Ansible (`brew install ansible` / `apt install ansible`). All tasks use `ansible.builtin.*` modules only — no external collections required.
 7. **Vault**: create the encrypted secrets file:
    ```
    cd ansible/technitium

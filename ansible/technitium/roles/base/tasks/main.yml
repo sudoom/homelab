@@ -15,12 +15,17 @@
     state: present
   tags: [base, hostname]
 
-- name: Set timezone to Europe/Warsaw
-  community.general.timezone:
-    name: Europe/Warsaw
+- name: Read current timezone
+  ansible.builtin.command: timedatectl show --value --property=Timezone
+  register: current_timezone
+  changed_when: false
+  check_mode: false
   tags: [base, timezone]
-  # If community.general isn't installed: `ansible-galaxy collection install community.general`
-  # Or replace with: ansible.builtin.command: timedatectl set-timezone Europe/Warsaw  (non-idempotent)
+
+- name: Set timezone to Europe/Warsaw
+  ansible.builtin.command: timedatectl set-timezone Europe/Warsaw
+  when: current_timezone.stdout != "Europe/Warsaw"
+  tags: [base, timezone]
 
 - name: Install required packages
   ansible.builtin.apt:
