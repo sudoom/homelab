@@ -40,16 +40,31 @@
 
 # ---- Read block list URLs from files/blocked.urls --------------------------
 - name: Read block-list URLs from files/blocked.urls
+  # Use .splitlines() (a Python string method) rather than .split('\n'),
+  # because in YAML scalars '\n' is the literal two-character sequence,
+  # not a newline — so .split('\n') returns the whole file as one element
+  # and the first-line comment then nukes everything via reject('match','^#').
   ansible.builtin.set_fact:
     technitium_block_list_urls: >-
       {{
-        lookup('ansible.builtin.file', 'blocked.urls').split('\n')
+        lookup('ansible.builtin.file', 'blocked.urls').splitlines()
         | map('trim')
         | reject('match', '^#')
         | reject('equalto', '')
         | list
         | join(',')
       }}
+  tags: [config, blocklist]
+
+- name: Sanity check — assert the blocklist URLs string is non-empty
+  ansible.builtin.assert:
+    that:
+      - technitium_block_list_urls | length > 0
+    fail_msg: |
+      files/blocked.urls produced an empty technitium_block_list_urls string.
+      Check that the file has at least one non-comment, non-blank line, and
+      that the file is at ansible/technitium/files/blocked.urls (lookup is
+      relative to the playbook dir, not the role).
   tags: [config, blocklist]
 
 # ---- /api/settings/set — server-level settings -----------------------------
