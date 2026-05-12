@@ -26,8 +26,13 @@ ansible/technitium/
 
 ## First-time setup (operator, manual)
 
-1. **Spare SD card** for the new box. Flash Raspberry Pi OS Lite (64-bit, Bookworm). Same kernel family as the current pi-hole (`6.12.x`, `aarch64`).
-2. **First boot**: configure via raspi-config — set hostname `technitium`, enable SSH, change `pi` password, set locale.
+1. **Spare SD card** for the new box. Use Raspberry Pi Imager and pre-configure:
+   - **OS**: Raspberry Pi OS Lite, 64-bit (Bookworm). Same kernel family as the current pi-hole (`6.12.x`, `aarch64`).
+   - **Hostname**: `technitium`
+   - **Username**: `admin` (not the default `pi` — matches the inventory's `ansible_user`)
+   - **SSH**: enable, with public-key authentication. Paste `~/.ssh/vadz_key.pub` from the workstation as the authorized key.
+   - **Locale/timezone**: as needed; the playbook sets `Europe/Warsaw` regardless.
+2. **First boot**: SSH should work directly with `ssh admin@<box-ip> -i ~/.ssh/vadz_key`. Sanity-check with `sudo -n true` (passwordless sudo expected on RPi imager's default; if not, store `ansible_become_password` in the vault — see step 7).
 3. **Static IP**: reserve the box's MAC at `192.168.1.12` on `gw.home.lab` (or whatever final IP it gets). For initial validation, bring it up on a temporary IP — the swap to `.12` happens at cutover.
 4. **Install Technitium** manually:
    ```
@@ -40,7 +45,7 @@ ansible/technitium/
    cd ansible/technitium
    ansible-vault create vars/vault.yml
    ```
-   Paste the template from `vars/vault.yml.example` and set `technitium_admin_password` to whatever you set in step 5.
+   Paste the template from `vars/vault.yml.example` and set `technitium_admin_password` to whatever you set in step 5. Add `ansible_become_password` too if sudo on the box is password-protected (skip if passwordless).
 
 ## Day-2: apply config
 

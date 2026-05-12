@@ -12,14 +12,16 @@
 all:
   hosts:
     technitium-primary:
-      ansible_host: 192.168.1.12          # final IP — change to temp IP during bootstrap
-      ansible_user: pi                    # default RPi OS Lite user; revisit if a different user is created
+      ansible_host: 192.168.1.12                       # final IP — change to temp IP during bootstrap
+      ansible_user: admin                              # operator-created user on RPi OS Lite (not the default `pi`)
+      ansible_ssh_private_key_file: ~/.ssh/vadz_key    # workstation-side key path; not committed
       ansible_python_interpreter: /usr/bin/python3
       technitium_role: primary
 
     # technitium-secondary:
     #   ansible_host: 192.168.1.13
-    #   ansible_user: pi
+    #   ansible_user: admin
+    #   ansible_ssh_private_key_file: ~/.ssh/vadz_key
     #   ansible_python_interpreter: /usr/bin/python3
     #   technitium_role: secondary
     #   technitium_primary_host: 192.168.1.12
