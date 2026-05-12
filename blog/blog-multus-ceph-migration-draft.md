@@ -422,3 +422,67 @@ Both changes intended to land together so the route exists before any pod could 
 1. From a host shell on node4 (e.g. `oc debug node/node4`), `ping 192.168.10.128` (a known pod IP) — should succeed via `ceph-shim`. This is the direction Rook's CSI plugin needs (kernel-RBD client → mon pod).
 2. From inside the test pod, `ping -I net1 192.168.10.3/.4` (other-host master IPs) — should still succeed at line rate.
 3. Pod → own-host (`ping -I net1 192.168.10.2`) may still fail with destination-unreachable. That's fine — Rook's CSI client side is always host-network, so the missing direction is HOST→POD, which the shim solves.
+
+## Phase 2 — the actual flip (2026-05-12)
+
+### Pre-flight: `kubectl rook-ceph multus validation` doesn't work on OpenShift
+
+Installed the `kubectl-rook-ceph` krew plugin and ran:
+
+```
+kubectl rook-ceph multus validation run \
+  --public-network=rook-ceph/ceph-public \
+  --cluster-network=rook-ceph/ceph-cluster
+```
+
+It timed out at the host-checker-pod stage. Admission rejection:
+
+```
+pods "multus-validation-test-host-checker-shared-storage-and-worker-nodes-" is forbidden:
+  unable to validate against any security context constraint:
+  - restricted-v2: .spec.securityContext.hostNetwork: Invalid value: true: Host network is not allowed
+  - provider "hostnetwork": Forbidden: not usable by user or serviceaccount
+  - provider "privileged": Forbidden: not usable by user or serviceaccount
+  - pod.metadata.annotations[seccomp.security.alpha.kubernetes.io/pod]: Forbidden: seccomp may not be set
+```
+
+Two OpenShift-specific blockers in the tool's pod spec: (a) the validation tool runs the host-checker DaemonSet as the namespace's `default` SA, which doesn't have `hostnetwork`/`privileged` SCC, and (b) the tool sets the legacy `seccomp.security.alpha.kubernetes.io/pod` annotation that `restricted-v2` rejects outright. Both would need patching to get the tool through OpenShift admission. The marginal value is iperf throughput across all node pairs, which we'll measure with fio post-flip anyway — skipping the formal validation. Yesterday's smoke test already verified the dimensions that actually matter (whereabouts allocation, cross-host reachability, host→pod via the shim).
+
+Cleaned up stranded test resources with `kubectl rook-ceph multus validation cleanup --namespace rook-ceph`.
+
+### Discovery: the flip is a two-step, not one-step
+
+Rendered the target chart change (`provider: host → multus`, add `selectors`, flip `public` CIDR `192.168.1.0/24 → 192.168.10.0/24`) and ran `helm template ... | oc diff -f -`. Admission rejected it:
+
+```
+The CephCluster "rook-ceph" is invalid: spec.network.provider: Invalid value: "string":
+  network provider must be disabled (reverted to empty string) before a new provider is enabled
+```
+
+Rook's CephCluster controller has a deliberate guard against direct provider transitions — you can't go from one provider to another in a single commit. Forces an intermediate `provider: ""` state so the operator's network reconfiguration is explicit, not silent. No bypass flag in v1.18 / Squid 19.2.3.
+
+So the migration becomes two commits:
+
+1. **Step 1**: `provider: host → provider: ""`. Daemons re-roll onto pod-only networking (OVN SDN). HEALTH_OK throughout the roll; throughput temporarily on encapsulated SDN (~6-8 Gbps effective) for both directions.
+2. **Step 2**: `provider: "" → provider: multus` with selectors and `public: 192.168.10.0/24`. Daemons re-roll onto Multus. End state: clients on 10G storage backnet directly, OSD↔OSD also on the backnet.
+
+Two daemon rolls (mons → mgrs → OSDs each time), serialized via PDB (`managePodBudgets: true`). Two degraded windows. ~25-30 min total wall-clock for a 3-OSD cluster.
+
+### Step 1 commit — provider blanked
+
+Chart edit: `components/storage/ceph-cluster/values.yaml` set `network.provider: ""`, addressRanges left untouched. Template already conditional on `provider == "multus"` for the `selectors:` block — no template change needed for step 1.
+
+Rendered `oc diff` against live:
+
+```
+@@ -72,7 +72,6 @@
+       public:
+       - 192.168.1.0/24
+     multiClusterService: {}
+-    provider: host
+   placement:
+```
+
+Exactly one line: `provider: host` removed from the spec (empty-string renders out via Helm's nil omit). No other deltas.
+
+

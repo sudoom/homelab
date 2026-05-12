@@ -14,6 +14,10 @@ dashboard:
   port: 8080
 
 network:
+  # Step 1 of the host→multus migration (2026-05-12): provider blanked so Rook
+  # accepts the subsequent flip to multus. Step 2 will set provider: multus +
+  # selectors + flip public CIDR to 192.168.10.0/24. See blog/blog-multus-ceph-migration-draft.md.
+  provider: ""
   public: "192.168.1.0/24"
   cluster: "192.168.10.0/24"
 

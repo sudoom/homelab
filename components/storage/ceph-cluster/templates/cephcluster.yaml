@@ -31,7 +31,12 @@ spec:
     port: {{ .Values.dashboard.port }}
 
   network:
-    provider: host
+    provider: {{ .Values.network.provider }}
+    {{- if eq .Values.network.provider "multus" }}
+    selectors:
+      public: {{ .Values.network.selectors.public }}
+      cluster: {{ .Values.network.selectors.cluster }}
+    {{- end }}
     addressRanges:
       public:
         - {{ .Values.network.public | quote }}
