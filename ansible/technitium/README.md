@@ -10,7 +10,7 @@ The box runs **outside** the OKD cluster. ArgoCD can't reach it, but more import
 
 ```
 ansible/technitium/
-├── inventory.yml                          # technitium-primary; secondary commented out (not procured yet)
+├── inventory.yml                          # dns-master; dns-secondary commented out (not procured yet)
 ├── playbook.yml                           # top-level entrypoint, applies all roles
 ├── group_vars/all.yml                     # shared config: zone records, blocklist policy, rate limits
 ├── vars/vault.yml.example                 # template for the (gitignored) vault file
@@ -28,7 +28,7 @@ ansible/technitium/
 
 1. **Spare SD card** for the new box. Use Raspberry Pi Imager and pre-configure:
    - **OS**: Raspberry Pi OS Lite, 64-bit (Bookworm). Same kernel family as the current pi-hole (`6.12.x`, `aarch64`).
-   - **Hostname**: `technitium`
+   - **Hostname**: `dns-master` (matches the inventory key; web UI reachable at `http://dns-master:5380` from anywhere on the LAN that resolves it)
    - **Username**: `admin` (not the default `pi` — matches the inventory's `ansible_user`)
    - **SSH**: enable, with public-key authentication. Paste `~/.ssh/vadz_key.pub` from the workstation as the authorized key.
    - **Locale/timezone**: as needed; the playbook sets `Europe/Warsaw` regardless.
@@ -53,7 +53,7 @@ ansible/technitium/
 cd ansible/technitium
 ansible-playbook -i inventory.yml playbook.yml \
   --ask-vault-pass \
-  --limit technitium-primary
+  --limit dns-master
 ```
 
 The playbook is idempotent — re-run after every config change. Day-2 flow:
@@ -70,7 +70,7 @@ A separate playbook `upgrade.yml` handles periodic maintenance — OS package up
 ```
 ansible-playbook -i inventory.yml upgrade.yml \
   --ask-vault-pass \
-  --limit technitium-primary
+  --limit dns-master
 ```
 
 What it does:

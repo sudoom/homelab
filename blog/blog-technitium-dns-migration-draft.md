@@ -1,6 +1,6 @@
 # technitium: DNS migration from pi-hole — planning notes
 
-Working notes for replacing the home pi-hole (RPi 3B+ at `192.168.1.12`) with **Technitium DNS Server** on the same physical RPi 3B+, host name `technitium`. Later: add a secondary on an RPi Zero 2W for HA — primary/secondary pair clustered via Technitium's built-in replication. **Plan, not implementation.**
+Working notes for replacing the home pi-hole (RPi 3B+ at `192.168.1.12`) with **Technitium DNS Server** on the same physical RPi 3B+, host name `dns-master` (matches the existing `pi-hole-master` convention). Later: add a secondary on an RPi Zero 2W for HA — `dns-secondary`, primary/secondary pair clustered via Technitium's built-in replication. Web UI reachable at `http://dns-master:5380` once the LAN resolves the new hostname. **Plan, not implementation.**
 
 ## Why we're doing this
 
@@ -161,9 +161,9 @@ If Docker becomes preferred later (snapshot/rollback ergonomics), swapping is re
 
 ```bash
 # 1. Standard first-boot setup: SSH on, locale, change pi password.
-#    Set hostname `technitium`. Static IP via DHCP reservation on gw.home.lab.
+#    Set hostname `dns-master`. Static IP via DHCP reservation on gw.home.lab.
 sudo raspi-config
-sudo hostnamectl set-hostname technitium
+sudo hostnamectl set-hostname dns-master
 
 # 2. Technitium installer (downloads portable build + creates systemd unit `dns.service`):
 curl -sSL https://download.technitium.com/dns/install.sh | sudo bash
@@ -185,7 +185,7 @@ Playbook responsibilities (sketch — refine when building):
 
 ```
 ansible/technitium/
-├── inventory.yml          # technitium-primary (RPi 3B+), technitium-secondary (RPi Zero 2W, future)
+├── inventory.yml          # dns-master (RPi 3B+), dns-secondary (RPi Zero 2W, future)
 ├── playbook.yml           # main entrypoint
 ├── roles/
 │   ├── base/              # RPi OS hardening: unattended-upgrades, fail2ban, ssh-key auth, timezone
@@ -198,7 +198,7 @@ ansible/technitium/
     └── allowed.exceptions             # allowlist overrides
 ```
 
-The playbook is **idempotent and pull-based** — running it against either node converges that node to the desired state. Primary and secondary differ only in role-level params (replication mode, peer address). The user runs `ansible-playbook -i inventory.yml playbook.yml --limit technitium-primary` (or `--limit technitium-secondary`) from a workstation.
+The playbook is **idempotent and pull-based** — running it against either node converges that node to the desired state. Primary and secondary differ only in role-level params (replication mode, peer address). The user runs `ansible-playbook -i inventory.yml playbook.yml --limit dns-master` (or `--limit dns-secondary`) from a workstation.
 
 Day-2 changes (new block list, new zone record, rate-limit tweak) → edit the files in `ansible/technitium/files/`, commit to Git, re-run the playbook. Same flow as everything else, just outside ArgoCD's purview.
 

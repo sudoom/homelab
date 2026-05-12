@@ -1,24 +1,26 @@
 ---
-# technitium DNS server inventory.
+# Inventory for the Technitium DNS Server boxes.
 #
-# Primary: RPi 3B+ at 192.168.1.12 (the host currently running pi-hole; we'll
-# rebuild it on a spare SD card as `technitium`, swap SD cards, keep the IP).
-# Secondary: RPi Zero 2W, not yet procured — placeholder commented out below.
+# Naming convention follows the existing pi-hole box (`pi-hole-master`):
+#   - dns-master    — primary, RPi 3B+ at 192.168.1.12 (the same physical box
+#                     currently running pi-hole; we'll rebuild it on a spare
+#                     SD card with Technitium, swap SD cards, keep the IP).
+#   - dns-secondary — future, RPi Zero 2W, not yet procured.
 #
-# Bootstrap order: stand up primary on a spare SD card with a temporary IP
-# first, validate via this playbook, then physically swap SD cards on the
+# Bootstrap order: stand up the primary on a spare SD card with a temporary
+# IP first, validate via this playbook, then physically swap SD cards on the
 # RPi 3B+ to take over 192.168.1.12.
 
 all:
   hosts:
-    technitium-primary:
+    dns-master:
       ansible_host: 192.168.1.12                       # final IP — change to temp IP during bootstrap
       ansible_user: admin                              # operator-created user on RPi OS Lite (not the default `pi`)
       ansible_ssh_private_key_file: ~/.ssh/vadz_key    # workstation-side key path; not committed
       ansible_python_interpreter: /usr/bin/python3
       technitium_role: primary
 
-    # technitium-secondary:
+    # dns-secondary:
     #   ansible_host: 192.168.1.13
     #   ansible_user: admin
     #   ansible_ssh_private_key_file: ~/.ssh/vadz_key
