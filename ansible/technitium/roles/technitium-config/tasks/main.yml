@@ -63,6 +63,7 @@
       recursion: "{{ technitium_recursion_mode }}"
       dnssecValidation: "{{ technitium_dnssec_validation | string | lower }}"
       qpmLimitBypassList: "{{ technitium_qpm_bypass_list }}"
+      enableBlocking: "true"                # explicit — Technitium's fresh-install default is false
       blockListUrls: "{{ technitium_block_list_urls }}"
       blockListUpdateIntervalHours: "{{ technitium_blocklist_update_interval_hours }}"
     status_code: 200
