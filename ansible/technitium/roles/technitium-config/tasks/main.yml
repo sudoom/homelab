@@ -16,6 +16,9 @@
 #   7. /api/user/logout
 
 # ---- Login + Bearer header --------------------------------------------------
+# Tagged `always` so authentication runs regardless of which --tags filter the
+# operator picks (e.g. --tags forwarders). Without this, narrow-scoped re-runs
+# fail with "technitium_auth_headers is undefined".
 - name: Login to Technitium API
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/user/login"
@@ -29,14 +32,14 @@
     return_content: true
   register: technitium_login
   no_log: true
-  tags: [config]
+  tags: [config, always]
 
 - name: Extract session token + build Bearer auth header
   ansible.builtin.set_fact:
     technitium_auth_headers:
       Authorization: "Bearer {{ technitium_login.json.token }}"
   no_log: true
-  tags: [config]
+  tags: [config, always]
 
 # ---- Read block list URLs from files/blocked.urls --------------------------
 - name: Read block-list URLs from files/blocked.urls
@@ -44,6 +47,7 @@
   # because in YAML scalars '\n' is the literal two-character sequence,
   # not a newline — so .split('\n') returns the whole file as one element
   # and the first-line comment then nukes everything via reject('match','^#').
+  # Also tagged `always` so --tags settings (which uses this fact) doesn't fail.
   ansible.builtin.set_fact:
     technitium_block_list_urls: >-
       {{
@@ -54,7 +58,7 @@
         | list
         | join(',')
       }}
-  tags: [config, blocklist]
+  tags: [config, blocklist, always]
 
 - name: Sanity check — assert the blocklist URLs string is non-empty
   ansible.builtin.assert:
@@ -65,7 +69,7 @@
       Check that the file has at least one non-comment, non-blank line, and
       that the file is at ansible/technitium/files/blocked.urls (lookup is
       relative to the playbook dir, not the role).
-  tags: [config, blocklist]
+  tags: [config, blocklist, always]
 
 # ---- /api/settings/set — server-level settings -----------------------------
 - name: Apply server-level DNS settings
