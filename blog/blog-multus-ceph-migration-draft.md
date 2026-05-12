@@ -483,6 +483,8 @@ Rendered `oc diff` against live:
    placement:
 ```
 
-Exactly one line: `provider: host` removed from the spec (empty-string renders out via Helm's nil omit). No other deltas.
+Exactly one line: `provider: host` → `provider: ""`. No other deltas.
+
+**Helm rendering gotcha** caught on the first push: template was `provider: {{ .Values.network.provider }}` (unquoted). With `values.yaml: provider: ""`, that renders as `provider: ` (bare, no value), which YAML parses as literal `null` — and the CephCluster CRD enum accepts `""`, `"host"`, `"multus"`, or *absent*, but **not** `null`. ArgoCD's first 5 sync attempts failed with `spec.network.provider: Unsupported value: "null"` before I caught it. Fix is `provider: {{ .Values.network.provider | quote }}` so the empty string renders as `""` explicitly. No cluster churn — the rejection was at admission, never reached the controller.
 
 

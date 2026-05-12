@@ -31,7 +31,7 @@ spec:
     port: {{ .Values.dashboard.port }}
 
   network:
-    provider: {{ .Values.network.provider }}
+    provider: {{ .Values.network.provider | quote }}
     {{- if eq .Values.network.provider "multus" }}
     selectors:
       public: {{ .Values.network.selectors.public }}
