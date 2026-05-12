@@ -2,6 +2,25 @@
 # Base OS hygiene for the technitium box.
 # Keep this minimal — the box's only job is DNS; don't pile on.
 
+- name: Check whether dhcpcd is in use
+  ansible.builtin.stat:
+    path: /etc/dhcpcd.conf
+  register: dhcpcd_conf_stat
+  tags: [base, hostname]
+
+- name: Disable dhcpcd's hostname hook (prevents DHCP/PTR from reverting our hostname)
+  # Without this, dhcpcd's 30-hostname hook does a reverse lookup on the leased
+  # IP and resets `hostname` + `/etc/hostname` + `/etc/hosts` to whatever the
+  # DHCP server's lease record says. That's what reverted `dns-master` back to
+  # `pi-hole-master` post-cutover. `nohook hostname` tells dhcpcd to leave the
+  # hostname alone — our static settings below then stick.
+  ansible.builtin.lineinfile:
+    path: /etc/dhcpcd.conf
+    line: "nohook hostname"
+    state: present
+  when: dhcpcd_conf_stat.stat.exists
+  tags: [base, hostname]
+
 - name: Set hostname
   ansible.builtin.hostname:
     name: "{{ inventory_hostname }}"
