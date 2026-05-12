@@ -487,4 +487,140 @@ Exactly one line: `provider: host` → `provider: ""`. No other deltas.
 
 **Helm rendering gotcha** caught on the first push: template was `provider: {{ .Values.network.provider }}` (unquoted). With `values.yaml: provider: ""`, that renders as `provider: ` (bare, no value), which YAML parses as literal `null` — and the CephCluster CRD enum accepts `""`, `"host"`, `"multus"`, or *absent*, but **not** `null`. ArgoCD's first 5 sync attempts failed with `spec.network.provider: Unsupported value: "null"` before I caught it. Fix is `provider: {{ .Values.network.provider | quote }}` so the empty string renders as `""` explicitly. No cluster churn — the rejection was at admission, never reached the controller.
 
+**Second rendering gotcha** caught on the next push: with `provider: ""` accepted by admission, the Rook **operator** (not admission webhook) then rejected the resulting spec because `addressRanges` was still set:
+
+```
+failed to validate network spec for cluster in namespace "rook-ceph":
+network ranges can only be specified for "host" and "multus" network providers
+```
+
+The operator's own reconcile-time validator refuses `addressRanges` when provider is neither host nor multus. Operator went into a tight retry loop (~1 reconcile/sec) emitting this error. Fix: gate the `addressRanges:` block in the template behind a non-empty provider, so the field is *absent* when `provider: ""`:
+
+```yaml
+{{- if .Values.network.provider }}
+addressRanges:
+  public:
+    - {{ .Values.network.public | quote }}
+  cluster:
+    - {{ .Values.network.cluster | quote }}
+{{- end }}
+```
+
+Wrinkle: `oc diff` showed the diff as empty even though the live spec still had `addressRanges` and the rendered manifest didn't. Reason: the CephCluster resource was originally created with non-SSA apply and had **`metadata.managedFields: []`** (no field manager ownership tracked). Server-side apply only removes fields it owns; with no ownership recorded, it can't remove `addressRanges` even when the manifest omits it. ArgoCD's selfHeal eventually cleared the field on a later cycle (mechanism unclear — possibly a full re-establish of SSA ownership), but it took several minutes. Lesson: any CephCluster spec field that was originally created via non-SSA path is sticky and may not be removable via Helm template alone.
+
+### Daemon roll begins — mgrs swap cleanly
+
+Once the operator stopped erroring, Rook started the daemon roll:
+
+- `mgr-a` swapped first: new pod `57fc6c4dd8-87226` replaced old `d7db75d8-qjvfh`, deployment template now `hostNetwork: false` + pod-only network. ~15s.
+- `mgr-b` followed: new pod `ff4cdbc9-xjkrr` replaced old `7fc5f7d84c-b2stf`. ~15s.
+- Both mgrs healthy, active mgr migrated from `b` to `a` during the swap.
+
+Mons did NOT roll next (despite being typically the natural next phase). Operator went straight to OSDs.
+
+### OSD-0 crashloop — stale `public_network` in config DB
+
+OSD-0 rolled (replaced with new pod `5659dcd494-rlzsd` on `hostNetwork: false` + pod IP `10.130.1.8`), then immediately crashlooped. Container log told the whole story in one line:
+
+```
+unable to find any IPv4 address in networks '192.168.1.0/24' interfaces ''
+Failed to pick public address.
+```
+
+Root cause: when running with `provider: host`, the operator had set `public_network = 192.168.1.0/24` in the Ceph **config database** (mons' KV store) so daemons would bind to the frontnet on the host. When provider changed to `""`, **the operator did not clear `public_network` from the config DB.** The OSD daemon read `public_network = 192.168.1.0/24` from the mons, looked for an interface with a `192.168.1.x` address on the pod's net namespace, found none (pod IP was `10.130.1.8`), and refused to start.
+
+This is the silent assumption in Rook's "host → empty" transition: the operator updates the *Deployment* shape but not the *Ceph config DB* settings that the daemon reads at startup. The two had drifted into mutual incompatibility.
+
+Fixed by clearing from the toolbox:
+
+```
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph config rm global public_network
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph config rm global cluster_network
+oc -n rook-ceph delete pod -l osd=0 -n rook-ceph
+```
+
+New OSD-0 pod came up clean on its pod IP within ~15s — no `public_network` filter, daemon bound to the first available interface, which on a pod-network pod is just `eth0` with the assigned `10.130.x.x` IP.
+
+### The real failure mode: peering hung indefinitely with mixed network shapes
+
+Now the cluster had:
+
+- **OSD-0**: pod network, address `10.130.1.10` only
+- **OSD-1**: still on host network (hadn't rolled yet), addresses `192.168.1.8` (frontnet) + `192.168.10.3` (backnet)
+- **OSD-2**: same shape as OSD-1, addresses `192.168.1.9` + `192.168.10.4`
+- **mons**: all still on host network, `192.168.1.7/.8/.9`
+
+Mons advertised the new OSD-0 address (`10.130.1.10`) to the cluster, OSD-1 and OSD-2 saw it, and **PG peering started.** Then it hung. 220/220 PGs `peering`, no progress for 4+ minutes. Slow ops climbed monotonically: 10 → 269 → 521 → 770. Client I/O was effectively blocked.
+
+The connectivity *should* have worked — OVN SDN passes pod↔host traffic in both directions, and the host network gets a default route back to pod IPs. But peering involves repeated multi-message handshakes per PG; if even a few percent of those messages drop or arrive at the wrong source-address (due to OVN's SNAT for pod→external traffic), cephx session establishment between OSDs stalls, and the PG never finishes peering. Worse, msgr2 sessions retry indefinitely without ever timing out hard enough for Ceph to give up and try a different path.
+
+Other observability casualties as the storage froze:
+
+- **Prometheus**: TSDB lives on a Ceph RBD PVC. Disk writes blocked, pod went `5/6 Running, 6 restarts`. Scrapes accumulated in memory until WAL pressure caused container restarts.
+- **Grafana dashboards** ("Ceph Cluster", "Node Exporter Full", "Mikrotik" — though Mikrotik kept working): all "No data" because Prometheus stopped persisting samples.
+- **ArgoCD UI/Server**: laggy but functional (its repo cache is on Ceph too).
+
+### The deadlock — Rook's safety check refused to roll OSDs while peering was stuck
+
+When peering hung, Rook's operator queued updates for OSD-0/1/2 Deployments but blocked all three on its `ceph osd ok-to-stop` safety check. Logs showed:
+
+```
+op-osd: [rook-ceph] OSD 0 is not ok-to-stop. will try updating it again later
+op-osd: [rook-ceph] OSD 1 is not ok-to-stop. will try updating it again later
+op-osd: [rook-ceph] OSD 2 is not ok-to-stop. will try updating it again later
+```
+
+…in a tight loop, indefinitely. Classic chicken-and-egg:
+
+- Peering hung *because* OSD-0 advertised a pod IP that the other OSDs/mons couldn't establish reliable msgr2 sessions to
+- Rook wouldn't roll OSD-0 back to hostNetwork *because* the ok-to-stop check requires peering to be healthy
+- → No path forward without manual intervention
+
+This is **the failure mode that breaks Rook's documented "host → empty → multus" path on a 3-OSD-no-drain cluster.** With 4+ OSDs and drain headroom, the safety check would still block, but you'd have replication margin to force-roll one. With 3 OSDs and `min_size: 2`, force-rolling two simultaneously risks I/O outage.
+
+### Recovery — rollback + manual OSD-0 Deployment patch
+
+Committed `provider: host` rollback (`2ddd69f`). ArgoCD synced the CephCluster CR back to `provider: host` with the original `addressRanges`. Rook's operator picked up the change and *tried* to update OSD-0/1/2 Deployments back to `hostNetwork: true` — but the same ok-to-stop check blocked all three.
+
+So Rook re-applying its own desired state was *also* deadlocked by its own safety check. The CR was healthy, the Deployment specs were stale, and the operator was stuck.
+
+Broke the deadlock with a direct kubectl patch on the OSD-0 Deployment, bypassing Rook:
+
+```
+oc -n rook-ceph patch deploy rook-ceph-osd-0 --type=json \
+  -p '[{"op":"add","path":"/spec/template/spec/hostNetwork","value":true}]'
+```
+
+The patched state matched what Rook *wanted* to apply, just without Rook's blocked safety gate. New OSD-0 pod came up with `hostNetwork: true`, bound to `192.168.1.7`, mons learned the new (host) address, peering resumed almost immediately:
+
+- `220 peering` → `198 active+undersized+degraded` + `22 active+undersized` within seconds
+- Slow ops `770 → 2` within ~30s
+- Client I/O resumed; Prometheus recovered; Grafana dashboards repopulated
+
+Note: `public_network = 192.168.1.0/24` was already back in the config DB by then — the operator had set it during its CephCluster reconcile (just couldn't update the Deployment). So OSD-0's restart picked the right interface automatically. The earlier `ceph config rm` to fix the original crash had been undone by Rook's reconcile already.
+
+Backfill to clear the 33% objects-degraded ran in the background after recovery.
+
+### Lessons + revised approach
+
+1. **The Rook-documented `host → empty → multus` path is NOT safe on a 3-OSD-no-drain cluster.** The empty-intermediate state creates a network-shape heterogeneity (one OSD on pod network, others on host network) that hangs peering. Rook's own safety check then refuses to homogenize forward. The only escape is manual Deployment surgery, which defeats the purpose of using a managed operator.
+
+2. **Rook's operator updates Deployment shape but not Ceph config DB on a network provider change.** The `public_network` setting in the mons' KV store survives a `provider` change and causes the new daemon shape to crash. This is at minimum surprising; possibly an upstream bug. Even if you successfully homogenized the network shape, you'd still hit this on every OSD restart until the operator (or someone) updates the config DB to match.
+
+3. **`metadata.managedFields: []` makes SSA-driven field removal a no-op.** Resources created pre-SSA carry forever-sticky fields. We may want to do a one-time `oc apply --server-side --force-conflicts` on the CephCluster CR to establish ArgoCD as the field manager before the next risky spec change — or just stop expecting SSA removal to work for this resource.
+
+4. **Observability stack is tightly coupled to storage.** When Ceph hung, Prometheus/Grafana/Loki all went dark in the same window, blinding us mid-incident. That's a real exposure — we should think about whether the monitoring stack should live on a different storage class (or at least how to inspect cluster state without the dashboards working).
+
+**Revised path forward for client throughput uplift:**
+
+Picking option (d) from the recovery decision tree: **abandon the Multus migration for now.** Reasons:
+
+- The 10G storage backnet is already in use for OSD↔OSD replication, which was the dominant bottleneck in the bottleneck-sweep (per `blog/blog-rook-ceph-draft.md`).
+- The expected client-throughput uplift from Multus (~118 MB/s → ~700 MB/s on 1M seqwrite) is real but doesn't justify the cost of working around the deadlock on a 3-OSD topology.
+- Revisit when there's drain headroom (4+ nodes, or a hot-spare OSD), or when there's a path that doesn't require the empty-intermediate state.
+
+Files left in place: NADs (`components/cluster-config/ceph-network-attachments/`) and the NNCP `ceph-shim` interface (`components/cluster-config/nmstate-nncp/`). They're harmless to keep — the NADs aren't referenced by any CephCluster spec anymore, and the shim+routing setup is dormant. Removing them is queued as a cleanup TODO but not urgent.
+
+The README TODO line for the Multus migration will be revised to reflect this — moving the item from "in flight" to "queued, blocked on drain headroom" with the rationale captured here.
+
 
