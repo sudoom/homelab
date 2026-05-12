@@ -118,7 +118,7 @@ Recommended starting point: **10 000 queries / 60 s per client**. Validate by ch
 
 Pi-hole's blocked-domain lists should carry to technitium more or less unchanged. Lists in use today (extract from pi-hole admin → `Group Management → Lists`):
 
-- **TODO** — pull the actual list URLs from the live pi-hole UI before cutover. Technitium imports the same Steven Black / OISD / etc. lists natively.
+- **Decided 2026-05-12**: StevenBlack/hosts as the single source of truth (meta-list that already merges AdAway, MVPS, Disconnect, etc.). ~82.6k blocked domains, validated reachable, parses natively in Technitium. The pi-hole's actual adlist was never extracted — we went with the canonical meta-list directly. Add more lists later via `ansible/technitium/files/blocked.urls` if a specific gap shows up.
 
 ## Recursive resolution + DNSSEC
 
@@ -241,25 +241,50 @@ Pinned the Ansible `technitium-config` role's HTTP API param names against [APID
 
 These are now hard-coded into `ansible/technitium/roles/technitium-config/tasks/main.yml`; the role's `debug:` placeholder TODOs are gone. End-to-end run against the live API still needs to happen (with the vault password) — the param names are docs-pinned but not yet observed-correct.
 
+## Cutover + post-cutover bugs (2026-05-12 evening)
+
+Cutover happened during the same session. Sequence on `dns-master`:
+
+```
+sudo systemctl stop pihole-FTL
+sudo systemctl disable pihole-FTL
+sudo systemctl restart dns          # Technitium grabs :53 once pi-hole releases it
+sudo ss -tulnp 'sport = :53'        # confirms dns-server now binds :53 on all interfaces
+```
+
+LAN DNS gap was sub-second — Technitium re-bound :53 immediately on restart.
+
+**MikroTik discovery (gw.home.lab → IP/DNS/Static):** the router holds *authoritative static entries* for `okd.sudops.pl` (not a conditional forwarder as I'd assumed). Live entries: `api`, `api-int` → `192.168.1.240`; regex `*.apps.okd.sudops.pl` → `192.168.1.241`. Today's chain was: client → pi-hole → forwards `okd.sudops.pl` → gw.home.lab static answer. Post-cutover, technitium is authoritative on the LAN view and answers locally — the MikroTik entries are dead code. **Don't remove them yet** — keep them through the 24h soak as a safety net; remove after.
+
+### Three bugs caught post-cutover
+
+**1. Blocklist URLs pushed as empty string** (silent). `dig doubleclick.net` returned a real IP, `/etc/dns/blocklists/` was empty. Web UI showed "Allow / Block List URLs" field empty. Root cause: `lookup('ansible.builtin.file', 'blocked.urls').split('\n')` — in a YAML scalar, `'\n'` is the literal two-char sequence, not a newline, so `.split('\n')` returned the whole file as one element, the first-line `# Block-list URLs ...` comment matched `reject('match', '^#')` and the list emptied. `join(',')` of empty list = `''`. Pushed to `/api/settings/set` as `blockListUrls=`, accepted as "no URLs configured". Fix: `splitlines()` instead. Added a follow-up `assert` so this silent-empty pattern can't recur.
+
+**2. `enableBlocking` defaults to false** on a fresh Technitium install — even with `blockListUrls` populated, blocking is gated off. Added `enableBlocking: "true"` to the settings.set call so re-runs flip it explicitly.
+
+**3. Hostname kept reverting from `dns-master` back to `pi-hole-master`.** The base role's `Set hostname` task ran cleanly (`ok` not `changed`), but dhcpcd's `30-hostname` hook fired on every lease renewal, did a reverse-DNS lookup on the leased IP (the MikroTik lease record still says `pi-hole-master`), and reset `/etc/hostname` + `/etc/hosts` + the kernel value. Fix: base role now adds `nohook hostname` to `/etc/dhcpcd.conf` BEFORE the hostname-set task, so renewals stop touching it. Validated: `ok=8, changed=3`.
+
 ## Open items / TODOs
 
-Closed during 2026-05-12 design session:
+Closed during 2026-05-12 session:
 
-- ✅ OS confirmed — RPi OS Lite aarch64 (kernel 6.12.75, Bookworm-based, build 2026-03-11). Same image for primary + future secondary.
-- ✅ Install method decided — native via Technitium's installer script. Not Docker.
-- ✅ Config management approach — Ansible playbook under `ansible/technitium/`, applied manually from a workstation. Not under ArgoCD (DNS shouldn't depend on the cluster being up).
-- ✅ Hostname / inventory key — `dns-master` (matches the existing `pi-hole-master` convention). Future secondary: `dns-secondary`.
-- ✅ SSH access shape — `ssh admin@192.168.1.12 -i ~/.ssh/vadz_key`, passwordless sudo confirmed.
-- ✅ Ansible scaffold built — `playbook.yml` (full configure), `base-only.yml` (no-vault validation), `upgrade.yml` (OS + Technitium periodic upgrade). All `ansible.builtin.*` modules only.
-- ✅ Base role validated end-to-end against the live box (ok=6, changed=2 — installed missing packages + dropped 20auto-upgrades config).
-- ✅ Block list URLs decided — StevenBlack/hosts only (validated 2026-05-12, ~82.6k blocked domains, hosts-file format, recent upstream commit). Single source of truth; add more later if a specific gap shows up.
-- ✅ Technitium HTTP API param names pinned (see section above).
+- ✅ OS confirmed — RPi OS Lite aarch64 (kernel 6.12.75, Bookworm/Trixie-based).
+- ✅ Install method — native via Technitium installer (not Docker).
+- ✅ Config management — Ansible playbook under `ansible/technitium/`; manual run from workstation; not ArgoCD-managed.
+- ✅ Hostname / inventory key — `dns-master`; future secondary `dns-secondary`.
+- ✅ SSH shape — `ssh admin@192.168.1.12 -i ~/.ssh/vadz_key`, passwordless sudo.
+- ✅ Ansible scaffold — `playbook.yml`, `base-only.yml`, `upgrade.yml`; all `ansible.builtin.*` only.
+- ✅ Base role validated end-to-end (multiple runs through the day; idempotent).
+- ✅ Block list URL set — StevenBlack/hosts (single source of truth).
+- ✅ Technitium HTTP API param names pinned to upstream APIDOCS.md.
+- ✅ End-to-end `playbook.yml` run against live API (`ok=21` first run, then iterated three fixes).
+- ✅ MikroTik forwarder check — confirmed it's static entries, not a forwarder; will become dead code after soak.
+- ✅ **Cutover** — Technitium owns `:53`; pi-hole stopped + disabled; authoritative zones answering; blocklist active after the splitlines fix; hostname locked via `nohook hostname`.
 
-Still open:
+Still open (queued for tomorrow / future):
 
-- [ ] **End-to-end run of `playbook.yml`** against the live Technitium API with the vault password. Will surface any param-name drift between APIDOCS.md and the actual installed version.
-- [ ] **Confirm `gw.home.lab` (MikroTik) conditional-forwarder for `okd.sudops.pl`** — point or remove. After technitium becomes authoritative on the LAN view, the gateway's forwarder rule should either be removed (if nothing else needs it) or repointed at `192.168.1.12`. Verify before cutover.
-- [ ] **Cutover swap**: stop pi-hole, restart `dns.service`, verify Technitium grabs `:53`. ~1 min LAN DNS downtime; pick a quiet window.
-- [ ] **24h soak after cutover** then `apt remove --purge pihole pihole-FTL` to clean up.
-- [ ] **Monitoring**: Technitium has a Prometheus exporter (community); scrape from the cluster's existing stack into a dashboard. Low priority — defer until cutover is done.
-- [ ] **Procurement**: RPi Zero 2W for the secondary. Not blocking; primary works standalone.
+- [ ] **24h soak then pi-hole purge** — verify Technitium remains stable through Mon/IoT/laptop traffic patterns overnight, then on `dns-master`: `sudo apt remove --purge pihole pihole-FTL && sudo rm -rf /etc/pihole /var/log/pihole*`. Reclaims disk and removes the now-dead pi-hole binary.
+- [ ] **Cosmetic: SOA primary NS shows `pi-hole-master.`** for all three Technitium-served zones (`okd.sudops.pl`, `cluster.local`, `svc.cluster.local.okd.sudops.pl`). Holdover from the box's old hostname before today's rename. Fix via the web UI's zone editor (`Zones → <zone> → SOA → Primary Name Server` → `dns-master.`) or by deleting + recreating the zones via the Ansible role. Purely cosmetic.
+- [ ] **Cosmetic: MikroTik DHCP lease record + DNS static entries.** The lease still labels `192.168.1.12` as `pi-hole-master` — change the lease's "Host Name" field to `dns-master`. Also after the 24h soak, remove the now-dead static DNS entries for `api.okd.sudops.pl`, `api-int.okd.sudops.pl`, and the `*.apps.okd.sudops.pl` regex on the router (technitium answers these authoritatively now).
+- [ ] **Monitoring**: Technitium has a Prometheus exporter (community — pick one); scrape from the cluster's stack into a dashboard. Lower priority; defer.
+- [ ] **Procurement**: RPi Zero 2W for the `dns-secondary` secondary. Not blocking; primary works standalone.
