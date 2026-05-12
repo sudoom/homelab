@@ -264,6 +264,27 @@ LAN DNS gap was sub-second — Technitium re-bound :53 immediately on restart.
 
 **3. Hostname kept reverting from `dns-master` back to `pi-hole-master`.** The base role's `Set hostname` task ran cleanly (`ok` not `changed`), but dhcpcd's `30-hostname` hook fired on every lease renewal, did a reverse-DNS lookup on the leased IP (the MikroTik lease record still says `pi-hole-master`), and reset `/etc/hostname` + `/etc/hosts` + the kernel value. Fix: base role now adds `nohook hostname` to `/etc/dhcpcd.conf` BEFORE the hostname-set task, so renewals stop touching it. Validated: `ok=8, changed=3`.
 
+### Coverage gap caught right after I'd called the session done: home.lab / homelab.net
+
+Old-cluster `node1` started reporting `NotReady` shortly after the cutover. Kubelet's kubeconfig points at `https://kube-cp.homelab.net:8443`, and that name suddenly returned NXDOMAIN. Pre-cutover, pi-hole forwarded `homelab.net` → `gw.home.lab` (192.168.1.1) where MikroTik holds static A records (`kube-cp.homelab.net → 192.168.1.200`, the old-cluster API VIP). Technitium does recursive resolution by default — without explicit Forwarder zones for those LAN-local domains, queries hit public Cloudflare and got NXDOMAIN. My fault for not auditing the full MikroTik static-DNS table when scoping today's migration; I focused on `okd.sudops.pl` and missed the rest.
+
+Fix: add `technitium_forwarder_zones` list to `group_vars/all.yml` and a corresponding role task that calls `/api/zones/create` with `type=Forwarder` for each (`home.lab` and `homelab.net`, both → `192.168.1.1`).
+
+### Three bugs fixed iterating that fix
+
+**1. Silent zone-create failures.** First playbook re-run reported `ok=N changed=0 failed=0` but the Forwarder zones weren't actually on disk and the SOA query for `homelab.net` returned Cloudflare's nameservers (proof Technitium was still recursing publicly). Root cause: Technitium returns **HTTP 200** with `{"status": "error", "errorMessage": "..."}` in the body when zone-create has a problem. The role was checking only the HTTP status code, so silent failures passed through unflagged. Fix: `return_content: true` + `register: response` + `failed_when: response.json.status != "ok"` (with an allowlist for the already-exists case to keep re-runs idempotent).
+
+**2. `--tags forwarders` skipped the login.** Second re-run failed at the Forwarder zone task with `technitium_auth_headers is undefined`. The Login + token-extract tasks were tagged only `[config]`, so Ansible's tag filter skipped them when the operator scoped to `--tags forwarders`. Fix: tag auth-setup tasks (login, token extract, blocklist URL set_fact, blocklist assert) with `always` — special Ansible tag that runs the task regardless of which other `--tags` filter is used. Now narrow re-runs bring the auth setup along automatically.
+
+**3. The initial role didn't include Forwarder zones at all.** Pure design omission — I structured the role around what was on my mental model of "the pi-hole's job" (authoritative zones for okd, blocklist, blocked-zones for cluster.local) and missed that pi-hole was also implicitly carrying `homelab.net` queries via its conditional forwarder chain. Lesson: when migrating a resolver, **audit every static + forwarded zone the old box was implicitly serving** — not just the ones in active mental model.
+
+End-to-end DNS chain verified working after `f0bb5e1`:
+- `okd.sudops.pl` → authoritative on Technitium (api/api-int/`*.apps`/node names) ✓
+- `homelab.net` → Forwarder → MikroTik (kube-cp etc.) ✓
+- `home.lab` → Forwarder → MikroTik (gw etc.) ✓
+- `cluster.local` + `svc.cluster.local.okd.sudops.pl` → NXDOMAIN locally ✓
+- Everything else → recursive resolution + DNSSEC + StevenBlack blocklist ✓
+
 ## Open items / TODOs
 
 Closed during 2026-05-12 session:
@@ -280,10 +301,14 @@ Closed during 2026-05-12 session:
 - ✅ End-to-end `playbook.yml` run against live API (`ok=21` first run, then iterated three fixes).
 - ✅ MikroTik forwarder check — confirmed it's static entries, not a forwarder; will become dead code after soak.
 - ✅ **Cutover** — Technitium owns `:53`; pi-hole stopped + disabled; authoritative zones answering; blocklist active after the splitlines fix; hostname locked via `nohook hostname`.
+- ✅ **Forwarder zones for `home.lab` + `homelab.net`** added to role + applied — restored kube-cp.homelab.net resolution for the old cluster (broke node1's kubelet temporarily until this landed).
+- ✅ **Role hardening** — `failed_when` on Forwarder zone task surfaces silent status="error" responses; `always` tag on auth-setup tasks makes `--tags X` re-runs work.
 
 Still open (queued for tomorrow / future):
 
 - [ ] **24h soak then pi-hole purge** — verify Technitium remains stable through Mon/IoT/laptop traffic patterns overnight, then on `dns-master`: `sudo apt remove --purge pihole pihole-FTL && sudo rm -rf /etc/pihole /var/log/pihole*`. Reclaims disk and removes the now-dead pi-hole binary.
+- [ ] **Audit MikroTik's static DNS table for other LAN-local zones** that might need Forwarder zones in Technitium too. Today's `kube-cp.homelab.net` surprise proved the design needs zone-by-zone validation, not just `okd.sudops.pl`. Check every active entry in `/ip dns static print` — if it's a zone Technitium doesn't have either authoritatively or via Forwarder, add it to `technitium_forwarder_zones` in `group_vars/all.yml`.
+- [ ] **Apply `failed_when status != "ok"` to the other zone-create tasks** (okd.sudops.pl + blocked zones). They're working empirically today but currently subject to the same silent-failure pattern — would silently no-op on a future Technitium API change. Cheap belt-and-braces.
 - [ ] **Cosmetic: SOA primary NS shows `pi-hole-master.`** for all three Technitium-served zones (`okd.sudops.pl`, `cluster.local`, `svc.cluster.local.okd.sudops.pl`). Holdover from the box's old hostname before today's rename. Fix via the web UI's zone editor (`Zones → <zone> → SOA → Primary Name Server` → `dns-master.`) or by deleting + recreating the zones via the Ansible role. Purely cosmetic.
 - [ ] **Cosmetic: MikroTik DHCP lease record + DNS static entries.** The lease still labels `192.168.1.12` as `pi-hole-master` — change the lease's "Host Name" field to `dns-master`. Also after the 24h soak, remove the now-dead static DNS entries for `api.okd.sudops.pl`, `api-int.okd.sudops.pl`, and the `*.apps.okd.sudops.pl` regex on the router (technitium answers these authoritatively now).
 - [ ] **Monitoring**: Technitium has a Prometheus exporter (community — pick one); scrape from the cluster's stack into a dashboard. Lower priority; defer.

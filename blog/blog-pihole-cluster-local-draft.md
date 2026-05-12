@@ -204,7 +204,7 @@ node5 ≈ node6 to within a small constant. That's what nodes-doing-similar-work
 
 ### Lesson
 
-**Never point a recursive resolver's conditional forwarder at a Kubernetes node that uses that same recursive resolver as upstream.** It's a textbook A→B→A loop and it's invisible until traffic volume gives it away. The "host CoreDNS will give better answers for `*.apps.okd.sudops.pl`" intuition isn't wrong on its own — but the loop risk dominates. If we ever want LAN clients to resolve cluster ingress names without `/etc/hosts`, the right answer is to add the records to whatever LAN-side resolver pi-hole *can* point at without looping (the router, or the planned technetium box), not to forward into the cluster.
+**Never point a recursive resolver's conditional forwarder at a Kubernetes node that uses that same recursive resolver as upstream.** It's a textbook A→B→A loop and it's invisible until traffic volume gives it away. The "host CoreDNS will give better answers for `*.apps.okd.sudops.pl`" intuition isn't wrong on its own — but the loop risk dominates. If we ever want LAN clients to resolve cluster ingress names without `/etc/hosts`, the right answer is to add the records to whatever LAN-side resolver pi-hole *can* point at without looping (the router, or the planned technitium box), not to forward into the cluster.
 
 ## Aftershock — Argo repo-server can't fetch from GitHub (2026-04-30 ~20:45 CEST)
 
@@ -220,4 +220,4 @@ Same fingerprint as before — `server misbehaving` is Go's translation of REFUS
 
 `openshift-gitops-repo-server` was scheduled on **node6**, which is the same client pi-hole was REFUSING in the prior session. CoreDNS-on-node6 → pi-hole → REFUSED → repo-server's `net.LookupHost("github.com")` returns "server misbehaving" → Argo can't render manifests for any Helm-source app, not just Mikrotik.
 
-Not fixed in-session per the planned pi-hole → technetium migration (don't pile workarounds onto the box that's going away). The acute symptom self-clears when the rate-limit window resets *and* the retry pressure drops — but with repo-server retrying every second on a permanent error, that doesn't happen until something breaks the loop (operator pod move, repo-server restart, pi-hole restart, or the migration). Recording it here so the same wake-up call doesn't have to happen a third time.
+Not fixed in-session per the planned pi-hole → technitium migration (don't pile workarounds onto the box that's going away). The acute symptom self-clears when the rate-limit window resets *and* the retry pressure drops — but with repo-server retrying every second on a permanent error, that doesn't happen until something breaks the loop (operator pod move, repo-server restart, pi-hole restart, or the migration). Recording it here so the same wake-up call doesn't have to happen a third time.

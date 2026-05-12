@@ -106,7 +106,7 @@ dial tcp: lookup github.com on 172.30.0.10:53: server misbehaving
 
 The deadlock is self-feeding: repo-server retries `git ls-remote` once a second; combined with everything else node6 looks up, that's enough to keep node6 over pi-hole's 1000-q/min rate-limit window. Pi-hole keeps responding REFUSED → Argo can't resolve `github.com` → the rollout stalls on whichever commit got through during a momentary clear window.
 
-Cross-reference with `blog-pihole-cluster-local-draft.md` for the underlying analysis. The acute fix is to bounce the repo-server pod so it reschedules off node6; the durable fix is the planned pi-hole → technetium migration. I rode it out this session — the rate-limit window cleared on its own once retry pressure dropped.
+Cross-reference with `blog-pihole-cluster-local-draft.md` for the underlying analysis. The acute fix is to bounce the repo-server pod so it reschedules off node6; the durable fix is the planned pi-hole → technitium migration. I rode it out this session — the rate-limit window cleared on its own once retry pressure dropped.
 
 ## What `mktxp.conf` looks like for two devices
 
@@ -190,6 +190,6 @@ Grafana dashboard 13679 is provisioned by `grafana-config` and bound to the `Pro
 
 ## Why I bothered with all of this
 
-Three weeks of fio runs against Ceph generated lots of "is the network in the way?" follow-ups. Without `node_network_*` on the switch side it's all guessing. Now there's a graphable answer. The PoE / wireless / DHCP signals are bonus — and turn out to be useful for the upcoming pi-hole → technetium migration, where the switch is going to be the most stable observability point as boxes get swapped in and out.
+Three weeks of fio runs against Ceph generated lots of "is the network in the way?" follow-ups. Without `node_network_*` on the switch side it's all guessing. Now there's a graphable answer. The PoE / wireless / DHCP signals are bonus — and turn out to be useful for the upcoming pi-hole → technitium migration, where the switch is going to be the most stable observability point as boxes get swapped in and out.
 
 Total session time: ~1 hour of chart writing, ~30 min of debug-and-fix on the four issues above. Cheaper than I'd guessed.

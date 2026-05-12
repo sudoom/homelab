@@ -53,7 +53,7 @@ Curated to "things I'd want to know are down at 02:00":
 - **OKD platform:** `api.okd.sudops.pl:6443/healthz` and the ingress canary route. Both with `[CERTIFICATE_EXPIRATION] > 168h` to catch cert-manager regressions early.
 - **Cluster apps:** ArgoCD, Grafana, Ceph dashboard. These are the three I actually open day-to-day.
 - **Network gear:** TCP probes against the mktxp/RouterOS API port (`tcp://192.168.1.1:8728` for the router and `tcp://192.168.1.220:8728` for the switch). Originally drafted as ICMP — that didn't survive contact with OpenShift's `restricted-v2` SCC, see "Rollout findings" below. Both devices already have `tcp/8728` open for the mktxp scrape, so reusing it as a liveness probe is free.
-- **DNS:** UDP probe to pi-hole at 192.168.1.12. Tagged for replacement (technetium migration is queued), but until then it's load-bearing for cluster.local resolution from external machines, and seeing it red the moment it stops being authoritative is worth the line.
+- **DNS:** UDP probe to pi-hole at 192.168.1.12. Tagged for replacement (technitium migration is queued), but until then it's load-bearing for cluster.local resolution from external machines, and seeing it red the moment it stops being authoritative is worth the line.
 
 The cert-expiry checks are the one thing I'd flag as non-obvious — Gatus's `[CERTIFICATE_EXPIRATION]` placeholder evaluates against the leaf cert presented during the HTTPS handshake. `> 168h` (one week) gives a comfortable lead on cert-manager renewal failures before the cert actually expires.
 

@@ -203,9 +203,9 @@ All ten CRDs present, controller running, CSV `Succeeded`. The cluster is now re
 
 ## Rollout interference: pi-hole DNS rate-limit
 
-Worth noting because it cost about ten minutes of staring at "stuck" Argo apps before realizing the apps weren't stuck — Argo's repo-server couldn't resolve `github.com`. Pi-hole at `192.168.1.12` (still authoritative for `cluster.local` until technetium migration) periodically rate-limits DNS queries from cluster nodes and starts returning SERVFAIL to bursty clients. The repo-server was logging `lookup github.com on 172.30.0.10:53: server misbehaving`.
+Worth noting because it cost about ten minutes of staring at "stuck" Argo apps before realizing the apps weren't stuck — Argo's repo-server couldn't resolve `github.com`. Pi-hole at `192.168.1.12` (still authoritative for `cluster.local` until technitium migration) periodically rate-limits DNS queries from cluster nodes and starts returning SERVFAIL to bursty clients. The repo-server was logging `lookup github.com on 172.30.0.10:53: server misbehaving`.
 
-Not a CNPG problem; it's the recurring pi-hole rate-limit issue documented in `blog-pihole-draft.md`. Workaround: wait it out (rate-limit window resets after a couple minutes). Long-term fix is the technetium migration, which retires the 192.168.1.12 box. Cross-referenced here only because if a future me pulls up this draft after a similar rollout that "didn't sync," the pi-hole DNS path is the second thing to check after the catalog source.
+Not a CNPG problem; it's the recurring pi-hole rate-limit issue documented in `blog-pihole-draft.md`. Workaround: wait it out (rate-limit window resets after a couple minutes). Long-term fix is the technitium migration, which retires the 192.168.1.12 box. Cross-referenced here only because if a future me pulls up this draft after a similar rollout that "didn't sync," the pi-hole DNS path is the second thing to check after the catalog source.
 
 ## Open follow-ups
 
