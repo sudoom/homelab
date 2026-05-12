@@ -1,18 +1,21 @@
 ---
 # Configure Technitium DNS Server via its HTTP API.
 # All API calls go to 127.0.0.1:5380 (the local box) — no need to expose the
-# admin port externally.
+# admin port externally. API param names are taken from the canonical doc:
+# https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md
 #
 # Workflow:
-#   1. Login with admin credentials → register session token
-#   2. Apply server settings (recursion, DNSSEC, rate limits)
-#   3. Ensure authoritative split-horizon zone for okd.sudops.pl exists with
-#      the expected records
-#   4. Ensure blocked zones (cluster.local, svc.cluster.local.okd.sudops.pl)
-#      return NXDOMAIN
-#   5. Ensure blocklist URLs are configured + refreshed
-#   6. Logout
+#   1. Login with admin credentials → register session token, build Bearer header
+#   2. /api/settings/set with: recursion, DNSSEC, rate-limit bypass, block-list
+#      URLs (read from files/blocked.urls), block-list update interval
+#   3. /api/zones/create for okd.sudops.pl (authoritative split-horizon)
+#   4. /api/zones/records/add for each record in the okd zone (overwrite=true → idempotent)
+#   5. /api/zones/create for each blocked zone (cluster.local + svc.cluster.local.okd.sudops.pl)
+#      — empty authoritative zone → NXDOMAIN by default
+#   6. /api/settings/forceUpdateBlockLists to refresh the block list cache now
+#   7. /api/user/logout
 
+# ---- Login + Bearer header --------------------------------------------------
 - name: Login to Technitium API
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/user/login"
@@ -22,105 +25,144 @@
       user: "{{ technitium_admin_user }}"
       pass: "{{ technitium_admin_password }}"
       includeInfo: "false"
-    return_content: true
     status_code: 200
+    return_content: true
   register: technitium_login
-  no_log: true       # don't leak the password in playbook output
-  tags: [config]
-
-- name: Extract session token
-  ansible.builtin.set_fact:
-    technitium_token: "{{ technitium_login.json.token }}"
   no_log: true
   tags: [config]
 
-# ---- Server settings (recursion, DNSSEC, rate limit) ----------------------
-- name: Apply server-level settings
+- name: Extract session token + build Bearer auth header
+  ansible.builtin.set_fact:
+    technitium_auth_headers:
+      Authorization: "Bearer {{ technitium_login.json.token }}"
+  no_log: true
+  tags: [config]
+
+# ---- Read block list URLs from files/blocked.urls --------------------------
+- name: Read block-list URLs from files/blocked.urls
+  ansible.builtin.set_fact:
+    technitium_block_list_urls: >-
+      {{
+        lookup('ansible.builtin.file', 'blocked.urls').split('\n')
+        | map('trim')
+        | reject('match', '^#')
+        | reject('equalto', '')
+        | list
+        | join(',')
+      }}
+  tags: [config, blocklist]
+
+# ---- /api/settings/set — server-level settings -----------------------------
+- name: Apply server-level DNS settings
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/settings/set"
     method: POST
+    headers: "{{ technitium_auth_headers }}"
     body_format: form-urlencoded
     body:
-      token: "{{ technitium_token }}"
       recursion: "{{ technitium_recursion_mode }}"
       dnssecValidation: "{{ technitium_dnssec_validation | string | lower }}"
-      # Technitium's rate-limit param name varies by version; verify via the
-      # web UI's network tab when first configuring and update this body.
-      # Placeholder param name — TODO confirm:
-      clientsPerSecond: "{{ (technitium_rate_limit_per_client_per_minute / 60) | int }}"
+      qpmLimitBypassList: "{{ technitium_qpm_bypass_list }}"
+      blockListUrls: "{{ technitium_block_list_urls }}"
+      blockListUpdateIntervalHours: "{{ technitium_blocklist_update_interval_hours }}"
     status_code: 200
   tags: [config, settings]
 
-# ---- Authoritative zone: okd.sudops.pl ------------------------------------
-# Create the zone if it doesn't exist, then add/update each record.
-# Technitium's API for zones: /api/zones/create, /api/zones/records/add etc.
-# These are documented at https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md
+# ---- /api/zones/create — authoritative okd.sudops.pl -----------------------
 - name: Ensure okd.sudops.pl primary zone exists
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/zones/create"
     method: POST
+    headers: "{{ technitium_auth_headers }}"
     body_format: form-urlencoded
     body:
-      token: "{{ technitium_token }}"
       zone: "{{ okd_zone_name }}"
       type: Primary
-    status_code: [200, 409]    # 409 = already exists, treat as success
-  register: okd_zone_create
-  changed_when: okd_zone_create.status == 200
+    # 200 on create; on already-exists Technitium returns 200 with status=error +
+    # specific message — accept both, idempotency check on records is below.
+    status_code: 200
   tags: [config, zones]
 
-- name: Add/update authoritative records for okd.sudops.pl
-  # TODO: replace with proper idempotent loop. Technitium's API for record
-  # CRUD: GET /api/zones/records/get to read, POST /api/zones/records/add to
-  # create, POST /api/zones/records/update to modify. The naive approach
-  # ("add" with overwrite=true) works but generates noise. Refine when we
-  # have a working primary to test against.
-  ansible.builtin.debug:
-    msg: |
-      Records that should exist in {{ okd_zone_name }}:
-        api               → A {{ okd_api_vip }}
-        api-int           → A {{ okd_api_vip }}
-        *.apps            → A {{ okd_ingress_vip }}
-        {% for node in okd_nodes %}
-        {{ node.name }}            → A {{ node.ip }}
-        {% endfor %}
-  tags: [config, zones, todo]
+# ---- /api/zones/records/add — populate okd.sudops.pl records ---------------
+- name: Build okd.sudops.pl service-level records list
+  ansible.builtin.set_fact:
+    okd_records:
+      - { domain: "api.{{ okd_zone_name }}",     ipAddress: "{{ okd_api_vip }}" }
+      - { domain: "api-int.{{ okd_zone_name }}", ipAddress: "{{ okd_api_vip }}" }
+      - { domain: "*.apps.{{ okd_zone_name }}",  ipAddress: "{{ okd_ingress_vip }}" }
+  tags: [config, zones]
 
-# ---- Blocked zones (NXDOMAIN locally) -------------------------------------
-- name: Ensure blocked zones return NXDOMAIN
+- name: Add/update okd.sudops.pl service-level A records (idempotent via overwrite=true)
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/records/add"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ okd_zone_name }}"
+      domain: "{{ item.domain }}"
+      type: A
+      ipAddress: "{{ item.ipAddress }}"
+      ttl: "60"
+      overwrite: "true"
+    status_code: 200
+  loop: "{{ okd_records }}"
+  loop_control:
+    label: "{{ item.domain }} → {{ item.ipAddress }}"
+  tags: [config, zones]
+
+- name: Add/update okd.sudops.pl node A records (idempotent via overwrite=true)
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/records/add"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ okd_zone_name }}"
+      domain: "{{ item.name }}.{{ okd_zone_name }}"
+      type: A
+      ipAddress: "{{ item.ip }}"
+      ttl: "60"
+      overwrite: "true"
+    status_code: 200
+  loop: "{{ okd_nodes }}"
+  loop_control:
+    label: "{{ item.name }}.{{ okd_zone_name }} → {{ item.ip }}"
+  tags: [config, zones]
+
+# ---- Blocked zones (NXDOMAIN locally, never recurse) -----------------------
+# An authoritative zone with no records returns NXDOMAIN for any query under it.
+- name: Ensure blocked zones return NXDOMAIN (authoritative empty zones)
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/zones/create"
     method: POST
+    headers: "{{ technitium_auth_headers }}"
     body_format: form-urlencoded
     body:
-      token: "{{ technitium_token }}"
       zone: "{{ item }}"
       type: Primary
-    status_code: [200, 409]
+    status_code: 200
   loop: "{{ technitium_blocked_zones }}"
   loop_control:
     label: "{{ item }}"
   tags: [config, blocked]
-  # An authoritative zone with NO records returns NXDOMAIN by default for any
-  # query under it. That's exactly what we want for cluster.local and
-  # svc.cluster.local.okd.sudops.pl.
 
-# ---- Blocklist URLs -------------------------------------------------------
-- name: Configure blocklist URLs
-  # TODO: read files/blocked.urls (one URL per line) and apply via:
-  #   POST /api/settings/set with blockListUrls=<newline-separated>
-  # Refine the body shape when we have the live API to inspect.
-  ansible.builtin.debug:
-    msg: "TODO: apply blocklist URLs from files/blocked.urls"
-  tags: [config, blocklist, todo]
+# ---- Force-refresh block list cache now -----------------------------------
+- name: Force update of block list cache
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/settings/forceUpdateBlockLists"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    status_code: 200
+  changed_when: false   # always fires; not really a "change" in Ansible terms
+  tags: [config, blocklist]
 
-- name: Logout
+# ---- Logout ---------------------------------------------------------------
+- name: Logout from Technitium API
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/user/logout"
     method: POST
-    body_format: form-urlencoded
-    body:
-      token: "{{ technitium_token }}"
+    headers: "{{ technitium_auth_headers }}"
     status_code: [200, 401]
   no_log: true
   tags: [config]

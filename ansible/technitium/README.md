@@ -83,8 +83,57 @@ Expected DNS downtime: **~30 s if a reboot fires**, **~10 s if not** (the Techni
 
 Cadence suggestion: **monthly**, or on demand when a CVE for Technitium / glibc / kernel lands. Cron-it later if drift becomes a concern.
 
+## What the playbook configures
+
+The `technitium-config` role applies the following via Technitium's HTTP API (`/api/...`). Param names verified 2026-05-12 against [`APIDOCS.md` on master](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md).
+
+**Server-level settings** (`/api/settings/set`):
+| Param | Set to | Configurable via |
+|---|---|---|
+| `recursion` | `AllowOnlyForPrivateNetworks` (not an open resolver) | `technitium_recursion_mode` in `group_vars/all.yml` |
+| `dnssecValidation` | `true` | `technitium_dnssec_validation` |
+| `qpmLimitBypassList` | `192.168.1.0/24` (the LAN — bypasses per-subnet rate limits) | `technitium_qpm_bypass_list` |
+| `blockListUrls` | comma-joined list from `files/blocked.urls` | edit the file |
+| `blockListUpdateIntervalHours` | `24` | `technitium_blocklist_update_interval_hours` |
+
+**Authoritative zone for `okd.sudops.pl`** (`/api/zones/create` + `/api/zones/records/add`, idempotent via `overwrite=true`):
+| Domain | A → | Driven by |
+|---|---|---|
+| `api.okd.sudops.pl` | `192.168.1.240` | `okd_api_vip` |
+| `api-int.okd.sudops.pl` | `192.168.1.240` | `okd_api_vip` |
+| `*.apps.okd.sudops.pl` | `192.168.1.241` | `okd_ingress_vip` |
+| `node4.okd.sudops.pl` | `192.168.1.7` | `okd_nodes` list |
+| `node5.okd.sudops.pl` | `192.168.1.8` | `okd_nodes` list |
+| `node6.okd.sudops.pl` | `192.168.1.9` | `okd_nodes` list |
+
+**Blocked zones** (authoritative empty zones → NXDOMAIN by default):
+- `cluster.local` (carry-over from pi-hole `local=/cluster.local/`)
+- `svc.cluster.local.okd.sudops.pl` (search-suffix-leak shape from cluster pods)
+
+**Blocklist refresh**: after settings + zones are applied, the role triggers `/api/settings/forceUpdateBlockLists` so the block list cache populates immediately rather than waiting for the 24-h schedule.
+
+## Day-2: editing config
+
+Every config knob lives in `group_vars/all.yml` (or `files/blocked.urls` for the blocklist sources). After editing:
+
+```bash
+cd ansible/technitium
+ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --limit dns-master
+```
+
+Common edits and the file they live in:
+| Want to… | Edit |
+|---|---|
+| Add a node IP | `okd_nodes` in `group_vars/all.yml` |
+| Change `*.apps` ingress VIP | `okd_ingress_vip` |
+| Add a blocklist URL | append to `files/blocked.urls` (comments OK) |
+| Narrow the rate-limit bypass | `technitium_qpm_bypass_list` (CIDR; default whole `192.168.1.0/24`) |
+| Add a new "block this zone" rule | `technitium_blocked_zones` list |
+
 ## What's NOT done yet
 
-See the `TODO` markers in the role tasks files. The skeleton works for install + base OS, but the config role has placeholder `debug:` tasks where the Technitium HTTP API body shapes need to be confirmed against a live box (Technitium's API param names evolve across releases — pin them once we know).
+- **Operator-manual bootstrap steps 1-5** above (SD flash + Technitium install + admin password) — playbook expects an already-installed Technitium and a populated `vars/vault.yml`.
+- **End-to-end run against a live Technitium API** still needs to happen — the param names are pinned to the docs but haven't been validated against the running instance yet.
+- **Primary/secondary cluster role** is still a placeholder pending the RPi Zero 2W.
 
-See also the open-items checklist in `blog/blog-technitium-dns-migration-draft.md`.
+See the open-items checklist in `blog/blog-technitium-dns-migration-draft.md` for the full punch list.

@@ -229,6 +229,18 @@ If technitium lands first: pi-hole's failure modes are resolved (Technitium answ
 
 Recommended sequencing: **technitium first, Track B when there's a quiet day for an MCO master reboot**. Today's incident proved we don't have appetite for a reboot cycle right now.
 
+## Technitium API param verification (2026-05-12)
+
+Pinned the Ansible `technitium-config` role's HTTP API param names against [APIDOCS.md on master](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md). Key params and gotchas:
+
+- **Auth**: `Authorization: Bearer <token>` header (preferred); login response returns `{"token": "..."}` in JSON body. Old-style `?token=` query/form param still works but is deprecated.
+- **Recursion mode**: param `recursion`, values `Deny | Allow | AllowOnlyForPrivateNetworks | UseSpecifiedNetworkACL`. We use `AllowOnlyForPrivateNetworks` so technitium isn't an open resolver.
+- **Rate limit**: Technitium does **per-subnet QPM (Queries Per Minute) prefix limits**, not pi-hole's per-client REFUSE. The right knobs are `qpmPrefixLimitsIPv4/IPv6` (formatted `prefix,udpLimit,tcpLimit`, pipe-separated rows) and `qpmLimitBypassList` (comma-separated CIDRs that bypass entirely). Simplest correct config for the home LAN: bypass the whole `192.168.1.0/24` so the cluster never gets REFUSED during memberlist bursts. Narrow later if specific noisy clients show up.
+- **Block lists**: `blockListUrls` on `/api/settings/set` accepts a **comma-separated** list of URLs. Refresh cadence via `blockListUpdateIntervalHours` (default 24). Force an immediate fetch via `/api/settings/forceUpdateBlockLists`. Technitium auto-detects the upstream format (hosts file, ABP, plain domain list).
+- **Add record**: `/api/zones/records/add` with `domain` + `zone` + `type=A` + `ipAddress` + `ttl` + `overwrite=true`. The `overwrite=true` is what makes the Ansible loop idempotent — re-running converges values without piling up duplicates.
+
+These are now hard-coded into `ansible/technitium/roles/technitium-config/tasks/main.yml`; the role's `debug:` placeholder TODOs are gone. End-to-end run against the live API still needs to happen (with the vault password) — the param names are docs-pinned but not yet observed-correct.
+
 ## Open items / TODOs
 
 Closed during 2026-05-12 design session:
@@ -236,12 +248,18 @@ Closed during 2026-05-12 design session:
 - ✅ OS confirmed — RPi OS Lite aarch64 (kernel 6.12.75, Bookworm-based, build 2026-03-11). Same image for primary + future secondary.
 - ✅ Install method decided — native via Technitium's installer script. Not Docker.
 - ✅ Config management approach — Ansible playbook under `ansible/technitium/`, applied manually from a workstation. Not under ArgoCD (DNS shouldn't depend on the cluster being up).
+- ✅ Hostname / inventory key — `dns-master` (matches the existing `pi-hole-master` convention). Future secondary: `dns-secondary`.
+- ✅ SSH access shape — `ssh admin@192.168.1.12 -i ~/.ssh/vadz_key`, passwordless sudo confirmed.
+- ✅ Ansible scaffold built — `playbook.yml` (full configure), `base-only.yml` (no-vault validation), `upgrade.yml` (OS + Technitium periodic upgrade). All `ansible.builtin.*` modules only.
+- ✅ Base role validated end-to-end against the live box (ok=6, changed=2 — installed missing packages + dropped 20auto-upgrades config).
+- ✅ Block list URLs decided — StevenBlack/hosts only (validated 2026-05-12, ~82.6k blocked domains, hosts-file format, recent upstream commit). Single source of truth; add more later if a specific gap shows up.
+- ✅ Technitium HTTP API param names pinned (see section above).
 
 Still open:
 
-- [ ] Pull the active block list URLs from the running pi-hole and check them into `ansible/technitium/files/blocked.urls`. (`pihole -a -l` from the pi-hole box, or `cat /etc/pihole/adlists.list`.)
-- [ ] Confirm `gw.home.lab` (MikroTik) currently has a conditional-forwarder rule for `okd.sudops.pl` and where it points. After technitium becomes authoritative on the LAN view, the gateway's forwarder rule should either be removed, or — if anything besides pi-hole still queries the gateway for cluster names — repointed at technitium directly. Verify before cutover.
-- [ ] Decide on monitoring: Technitium exposes stats via its HTTP API (and there's a community Prometheus exporter at github.com/javapride/technitium-dns-exporter or similar). Probably scrape from the existing OKD Prometheus into a dashboard. Lower priority — get the box working first.
-- [ ] Plan the actual swap window with the rest of the house — LAN clients (TV, IoT) lose DNS for ~1 min during the IP move. Quiet evening, ideally.
-- [ ] Build the Ansible playbook (scaffold first — empty roles + inventory — then fill in as the primary install reveals what needs templating).
-- [ ] Procurement: the RPi Zero 2W for the secondary. Not blocking; primary works standalone with no HA until the Zero 2W lands.
+- [ ] **End-to-end run of `playbook.yml`** against the live Technitium API with the vault password. Will surface any param-name drift between APIDOCS.md and the actual installed version.
+- [ ] **Confirm `gw.home.lab` (MikroTik) conditional-forwarder for `okd.sudops.pl`** — point or remove. After technitium becomes authoritative on the LAN view, the gateway's forwarder rule should either be removed (if nothing else needs it) or repointed at `192.168.1.12`. Verify before cutover.
+- [ ] **Cutover swap**: stop pi-hole, restart `dns.service`, verify Technitium grabs `:53`. ~1 min LAN DNS downtime; pick a quiet window.
+- [ ] **24h soak after cutover** then `apt remove --purge pihole pihole-FTL` to clean up.
+- [ ] **Monitoring**: Technitium has a Prometheus exporter (community); scrape from the cluster's existing stack into a dashboard. Low priority — defer until cutover is done.
+- [ ] **Procurement**: RPi Zero 2W for the secondary. Not blocking; primary works standalone.

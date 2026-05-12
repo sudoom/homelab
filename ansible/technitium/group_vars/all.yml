@@ -35,16 +35,21 @@ technitium_blocked_zones:
   - svc.cluster.local.okd.sudops.pl
 
 # ---- Rate limiting ----
-# Pi-hole's default was REFUSING node6 in April. Bump well above the cluster's
-# peak burst (post-restart memberlist re-resolution).
-technitium_rate_limit_per_client_per_minute: 10000
+# Technitium rate-limits by client subnet (QPM = queries per minute, per-prefix).
+# Pi-hole's per-client REFUSE storm bit node6 in April; technitium's approach
+# is different — we use the bypass list to exempt the LAN entirely from QPM
+# limits. The cluster nodes generate bursty DNS during memberlist re-resolution
+# after pod restarts; bypassing makes that a non-issue. Narrow this CIDR later
+# if specific noisy clients show up that *should* be rate-limited.
+technitium_qpm_bypass_list: "192.168.1.0/24"
 
 # ---- Recursion + DNSSEC ----
 technitium_recursion_mode: "AllowOnlyForPrivateNetworks"  # not "Allow" — don't be an open resolver
 technitium_dnssec_validation: true
 
 # ---- Block lists ----
-# URLs in files/blocked.urls (one per line). Carry-over from pi-hole + curated.
-# Pull current pi-hole list with `pihole -a -l` or `cat /etc/pihole/adlists.list`
-# and check the result into files/blocked.urls.
-technitium_blocklist_update_hour: 4   # rebuild local blocklist cache at 04:00 daily
+# URLs in files/blocked.urls (one per line, # for comments). Currently:
+# StevenBlack/hosts only (validated 2026-05-12, ~82k blocked domains).
+# Add more lists there over time.
+# Technitium re-fetches from each URL every N hours; 24 is the upstream default.
+technitium_blocklist_update_interval_hours: 24
