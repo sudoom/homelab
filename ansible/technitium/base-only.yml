@@ -1,0 +1,18 @@
+---
+# Runs only the `base` role — OS-level hygiene (hostname, /etc/hosts, timezone,
+# apt packages, unattended-upgrades). Useful for:
+#   - first-run validation: SSH, sudo, apt, hostname operations all work
+#   - debugging the base role in isolation when the rest of the playbook
+#     requires the vault password (this playbook does NOT load vars/vault.yml)
+#
+# Usage:
+#   cd ansible/technitium
+#   ansible-playbook -i inventory.yml base-only.yml --limit dns-master
+
+- name: Apply base OS configuration only (no Technitium, no vault)
+  hosts: all
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: base
