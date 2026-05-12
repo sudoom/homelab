@@ -37,11 +37,13 @@ spec:
       public: {{ .Values.network.selectors.public }}
       cluster: {{ .Values.network.selectors.cluster }}
     {{- end }}
+    {{- if .Values.network.provider }}
     addressRanges:
       public:
         - {{ .Values.network.public | quote }}
       cluster:
         - {{ .Values.network.cluster | quote }}
+    {{- end }}
 
   cephConfig:
     global:
