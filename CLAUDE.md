@@ -283,7 +283,7 @@ For mutations against the cluster (apply/delete/patch/scale, etc.), still go thr
 
 ## Ending a session ("call it")
 
-When the user says **"call it"**, **"call it for the night"**, **"wrap up"**, **"end of session"**, or anything semantically equivalent, treat it as a trigger to do a final pass *before* the goodbye summary — don't just summarize and stop. Two things, in order:
+When the user says **"call it"**, **"call it for the night"**, **"wrap up"**, **"end of session"**, or anything semantically equivalent, treat it as a trigger to do a final pass *before* the goodbye summary — don't just summarize and stop. Three things, in order:
 
 1. **Doublecheck docs for drift from today's work.**
    - `README.md` TODO: every shipped item removed; every newly-discovered item added; every still-queued item refreshed (rationale, blockers, status) if today changed it.
@@ -297,8 +297,23 @@ When the user says **"call it"**, **"call it for the night"**, **"wrap up"**, **
    - Temporary experiment files / one-off scripts / dump artifacts left in the repo root or `tests/` that shouldn't be checked in long-term — propose deletion with rationale, don't silently delete.
    - Unused imports, dead-letter Kustomize patches, etc.
    - Use `git status --short` + `git ls-files --others --exclude-standard` to check for tracked-but-orphaned and untracked files.
+3. **Cluster health sweep — expected result is no error.**
 
-Both passes are *additional* commits on top of whatever the session shipped. End with a one-paragraph session ledger (commits + final state) — that part stays as-is.
+   The 2026-05-13 RGW outage existed for 21 h because no one ran a sweep. Doing it at end-of-session bounds that window to "one session length" instead of "however long until I happen to notice." Use the readonly kubeconfig (`KUBECONFIG=~/.kube/config-readonly`) — every read below works under it, no `oc login` required.
+
+   Check, in order:
+   - **Nodes:** `oc get nodes` — all `Ready`. Anything else (`NotReady`, `SchedulingDisabled` not introduced by today) → flag.
+   - **ArgoCD apps:** `oc -n openshift-gitops get applications` — every app `Synced` + `Healthy`. `OutOfSync` is normal right after a push; if it persists past 5 min, dig.
+   - **CSVs:** `oc get csv -A | awk 'NR==1 || $NF!="Succeeded"'` — only the header line should print.
+   - **Certificates:** `oc get certificate -A` — every entry `Ready=True`. cert-manager renewal failures are silent otherwise.
+   - **Pod restart-count outliers:** `oc get pods -A -o jsonpath='{range .items[?(@.status.containerStatuses[0].restartCount>10)]}{.metadata.namespace}/{.metadata.name} restarts={.status.containerStatuses[0].restartCount}{"\n"}{end}'` — every entry should be a known recurring item (`nmstate-handler` — open CSV-RBAC upstream bug; `multus-*`, `haproxy-node*`, `router-default` — long-uptime cumulative). Anything new = investigate.
+   - **Non-Running pods:** `oc get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded` — empty.
+   - **Ceph health:** `oc -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}'` — `HEALTH_OK` or `HEALTH_WARN` with only the known `BLUESTORE_SLOW_OP_ALERT`. Anything else, especially `HEALTH_ERR` or unfamiliar warning codes → flag. **Don't use the toolbox-exec form (`oc exec deploy/rook-ceph-tools -- ceph -s`) — pods/exec is denied under the readonly SA; the CR status field carries the same answer.**
+   - **Active Prometheus alerts:** there's no read-only path to `/api/v1/alerts` under the SA token (Thanos requires `prometheuses/api` CREATE). If the operator kubeconfig is logged in, `oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- wget -qO- 'http://localhost:9090/api/v1/alerts' | jq '.data.alerts[] | select(.state=="firing") | .labels.alertname'` is the canonical query. If it isn't logged in, skip this check rather than block goodbye on it — the previous checks already catch most issues, and the alert layer is downstream of them.
+
+   The expected result of every line above is "no surprise." If any check surfaces a new outlier today's session caused or didn't notice, that's a goodbye-blocker — investigate before the session ledger, even if it means another commit. A clean sweep is one short paragraph in the ledger ("cluster sweep clean: …"); a dirty sweep gets its own paragraph (with the symptom + what was done).
+
+All three passes are *additional* commits on top of whatever the session shipped. End with a one-paragraph session ledger (commits + final state) — that part stays as-is.
 
 ## Blog notes — keep them current
 
