@@ -200,3 +200,147 @@ pool 10 'ceph-objectstore.rgw.buckets.data' replicated size 3 min_size 2
 `read_balance_score 1.22` (down from 3.00) — replicas now properly spread across OSDs. `HEALTH_OK`, 220 PGs all `active+clean`, no SLOW_OPS during the split. PG-per-OSD ~73 (was 63), still well below the warning threshold.
 
 **Lesson for future RGW pools / new pool types:** Rook's `parameters.pg_num_min` is a passive constraint, not an autoscale trigger. On clusters where the autoscaler is healthy, the chart-only path is sufficient — Rook/Ceph will grow `pg_num` toward `pg_num_min`. On clusters where it isn't (us, Squid 19.2.3), expect to do a one-time toolbox `pg_num` bump to bootstrap. The chart's `pg_num_min` then enforces the floor going forward, so this isn't a recurring chore — only a first-fill artefact.
+
+## Update 2026-05-13: RGW silent 21h outage from router co-location on host network
+
+### Discovery
+
+While building a long-lived read-only `claude-reader` ServiceAccount for out-of-band cluster reads (separate post), I ran a routine cluster health sweep and noticed an outlier in pod restart counts:
+
+```
+NAMESPACE    NAME                                                RESTARTS
+rook-ceph    rook-ceph-rgw-ceph-objectstore-a-6d5f7d86f6-rlh4s   214
+nmstate      nmstate-handler-rb6gs                                36
+nmstate      nmstate-handler-dtflz                                20
+openshift-ingress   router-default-559f95b7d-n4nrh                12
+```
+
+214 in a category where the next-highest "real" anomaly (nmstate, known upstream RBAC bug) is 36 deserved a look.
+
+### Root cause — `EADDRINUSE` on the host port
+
+`oc -n rook-ceph logs <rgw-pod> --previous` gave the answer on the second screen:
+
+```
+debug ... 0 framework: beast
+debug ... 0 framework conf key: port, val: 80
+...
+debug ... -1 failed to bind address 0.0.0.0:80: Address already in use
+debug ... -1 ERROR: failed initializing frontend
+debug ... -1 ERROR:  initialize frontend fail, r = 98
+```
+
+Exit 98 = `EADDRINUSE`. RGW couldn't bind `0.0.0.0:80`.
+
+Three loaded pieces of context locked the diagnosis:
+
+1. **`CephCluster.spec.network.provider: host`** — RGW runs on host network (see `blog-multus-ceph-migration-draft.md` for why we're locked here until 4+ OSDs exist).
+2. **`openshift-ingress/router-default` runs hostNetwork on port 80** — that's the cluster's edge HTTP listener. Two replicas (default HA mode for a 3-node bare-metal IngressController).
+3. **2026-05-12 Multus migration attempt + rollback** rolled the RGW pod. After rescheduling, kube-scheduler picked node4 — which already had a `router-default` pod since 2026-05-11.
+
+Pod placement after the reschedule, captured 2026-05-13 13:48 CEST:
+
+| Node    | router-default | RGW |
+|---------|----------------|-----|
+| node4   | ✓ (pkrsj, 44h) | ✓ (rlh4s, 19h crashlooping) |
+| node5   | — (free)       | — |
+| node6   | ✓ (n4nrh, 4d19h) | — |
+
+Node5 was the only collision-free placement on the cluster, and the scheduler hadn't been told to prefer it.
+
+### Why no alarm
+
+The pod was `CrashLoopBackOff` with `restartCount: 214`. ArgoCD's `logging-stack` Application reported `Synced + Healthy` throughout — ArgoCD checks the AppProject's resource health, not whether downstream consumers can actually use the resources. The Loki consumer was almost certainly silently failing S3 writes against the in-cluster `rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80` endpoint (no healthy endpoints behind the Service), but that didn't bubble back as Application Degraded.
+
+This is a real observability hole: any silent failure of `rook-ceph-rgw-*` Service endpoints needs to alert. A `PrometheusRule` on `kube_endpoint_address_available{endpoint=~"rook-ceph-rgw-.*"} == 0` would have caught this within minutes. Adding to the open-followups list.
+
+### Fix — `requiredDuringSchedulingIgnoredDuringExecution` podAntiAffinity
+
+Added to `gateway.placement` in `components/storage/ceph-object-store/values.yaml`, templated through to the CephObjectStore CR:
+
+```yaml
+placement:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            ingresscontroller.operator.openshift.io/deployment-ingresscontroller: default
+        namespaces:
+          - openshift-ingress
+        topologyKey: kubernetes.io/hostname
+```
+
+`required` not `preferred` is deliberate. Co-residence is functionally broken — better to be `Pending` and observable than `Running` and silently failing for 21 hours. With 2 routers + 1 RGW on 3 nodes, RGW now pins to node5; if node5 becomes unavailable (planned reboot, kernel panic), RGW goes `Pending` until either node5 comes back or a router moves. That's the right alarm shape: kube-scheduler refusing to place the pod is an event Prometheus *will* see.
+
+The `namespaces` field is required because the router pods live in `openshift-ingress`, not in RGW's own `rook-ceph` namespace — without it, the labelSelector silently matches nothing (pod-anti-affinity defaults to same-namespace).
+
+### oc diff before commit
+
+```
+@@ -31,7 +31,15 @@
+   gateway:
+     instances: 1
+-    placement: {}
++    placement:
++      podAntiAffinity:
++        requiredDuringSchedulingIgnoredDuringExecution:
++        - labelSelector:
++            matchLabels:
++              ingresscontroller.operator.openshift.io/deployment-ingresscontroller: default
++          namespaces:
++          - openshift-ingress
++          topologyKey: kubernetes.io/hostname
+```
+
+Clean delta — only the `placement` field changes from `{}` to the rule. No SSA managed-fields drift to worry about here (CephObjectStore was created via ArgoCD SSA, unlike the CephCluster which has the empty-managedFields gotcha).
+
+### Rollout
+
+```
+13:55:55 CEST  push commit 654558c (chart change with placement)
+13:57:10       old pod still crashlooping on node4 (restartCount=215)
+13:59:33       new pod 6ddb7d9cb9-gb8jn Running on node5, restarts=0
+14:00:09       last Loki "connection refused" against rook-ceph-rgw service
+14:00:33       Loki "finished uploading table" — chunks flowing again
+```
+
+Push → RGW Running: **3 min 38 s**. Push → Loki recovered: **~4 min 38 s**. The ~35 s tail between RGW Ready and Loki seeing the new endpoint is kube-proxy/EndpointSlice → iptables propagation plus Loki's already-in-flight retry batches reaching their 10-retry limit.
+
+A note on the residual data loss: Loki has at-most-once semantics on chunks. The `failed to flush ... terminated after 10 retries` lines in the ingester logs indicate chunks that were dropped permanently. Over a 21 h window with constant infra-log traffic, that's a non-trivial number of dropped chunks — but most of the lost data was in-memory in ingesters that had already buffered against the failing S3 path, so the gap in query results is bounded by how much each ingester could hold before evicting. Acceptable for homelab; the alternative (Loki blocking ingest until S3 recovers) would have cascaded into log-stack pod OOMs and made the failure much louder + worse.
+
+### CR diff verification post-rollout
+
+Just to confirm the live `CephObjectStore` carries the new placement:
+
+```yaml
+spec:
+  gateway:
+    placement:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                ingresscontroller.operator.openshift.io/deployment-ingresscontroller: default
+            namespaces:
+              - openshift-ingress
+            topologyKey: kubernetes.io/hostname
+```
+
+And Pod placement:
+
+```
+NAME                                                NODE                  STATUS    READY  RESTARTS
+rook-ceph-rgw-ceph-objectstore-a-6ddb7d9cb9-gb8jn   node5.okd.sudops.pl   Running   1/1    0
+```
+
+EndpointSlice now points to `192.168.1.8` (node5's host IP, since we're on host network) and condition `Ready=true`.
+
+`ceph -s` post-recovery:
+- `rgw: 1 daemon active (1 hosts, 1 zones)` ✓
+- `HEALTH_WARN` persists due to the unrelated `BLUESTORE_SLOW_OP_ALERT` (recurring on this cluster; see `blog-rook-ceph-draft.md`)
+
+### Open follow-ups
+
+- **Endpoint-availability PrometheusRule** for the `rook-ceph-rgw-*` Service — fires on `kube_endpoint_address_available == 0` for any RGW Service. Would have caught this in minutes instead of 21h.
+- **Verify Loki post-recovery** — confirm S3 writes are flowing again and the Loki ring isn't stuck in an unhappy state from 21h of failed writes. Check `loki_ingester_wal_disk_full_failures_total`, `loki_distributor_lines_received_total`, and the `ceph-objectstore.rgw.buckets.data` pool size in the toolbox.
+- **Documented co-location constraint in CLAUDE.md** — the "Network provider — locked on host" section should mention this scheduling implication: under host network, any RGW (or future RGW-like) workload binding port 80 cannot co-exist with `router-default`. With 2 routers + 1 RGW on a 3-node cluster the constraint is tight; a 4th node would relax it.
