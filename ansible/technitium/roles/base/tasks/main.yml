@@ -71,3 +71,43 @@
 
 # TODO (when ready): fail2ban for ssh, ssh-key-only auth (PasswordAuthentication no),
 # disable root login, etc. Out of scope for the first scaffold pass.
+
+# ---- Pi-hole removal (post-Technitium-cutover cleanup) --------------------
+# Codifies the pi-hole purge so that:
+#   (a) the cleanup runs on the current dns-master box without a one-off SSH command, and
+#   (b) any future reimage that accidentally installs pi-hole gets re-cleaned
+#       on the next base-role run.
+# Pi-hole's v6 installer registers only `pihole-meta` with apt; the rest of
+# the footprint (CLI script, /etc/pihole, /opt/pihole, admin web UI files,
+# the FTL systemd unit) is dropped outside dpkg's tracking, so apt purge
+# alone doesn't remove it. We purge the meta package first (lets dpkg run
+# its postrm), then sweep the installer-managed paths, then daemon-reload
+# to drop the now-stale unit file.
+# Tasks are state=absent and naturally idempotent — once clean, re-runs no-op.
+- name: Remove pihole-meta apt package
+  ansible.builtin.apt:
+    name: pihole-meta
+    state: absent
+    purge: true
+  tags: [base, pihole-cleanup]
+
+- name: Remove pi-hole installer-managed files and directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/pihole
+    - /opt/pihole
+    - /var/log/pihole
+    - /var/www/html/admin
+    - /etc/cron.d/pihole
+    - /etc/systemd/system/pihole-FTL.service
+    - /usr/local/bin/pihole
+  register: pihole_files_removed
+  tags: [base, pihole-cleanup]
+
+- name: Reload systemd after removing pihole-FTL unit file
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: pihole_files_removed.changed
+  tags: [base, pihole-cleanup]
