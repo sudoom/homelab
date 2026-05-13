@@ -131,7 +131,7 @@ applications:
     syncWave: "4"
 
   rook-ceph-cluster:
-    enabled: true
+    enabled: false
     path: components/storage/rook-ceph-cluster
     namespace: rook-ceph
     syncWave: "3"
