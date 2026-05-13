@@ -624,3 +624,77 @@ Files left in place: NADs (`components/cluster-config/ceph-network-attachments/`
 The README TODO line for the Multus migration will be revised to reflect this — moving the item from "in flight" to "queued, blocked on drain headroom" with the rationale captured here.
 
 
+
+
+---
+
+## 2026-05-13 evening: take 2 — fresh-rebuild on `provider: multus` from the start
+
+**Premise change.** The 2026-05-12 rollback ruled out the `host → "" → multus` two-step on this topology. But the failure mode that closed that door — PG peering stalling under an asymmetric-address shape during the empty-provider intermediate — only exists *because* you're transitioning a live cluster through an intermediate state. A **fresh** cluster that comes up on `provider: multus` from the first daemon doesn't pass through that intermediate. No mixed-network peering shape can form because every daemon was born on the pod network.
+
+The cost: nuke and pave. Every PVC on `ceph-nvme-block` (~255 GiB provisioned) is gone. RGW data pool with 46 GiB of Loki S3 chunks is gone. Prometheus's 15d of metrics is gone. The user signed off explicitly ("start with 2" — meaning skip the optional pre-flight backup and start at consumer-disable).
+
+This is the kind of homelab call you can only make when the cluster's actual business value is small and replaceable: every workload reconstructs from git on next sync.
+
+### Phase 2 — disable Ceph-PVC-consuming consumers (shipped, commit `2a20805`)
+
+Disabled in `bootstrap/root-app/values.yaml`:
+- `media` — 6 config PVCs (radarr/sonarr/etc) + the 500 GiB `media-data-pvc` (NFS, RetainPolicy=Retain → data survives even though the PV will end up Released)
+- `logging-stack` — LokiStack CR + 9 PVCs (ingester storage + WAL + index-gateway + compactor) + Loki OBC against RGW
+- `grafana-config` — Grafana CR + 1 PVC
+- `gatus` — 1 PVC + status check history
+- `monitoring-config` — ConfigMaps only (Prometheus/Alertmanager PVCs are operator-managed)
+- `ceph-object-store` — CephObjectStore CR + RGW Deployment + Route
+
+Left enabled: `smartctl-exporter` + `mikrotik-exporter` (no PVCs), `ceph-network-attachments` (the NADs are needed for Phase 4 bootstrap), `nmstate-nncp` (the ceph-shim is still load-bearing for storage backnet routing), `rook-ceph-operator` (needs to be alive to handle the teardown AND the new cluster bootstrap).
+
+**Surprise**: the cluster drained itself harder than expected. Within 8 minutes:
+- All 6 Applications gone via ArgoCD cascade-delete.
+- Loki-operator + grafana-operator + media app cascade-cleaned their PVCs cleanly via CSI (pool-side RBD images properly deleted).
+- **CMO recreated `prometheus-k8s` and `alertmanager-main` StatefulSets without volumeClaimTemplates** when the `cluster-monitoring-config` ConfigMap disappeared, switching them to emptyDir storage. This auto-deleted the four Prometheus + two Alertmanager PVCs that I'd assumed would need manual cleanup. (Bonus discovery: CMO's reaction to a missing ConfigMap is more aggressive than I'd expected — worth remembering.)
+- End state before Phase 3: only `image-registry-storage` (NFS) and `media-data-pvc` (NFS, Released, data on disk) remained. `oc -n rook-ceph exec deploy/rook-ceph-tools -- rbd ls -p nvme-replicated` returned empty. RGW pools still held 46 GiB Loki chunks + ~14 MiB metadata, which would get wiped on teardown anyway.
+
+### Phase 3a — authorize Ceph cleanup (shipped, commit `9de2a34`)
+
+`cleanupPolicy.confirmation: "yes-really-destroy-data"` set on the rook-ceph-cluster chart (with `sanitizeDisks.method: quick` left at the upstream default). ArgoCD applied it within seconds; live CR confirmed. No daemon impact — this string alone just authorizes Rook to zap disks on the next CR delete.
+
+### Phase 3b — trigger teardown (shipped, commit `ff39676`)
+
+`rook-ceph-cluster` disabled in root-app. ArgoCD cascade-deleted the Application; the CephCluster CR went with it; Rook's cleanup flow spawned a `cluster-cleanup-job-<node>` per node. Each one:
+
+```
+2026-05-13 18:06:39 I | cleanup: starting cluster clean up
+2026-05-13 18:06:39 I | cleanup: successfully cleaned up "/var/lib/rook/rook-ceph" directory
+2026-05-13 18:06:39 I | cleanup: successfully cleaned up the mon directory "/var/lib/rook/mon-a" on the dataDirHostPath "/var/lib/rook"
+2026-05-13 18:06:39 I | cleanup: successfully cleaned up exporter directory "/var/lib/rook/exporter"
+2026-05-13 18:06:41 I | cephosd: 1 ceph-volume raw osd devices configured on this node
+2026-05-13 18:06:41 I | cleanup: sanitizing osd 0 disk "/dev/nvme0n1"
+2026-05-13 18:06:41 I | cleanup: --> Zapping: /dev/nvme0n1
+  Running command: /usr/bin/ceph-bluestore-tool zap-device --dev /dev/nvme0n1 --yes-i-really-really-mean-it
+  Running command: /usr/bin/dd if=/dev/zero of=/dev/nvme0n1 bs=1M count=10 conv=fsync
+2026-05-13 18:06:41 I | cleanup: successfully executed sanitization command for osd disk "/dev/nvme0n1"
+```
+
+Each job finished in 4-5 seconds (small because the cluster had almost no data to wipe — the dd-zero of the first 10MB is what actually removes the BlueStore signature, and the partition table is overwritten implicitly). All three completed at ~18:07 UTC.
+
+**End-of-night state (20:09 CEST):**
+- 0 CephCluster / CephBlockPool / CephObjectStore / CephFilesystem CRs.
+- `rook-ceph` namespace contains only the operator + CSI plugins.
+- All 3 OSD disks (`/dev/nvme0n1` × node{4,5,6}) zapped and ready for fresh bootstrap.
+- 21 ArgoCD apps Synced+Healthy (10 disabled but expected: ceph-cluster/ceph-storage-classes/rook-ceph-cluster/ceph-object-store/media/logging-stack/grafana-config/gatus/monitoring-config + the new rook-ceph-cluster wrapper).
+- All nodes Ready. Zero non-Running pods cluster-wide.
+- Both NFS-backed PVs persist (image-registry bound, media-data-pvc Released — data still on the NFS share at /volume1/kubenfs).
+- Multus NADs (`ceph-cluster`, `ceph-public`) intact for Phase 4. ceph-shim NNCPs intact.
+
+### Phase 4+ — queued for tomorrow's session
+
+Edit `components/storage/rook-ceph-cluster/values.yaml`:
+- `network.provider: host` → `multus`
+- Add `network.selectors.public: ceph-public` + `network.selectors.cluster: ceph-cluster` (using the existing NADs in `rook-ceph`)
+- Remove `network.addressRanges` (Multus NAD IPAM provides the IPs)
+- Set `cleanupPolicy.confirmation: ""` back to empty (we're DONE destroying)
+- Re-enable `rook-ceph-cluster` in `bootstrap/root-app/values.yaml`
+
+Then sequence the bring-up: rook-ceph-cluster → ceph-object-store (and DROP the router-anti-affinity hack — RGW will bind a pod IP now, no host-port-80 collision possible) → monitoring-config + logging-stack + grafana-config + gatus + media re-enabled.
+
+**Rollback plan if multus-bootstrap also fails**: revert the values.yaml change in components/storage/rook-ceph-cluster/ (back to `provider: host`), commit, re-enable the app. Fresh cluster comes up on host networking. Worst case +1 hour of recovery work.
