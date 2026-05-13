@@ -3,6 +3,14 @@ kind: CephCluster
 metadata:
   name: rook-ceph
   namespace: rook-ceph
+  annotations:
+    # Pinned during the migration from this vendored chart to the upstream
+    # `rook-ceph-cluster` Helm subchart (README TODO, blog/blog-rook-ceph-draft.md).
+    # Without this, disabling this Application during the ownership flip would
+    # cascade-delete the CephCluster CR and tear down OSDs. Remove this
+    # annotation only after the new chart has owned the live resource cleanly
+    # for >=24h.
+    helm.sh/resource-policy: keep
 spec:
   monitoring:
     enabled: true

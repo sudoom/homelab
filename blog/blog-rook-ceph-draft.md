@@ -1769,3 +1769,68 @@ The dispatcher script stays in place as a defensive no-op: if anything in the fu
 **Lesson, again, with feeling**: the empirical test (Python `socket.connect` from inside a pod) was decisive. Earlier today I'd written off the dispatcher as the fix and would have been done — but having the *post-state* confirmation lets me say "the dispatcher script is no-op today *and* the actual cause was something else entirely." Without the after-state test, I'd have left a runbook entry that says "if you see this 504 again, ship the dispatcher script" — and it would have done nothing, because the symptom-removal mechanism is "reboot all pods that were created when the host had the bad search list." Naming the actual mechanism beats naming a credible-sounding mechanism.
 
 Both linked TODOs close: the search-list cleanup (which is now in place defensively, even if not load-bearing today), and the Loki 504 (queries return data instead of `DeadlineExceeded`).
+
+
+---
+
+## 2026-05-13: Migration to upstream rook-ceph-cluster subchart — Phase A (resource-policy pinning)
+
+Queued in the README TODO for a while: consolidate the two vendored charts (`components/storage/ceph-cluster/` for the CR + toolbox + dashboard route + prometheus rules + ServiceMonitor + RBAC + RBD trash purge job, `components/storage/ceph-storage-classes/` for the BlockPool + StorageClasses) into a single Helm release that depends on the upstream `rook-ceph-cluster` v1.19.5 chart. The operator side (`components/operators/rook-ceph/`) is already on the upstream pattern at the same version — this just brings the cluster + pools + SCs in line.
+
+Why bother: removes the vendored `files/ceph-prometheus-rules.yaml` (drift risk against upstream); future Ceph upgrades become a chart-version bump rather than a hand-curated reapply; consolidates ownership under a single Helm release with chart-driven defaults.
+
+Why carefully: the live `CephCluster/rook-ceph` was originally created via non-SSA apply and has `metadata.managedFields: []` (documented in CLAUDE.md as the SSA gotcha). On a 3-OSD no-drain cluster, **any** path that lets ArgoCD prune the CephCluster CR or the CephBlockPool CR is a fast trip to data loss — `mon_allow_pool_delete: "true"` is set in cephConfig, so Rook would actually drop the pool if the BlockPool CR went.
+
+### Phased plan
+
+1. **Phase A (this commit)**: pin destructive resources with `helm.sh/resource-policy: keep` on the existing charts. Zero shape change, just an annotation, so no reconciliation churn and no degraded window.
+2. **Phase B (next)**: build the replacement chart `components/storage/rook-ceph-cluster/` wrapping the upstream subchart. Reverse-engineer values until `helm template … | oc diff -f -` is empty (or label-only). Custom extras the subchart doesn't ship — Dashboard Route, prometheus-k8s RBAC, RBD trash-purge bootstrap Job — stay as local templates in this new chart.
+3. **Phase C**: `bootstrap/root-app/values.yaml` flip — disable the two old apps, enable the new one. ArgoCD removes the old Applications; the Phase-A annotations prevent cascade-deletion. New Application asserts ownership via SSA — may need a one-shot `oc apply --server-side --force-conflicts` on the CephCluster spec to break the empty-managedFields stalemate.
+4. **Phase D**: after >=24h of clean ownership, delete the old chart directories + drop the `helm.sh/resource-policy: keep` annotations from the new chart's renders (they served their migration purpose).
+
+### Phase A — what shipped
+
+Four resources annotated:
+
+| Resource | File | Why pinned |
+|---|---|---|
+| `CephCluster/rook-ceph` | `components/storage/ceph-cluster/templates/cephcluster.yaml` | CR deletion → Rook tears down OSDs (`cleanupPolicy.confirmation: ""` preserves on-disk data but the cluster state is gone). |
+| `CephBlockPool/nvme-replicated` | `components/storage/ceph-storage-classes/templates/pools-and-classes.yaml` | CR deletion → Rook calls `ceph osd pool delete` (allowed: `mon_allow_pool_delete=true`) → all data on the pool gone. |
+| `StorageClass/ceph-nvme-block` | `components/storage/ceph-storage-classes/templates/pools-and-classes.yaml` | SC deletion → new PVC creation against this class fails (every observability PVC, every app PVC). Existing PVCs keep working but rebinding breaks. |
+| `StorageClass/ceph-bucket` | `components/storage/ceph-storage-classes/templates/object-bucket-class.yaml` | SC deletion → no new ObjectBucketClaim provisioning. Loki/OADP/CNPG OBCs break. |
+
+Other resources in both charts (toolbox, PrometheusRule, ServiceMonitor, Dashboard Route, prometheus-k8s RBAC, RBD trash-purge Job) are intentionally **not** pinned: brief deletion during the Phase C swap is harmless and they re-create from the new chart cleanly.
+
+### Validation
+
+Helm lint + render + kubeconform + oc diff against live. The diff is the load-bearing one — it should show exactly four annotation additions and nothing else:
+
+```
+$ helm template ceph-cluster components/storage/ceph-cluster/ -n rook-ceph -f .../values.yaml | oc diff -f -
+--- LIVE/.../CephCluster/rook-ceph
++++ MERGED/.../CephCluster/rook-ceph
+@@ -3,6 +3,7 @@
+ metadata:
+   annotations:
+     argocd.argoproj.io/tracking-id: ceph-cluster:ceph.rook.io/CephCluster:rook-ceph/rook-ceph
++    helm.sh/resource-policy: keep
+   creationTimestamp: "2026-04-12T18:19:43Z"
+   finalizers:
+   - cephcluster.ceph.rook.io
+
+$ helm template ceph-storage-classes components/storage/ceph-storage-classes/ -n rook-ceph -f .../values.yaml | oc diff -f -
+[same shape — annotation addition only — on:
+  CephBlockPool/nvme-replicated
+  StorageClass/ceph-bucket
+  StorageClass/ceph-nvme-block]
+```
+
+The empty-`managedFields` gotcha doesn't bite here because we're **adding** a field, not removing one — SSA's ownership tracking matters for removal, not for new keys. Confirmed by the diff being clean.
+
+### Degraded window
+
+None. Annotation-only change; Rook's reconciler doesn't watch annotations, so no OSD churn. The CephCluster CR gets the annotation in-place via SSA patch; that's metadata, not spec.
+
+### Next session: Phase B
+
+Build `components/storage/rook-ceph-cluster/` (Chart.yaml `dependencies: rook-ceph-cluster v1.19.5`, values.yaml reverse-engineered to match live, local templates for the OpenShift-specific extras). Pre-commit gate: `oc diff` against live shows only label/annotation deltas (anything in `spec` is a stop-and-investigate signal).

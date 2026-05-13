@@ -5,6 +5,12 @@ kind: CephBlockPool
 metadata:
   name: {{ $name }}
   namespace: rook-ceph
+  annotations:
+    # Pinned during the migration to the upstream rook-ceph-cluster subchart.
+    # Pool deletion = data loss (mon_allow_pool_delete=true is set on this
+    # cluster, so Rook would actually drop the pool if the CR went). Remove
+    # only after the new chart owns this resource cleanly.
+    helm.sh/resource-policy: keep
 spec:
   failureDomain: {{ $pool.failureDomain }}
   deviceClass: {{ $pool.deviceClass }}
@@ -23,6 +29,11 @@ kind: StorageClass
 metadata:
   name: ceph-{{ $pool.deviceClass }}-block
   annotations:
+    # Pinned during the migration to the upstream rook-ceph-cluster subchart.
+    # StorageClass deletion breaks new PVC binding for any workload using
+    # this class (every observability PVC, every app PVC). Remove only after
+    # the new chart owns this resource cleanly.
+    helm.sh/resource-policy: keep
     {{- if $pool.default }}
     storageclass.kubernetes.io/is-default-class: "true"
     {{- end }}

@@ -3,6 +3,12 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: {{ .Values.objectBucket.storageClassName }}
+  annotations:
+    # Pinned during the migration to the upstream rook-ceph-cluster subchart.
+    # Deletion would break new ObjectBucketClaim provisioning (Loki OBC,
+    # future OADP/CNPG OBCs). Remove only after the new chart owns this
+    # resource cleanly.
+    helm.sh/resource-policy: keep
 provisioner: rook-ceph.ceph.rook.io/bucket
 reclaimPolicy: {{ .Values.objectBucket.reclaimPolicy }}
 parameters:
