@@ -1961,3 +1961,36 @@ Cutover sequence to watch:
 5. Observability stack may bounce around as Loki/Prometheus PVCs un/remount through the OSD restarts — confirmed-acceptable per CLAUDE.md.
 
 Phase D (cleanup): after >=24h clean, delete `components/storage/ceph-cluster/` and `components/storage/ceph-storage-classes/` from the repo. The `helm.sh/resource-policy: keep` annotations on live resources will already have been removed by SSA when the new chart asserted ownership without re-rendering them.
+
+### Phase C — flip shipped, cutover went better than expected
+
+Commit `6e181c8` pushed at 17:20 UTC (19:20 CEST). Root-app refresh nudged manually to skip the 3-min poll wait. End-to-end cutover was ~10 minutes wall-clock — significantly under the projected 30-60 min window.
+
+**What ArgoCD + Rook did, observed:**
+
+1. Root-app reconciled, saw the two old apps missing from rendered output, deleted them both. The four pinned resources (CephCluster, CephBlockPool/nvme-replicated, StorageClass/ceph-nvme-block, StorageClass/ceph-bucket) stayed live as designed — `helm.sh/resource-policy: keep` from Phase A held cleanly through the cascade-delete. Other resources from the old apps (PrometheusRule/rook-ceph-rules, ServiceAccount/rook-ceph-tools, plus the old toolbox Deployment/Job/etc. owned by the old apps) cascade-deleted.
+2. New `rook-ceph-cluster` Application created, started syncing. SSA on the four pinned resources transferred ownership in-place — no `force-conflicts` needed. The CLAUDE.md empty-managedFields gotcha did NOT bite this cutover; ArgoCD's controller field-manager apparently re-established ownership cleanly without intervention.
+3. Rook reconciler saw the new CephCluster spec (with `priorityClassNames`, `logCollector.enabled: true`, `healthCheck` probes, `network.connections` block, etc.) and rolled mons → mgrs → OSDs serially. ok-to-stop checks held; client I/O continued (observability stack stayed up through it).
+4. Toolbox Deployment was updated in-place (creationTimestamp unchanged from April 12); script body replaced with the upstream version, `serviceAccountName` changed from the old `rook-ceph-tools` SA to the upstream `rook-ceph-default`. Old `rook-ceph-tools` SA cascade-deleted with the old app.
+5. PrometheusRule `rook-ceph-rules` (vendored, 12d old) was deleted with the old app; replaced by `prometheus-ceph-rules` (upstream rule set, freshly created by the new chart). Brief alert-blind window during the swap, now restored.
+
+**Cleaner end state than designed:**
+
+- The Phase A `helm.sh/resource-policy: keep` annotations on all four pinned resources are gone — SSA removed them as part of the new chart's apply (the new render doesn't claim them, and the field manager dropped its ownership). **Phase D's annotation-scrub step is therefore already complete.**
+- All daemon pods (mons, mgrs, OSDs) now show `priorityClassName` and the `log-collector` sidecar (`2/2` mons, `3/3` mgrs, `2/2` OSDs). The full upstream-default shape is now in effect on the cluster.
+- **Ceph health: `HEALTH_OK`** — better than the pre-flight `HEALTH_WARN` (BLUESTORE_SLOW_OP_ALERT, known recurring). The rolling restart apparently cleared the slow-op tracking. Will be interesting to see if it stays clear over the next 24h or if the alert comes back.
+
+**Health sweep:**
+
+```
+nodes:               3/3 Ready
+argocd applications: 28/28 Synced+Healthy
+CSVs:                all Succeeded
+certificates:        all Ready=True
+non-Running pods:    none
+ceph health:         HEALTH_OK
+```
+
+### Phase D — what's left
+
+Only the repo-side cleanup: delete `components/storage/ceph-cluster/` and `components/storage/ceph-storage-classes/` directories, remove the disabled entries from `bootstrap/root-app/values.yaml`, drop the migration TODO from the README. Pure repo hygiene — no cluster impact, the cluster is already on the new chart and stable. Can ship immediately or hold for 24h soak as belt-and-suspenders.
