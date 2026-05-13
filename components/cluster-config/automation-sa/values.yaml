@@ -1,0 +1,22 @@
+# Dedicated namespace for long-lived automation SAs.
+# Kept separate from openshift-* / kube-system so RBAC blast-radius is obvious
+# and so future SAs (Renovate, GitOps, observability scrapers run from outside
+# the cluster, etc.) have an idiomatic home.
+namespace: automation
+
+serviceAccount:
+  # Used by Claude Code's kubernetes MCP + ad-hoc `oc` reads from this
+  # workstation. Bound cluster-wide to `cluster-reader` (read on all kinds
+  # except RBAC-sensitive ones; notably *does* include `get/list secrets`).
+  # If a tighter scope is ever needed (e.g. denied secrets), swap roleRef to
+  # a custom ClusterRole defined here.
+  name: claude-reader
+
+# Token extraction (one-time, after ArgoCD syncs this chart):
+#   oc -n automation get secret claude-reader-token -o jsonpath='{.data.token}' | base64 -d
+#
+# The Secret is type kubernetes.io/service-account-token; OpenShift's
+# kube-controller-manager populates the `token` field automatically after
+# the Secret + SA both exist. The token is a long-lived JWT with no expiry —
+# revoke by deleting the Secret (controller will mint a fresh one) or by
+# deleting the SA (revokes the binding too).

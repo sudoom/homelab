@@ -1,0 +1,5 @@
+apiVersion: v2
+name: automation-sa
+description: Long-lived ServiceAccount + cluster-reader binding for non-interactive read-only cluster access (Claude, scripts, future CI)
+version: 1.0.0
+type: application

@@ -18,6 +18,12 @@ applications:
     namespace: default
     syncWave: "0"
 
+  automation-sa:
+    enabled: true
+    path: components/cluster-config/automation-sa
+    namespace: default
+    syncWave: "0"
+
   # Wave 1 — Operators (subscriptions + instances)
   nmstate-operator:
     enabled: true
