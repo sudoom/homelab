@@ -1,0 +1,54 @@
+# Alert on RGW Service having zero available endpoints.
+#
+# Lives in rook-ceph namespace (labeled openshift.io/cluster-monitoring=true),
+# so it's discovered by the platform Prometheus (the user-workload Prometheus
+# explicitly excludes namespaces with that label). The metric
+# `kube_endpoint_address_available` is from kube-state-metrics, also in
+# platform Prometheus — same Prometheus on both sides of the join.
+#
+# Motivation: 2026-05-13 RGW silent 21h outage. Anti-affinity (see
+# cephobjectstore.yaml) prevents future EADDRINUSE crashloops by pinning RGW
+# off router-co-located nodes; this rule covers the broader "RGW Service has
+# no endpoints" failure mode regardless of root cause (crashloop, Pending,
+# scheduling block, image pull failure, ...).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rook-ceph-rgw-rules
+  namespace: {{ .Values.namespace }}
+  labels:
+    team: rook
+spec:
+  groups:
+    - name: ceph-rgw-availability
+      rules:
+        - alert: CephObjectStoreNoEndpoints
+          expr: |
+            kube_endpoint_address_available{namespace="rook-ceph", endpoint=~"rook-ceph-rgw-.*"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ceph RGW Service has no available endpoints"
+            description: |
+              No RGW pod is registered as a ready endpoint behind Service
+              {{`{{ $labels.endpoint }}`}} for >2m. Object storage path is down:
+              Loki S3 writes, OADP backups, and any other in-cluster S3 client
+              will be failing.
+
+              Common causes:
+                - RGW pod stuck in CrashLoopBackOff (check `oc -n rook-ceph
+                  logs <rgw-pod> --previous` — if you see "failed to bind
+                  0.0.0.0:80: Address already in use", the anti-affinity rule
+                  in components/storage/ceph-object-store/values.yaml has
+                  somehow been bypassed).
+                - RGW pod Pending due to the router-anti-affinity rule: only
+                  node5 is router-free, so if node5 is cordoned or down, RGW
+                  goes Pending until either node5 returns or a router moves.
+                  This is the intended alarm shape — see CLAUDE.md "Scheduling
+                  implication of host network".
+                - Underlying storage backend issue blocking RGW init.
+
+              Full 2026-05-13 incident write-up:
+              blog/blog-ceph-object-store-draft.md ("Update 2026-05-13: RGW
+              silent 21h outage").
