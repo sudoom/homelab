@@ -1,16 +1,26 @@
-# Alert on RGW Service having zero available endpoints.
+# Alert on RGW Service having zero ready endpoints.
 #
 # Lives in rook-ceph namespace (labeled openshift.io/cluster-monitoring=true),
-# so it's discovered by the platform Prometheus (the user-workload Prometheus
-# explicitly excludes namespaces with that label). The metric
-# `kube_endpoint_address_available` is from kube-state-metrics, also in
-# platform Prometheus — same Prometheus on both sides of the join.
+# so it's discovered by platform Prometheus. The metric `kube_endpoint_address`
+# from kube-state-metrics emits one series per (endpoint, address, ready)
+# tuple — but only emits series for addresses that *exist*. If an endpoint
+# has zero ready addresses (RGW pod CrashLoopBackOff, Pending, etc.), the
+# `ready="true"` series is absent rather than zero-valued, so a naive
+# `count(...) == 0` doesn't fire on missing data.
+#
+# The `or vector(0)` trick substitutes a synthetic 0 when the input vector is
+# empty, so the `== 0` comparison always evaluates. Verified both sides
+# 2026-05-13: healthy state → empty result (no fire); absent series → result
+# {} = 0 (fires).
+#
+# Note: labels are dropped by the sum + vector(0), so the annotation can't
+# reference Prometheus-template `$labels.endpoint` — we hardcode the
+# service-name pattern instead.
 #
 # Motivation: 2026-05-13 RGW silent 21h outage. Anti-affinity (see
 # cephobjectstore.yaml) prevents future EADDRINUSE crashloops by pinning RGW
 # off router-co-located nodes; this rule covers the broader "RGW Service has
-# no endpoints" failure mode regardless of root cause (crashloop, Pending,
-# scheduling block, image pull failure, ...).
+# no endpoints" failure mode regardless of root cause.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -24,17 +34,17 @@ spec:
       rules:
         - alert: CephObjectStoreNoEndpoints
           expr: |
-            kube_endpoint_address_available{namespace="rook-ceph", endpoint=~"rook-ceph-rgw-.*"} == 0
+            (sum(kube_endpoint_address{namespace="rook-ceph",endpoint=~"rook-ceph-rgw-.*",ready="true"}) or vector(0)) == 0
           for: 2m
           labels:
             severity: critical
           annotations:
-            summary: "Ceph RGW Service has no available endpoints"
+            summary: "Ceph RGW Service has no ready endpoints"
             description: |
-              No RGW pod is registered as a ready endpoint behind Service
-              {{`{{ $labels.endpoint }}`}} for >2m. Object storage path is down:
-              Loki S3 writes, OADP backups, and any other in-cluster S3 client
-              will be failing.
+              No RGW pod is registered as a ready endpoint behind any
+              `rook-ceph-rgw-*` Service in namespace rook-ceph for >2m. Object
+              storage path is down: Loki S3 writes, OADP backups, and any
+              other in-cluster S3 client will be failing.
 
               Common causes:
                 - RGW pod stuck in CrashLoopBackOff (check `oc -n rook-ceph
