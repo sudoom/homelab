@@ -136,8 +136,10 @@ applications:
     namespace: rook-ceph
     syncWave: "3"
 
+  # Disabled 2026-05-13 for the Multus-from-scratch CephCluster rebuild
+  # (Phase 2 of that work). Re-enables come after fresh-cluster bootstrap.
   ceph-object-store:
-    enabled: true
+    enabled: false
     path: components/storage/ceph-object-store
     namespace: rook-ceph
     syncWave: "4"
@@ -149,14 +151,18 @@ applications:
     syncWave: "4"
 
   # Wave 5 — Monitoring + observability config
+  # grafana-config / monitoring-config / gatus / logging-stack disabled
+  # 2026-05-13 for the Multus-from-scratch CephCluster rebuild — every
+  # one of these has PVCs on ceph-nvme-block that need to drain cleanly
+  # before Ceph teardown. Re-enables come after fresh-cluster bootstrap.
   grafana-config:
-    enabled: true
+    enabled: false
     path: components/cluster-config/grafana-config
     namespace: grafana
     syncWave: "5"
 
   monitoring-config:
-    enabled: true
+    enabled: false
     path: components/cluster-config/monitoring-config
     namespace: openshift-monitoring
     syncWave: "5"
@@ -174,20 +180,20 @@ applications:
     syncWave: "5"
 
   gatus:
-    enabled: true
+    enabled: false
     path: components/cluster-config/gatus
     namespace: gatus
     syncWave: "5"
 
   logging-stack:
-    enabled: true
+    enabled: false
     path: components/cluster-config/logging-stack
     namespace: openshift-logging
     syncWave: "5"
 
   # Wave 6 — Applications
   media:
-    enabled: true
+    enabled: false
     path: components/apps/media
     namespace: media
     syncWave: "6"
