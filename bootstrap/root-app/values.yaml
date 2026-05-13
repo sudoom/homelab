@@ -112,24 +112,26 @@ applications:
     syncWave: "3"
 
   # Wave 3 — Storage (depends on Rook operator + storage network)
+  # ceph-cluster + ceph-storage-classes were replaced by rook-ceph-cluster
+  # (upstream subchart wrapper) at Phase C cutover 2026-05-13. Live
+  # CephCluster / CephBlockPool / StorageClass resources stay across the
+  # cutover via the Phase A `helm.sh/resource-policy: keep` annotations;
+  # the new app then asserts ownership. Phase D cleanup removes these
+  # disabled entries entirely. See blog/blog-rook-ceph-draft.md.
   ceph-cluster:
-    enabled: true
+    enabled: false
     path: components/storage/ceph-cluster
     namespace: rook-ceph
     syncWave: "3"
 
   ceph-storage-classes:
-    enabled: true
+    enabled: false
     path: components/storage/ceph-storage-classes
     namespace: rook-ceph
     syncWave: "4"
 
-  # Replacement for ceph-cluster + ceph-storage-classes — wraps the upstream
-  # rook-ceph-cluster Helm subchart. Disabled until the Phase C ownership
-  # flip. Phase C will set this to `enabled: true` and the two above to
-  # `enabled: false` in a single commit. See blog/blog-rook-ceph-draft.md.
   rook-ceph-cluster:
-    enabled: false
+    enabled: true
     path: components/storage/rook-ceph-cluster
     namespace: rook-ceph
     syncWave: "3"
