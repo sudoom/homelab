@@ -1,0 +1,29 @@
+# Custom read-all ClusterRole. OpenShift's built-in `cluster-reader` covers
+# most stable API groups (core, apps, batch, rbac.authorization.k8s.io, etc.)
+# and CRDs that explicitly aggregate to it (cert-manager.io, argoproj.io, …),
+# but NOT every operator-installed CRD. Specifically uncovered on this
+# cluster:
+#   - ceph.rook.io/* (CephCluster, CephBlockPool, CephObjectStore, …)
+#   - operator.openshift.io/* (IngressController, …)
+#   - likely loki.grafana.com/*, grafana.integreatly.org/*, postgresql.cnpg.io/*
+#
+# Maintaining a per-API-group whitelist would require a chart edit every time
+# a new operator is added. At the homelab scale, `*/*` read access bound to a
+# scoped SA is a better tradeoff: one chart, no maintenance burden as the
+# cluster grows.
+#
+# Blast radius: identical to OpenShift `cluster-reader` for the dimensions
+# that matter (already includes get/list/watch on secrets cluster-wide).
+# Marginal addition is read on operator-managed CRDs, which is what we want.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-reader-all
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Read non-resource URLs (/healthz, /version, /metrics, …) — cluster-reader
+  # includes these, mirror it here so the swap is a strict superset.
+  - nonResourceURLs: ["*"]
+    verbs: ["get"]

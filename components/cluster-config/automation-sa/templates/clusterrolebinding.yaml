@@ -1,11 +1,19 @@
+# Bound to the locally-defined `cluster-reader-all` ClusterRole, not the
+# built-in `cluster-reader` — the built-in doesn't cover operator-installed
+# CRDs (Rook, etc.), see ../clusterrole.yaml for the reasoning.
+#
+# Binding name changed from the original `claude-reader-cluster-reader` to
+# `claude-reader-readall` to signal the broader scope. RBAC roleRef is
+# immutable so the old binding can't be edited in place — ArgoCD prunes the
+# old one and creates this new one on the same sync.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Values.serviceAccount.name }}-cluster-reader
+  name: {{ .Values.serviceAccount.name }}-readall
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cluster-reader
+  name: cluster-reader-all
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccount.name }}

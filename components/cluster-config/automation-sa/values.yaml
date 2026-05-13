@@ -6,10 +6,15 @@ namespace: automation
 
 serviceAccount:
   # Used by Claude Code's kubernetes MCP + ad-hoc `oc` reads from this
-  # workstation. Bound cluster-wide to `cluster-reader` (read on all kinds
-  # except RBAC-sensitive ones; notably *does* include `get/list secrets`).
-  # If a tighter scope is ever needed (e.g. denied secrets), swap roleRef to
-  # a custom ClusterRole defined here.
+  # workstation. Bound cluster-wide to `cluster-reader-all` — a locally-
+  # defined ClusterRole granting `get/list/watch` on `*/*` (every API
+  # group + resource, including operator CRDs). See templates/clusterrole.yaml
+  # for why we don't use OpenShift's built-in `cluster-reader` (Rook and a
+  # few other operator CRDs aren't covered by it).
+  #
+  # Blast radius: this token can read every Secret in the cluster — same as
+  # the built-in cluster-reader. If a tighter scope is wanted (e.g. denied
+  # secrets), edit the ClusterRole rules.
   name: claude-reader
 
 # Token extraction (one-time, after ArgoCD syncs this chart):
