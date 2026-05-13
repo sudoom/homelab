@@ -123,7 +123,6 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   - Verify ~24h Technitium stability under normal LAN traffic
   - On `dns-master`: `sudo apt remove --purge pihole pihole-FTL && sudo rm -rf /etc/pihole /var/log/pihole*`
   - On MikroTik: remove now-dead static DNS entries for `api.okd.sudops.pl` / `api-int.okd.sudops.pl` / `*.apps.okd.sudops.pl` (technitium answers authoritatively now); update DHCP lease record for `192.168.1.12` from `pi-hole-master` to `dns-master` (cosmetic)
-  - Fix SOA primary-NS field on all three Technitium zones — currently `pi-hole-master.` (holdover from before today's hostname rename), should be `dns-master.`
   - Procure RPi Zero 2W for the `dns-secondary` secondary (not blocking)
   - Monitoring: wire Technitium's Prometheus exporter into the cluster's stack (low priority)
 - [ ] **Apply `tests/mc-nm-strip-okd-search.yaml` MachineConfig** — drops `okd.sudops.pl` from host `/etc/resolv.conf` search list via a NetworkManager dispatcher; fixes the search-suffix leak storm at the source (pods stop emitting bogus `<...>.svc.cluster.local.okd.sudops.pl` queries). Not blocking the technitium migration (which handled the downstream symptom), but worth doing for cluster hygiene. Requires an MCO master-pool reboot (~30-45 min, three nodes serial). Defer until a quiet day.
