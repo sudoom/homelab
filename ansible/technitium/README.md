@@ -17,7 +17,7 @@ ansible/technitium/
 ├── files/
 │   └── blocked.urls                       # blocklist URLs, one per line
 ├── roles/
-│   ├── base/                              # OS hygiene (hostname, timezone, packages, unattended-upgrades)
+│   ├── base/                              # OS hygiene (hostname, timezone, packages, unattended-upgrades, pi-hole purge)
 │   ├── technitium-install/                # idempotent Technitium install/upgrade via upstream installer
 │   ├── technitium-config/                 # zones + settings + blocklists via Technitium HTTP API
 │   └── technitium-cluster/                # primary/secondary replication (placeholder until secondary lands)
