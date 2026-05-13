@@ -141,8 +141,15 @@ rook-ceph-cluster:
       osdMaintenanceTimeout: 30
       manageMachineDisruptionBudgets: false
 
+    # Multus-rebuild Phase 3 (2026-05-13): cluster is marked for
+    # destruction. Setting this string AUTHORIZES Rook to zap OSD disks
+    # via the cleanup Job when the CR is deleted. By itself it does not
+    # trigger anything — the cluster keeps running with this flag set.
+    # Phase 3b (separate commit) disables the rook-ceph-cluster app in
+    # root-app/values.yaml; that's what removes the CR and triggers
+    # the actual zap. Reverts to "" after fresh-cluster bootstrap.
     cleanupPolicy:
-      confirmation: ""
+      confirmation: "yes-really-destroy-data"
 
     removeOSDsIfOutAndSafeToRemove: false
 
