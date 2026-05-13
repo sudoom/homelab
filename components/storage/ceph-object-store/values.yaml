@@ -35,6 +35,28 @@ objectStore:
     # OpenShift Route (edge). securePort: 0 disables RGW's own TLS.
     port: 80
     securePort: 0
+    # Host-network anti-affinity against the default IngressController routers.
+    # The cluster is locked on `network.provider: host` (CLAUDE.md "Network
+    # provider — locked on host"), so RGW binds the host's :80. Two of three
+    # nodes also host an openshift-ingress/router-default pod on :80; without
+    # this rule, kube-scheduler can place RGW on a router-co-located node and
+    # RGW crashloops forever with EADDRINUSE (exit 98). 2026-05-12 Multus
+    # rollback rescheduled RGW onto node4 (router present); pod accumulated
+    # 214 restarts over ~21h before discovery on 2026-05-13.
+    # `required` (not `preferred`) is deliberate: co-residence is functionally
+    # broken, so Pending+observable beats Running+silently-failing. With 2
+    # routers on a 3-node cluster, only one node is router-free at a time —
+    # if that node becomes unavailable, RGW goes Pending until either the
+    # node comes back or a router moves. That's the right alarm shape.
+    placement:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                ingresscontroller.operator.openshift.io/deployment-ingresscontroller: default
+            namespaces:
+              - openshift-ingress
+            topologyKey: kubernetes.io/hostname
     resources:
       requests:
         cpu: 100m

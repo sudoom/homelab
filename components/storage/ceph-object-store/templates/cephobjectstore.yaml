@@ -33,5 +33,9 @@ spec:
     port: {{ .Values.objectStore.gateway.port }}
     securePort: {{ .Values.objectStore.gateway.securePort }}
     instances: {{ .Values.objectStore.gateway.instances }}
+    {{- with .Values.objectStore.gateway.placement }}
+    placement:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
     resources:
       {{- toYaml .Values.objectStore.gateway.resources | nindent 6 }}
