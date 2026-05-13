@@ -1,0 +1,18 @@
+apiVersion: v2
+name: rook-ceph-cluster
+description: |
+  Wrapper around the upstream rook-ceph-cluster Helm chart. Owns the
+  CephCluster CR, block pools, StorageClasses, toolbox, PrometheusRule,
+  plus OpenShift-specific extras (Dashboard Route, prometheus-k8s RBAC,
+  RBD trash-purge bootstrap Job) that the upstream chart doesn't ship.
+
+  Migration target replacing components/storage/ceph-cluster/ +
+  components/storage/ceph-storage-classes/. See blog/blog-rook-ceph-draft.md
+  for the phased rollout (A: pin destructives, B: this chart, C: ownership
+  flip via root-app, D: delete the old charts).
+version: 1.0.0
+type: application
+dependencies:
+  - name: rook-ceph-cluster
+    version: v1.19.5
+    repository: https://charts.rook.io/release

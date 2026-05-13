@@ -1,0 +1,235 @@
+# Upstream rook-ceph-cluster subchart values. Keys at this top level pass
+# through to the subchart under its own `rook-ceph-cluster:` block via the
+# Helm dependency mechanism — see https://helm.sh/docs/chart_template_guide/subcharts_and_globals/
+rook-ceph-cluster:
+  operatorNamespace: rook-ceph
+  clusterName: rook-ceph
+
+  toolbox:
+    enabled: true
+    # Inherit cephImage by default; explicit pin keeps the toolbox locked to
+    # the same Ceph version as the cluster even across subchart upgrades.
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        memory: "256Mi"
+
+  monitoring:
+    enabled: true
+    # Replaces the vendored files/ceph-prometheus-rules.yaml in the old chart.
+    createPrometheusRules: true
+
+  # No labels/annotations on the CephCluster CR. The Phase-A migration
+  # annotation lives on the *live* resource (added under the old chart);
+  # ArgoCD's ServerSideApply removes it when the new chart asserts
+  # ownership without rendering it, which is exactly the cleanup we want.
+  cephClusterMetadata:
+    annotations: {}
+    labels: {}
+
+  cephImage:
+    repository: quay.io/ceph/ceph
+    tag: v19.2.3
+    allowUnsupported: false
+
+  # Everything that goes verbatim into CephCluster.spec (the chart inserts
+  # cephClusterSpec via `toYaml | nindent 2` after the monitoring + cephVersion
+  # blocks it builds itself).
+  cephClusterSpec:
+    dataDirHostPath: /var/lib/rook
+
+    mon:
+      count: 3
+      allowMultiplePerNode: false
+
+    mgr:
+      count: 2
+      allowMultiplePerNode: false
+      modules:
+        - name: pg_autoscaler
+          enabled: true
+        - name: rook
+          enabled: true
+        - name: devicehealth
+          enabled: true
+
+    dashboard:
+      enabled: true
+      ssl: false
+      port: 8080
+
+    network:
+      # Locked on `host` per CLAUDE.md — do not flip to multus on this
+      # 3-OSD no-drain cluster until drain headroom exists. See
+      # blog/blog-multus-ceph-migration-draft.md.
+      provider: host
+      addressRanges:
+        public:
+          - "192.168.1.0/24"
+        cluster:
+          - "192.168.10.0/24"
+
+    cephConfig:
+      global:
+        osd_pool_default_size: "3"
+        osd_pool_default_min_size: "2"
+        mon_allow_pool_delete: "true"
+        mgr/dashboard/ssl: "false"
+        mgr/dashboard/server_port: "8080"
+      osd:
+        osd_memory_target: "4294967296"
+        bluestore_cache_autotune: "true"
+
+    placement:
+      all:
+        tolerations:
+          - effect: NoSchedule
+            key: node-role.kubernetes.io/master
+            operator: Exists
+          - effect: NoSchedule
+            key: node-role.kubernetes.io/control-plane
+            operator: Exists
+
+    resources:
+      mon:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          memory: "2Gi"
+      mgr:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          memory: "1Gi"
+      osd:
+        requests:
+          cpu: "1"
+          memory: "5Gi"
+        limits:
+          memory: "6Gi"
+      prepareosd:
+        requests:
+          cpu: "500m"
+          memory: "400Mi"
+      crashcollector:
+        requests:
+          cpu: "100m"
+          memory: "60Mi"
+        limits:
+          memory: "256Mi"
+
+    storage:
+      useAllNodes: false
+      useAllDevices: false
+      nodes:
+        - name: "node4.okd.sudops.pl"
+          devices:
+            - name: "/dev/nvme0n1"
+        - name: "node5.okd.sudops.pl"
+          devices:
+            - name: "/dev/nvme0n1"
+        - name: "node6.okd.sudops.pl"
+          devices:
+            - name: "/dev/nvme0n1"
+
+    disruptionManagement:
+      managePodBudgets: true
+      osdMaintenanceTimeout: 30
+      manageMachineDisruptionBudgets: false
+
+    cleanupPolicy:
+      confirmation: ""
+
+    removeOSDsIfOutAndSafeToRemove: false
+
+  cephBlockPools:
+    - name: nvme-replicated
+      spec:
+        failureDomain: host
+        deviceClass: nvme
+        replicated:
+          size: 3
+          requireSafeReplicaSize: true
+        parameters:
+          bulk: "true"
+          pg_num_min: "128"
+      storageClass:
+        enabled: true
+        name: ceph-nvme-block
+        isDefault: true
+        reclaimPolicy: Delete
+        allowVolumeExpansion: true
+        volumeBindingMode: Immediate
+        parameters:
+          imageFormat: "2"
+          imageFeatures: layering
+          csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+          csi.storage.k8s.io/provisioner-secret-namespace: "{{ .Release.Namespace }}"
+          csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+          csi.storage.k8s.io/controller-expand-secret-namespace: "{{ .Release.Namespace }}"
+          csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+          csi.storage.k8s.io/node-stage-secret-namespace: "{{ .Release.Namespace }}"
+          csi.storage.k8s.io/fstype: ext4
+
+  # No filesystems yet — CephFS is queued on bulk HDDs landing in the
+  # chassis (see README TODO). When it ships, add cephFileSystems here.
+  cephFileSystems: []
+
+  # No object stores rendered by this chart — components/storage/ceph-object-store/
+  # owns the CephObjectStore CR + RGW deployment + bucket SC separately.
+  # Folding it in is a separate migration once this one is bedded in.
+  cephObjectStores: []
+
+# ---------------------------------------------------------------------------
+# Local templates (rendered alongside the subchart) — OpenShift-specific
+# extras the upstream chart doesn't provide.
+
+# OpenShift Route fronting the Ceph dashboard with edge TLS at
+# ceph.apps.okd.sudops.pl. Upstream chart only ships Ingress + Gateway-API
+# HTTPRoute, not openshift.io/v1 Route.
+dashboardRoute:
+  enabled: true
+  host: ceph.apps.okd.sudops.pl
+
+# RBAC granting openshift-monitoring/prometheus-k8s SA the verbs needed to
+# scrape ServiceMonitor endpoints in rook-ceph. Upstream chart doesn't ship
+# this because it's OpenShift-Prometheus-specific (vanilla k8s Prometheus
+# uses its own SA + ClusterRole).
+prometheusScrapeRBAC:
+  enabled: true
+
+# Local ServiceMonitor scraping the mgr's prometheus-module endpoint.
+# Upstream chart relies on Rook's operator creating a `rook-ceph-exporter`
+# SM (sidecar metrics, different surface). Keep this local one to avoid a
+# silent metrics regression on cutover. Disable once we've confirmed the
+# exporter SM covers everything our dashboards/alerts need.
+mgrServiceMonitor:
+  enabled: true
+
+# StorageClass for ObjectBucketClaim provisioning against the existing
+# CephObjectStore (owned by components/storage/ceph-object-store/). Stays
+# as a local template here because that CR is still in a separate ArgoCD
+# app — folding it in is a follow-on migration.
+objectBucket:
+  enabled: true
+  storageClassName: ceph-bucket
+  objectStoreName: ceph-objectstore
+  objectStoreNamespace: rook-ceph
+  reclaimPolicy: Delete
+
+# Bootstrap Job that adds Ceph's built-in RBD trash purge schedule (mgr
+# scheduler, not a CronJob). Idempotent: skips if `every <interval>` is
+# already present for the pool, or replaces with the configured interval
+# if drifted. Upstream rook-ceph-cluster chart doesn't ship this — Ceph's
+# trash-purge scheduler is opt-in via mgr config.
+rbdTrashPurgeSchedule:
+  enabled: true
+  interval: "1h"
+  pools:
+    - nvme-replicated
+  # Pinned to the same image we use for the cluster.
+  image: quay.io/ceph/ceph:v19.2.3

@@ -1834,3 +1834,130 @@ None. Annotation-only change; Rook's reconciler doesn't watch annotations, so no
 ### Next session: Phase B
 
 Build `components/storage/rook-ceph-cluster/` (Chart.yaml `dependencies: rook-ceph-cluster v1.19.5`, values.yaml reverse-engineered to match live, local templates for the OpenShift-specific extras). Pre-commit gate: `oc diff` against live shows only label/annotation deltas (anything in `spec` is a stop-and-investigate signal).
+
+### Phase B — replacement chart built
+
+New chart `components/storage/rook-ceph-cluster/` shipped today, wired into `bootstrap/root-app/values.yaml` with `enabled: false` (Phase C flips it to true alongside disabling the two old apps, in one commit).
+
+Chart layout:
+
+```
+components/storage/rook-ceph-cluster/
+├── Chart.yaml                                  # depends on rook-ceph-cluster v1.19.5
+├── values.yaml                                 # cephClusterSpec + local extras
+└── templates/
+    ├── dashboard-route.yaml                    # OpenShift Route for ceph.apps.okd.sudops.pl
+    ├── object-bucket-storageclass.yaml         # ceph-bucket SC (CephObjectStore still in a separate app)
+    ├── prometheus-scrape-rbac.yaml             # prometheus-k8s SA -> Role + Binding
+    ├── rbd-trash-purge-schedule.yaml           # bootstrap Job for Ceph mgr rbd-trash schedule
+    └── servicemonitor.yaml                     # mgr metrics SM (upstream only ships rook-ceph-exporter SM)
+```
+
+Upstream subchart renders: CephCluster, CephBlockPool, ceph-nvme-block StorageClass, toolbox Deployment, prometheus-ceph-rules PrometheusRule (replaces vendored `files/ceph-prometheus-rules.yaml`). Everything else is local.
+
+### The Option-B decision (embrace upstream defaults)
+
+The initial `oc diff` against live revealed the upstream chart's defaults inject spec keys the old chart never set:
+
+- `priorityClassNames.{mon,osd,mgr}` -> rolls all mons + OSDs + mgrs.
+- `logCollector.enabled: true` -> adds a logcollector sidecar to all daemon pods (rolling restart of all of them).
+- `crashCollector.disable: false` -> minor; crash-collector daemon restart.
+- `resources.{cleanup, exporter, logcollector, mgr-sidecar}` -> adds resource limits to sidecars.
+- `healthCheck.{daemonHealth, livenessProbe}` -> probe definitions added (likely Deployment update, no restart).
+- `network.connections.{compression, encryption, requireMsgr2}` -> all default-OFF anyway, may or may not trigger a daemon reconcile.
+- Several upgrade-flow keys (`skipUpgradeChecks`, `continueUpgradeAfterChecksEvenIfNotHealthy`, `upgradeOSDRequiresHealthyPGs`, `waitTimeoutForHealthyOSDInMinutes`) and `cleanupPolicy.{allowUninstallWithVolumes, sanitizeDisks.*}` -> no daemon impact, only matter on future upgrade / uninstall.
+
+Three options were on the table:
+
+- A (minimal-diff) — null every upstream-default field the old chart didn't set, render byte-identical to current live, zero daemon restart. Cost: ugly values.yaml peppered with `null` overrides; new upstream defaults need new null entries on each chart bump.
+- B (embrace) — keep upstream defaults, accept rolling restart of all daemons at Phase C cutover, end up with the upstream-recommended spec going forward.
+- C (mixed) — null only the demonstrably daemon-restarting fields, keep the rest. Middle ground.
+
+**Chose B.** Reasoning: upstream's defaults are genuinely better than what the old chart shipped (`priorityClassNames` matters when the cluster is under memory pressure and kubelet has to decide what to evict; `logCollector` is useful for post-mortem debugging). The rolling restart is bounded — Rook does ok-to-stop checks and rolls one daemon at a time. The cluster goes through a degraded window on each OSD restart, but client I/O keeps flowing (`size=3, min_size=2`). Plan B (full rebuild) is the safety net if it goes sideways.
+
+Expected cutover-window cost when Phase C lands: ~30-60 min of rolling daemon restarts. Each OSD restart = ~5 min degraded; three OSDs serial = ~15 min worst-case. mons + mgrs roll in parallel but are stateless from a client POV.
+
+### Network reference double-check (per user ask)
+
+Verified there is no Multus contamination in the new chart's render. The CephCluster's network block renders as:
+
+```yaml
+network:
+  provider: host                              # locked per CLAUDE.md
+  addressRanges:
+    public: [192.168.1.0/24]                 # frontnet — client traffic
+    cluster: [192.168.10.0/24]               # storage backnet — OSD-OSD replication
+  connections:                                # upstream-default block, all false
+    compression: {enabled: false}
+    encryption: {enabled: false}
+    requireMsgr2: false
+```
+
+No `selectors` (would reference NetworkAttachmentDefinitions in Multus mode). No `provider: multus`. Grep on the upstream chart confirms every `multus` reference in its values.yaml is commented-out documentation; templates have zero conditional logic that could inject multus config based on other values. The dormant Multus phase-1 charts (`components/cluster-config/ceph-network-attachments/`, `nmstate-nncp/`) are isolated — they ship NADs + nmstate NNCPs but do not touch `cephClusterSpec.network`. Live spec still has `multiClusterService: {}` as a Rook-defaulted no-op key; the new chart's render doesn't include it, and SSA will leave Rook to re-add the default on its own reconcile. Safe.
+
+### Validation transcript
+
+```
+$ helm lint components/storage/rook-ceph-cluster/
+[INFO] Chart.yaml: icon is recommended
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template rook-ceph-cluster components/storage/rook-ceph-cluster/ -n rook-ceph \n    -f components/storage/rook-ceph-cluster/values.yaml | kubeconform -strict -ignore-missing-schemas ...
+# silent (all schemas pass)
+
+$ helm template ... | oc diff -f -
+# 4 resources diff'd:
+#   - Deployment/rook-ceph-tools         — upstream toolbox script (more sophisticated than ours)
+#   - Job/rbd-trash-purge-schedule       — uses rook-ceph-default SA, minor script differences
+#   - CephCluster/rook-ceph              — upstream defaults bleed in (the big one — see above)
+#   - PrometheusRule/prometheus-ceph-rules — CREATED (upstream rule set, replaces our rook-ceph-rules)
+# Notably empty diff:
+#   - CephBlockPool/nvme-replicated       — byte-identical to live (Phase A annotation will be dropped by SSA on cutover)
+#   - StorageClass/ceph-nvme-block        — byte-identical
+#   - StorageClass/ceph-bucket            — byte-identical
+#   - ServiceMonitor/rook-ceph-mgr        — byte-identical (kept the local one to avoid a metrics gap)
+#   - Route, RBAC                         — byte-identical
+```
+
+### Resource inventory on the cutover side
+
+New chart renders 10 resources, of which 4 are local templates:
+
+| kind | name | source |
+|---|---|---|
+| CephCluster | rook-ceph | upstream subchart |
+| CephBlockPool | nvme-replicated | upstream subchart |
+| StorageClass | ceph-nvme-block | upstream subchart |
+| StorageClass | ceph-bucket | local (ObjectBucket SC) |
+| Deployment | rook-ceph-tools | upstream subchart (toolbox) |
+| Job | rbd-trash-purge-schedule-bootstrap | local |
+| PrometheusRule | prometheus-ceph-rules | upstream subchart (replaces vendored localrules.yaml) |
+| Role + RoleBinding | rook-ceph-metrics | local |
+| Route | ceph-dashboard | local (no openshift.io/v1 in upstream) |
+| ServiceMonitor | rook-ceph-mgr | local (upstream relies on Rook operator creating rook-ceph-exporter SM only) |
+
+Resources currently present that the new chart does NOT render, and which the cutover will cascade-delete (no `helm.sh/resource-policy: keep` needed):
+
+- ServiceAccount/rook-ceph-tools (new chart uses rook-ceph-default for toolbox + Job)
+- PrometheusRule/rook-ceph-rules (replaced by prometheus-ceph-rules; brief alert-blind window during cutover)
+
+Resources pinned in Phase A and kept by their annotation across the cutover:
+
+- CephCluster/rook-ceph
+- CephBlockPool/nvme-replicated
+- StorageClass/ceph-nvme-block
+- StorageClass/ceph-bucket
+
+### Next session: Phase C
+
+Single commit: in `bootstrap/root-app/values.yaml` set `ceph-cluster.enabled: false`, `ceph-storage-classes.enabled: false`, `rook-ceph-cluster.enabled: true`. ArgoCD removes the two old Applications (resources protected by the Phase-A annotation stay live), creates the new Application, asserts ownership of the four pinned resources via SSA. The empty-`managedFields` gotcha on `CephCluster` may bite — if SSA refuses to take over the spec cleanly, a one-shot `oc apply --server-side --force-conflicts -f <rendered>` from the operator workstation is the documented escape (CLAUDE.md, "CephCluster SSA gotcha").
+
+Cutover sequence to watch:
+
+1. Old apps deleted (~30s).
+2. New app appears Synced+Healthy in ArgoCD — but Rook is now seeing a new spec with `priorityClassNames` etc.
+3. Rook reconciles: rolling restart of mons (one at a time, ok-to-stop respected) -> mgrs -> OSDs (one at a time, ok-to-stop respected).
+4. Total wall-clock ~30-60 min until `ceph -s` returns to HEALTH_OK / known-WARN.
+5. Observability stack may bounce around as Loki/Prometheus PVCs un/remount through the OSD restarts — confirmed-acceptable per CLAUDE.md.
+
+Phase D (cleanup): after >=24h clean, delete `components/storage/ceph-cluster/` and `components/storage/ceph-storage-classes/` from the repo. The `helm.sh/resource-policy: keep` annotations on live resources will already have been removed by SSA when the new chart asserted ownership without re-rendering them.

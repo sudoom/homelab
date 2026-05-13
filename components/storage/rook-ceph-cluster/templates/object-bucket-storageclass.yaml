@@ -1,0 +1,17 @@
+{{- if .Values.objectBucket.enabled }}
+# StorageClass that provisions buckets in the existing CephObjectStore
+# (owned by components/storage/ceph-object-store/) via ObjectBucketClaim.
+# This SC stays local to this chart instead of folded into upstream
+# cephObjectStores[] because the CephObjectStore CR itself is still in a
+# separate ArgoCD app — see the migration plan in
+# blog/blog-rook-ceph-draft.md.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.objectBucket.storageClassName }}
+provisioner: rook-ceph.ceph.rook.io/bucket
+reclaimPolicy: {{ .Values.objectBucket.reclaimPolicy }}
+parameters:
+  objectStoreName: {{ .Values.objectBucket.objectStoreName }}
+  objectStoreNamespace: {{ .Values.objectBucket.objectStoreNamespace }}
+{{- end }}

@@ -124,6 +124,16 @@ applications:
     namespace: rook-ceph
     syncWave: "4"
 
+  # Replacement for ceph-cluster + ceph-storage-classes — wraps the upstream
+  # rook-ceph-cluster Helm subchart. Disabled until the Phase C ownership
+  # flip. Phase C will set this to `enabled: true` and the two above to
+  # `enabled: false` in a single commit. See blog/blog-rook-ceph-draft.md.
+  rook-ceph-cluster:
+    enabled: false
+    path: components/storage/rook-ceph-cluster
+    namespace: rook-ceph
+    syncWave: "3"
+
   ceph-object-store:
     enabled: true
     path: components/storage/ceph-object-store
