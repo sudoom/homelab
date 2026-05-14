@@ -147,6 +147,7 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - Occasionally an image refuses removal with `image has watchers` — usually a stuck CSI nodeplugin attachment; investigate the node, don't force-delete the image.
 - **`operation already exists` mount lock can outlive plugin restarts.** When `NodeStageVolume` hangs (e.g., kRBD waiting on an unreachable OSD), the rbd-plugin's in-memory operation tracker locks the volume ID. Every retry returns `rpc error: code = Aborted desc = an operation with the given Volume ID ... already exists`. Restarting the rbd-nodeplugin pod usually clears the lock — but if the underlying cause (network unreachable, msgr2 silent drop) persists, the new plugin will hit the same hang on the first retry. **Don't chase the lock; chase what's keeping the first call stuck.** Check `/sys/bus/rbd/devices/` on the host via `oc debug node/<name>` — empty = the hang is in plugin userspace, not kernel.
 - **Stuck VolumeAttachments need finalizer force-clear.** When CSI mount fails repeatedly, VAs accumulate with the `external-attacher/rook-ceph-rbd-csi-ceph-com` finalizer and `attached: true` even though no mount succeeded. If the PV is also gone (e.g., test PVC deleted), normal `oc delete` hangs forever. Unstick: `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. Same pattern can affect `rook-ceph-mon-endpoints` ConfigMap / `rook-ceph-mon` Secret after teardown — same force-clear works.
+- **Orphan Released PVs block the csi-provisioner cluster-wide.** When CSI's `DeleteVolume` for a PV fails (e.g., earlier mount regression left an unfinishable rbd image), the PV stays `Released` and the provisioner re-attempts deletion forever. CSI plugins serialize operations cluster-wide, so a stuck DeleteVolume blocks every new CreateVolume too — symptom looks identical to the "operation already exists" lock from the per-volume tracker, but the cause is a different volume's stuck deletion. **Before applying any test PVC, check for orphan Released PVs**: `oc get pv | grep Released`. Clear them with `oc patch pv <name> -p '{"metadata":{"finalizers":[]}}' --type=merge && oc delete pv <name>`. Also clear any stale VolumeAttachments to the now-gone PV. The "stuck VA + stuck PV" duo can survive plugin restarts, controlplugin restarts, and operator restarts — must be manually cleared.
 
 ### Network provider — `host` (with required `addressRanges`)
 
@@ -176,28 +177,61 @@ If a future change to `addressRanges` is needed, daemons need a rollout restart 
 
 **Scheduling implication of host network: RGW must avoid router-co-located nodes.** With `network.provider: host`, every Ceph daemon binds the node's host ports. RGW listens on `:80` (`gateway.port: 80`). The cluster's edge `openshift-ingress/router-default` IngressController also runs hostNetwork on `:80/:443`, and the default HA mode places 2 router replicas on a 3-node bare-metal cluster — meaning 2 of 3 nodes have host port 80 occupied at all times. RGW therefore has exactly one collision-free node available. 2026-05-13 incident: a Multus rollback rescheduled RGW onto a router-co-located node, RGW crashlooped silently for ~21h with `EADDRINUSE` (exit 98), and Loki's S3 path was non-functional throughout. The `components/storage/ceph-object-store/` chart carries a `required` podAntiAffinity selecting on `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default` in `openshift-ingress` namespace; **don't remove or downgrade to `preferred`** — co-residence is functionally broken and Pending+observable is the right alarm shape. Any future RGW-class daemon (multi-instance RGW, NFS-ganesha, an NVMe-of gateway) binding host ports needs the same anti-affinity treatment.
 
-### Post-teardown leftover state blocks fresh bootstrap
+### Clean teardown procedure — "fresh install" means **fresh**
 
-When tearing down a CephCluster via `cleanupPolicy.confirmation: "yes-really-destroy-data"`, Rook's cleanup-jobs zap OSD disks but do NOT clean up two namespace-level objects:
+`cleanupPolicy.confirmation: "yes-really-destroy-data"` + disabling the app zaps OSD disks via Rook's cleanup-jobs, but leaves a long tail of namespace-level state that the next fresh bootstrap inherits and gets confused by. **Each item below bit us individually on 2026-05-14 — clean ALL of them as part of every teardown, not after symptoms appear.**
 
-- ConfigMap `rook-ceph-mon-endpoints` — mon topology + Service IPs
-- Secret `rook-ceph-mon` — mon auth keyring
-
-Both persist with finalizers from the previous cluster. On fresh bootstrap, Rook reads these and tries to reconcile from a partial-state view (endpoints exist, mons don't) — it does NOT simply re-bootstrap. Symptom: operator log stops at `"detecting the ceph image version for image quay.io/ceph/ceph:vX.Y.Z..."` and no mon/detect-version pod ever spawns. CR phase stays `Progressing` indefinitely.
-
-Recovery (do BEFORE re-enabling the cluster app, or as soon as you notice the stuck bootstrap):
+After the cleanup-jobs complete (verify with `oc -n rook-ceph get jobs | grep cluster-cleanup-job` — all `Complete`), run the full sweep:
 
 ```bash
-oc -n rook-ceph delete cm rook-ceph-mon-endpoints rook-ceph-pdbstatemap
-oc -n rook-ceph delete secret rook-ceph-mon
-# If the above hang on finalizers (common):
-oc -n rook-ceph patch cm rook-ceph-mon-endpoints -p '{"metadata":{"finalizers":[]}}' --type=merge
-oc -n rook-ceph patch secret rook-ceph-mon -p '{"metadata":{"finalizers":[]}}' --type=merge
-# Then bounce the operator so it re-reconciles from a clean slate:
+# 1. Rook's mon-tracking state (causes "detecting the ceph image version" hang on next bootstrap):
+oc -n rook-ceph delete cm rook-ceph-mon-endpoints rook-ceph-pdbstatemap --ignore-not-found
+oc -n rook-ceph delete secret rook-ceph-mon --ignore-not-found
+# These usually need finalizer force-clear because Rook's finalizer can't reconcile against a deleted CR:
+oc -n rook-ceph patch cm rook-ceph-mon-endpoints -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+oc -n rook-ceph patch secret rook-ceph-mon -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+
+# 2. Bootstrap Jobs from previous cluster (immutable; ArgoCD can't re-apply, blocks sync):
+oc -n rook-ceph delete job rbd-trash-purge-schedule-bootstrap --ignore-not-found
+oc -n rook-ceph delete jobs -l rook-ceph-cleanup --ignore-not-found  # any cluster-cleanup-job-* still around
+
+# 3. Orphan PVs (Released or Failed status) — block csi-provisioner cluster-wide:
+for PV in $(oc get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' | grep ceph-nvme); do
+  oc patch pv $PV -p '{"metadata":{"finalizers":[]}}' --type=merge
+  oc delete pv $PV --ignore-not-found
+done
+
+# 4. Orphan VolumeAttachments referencing now-gone PVs:
+for VA in $(oc get volumeattachment -o name); do
+  oc patch $VA -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+done
+
+# 5. Test-namespace PVCs still around from prior runs:
+oc -n default get pvc 2>/dev/null | awk 'NR>1 && $4=="ceph-nvme-block" {print $1}' | xargs -r -I {} oc -n default patch pvc {} -p '{"metadata":{"finalizers":[]}}' --type=merge
+
+# 6. CSI plugin in-memory state — kill all 6 plugin pods, fresh start (operator recreates):
+oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-nodeplugin --wait=false
+oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin --wait=false
+oc -n rook-ceph delete pod -l app=rook-ceph.cephfs.csi.ceph.com-nodeplugin --wait=false
+oc -n rook-ceph delete pod -l app=rook-ceph.cephfs.csi.ceph.com-ctrlplugin --wait=false
+
+# 7. Bounce the rook-operator so it reconciles from a truly clean slate:
 oc -n rook-ceph delete pod -l app=rook-ceph-operator
 ```
 
-Within ~30s after operator restart, fresh mon "a" is created with new Service IPs and bootstrap proceeds normally.
+The SA dockercfg secrets (`builder-dockercfg-*`, `ceph-csi-*-dockercfg-*`, `rook-ceph-*-dockercfg-*`) are cosmetic OpenShift-managed artifacts; they get regenerated when the SAs are next used. Leave them alone.
+
+**Symptom map — which leftover causes which symptom:**
+
+| Symptom | Likely leftover |
+|---|---|
+| Bootstrap hangs at `"detecting the ceph image version"` | `rook-ceph-mon-endpoints` CM + `rook-ceph-mon` Secret |
+| ArgoCD app stuck `OutOfSync`, `Job is invalid: spec.selector: Required value` | Old `rbd-trash-purge-schedule-bootstrap` Job |
+| csi-provisioner spins forever on volume IDs unrelated to current PVCs | Orphan Released PVs |
+| New PVC stuck `Pending` even after provisioner restart | Combination of orphan PVs + stale VAs blocking the serialized provisioner |
+| `NodeStageVolume` returns "operation already exists" immediately on first mount | Stale VA + plugin in-memory tracker on a volume that no longer exists |
+
+If you're tearing down, run the full sweep. If you discover one of these symptoms during a botched bootstrap, the table above tells you which subset of the sweep to apply.
 
 ### `CephCluster` SSA gotcha — `managedFields: []` makes field removal sticky
 
@@ -271,6 +305,37 @@ When an Application is `OutOfSync`, `Degraded`, or just "stuck", check in this o
 3. `oc describe <kind> <name> -n <ns>` — per-resource conditions.
 4. For operator-managed resources: `oc get csv -n <operator-ns>` and `oc get subscription -n <operator-ns>` first — a stuck CSV blocks everything downstream.
 5. For cert-manager: `oc describe certificate <name> -n <ns>` → `CertificateRequest` → `Order` → `Challenge`. DNS-01 failures are almost always Cloudflare token expired or wrong zone.
+
+### Pre-flight checks for any CSI-mount-dependent work
+
+Before applying a test PVC, re-running a failed test, or debugging "operation already exists" / mount-hang symptoms, run these checks first — they catch cluster-wide CSI poison that survives plugin restarts:
+
+```bash
+# 1. Orphan PVs (Released or stuck-Bound to a deleted namespace)
+oc get pv | grep -E "Released|Failed"
+
+# 2. Stuck VolumeAttachments (especially with attached=true for a PV that no longer exists)
+oc get volumeattachment | awk '$5 == "true" {print}'
+
+# 3. Stuck PVCs with finalizers that never clear
+oc get pvc -A | grep -v "Bound\|NAME"
+
+# 4. Stale CSI controlplugin retry loops (look for "operation already exists" on volume IDs that don't correspond to any current PVC)
+oc -n rook-ceph logs -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin -c csi-provisioner --tail=20
+```
+
+If any are found, clear them BEFORE retrying the work:
+
+```bash
+# PVs (Released status, no claimant):
+oc patch pv <name> -p '{"metadata":{"finalizers":[]}}' --type=merge && oc delete pv <name>
+# VolumeAttachments (orphan / no underlying PV):
+oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge
+# PVCs:
+oc -n <ns> patch pvc <name> -p '{"metadata":{"finalizers":[]}}' --type=merge
+```
+
+Why this matters: the csi-provisioner serializes operations cluster-wide. A stuck `DeleteVolume` for an orphan PV blocks every new `CreateVolume` for unrelated PVCs — symptom looks identical to the per-volume "operation already exists" lock from the rbd-plugin's in-memory tracker, but the root cause is across PVs. Skipping this check sent us down a multi-hour rabbit hole on 2026-05-14 chasing the wrong symptom.
 
 ## Guardrails — do not do these
 

@@ -1,0 +1,209 @@
+Copr repo for python-scikit-learn owned by tcha  30 kB/s |  46 kB     00:01    
+CentOS Stream 9 - BaseOS                        4.3 MB/s | 8.9 MB     00:02    
+CentOS Stream 9 - AppStream                     8.2 MB/s |  27 MB     00:03    
+CentOS Stream 9 - Extras packages                25 kB/s |  21 kB     00:00    
+Extra Packages for Enterprise Linux 9 - x86_64  7.8 MB/s |  21 MB     00:02    
+Extra Packages for Enterprise Linux 9 openh264  5.8 kB/s | 2.5 kB     00:00    
+Dependencies resolved.
+================================================================================
+ Package                 Architecture Version             Repository       Size
+================================================================================
+Installing:
+ fio                     x86_64       3.35-1.el9          appstream       6.2 M
+Installing weak dependencies:
+ fio-engine-http         x86_64       3.35-1.el9          appstream        18 k
+ fio-engine-libaio       x86_64       3.35-1.el9          appstream        16 k
+ fio-engine-nbd          x86_64       3.35-1.el9          appstream        15 k
+ fio-engine-rados        x86_64       3.35-1.el9          appstream        16 k
+ fio-engine-rbd          x86_64       3.35-1.el9          appstream        16 k
+ fio-engine-rdma         x86_64       3.35-1.el9          appstream        21 k
+
+Transaction Summary
+================================================================================
+Install  7 Packages
+
+Total download size: 6.3 M
+Installed size: 8.7 M
+Downloading Packages:
+(1/7): fio-engine-libaio-3.35-1.el9.x86_64.rpm   45 kB/s |  16 kB     00:00    
+(2/7): fio-engine-http-3.35-1.el9.x86_64.rpm     50 kB/s |  18 kB     00:00    
+(3/7): fio-engine-nbd-3.35-1.el9.x86_64.rpm     222 kB/s |  15 kB     00:00    
+(4/7): fio-engine-rados-3.35-1.el9.x86_64.rpm   230 kB/s |  16 kB     00:00    
+(5/7): fio-engine-rbd-3.35-1.el9.x86_64.rpm     211 kB/s |  16 kB     00:00    
+(6/7): fio-engine-rdma-3.35-1.el9.x86_64.rpm    291 kB/s |  21 kB     00:00    
+(7/7): fio-3.35-1.el9.x86_64.rpm                5.6 MB/s | 6.2 MB     00:01    
+--------------------------------------------------------------------------------
+Total                                           3.9 MB/s | 6.3 MB     00:01     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Installing       : fio-engine-http-3.35-1.el9.x86_64                      1/7 
+  Installing       : fio-engine-libaio-3.35-1.el9.x86_64                    2/7 
+  Installing       : fio-engine-nbd-3.35-1.el9.x86_64                       3/7 
+  Installing       : fio-engine-rados-3.35-1.el9.x86_64                     4/7 
+  Installing       : fio-engine-rbd-3.35-1.el9.x86_64                       5/7 
+  Installing       : fio-engine-rdma-3.35-1.el9.x86_64                      6/7 
+  Installing       : fio-3.35-1.el9.x86_64                                  7/7 
+  Running scriptlet: fio-3.35-1.el9.x86_64                                  7/7 
+  Verifying        : fio-3.35-1.el9.x86_64                                  1/7 
+  Verifying        : fio-engine-http-3.35-1.el9.x86_64                      2/7 
+  Verifying        : fio-engine-libaio-3.35-1.el9.x86_64                    3/7 
+  Verifying        : fio-engine-nbd-3.35-1.el9.x86_64                       4/7 
+  Verifying        : fio-engine-rados-3.35-1.el9.x86_64                     5/7 
+  Verifying        : fio-engine-rbd-3.35-1.el9.x86_64                       6/7 
+  Verifying        : fio-engine-rdma-3.35-1.el9.x86_64                      7/7 
+
+Installed:
+  fio-3.35-1.el9.x86_64                   fio-engine-http-3.35-1.el9.x86_64    
+  fio-engine-libaio-3.35-1.el9.x86_64     fio-engine-nbd-3.35-1.el9.x86_64     
+  fio-engine-rados-3.35-1.el9.x86_64      fio-engine-rbd-3.35-1.el9.x86_64     
+  fio-engine-rdma-3.35-1.el9.x86_64      
+
+Complete!
+
+=== Pre-fill: dd 30GB (fast; spills bluestore metadata cache for valid measurements) ===
+4267704320 bytes (4.3 GB, 4.0 GiB) copied, 1 s, 4.3 GB/s8546942976 bytes (8.5 GB, 8.0 GiB) copied, 2 s, 4.3 GB/s12806258688 bytes (13 GB, 12 GiB) copied, 3 s, 4.3 GB/s 17099128832 bytes (17 GB, 16 GiB) copied, 4 s, 4.3 GB/s21335375872 bytes (21 GB, 20 GiB) copied, 5 s, 4.3 GB/s25578962944 bytes (26 GB, 24 GiB) copied, 6 s, 4.3 GB/s29291970560 bytes (29 GB, 27 GiB) copied, 7 s, 4.2 GB/s30083645440 bytes (30 GB, 28 GiB) copied, 12 s, 2.4 GB/s30084694016 bytes (30 GB, 28 GiB) copied, 12 s, 2.4 GB/s30085742592 bytes (30 GB, 28 GiB) copied, 12 s, 2.4 GB/s30086791168 bytes (30 GB, 28 GiB) copied, 12 s, 2.4 GB/s30087839744 bytes (30 GB, 28 GiB) copied, 12 s, 2.4 GB/s30324817920 bytes (30 GB, 28 GiB) copied, 13 s, 2.3 GB/s30666653696 bytes (31 GB, 29 GiB) copied, 14 s, 2.2 GB/s31007440896 bytes (31 GB, 29 GiB) copied, 15 s, 2.1 GB/s31333548032 bytes (31 GB, 29 GiB) copied, 18 s, 1.7 GB/s31334596608 bytes (31 GB, 29 GiB) copied, 18 s, 1.7 GB/s31335645184 bytes (31 GB, 29 GiB) copied, 18 s, 1.7 GB/s
+30720+0 records in
+30720+0 records out
+32212254720 bytes (32 GB, 30 GiB) copied, 513.292 s, 62.8 MB/s
+
+real	8m33.294s
+user	0m0.008s
+sys	0m9.519s
+
+=== fio: 4k QD32 randwrite (libaio direct=1), 60s — random write IOPS ceiling ===
+qd32-randwrite: (g=0): rw=randwrite, bs=(R) 4096B-4096B, (W) 4096B-4096B, (T) 4096B-4096B, ioengine=libaio, iodepth=32
+fio-3.35
+Starting 1 process
+
+qd32-randwrite: (groupid=0, jobs=1): err= 0: pid=62: Thu May 14 17:53:33 2026
+  write: IOPS=2057, BW=8231KiB/s (8428kB/s)(482MiB/60018msec); 0 zone resets
+    slat (nsec): min=984, max=16643k, avg=9581.96, stdev=111814.57
+    clat (usec): min=8520, max=81686, avg=14978.18, stdev=2811.83
+     lat (usec): min=9474, max=81688, avg=14987.76, stdev=2818.19
+    clat percentiles (usec):
+     |  1.00th=[12387],  5.00th=[12911], 10.00th=[13173], 20.00th=[13566],
+     | 30.00th=[13829], 40.00th=[14091], 50.00th=[14353], 60.00th=[14615],
+     | 70.00th=[15008], 80.00th=[16057], 90.00th=[17433], 95.00th=[18482],
+     | 99.00th=[21890], 99.50th=[27132], 99.90th=[52167], 99.95th=[63701],
+     | 99.99th=[71828]
+   bw (  KiB/s): min= 5504, max= 9472, per=100.00%, avg=8519.86, stdev=546.37, samples=115
+   iops        : min= 1376, max= 2368, avg=2129.97, stdev=136.59, samples=115
+  lat (msec)   : 10=0.01%, 20=97.97%, 50=1.90%, 100=0.13%
+  cpu          : usr=0.34%, sys=4.45%, ctx=62577, majf=0, minf=10
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=100.0%, >=64=0.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.1%, 64=0.0%, >=64=0.0%
+     issued rwts: total=0,123497,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=32
+
+Run status group 0 (all jobs):
+  WRITE: bw=8231KiB/s (8428kB/s), 8231KiB/s-8231KiB/s (8428kB/s-8428kB/s), io=482MiB (506MB), run=60018-60018msec
+
+Disk stats (read/write):
+  rbd0: ios=0/123266, merge=0/12, ticks=0/1833585, in_queue=1833585, util=96.24%
+
+=== fio: 4k QD32 randread (libaio direct=1), 60s — random read IOPS ceiling ===
+qd32-randread: (g=0): rw=randread, bs=(R) 4096B-4096B, (W) 4096B-4096B, (T) 4096B-4096B, ioengine=libaio, iodepth=32
+fio-3.35
+Starting 1 process
+
+qd32-randread: (groupid=0, jobs=1): err= 0: pid=81: Thu May 14 17:54:33 2026
+  read: IOPS=40.5k, BW=158MiB/s (166MB/s)(9485MiB/60001msec)
+    slat (nsec): min=962, max=4150.1k, avg=8477.29, stdev=11818.27
+    clat (usec): min=15, max=20943, avg=781.45, stdev=496.28
+     lat (usec): min=65, max=20951, avg=789.93, stdev=495.85
+    clat percentiles (usec):
+     |  1.00th=[  129],  5.00th=[  155], 10.00th=[  172], 20.00th=[  198],
+     | 30.00th=[  239], 40.00th=[  799], 50.00th=[  971], 60.00th=[ 1029],
+     | 70.00th=[ 1090], 80.00th=[ 1188], 90.00th=[ 1287], 95.00th=[ 1352],
+     | 99.00th=[ 1696], 99.50th=[ 2180], 99.90th=[ 3261], 99.95th=[ 3687],
+     | 99.99th=[ 5932]
+   bw (  KiB/s): min=97224, max=166504, per=100.00%, avg=161918.72, stdev=9481.92, samples=119
+   iops        : min=24306, max=41626, avg=40479.66, stdev=2370.48, samples=119
+  lat (usec)   : 20=0.01%, 50=0.01%, 100=0.18%, 250=31.37%, 500=5.21%
+  lat (usec)   : 750=1.59%, 1000=15.60%
+  lat (msec)   : 2=45.45%, 4=0.56%, 10=0.03%, 20=0.01%, 50=0.01%
+  cpu          : usr=6.47%, sys=17.58%, ctx=2012971, majf=0, minf=45
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.1%, 32=100.0%, >=64=0.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.1%, 64=0.0%, >=64=0.0%
+     issued rwts: total=2428116,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=32
+
+Run status group 0 (all jobs):
+   READ: bw=158MiB/s (166MB/s), 158MiB/s-158MiB/s (166MB/s-166MB/s), io=9485MiB (9946MB), run=60001-60001msec
+
+Disk stats (read/write):
+  rbd0: ios=2423955/3, merge=0/1, ticks=1861681/28, in_queue=1861710, util=99.78%
+
+=== fio: 1M QD8 seqwrite (libaio direct=1), 60s — write BW ceiling ===
+qd8-seqwrite: (g=0): rw=write, bs=(R) 1024KiB-1024KiB, (W) 1024KiB-1024KiB, (T) 1024KiB-1024KiB, ioengine=libaio, iodepth=8
+fio-3.35
+Starting 1 process
+
+qd8-seqwrite: (groupid=0, jobs=1): err= 0: pid=100: Thu May 14 17:55:34 2026
+  write: IOPS=61, BW=61.5MiB/s (64.5MB/s)(3697MiB/60070msec); 0 zone resets
+    slat (usec): min=17, max=99576, avg=197.27, stdev=2642.80
+    clat (msec): min=32, max=342, avg=129.77, stdev=47.42
+     lat (msec): min=32, max=342, avg=129.97, stdev=47.34
+    clat percentiles (msec):
+     |  1.00th=[   42],  5.00th=[   57], 10.00th=[   69], 20.00th=[   86],
+     | 30.00th=[  101], 40.00th=[  114], 50.00th=[  129], 60.00th=[  142],
+     | 70.00th=[  157], 80.00th=[  171], 90.00th=[  192], 95.00th=[  209],
+     | 99.00th=[  245], 99.50th=[  266], 99.90th=[  300], 99.95th=[  330],
+     | 99.99th=[  342]
+   bw (  KiB/s): min=49152, max=75776, per=99.90%, avg=62958.93, stdev=5610.22, samples=120
+   iops        : min=   48, max=   74, avg=61.48, stdev= 5.48, samples=120
+  lat (msec)   : 50=2.60%, 100=27.24%, 250=69.33%, 500=0.84%
+  cpu          : usr=0.23%, sys=0.14%, ctx=3655, majf=0, minf=10
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=99.8%, 16=0.0%, 32=0.0%, >=64=0.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.1%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     issued rwts: total=0,3697,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=8
+
+Run status group 0 (all jobs):
+  WRITE: bw=61.5MiB/s (64.5MB/s), 61.5MiB/s-61.5MiB/s (64.5MB/s-64.5MB/s), io=3697MiB (3877MB), run=60070-60070msec
+
+Disk stats (read/write):
+  rbd0: ios=0/3705, merge=0/11, ticks=0/477901, in_queue=477900, util=99.86%
+
+=== fio: 1M QD8 seqread (libaio direct=1), 60s — read BW ceiling ===
+qd8-seqread: (g=0): rw=read, bs=(R) 1024KiB-1024KiB, (W) 1024KiB-1024KiB, (T) 1024KiB-1024KiB, ioengine=libaio, iodepth=8
+fio-3.35
+Starting 1 process
+
+qd8-seqread: (groupid=0, jobs=1): err= 0: pid=119: Thu May 14 17:56:34 2026
+  read: IOPS=173, BW=173MiB/s (182MB/s)(10.2GiB/60068msec)
+    slat (usec): min=2, max=2525, avg=29.25, stdev=63.05
+    clat (usec): min=680, max=139105, avg=46149.11, stdev=40032.63
+     lat (usec): min=1215, max=139144, avg=46178.36, stdev=40027.30
+    clat percentiles (usec):
+     |  1.00th=[  1254],  5.00th=[  1319], 10.00th=[  1385], 20.00th=[  1713],
+     | 30.00th=[  2147], 40.00th=[ 22676], 50.00th=[ 48497], 60.00th=[ 65274],
+     | 70.00th=[ 71828], 80.00th=[ 84411], 90.00th=[103285], 95.00th=[110625],
+     | 99.00th=[128451], 99.50th=[130548], 99.90th=[135267], 99.95th=[137364],
+     | 99.99th=[137364]
+   bw (  KiB/s): min=118784, max=258048, per=100.00%, avg=177442.13, stdev=30410.14, samples=120
+   iops        : min=  116, max=  252, avg=173.28, stdev=29.70, samples=120
+  lat (usec)   : 750=0.01%, 1000=0.02%
+  lat (msec)   : 2=27.78%, 4=6.51%, 10=2.11%, 20=1.52%, 50=12.54%
+  lat (msec)   : 100=37.62%, 250=11.89%
+  cpu          : usr=0.10%, sys=0.37%, ctx=13567, majf=0, minf=524
+  IO depths    : 1=0.1%, 2=0.1%, 4=0.1%, 8=99.9%, 16=0.0%, 32=0.0%, >=64=0.0%
+     submit    : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.1%, 16=0.0%, 32=0.0%, 64=0.0%, >=64=0.0%
+     issued rwts: total=10404,0,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=8
+
+Run status group 0 (all jobs):
+   READ: bw=173MiB/s (182MB/s), 173MiB/s-173MiB/s (182MB/s-182MB/s), io=10.2GiB (10.9GB), run=60068-60068msec
+
+Disk stats (read/write):
+  rbd0: ios=10372/3, merge=0/1, ticks=478482/84, in_queue=478566, util=99.86%
+
+=== Sleeping for dashboard inspection ===
