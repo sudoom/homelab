@@ -61,15 +61,18 @@ rook-ceph-cluster:
       port: 8080
 
     network:
-      # Locked on `host` per CLAUDE.md — do not flip to multus on this
-      # 3-OSD no-drain cluster until drain headroom exists. See
-      # blog/blog-multus-ceph-migration-draft.md.
-      provider: host
-      addressRanges:
-        public:
-          - "192.168.1.0/24"
-        cluster:
-          - "192.168.10.0/24"
+      # Multus from the first daemon — this is the fresh-rebuild path
+      # (Phase 4 of the multus-rebuild sequence, 2026-05-14). The in-place
+      # host → "" → multus migration is the path that deadlocks on this
+      # 3-OSD no-drain topology (PG peering hangs during the empty-provider
+      # intermediate, with no Rook-native escape). Bringing daemons up on
+      # multus from cluster bootstrap sidesteps that entirely — no
+      # asymmetric-network shape ever exists. See
+      # blog/blog-multus-ceph-migration-draft.md "take 2".
+      provider: multus
+      selectors:
+        public: rook-ceph/ceph-public
+        cluster: rook-ceph/ceph-cluster
 
     cephConfig:
       global:
@@ -141,15 +144,13 @@ rook-ceph-cluster:
       osdMaintenanceTimeout: 30
       manageMachineDisruptionBudgets: false
 
-    # Multus-rebuild Phase 3 (2026-05-13): cluster is marked for
-    # destruction. Setting this string AUTHORIZES Rook to zap OSD disks
-    # via the cleanup Job when the CR is deleted. By itself it does not
-    # trigger anything — the cluster keeps running with this flag set.
-    # Phase 3b (separate commit) disables the rook-ceph-cluster app in
-    # root-app/values.yaml; that's what removes the CR and triggers
-    # the actual zap. Reverts to "" after fresh-cluster bootstrap.
+    # Empty = safe. Setting this string AUTHORIZES Rook to zap OSD disks
+    # via a cleanup Job when the CR is deleted; by itself it doesn't
+    # trigger anything, but a single keystroke + sync turns the cluster
+    # into a self-destructing one. Set non-empty only when intentionally
+    # wiping (last use: Phase 3a of the multus rebuild, 2026-05-13).
     cleanupPolicy:
-      confirmation: "yes-really-destroy-data"
+      confirmation: ""
 
     removeOSDsIfOutAndSafeToRemove: false
 

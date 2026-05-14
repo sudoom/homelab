@@ -686,15 +686,37 @@ Each job finished in 4-5 seconds (small because the cluster had almost no data t
 - Both NFS-backed PVs persist (image-registry bound, media-data-pvc Released — data still on the NFS share at /volume1/kubenfs).
 - Multus NADs (`ceph-cluster`, `ceph-public`) intact for Phase 4. ceph-shim NNCPs intact.
 
-### Phase 4+ — queued for tomorrow's session
+### Phase 4 — flip the chart to multus (shipped, 2026-05-14)
+
+Pre-flight verified clean: NNCPs `storage-node{4,5,6}` Available; NADs `ceph-public` + `ceph-cluster` present in `rook-ceph`; zero Ceph CRs; only stale ConfigMap left is `rook-ceph-pdbstatemap` (operator will rewrite); no leftover monmap/auth secrets; CSI plugins + operator healthy.
 
 Edit `components/storage/rook-ceph-cluster/values.yaml`:
 - `network.provider: host` → `multus`
-- Add `network.selectors.public: ceph-public` + `network.selectors.cluster: ceph-cluster` (using the existing NADs in `rook-ceph`)
-- Remove `network.addressRanges` (Multus NAD IPAM provides the IPs)
-- Set `cleanupPolicy.confirmation: ""` back to empty (we're DONE destroying)
-- Re-enable `rook-ceph-cluster` in `bootstrap/root-app/values.yaml`
+- Added `network.selectors.public: rook-ceph/ceph-public` + `network.selectors.cluster: rook-ceph/ceph-cluster` (explicit `<ns>/<name>` form even though the NADs are in the CephCluster's own namespace — same-namespace shorthand works, but the explicit form is what Rook prints in events and what survives a future namespace move)
+- Removed `network.addressRanges` (Multus NAD IPAM owns the IPs; passing both is redundant + ambiguous)
+- `cleanupPolicy.confirmation: "yes-really-destroy-data"` → `""` (close the loaded weapon)
 
-Then sequence the bring-up: rook-ceph-cluster → ceph-object-store (and DROP the router-anti-affinity hack — RGW will bind a pod IP now, no host-port-80 collision possible) → monitoring-config + logging-stack + grafana-config + gatus + media re-enabled.
+Render check (`helm template … | kubeconform -strict -summary`) → 10 valid / 0 invalid / 1 skipped (the CRD without a catalog schema, expected). Rendered `CephCluster.spec.network`:
 
-**Rollback plan if multus-bootstrap also fails**: revert the values.yaml change in components/storage/rook-ceph-cluster/ (back to `provider: host`), commit, re-enable the app. Fresh cluster comes up on host networking. Worst case +1 hour of recovery work.
+```
+network:
+  connections:
+    compression: { enabled: false }
+    encryption:  { enabled: false }
+    requireMsgr2: false
+  provider: multus
+  selectors:
+    cluster: rook-ceph/ceph-cluster
+    public:  rook-ceph/ceph-public
+```
+
+No `addressRanges` block in the rendered output — confirmed clean.
+
+### Phase 5+ — queued (next move in this session)
+
+- **Phase 5**: `rook-ceph-cluster.enabled: false` → `true` in `bootstrap/root-app/values.yaml`. One-line commit; ArgoCD picks it up and bootstraps a fresh CephCluster on multus from the first daemon. Expected: mons come up with annotated pod IPs from the `ceph-public` NAD; OSDs get both `ceph-public` (client) and `ceph-cluster` (replication) NADs. Watch for the operator + cluster going Ready, `ceph -s` → HEALTH_OK, and pool autocreate honouring `pg_num_min: 128` on `nvme-replicated`.
+- **Phase 6**: re-enable `ceph-object-store`. Also drop the router-anti-affinity hack from its values.yaml in the same commit — with RGW binding a pod IP (not `hostNetwork` on `:80`), the router co-residence collision that motivated the hack can't happen anymore. ObjectBucketClaims from Loki etc. need to re-create their buckets, since teardown nuked the RGW data pool too.
+- **Phase 7**: re-enable `monitoring-config`, `logging-stack`, `grafana-config`, `gatus`, `media`. Loki ingester PVCs come back empty; Prometheus/Alertmanager StatefulSets re-acquire volumeClaimTemplates once `cluster-monitoring-config` ConfigMap returns (CMO will switch them off emptyDir).
+- **Phase 8**: rebind `media-data-pvc` to the Released `nfs-csi` PV — preserves the 500 GiB media library across the rebuild (data was always on NFS, never on Ceph).
+
+**Rollback plan if multus-bootstrap fails**: revert `provider: multus` → `host` in the chart values, restore `addressRanges`, drop `selectors`, commit. Fresh cluster comes up on host networking. Worst case +1 h.
