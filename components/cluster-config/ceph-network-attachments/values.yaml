@@ -3,17 +3,27 @@ namespace: rook-ceph
 masterInterface: enp1s0f0np0
 mtu: 1500
 
-ipam:
-  range: 192.168.10.0/24
-  # Pods live in the upper /25 (192.168.10.128 – .254). The matching per-node
-  # route 192.168.10.128/25 dev ceph-shim in nmstate-nncp directs host→pod
-  # traffic through the macvlan shim, avoiding the bridge-mode hairpin drop
-  # that breaks pod↔own-host reachability on the master interface.
-  rangeStart: 192.168.10.128
-  rangeEnd: 192.168.10.254
-  exclude: []
-  networkName: ceph-storage
-
+# Each NAD owns its own IPAM range + whereabouts pool. The two pools must
+# be disjoint at the CIDR level so Ceph can pick the correct interface
+# from `public_network` / `cluster_network` config — when both NADs share
+# the same /24, OSD picks net1 for both public AND cluster traffic and
+# net2 ends up bound-but-unused. Split here: ceph-public on the lower /26
+# (192.168.10.128-191), ceph-cluster on the upper /26 (.192-.255). The
+# per-node `192.168.10.128/25 dev ceph-shim` route in nmstate-nncp covers
+# both /26s, so host-side reachability is unchanged.
+#
+# Distinct `network_name` values are mandatory: whereabouts treats same
+# network_name as one shared pool, so collapsing them defeats the split.
 attachments:
-  - ceph-public
-  - ceph-cluster
+  - name: ceph-public
+    range: 192.168.10.128/26
+    rangeStart: 192.168.10.129
+    rangeEnd: 192.168.10.190
+    networkName: ceph-public-pool
+    exclude: []
+  - name: ceph-cluster
+    range: 192.168.10.192/26
+    rangeStart: 192.168.10.193
+    rangeEnd: 192.168.10.254
+    networkName: ceph-cluster-pool
+    exclude: []

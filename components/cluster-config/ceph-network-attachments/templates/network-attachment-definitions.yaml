@@ -3,7 +3,7 @@
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
-  name: {{ . }}
+  name: {{ .name }}
   namespace: {{ $.Values.namespace }}
 spec:
   config: |
@@ -15,12 +15,12 @@ spec:
       "mtu": {{ $.Values.mtu }},
       "ipam": {
         "type": "whereabouts",
-        "network_name": {{ $.Values.ipam.networkName | quote }},
-        "range": {{ $.Values.ipam.range | quote }},
-        "range_start": {{ $.Values.ipam.rangeStart | quote }},
-        "range_end": {{ $.Values.ipam.rangeEnd | quote }},
+        "network_name": {{ .networkName | quote }},
+        "range": {{ .range | quote }},
+        "range_start": {{ .rangeStart | quote }},
+        "range_end": {{ .rangeEnd | quote }},
         "exclude": [
-          {{- range $i, $cidr := $.Values.ipam.exclude }}
+          {{- range $i, $cidr := .exclude }}
           {{- if $i }},{{ end }}
           {{ $cidr | quote }}
           {{- end }}

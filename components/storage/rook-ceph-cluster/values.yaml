@@ -81,6 +81,16 @@ rook-ceph-cluster:
         mon_allow_pool_delete: "true"
         mgr/dashboard/ssl: "false"
         mgr/dashboard/server_port: "8080"
+        # Explicit /26 split so OSDs bind cluster traffic to net2
+        # (ceph-cluster NAD) instead of looping back on net1 (ceph-public).
+        # Without these, Rook auto-derives a wider CIDR (192.168.10.0/24)
+        # that matches both NAD IPs, and Ceph picks net1 for both public
+        # AND cluster — net2 ends up bound-but-unused. The NADs in
+        # components/cluster-config/ceph-network-attachments/ are sized
+        # to match: public on .128/26 (.129-.190), cluster on .192/26
+        # (.193-.254). See Phase 6.5 of blog/blog-multus-ceph-migration-draft.md.
+        public_network: "192.168.10.128/26"
+        cluster_network: "192.168.10.192/26"
       osd:
         osd_memory_target: "4294967296"
         bluestore_cache_autotune: "true"
