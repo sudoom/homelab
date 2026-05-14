@@ -61,39 +61,37 @@ rook-ceph-cluster:
       port: 8080
 
     network:
-      # Multus from the first daemon — this is the fresh-rebuild path
-      # (Phase 4 of the multus-rebuild sequence, 2026-05-14). The in-place
-      # host → "" → multus migration is the path that deadlocks on this
-      # 3-OSD no-drain topology (PG peering hangs during the empty-provider
-      # intermediate, with no Rook-native escape). Bringing daemons up on
-      # multus from cluster bootstrap sidesteps that entirely — no
-      # asymmetric-network shape ever exists. See
-      # blog/blog-multus-ceph-migration-draft.md "take 2".
-      provider: multus
-      selectors:
-        public: rook-ceph/ceph-public
-        cluster: rook-ceph/ceph-cluster
+      # provider: host (chosen 2026-05-14 after a multus debugging round
+      # that cost a day and ended in a CSI mount regression we couldn't
+      # cleanly recover). On this 3-node single-storage-NIC topology, host
+      # mode skips the macvlan bridge-mode same-NIC limit (no shim needed),
+      # whereabouts IPAM, NAD selectors, and the source-IP/public_network
+      # coupling that bit us. The 10G backnet enp1s0f0np0 has the host's
+      # main 192.168.10.{2,3,4} IP; kernel routing puts client traffic
+      # for 192.168.10.0/24 on that interface naturally, so the read
+      # uplift we measured under multus (1.6 GB/s on 1M QD8 seqread)
+      # should be preserved. Write throughput cap (~89 MB/s on 1M QD8
+      # seqwrite) is msgr2 single-stream + 3-way replication amplification
+      # — not the network — so host doesn't sacrifice anything on the
+      # write side either.
+      #
+      # Trade: host-network Ceph daemons bind host ports, so RGW collides
+      # with openshift-ingress/router-default on :80 on 2 of 3 nodes.
+      # Mitigation: `required` podAntiAffinity in the ceph-object-store
+      # chart pins RGW to the router-free node. See
+      # blog/blog-multus-ceph-migration-draft.md final entries.
+      provider: host
 
     cephConfig:
       global:
+        # All four keys are required for our setup. Anything Ceph 19.x
+        # already defaults (bluestore_cache_autotune, dashboard.ssl/port —
+        # the latter pair is set redundantly by the `dashboard` block above)
+        # has been trimmed out. osd_memory_target also dropped — defaults
+        # to 4 GiB on Ceph 19 already.
         osd_pool_default_size: "3"
         osd_pool_default_min_size: "2"
         mon_allow_pool_delete: "true"
-        mgr/dashboard/ssl: "false"
-        mgr/dashboard/server_port: "8080"
-        # No explicit public_network / cluster_network. Rook auto-derives
-        # both to 192.168.10.0/24 from the multus NADs. A 2026-05-14
-        # attempt to split them onto disjoint /26s (commit 1e522df, then
-        # reverted in 1e522df+1) broke kRBD mounts — the ceph-shim source
-        # IP 192.168.10.16 sits outside 192.168.10.128/26, so msgr2 from
-        # the host stack hung. Keep them auto-derived unless we also
-        # re-IP the shim, which itself needs a degraded-window NNCP roll.
-        # The expected benefit (separate replication path) is moot here
-        # because both multus NADs share the same physical 10G NIC, so
-        # the wire ceiling is unchanged.
-      osd:
-        osd_memory_target: "4294967296"
-        bluestore_cache_autotune: "true"
 
     placement:
       all:
@@ -154,13 +152,11 @@ rook-ceph-cluster:
       osdMaintenanceTimeout: 30
       manageMachineDisruptionBudgets: false
 
-    # 2026-05-14 Phase A: cluster marked for destruction (multus+chart
-    # rebuild on a clean slate after a day of cascading CSI mount
-    # regressions from Phase 6.5). Phase B (separate commit) disables
-    # the rook-ceph-cluster app to trigger the actual zap. Reverts to
-    # "" after fresh-cluster bootstrap on the revised chart.
+    # Empty = safe. Set non-empty only when intentionally wiping (last
+    # use: rebuild Phase A on 2026-05-14, then reverted here for fresh
+    # bootstrap on provider: host).
     cleanupPolicy:
-      confirmation: "yes-really-destroy-data"
+      confirmation: ""
 
     removeOSDsIfOutAndSafeToRemove: false
 

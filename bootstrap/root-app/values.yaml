@@ -92,8 +92,12 @@ applications:
     namespace: openshift-config
     syncWave: "2"
 
+  # Disabled 2026-05-14: CephCluster is on `network.provider: host`, so
+  # the multus NADs aren't referenced by any daemon. Chart kept in tree
+  # in case a future round switches back to multus (would also need the
+  # `ceph-shim` NNCP re-enabled in nmstate-nncp).
   ceph-network-attachments:
-    enabled: true
+    enabled: false
     path: components/cluster-config/ceph-network-attachments
     namespace: rook-ceph
     syncWave: "2"
@@ -131,13 +135,13 @@ applications:
     syncWave: "4"
 
   rook-ceph-cluster:
-    enabled: false
+    enabled: true
     path: components/storage/rook-ceph-cluster
     namespace: rook-ceph
     syncWave: "3"
 
   ceph-object-store:
-    enabled: false
+    enabled: true
     path: components/storage/ceph-object-store
     namespace: rook-ceph
     syncWave: "4"
