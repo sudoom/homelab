@@ -154,13 +154,13 @@ rook-ceph-cluster:
       osdMaintenanceTimeout: 30
       manageMachineDisruptionBudgets: false
 
-    # Empty = safe. Setting this string AUTHORIZES Rook to zap OSD disks
-    # via a cleanup Job when the CR is deleted; by itself it doesn't
-    # trigger anything, but a single keystroke + sync turns the cluster
-    # into a self-destructing one. Set non-empty only when intentionally
-    # wiping (last use: Phase 3a of the multus rebuild, 2026-05-13).
+    # 2026-05-14 Phase A: cluster marked for destruction (multus+chart
+    # rebuild on a clean slate after a day of cascading CSI mount
+    # regressions from Phase 6.5). Phase B (separate commit) disables
+    # the rook-ceph-cluster app to trigger the actual zap. Reverts to
+    # "" after fresh-cluster bootstrap on the revised chart.
     cleanupPolicy:
-      confirmation: ""
+      confirmation: "yes-really-destroy-data"
 
     removeOSDsIfOutAndSafeToRemove: false
 
