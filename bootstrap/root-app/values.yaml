@@ -131,13 +131,13 @@ applications:
     syncWave: "4"
 
   rook-ceph-cluster:
-    enabled: true
+    enabled: false
     path: components/storage/rook-ceph-cluster
     namespace: rook-ceph
     syncWave: "3"
 
   ceph-object-store:
-    enabled: true
+    enabled: false
     path: components/storage/ceph-object-store
     namespace: rook-ceph
     syncWave: "4"
