@@ -61,26 +61,32 @@ rook-ceph-cluster:
       port: 8080
 
     network:
-      # provider: host (chosen 2026-05-14 after a multus debugging round
-      # that cost a day and ended in a CSI mount regression we couldn't
-      # cleanly recover). On this 3-node single-storage-NIC topology, host
-      # mode skips the macvlan bridge-mode same-NIC limit (no shim needed),
-      # whereabouts IPAM, NAD selectors, and the source-IP/public_network
-      # coupling that bit us. The 10G backnet enp1s0f0np0 has the host's
-      # main 192.168.10.{2,3,4} IP; kernel routing puts client traffic
-      # for 192.168.10.0/24 on that interface naturally, so the read
-      # uplift we measured under multus (1.6 GB/s on 1M QD8 seqread)
-      # should be preserved. Write throughput cap (~89 MB/s on 1M QD8
-      # seqwrite) is msgr2 single-stream + 3-way replication amplification
-      # — not the network — so host doesn't sacrifice anything on the
-      # write side either.
+      # provider: host with addressRanges pinning Ceph traffic to the
+      # 10G backnet (enp1s0f0np0, 192.168.10.0/24). Without addressRanges,
+      # Rook uses the K8s nodeIP for mon endpoints — that's the kubelet-
+      # registered IP, which on these nodes is the 1G frontnet (192.168.1.x).
+      # Ceph daemons then bind to whatever interface has IPs in that
+      # subnet and ALL traffic (client + replication) gets pinned to the
+      # 1G NIC, capping throughput at ~62 MB/s seqwrite / ~180 MB/s
+      # seqread (measured 2026-05-14 on this exact hardware). With
+      # addressRanges set, Rook writes public_network + cluster_network
+      # into the Ceph config DB, daemons bind to whichever interface
+      # has IPs in that range (enp1s0f0np0 / 192.168.10.0/24), and the
+      # 10G NIC carries everything.
       #
-      # Trade: host-network Ceph daemons bind host ports, so RGW collides
-      # with openshift-ingress/router-default on :80 on 2 of 3 nodes.
-      # Mitigation: `required` podAntiAffinity in the ceph-object-store
-      # chart pins RGW to the router-free node. See
-      # blog/blog-multus-ceph-migration-draft.md final entries.
+      # CLAUDE.md "Network provider" section has the full chronology.
+      # See also blog/blog-multus-ceph-migration-draft.md.
+      #
+      # Trade vs. multus: host-network Ceph daemons bind host ports, so
+      # RGW collides with openshift-ingress/router-default on :80 on 2 of
+      # 3 nodes. Mitigation: `required` podAntiAffinity in the
+      # ceph-object-store chart pins RGW to the router-free node.
       provider: host
+      addressRanges:
+        public:
+          - "192.168.10.0/24"
+        cluster:
+          - "192.168.10.0/24"
 
     cephConfig:
       global:
