@@ -780,3 +780,127 @@ This is a follow-up — not blocking the migration:
 - Higher-value next step is **fix `osd_pool_default_min_size` for the RGW pool path** and queue Loki/CNPG back online; we already validated the network shape works for clients.
 
 Queue this as a "if write throughput becomes the actual workload-limiting metric" item — not a pre-Phase-7 blocker.
+
+### Phase 6.5 — NAD IPAM split + explicit public/cluster_network (attempted + rolled back, 2026-05-14)
+
+**Premise.** Phase-5+6 measurements showed reads delivering on multus (1.6 GB/s) but writes stalled at 89 MB/s — well below the hardware-predicted ceiling. Diagnosis: with both NADs identical (same `master: enp1s0f0np0`, same `network_name: ceph-storage` whereabouts pool, same `192.168.10.0/24` range), and `public_network` = `cluster_network` = `.0/24` in the Ceph config DB, OSD-to-OSD replication landed on net1 (ceph-public NAD) instead of net2 (ceph-cluster NAD) — `ceph osd dump` showed identical IPs for `public_addr` and `cluster_addr` per OSD. Net2 was bound but unused. Hypothesis: split the NADs onto disjoint /26 ranges + pin `public_network`/`cluster_network` to the new CIDRs so Ceph correctly picks net1 for client traffic and net2 for replication.
+
+**Commit `1e522df`:**
+- `components/cluster-config/ceph-network-attachments/values.yaml`: converted `attachments` from a flat list of names sharing one IPAM block into a list of objects, each with its own range + `network_name`. Layout: `ceph-public` on `192.168.10.128/26` (whereabouts pool `ceph-public-pool`), `ceph-cluster` on `192.168.10.192/26` (pool `ceph-cluster-pool`).
+- `components/storage/rook-ceph-cluster/values.yaml`: added `public_network: 192.168.10.128/26` + `cluster_network: 192.168.10.192/26` under `cephConfig.global`.
+- Ceph-shim NNCP route `192.168.10.128/25 dev ceph-shim` already covered both /26s — no NMState edits needed.
+
+**The roll.** ArgoCD applied within ~30s; ceph config DB picked up the new keys. But daemons didn't auto-roll on a `cephConfig.global` change. Manually ran `oc rollout restart deploy` for `mon`, `mgr`, `osd`, `rgw`. Daemons came up on new IPs in <60s; OSD `cluster_addr` correctly migrated into `.193-.195`. Looked great. Re-ran the libaio test.
+
+**The regression.** Test pod stuck in `ContainerCreating` for 48 min on node4. Events: `MountVolume.MountDevice failed: rpc error: code = DeadlineExceeded` (first attempt), then `code = Aborted, an operation with the given Volume ID 0001-...-ad163d4e... already exists` (every subsequent retry). The first NodeStageVolume call hung forever; in-memory operation tracker in the rbd-plugin locked the volume; all retries bounced off the lock.
+
+**Root cause (when finally identified).** The host-side `ceph-shim` macvlan has IP `192.168.10.16/24` on each node — in `192.168.10.0/26`, **outside the new public `/26` (`.128/26`)**. When kRBD on the host routes to an OSD's public IP (in `.128-.190`), the kernel uses ceph-shim as the egress interface; source IP is `.16`. The OSD's `public_network 192.168.10.128/26` setting causes Ceph's msgr2 listener to silently drop connections from sources outside the public network. kRBD never receives an msgr2 banner and waits indefinitely.
+
+**Compounded by:** ArgoCD/Rook reconciled the NAD chart change first (NADs were updated), but Rook didn't propagate `cephConfig.global` to a daemon roll automatically — needed manual rollout restart. Multiple half-rolled states accumulated.
+
+### Phase 6.5 rollback (commit `0ee8168`) — did not unstick the mount regression
+
+**Premise.** Revert the chart changes, re-roll daemons on the wider `.0/24` config, watch CSI come back to life.
+
+**Steps executed:**
+1. Reverted NAD chart to single shared `ceph-storage` IPAM pool covering `.128-.254`.
+2. Reverted rook-ceph-cluster `cephConfig.global` to drop the explicit network keys.
+3. `ceph config rm global public_network` + `ceph config rm global cluster_network` via toolbox (Rook only SETS cephConfig keys; chart-key removal does not delete from the live DB).
+4. Re-set `public_network 192.168.10.0/24` + `cluster_network 192.168.10.0/24` in the toolbox (Rook didn't re-auto-derive on its own).
+5. Rollout restart mons + mgrs + OSDs + RGW + all CSI nodeplugins.
+
+**End state.** Ceph layer `HEALTH_OK`. OSD endpoints back on shared `/24` (`.135`, `.136`, `.137` for public+cluster, same IP different ports). CSI pods all fresh.
+
+**The mount STILL failed.** Identical `operation already exists` symptom. Every subsequent debugging step:
+- Force-removed finalizer on a 31-day-old orphan VolumeAttachment (`pvc-c6106cbb-...` for a deleted PV) — no effect on the new mount.
+- Force-removed finalizer on the new stuck VolumeAttachment for the test PVC — no effect.
+- Restarted both rbd-ctrlplugin pods (external-attacher containers) — no effect.
+- Spawned a privileged debug pod on node5 + node4: confirmed `/sys/bus/rbd/devices/` is EMPTY, no kernel rbd mappings, no stale mount entries. The hang is purely in the rbd-plugin userspace, not in kRBD.
+- Inspected the rbd-plugin's `/etc/ceph/ceph.conf`: empty (no `mon_host`) — but `ceph-csi-config` ConfigMap had the right mon addresses, so this isn't the issue.
+- Restarted the rook-operator + the `ceph-csi-controller-manager` — no effect.
+
+After ~2 hours of debugging, the regression was still in place. Ceph layer was healthy at every observable level; the CSI mount path was silently broken in a way that survived every reset short of cluster teardown.
+
+### Decision: full teardown + chart audit + revisit fundamental shape (2026-05-14 ~19:30 local)
+
+**Rationale.** The state was polluted in a way we couldn't isolate. Continuing to debug felt like chasing symptoms while the underlying corruption stayed invisible. Cheaper to teardown + rebootstrap on a chart we'd audited parameter-by-parameter than to keep poking.
+
+**Phase A (commit `9a89f23`):** set `cleanupPolicy.confirmation: "yes-really-destroy-data"` on the rook-ceph-cluster chart.
+
+**Phase B (commit `31cbda9`):** disabled both `rook-ceph-cluster` and `ceph-object-store` apps in root-app. ArgoCD cascade-deleted; Rook spawned cluster-cleanup-jobs per node; OSD disks zapped in 4s each. End state: 0 Ceph CRs, namespace had only operator + CSI plugins + the toolbox + the old rbd-trash-purge bootstrap Job.
+
+### Audit + decision: `provider: host` over multus for this round
+
+A side-by-side comparison of multus + shim vs. `provider: host` exposed multus's real cost:
+- Same write ceiling (msgr2 single-stream + replication, not network)
+- Read uplift achievable on host too (host's `enp1s0f0np0` has the main `192.168.10.{2,3,4}` IPs; kernel routes pod traffic onto the 10G NIC)
+- Multus complexity: NADs, NNCPs, shim, whereabouts IPAM, source-IP/public_network coupling, validation tooling we never ran
+- Host complexity: the RGW host-port-80 collision (requires `required` podAntiAffinity, already a known incident shape)
+
+**The Rook multus validation tool was never run.** Previous session attempted it, decided "OpenShift admission too hostile, skip", and the decision propagated forward unchallenged. In fact Rook ships `deploy/examples/multus-validation-test-openshift.yaml` — a RBAC manifest granting `hostnetwork-v2` SCC to a dedicated SA the validation tool can use. The tool is supported on OpenShift; we just didn't do the homework. Phase 6.5 might have been caught by it pre-apply.
+
+Decision: pick host this round. If we go back to multus later, **mandatory** to run the validation tool first.
+
+### Phase C (commit `5d8fa2d`) — rebuild on `provider: host`, chart trim
+
+Changes in `components/storage/rook-ceph-cluster/values.yaml`:
+- `network.provider: multus → host`, dropped `selectors` and `addressRanges`
+- Dropped redundant `cephConfig.global.{mgr/dashboard/ssl, mgr/dashboard/server_port}` (already set via `dashboard.{ssl, port}`)
+- Dropped `cephConfig.osd.{osd_memory_target, bluestore_cache_autotune}` (both Ceph 19 defaults)
+- `cleanupPolicy.confirmation: ""` (close the loaded weapon)
+
+Changes in `components/storage/ceph-object-store/values.yaml`:
+- Re-added the `gateway.placement.podAntiAffinity` block against `openshift-ingress/router-default`. With host networking, RGW binds host `:80` and the 2026-05-13 21h crashloop incident shape is back in scope.
+
+Changes in `bootstrap/root-app/values.yaml`:
+- `ceph-network-attachments.enabled: false` (NADs unused with host)
+- `rook-ceph-cluster.enabled: true`, `ceph-object-store.enabled: true`
+
+### Bootstrap surprise #1: leftover state from previous cluster blocked bootstrap
+
+ArgoCD applied; operator started reconciling but got stuck at `"detecting the ceph image version for image quay.io/ceph/ceph:v19.2.3..."` for ~10 minutes. No detect-version pod ever spawned. No mons. Operator log showed it was parsing **mon endpoints from the previous (destroyed) cluster** — `data:a=172.30.218.3:6789,c=172.30.94.96:6789,b=172.30.102.165:6789` (the OLD Service IPs).
+
+Root cause: the teardown via `cleanupPolicy` zaps OSD disks via cleanup-jobs but does NOT clean up two namespace-level objects:
+- ConfigMap `rook-ceph-mon-endpoints` (mon topology + Service IPs)
+- Secret `rook-ceph-mon` (mon auth keyring)
+
+Both persisted from the previous cluster. On fresh bootstrap, Rook reads them and tries to reconcile from a partial-state view (endpoints exist, mons don't) — it doesn't simply re-bootstrap. Both objects have finalizers that block normal `oc delete`. Required `oc patch <obj> -p '{"metadata":{"finalizers":[]}}' --type=merge` to force-clear.
+
+After clearing + operator pod restart, bootstrap proceeded normally: mons in <2 min, mgrs + OSDs + RGW within another 2 min, `HEALTH_OK` 8 pods.
+
+### Bootstrap surprise #2: `provider: host` binds to the K8s nodeIP, NOT the storage NIC
+
+`ceph osd dump` after bootstrap:
+```
+osd.0  [v2:192.168.1.7:6800/..., v1:192.168.1.7:6801/...]  [v2:192.168.1.7:6802/..., v1:192.168.1.7:6803/...]
+osd.1  [v2:192.168.1.8:...]                                [v2:192.168.1.8:...]
+osd.2  [v2:192.168.1.9:...]                                [v2:192.168.1.9:...]
+```
+
+All three OSDs bound to `192.168.1.{7,8,9}` — the **1G frontnet** IPs. Both public and cluster addrs.
+
+Cause: with `provider: host` and no `network.addressRanges`, Rook uses each node's K8s-registered IP as the mon endpoint. On these nodes, kubelet registered with the frontnet IP (because that's how the cluster was joined). Ceph daemons then bind to whichever interface has an IP in the network containing the mon endpoints — frontnet.
+
+This means: **the original "host mode caps at 118 MB/s" diagnosis in earlier blog drafts was correct about cause (Ceph traffic on the 1G NIC) but wrong about the fix (multus is not the only path; `network.addressRanges` would also force backnet binding without any of the multus complexity).**
+
+Plan: measure the libaio benchmark on this 1G-frontnet baseline FIRST (so we close the loop on the historical claim), then add:
+```yaml
+network:
+  provider: host
+  addressRanges:
+    public:
+      - "192.168.10.0/24"
+    cluster:
+      - "192.168.10.0/24"
+```
+and re-roll daemons to bind on the 10G backnet, then re-test for the apples-to-apples comparison.
+
+### Lessons captured into CLAUDE.md (separate commit)
+
+- Rook multus validation tool is **mandatory** pre-flight for any multus change — OpenShift-compatible RBAC exists upstream
+- `provider: host` on multi-NIC nodes needs `network.addressRanges` to pin to the storage NIC
+- Post-teardown leftover state (`rook-ceph-mon-endpoints` CM + `rook-ceph-mon` Secret) blocks fresh bootstrap; require finalizer-force-clear
+- Storage-mode debugging should be capped at ~30 min before teardown; today's 4-hour debug burn was a process failure
+- Stuck VolumeAttachments with broken finalizers need `oc patch` force-clear
+
+The "see CLAUDE.md" rules are dated and will outlive these blog drafts as the source of truth.

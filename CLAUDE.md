@@ -145,23 +145,59 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - The CSI driver does **deferred delete**: PVC removal calls `rbd trash mv`, not `rbd rm`. Trashed images keep consuming pool space until purged. Manual purge in 04/2026 reclaimed ~600 GiB.
 - Need a periodic `rbd trash purge schedule` (use Ceph's built-in scheduler, not a CronJob — it lives in mgr config).
 - Occasionally an image refuses removal with `image has watchers` — usually a stuck CSI nodeplugin attachment; investigate the node, don't force-delete the image.
+- **`operation already exists` mount lock can outlive plugin restarts.** When `NodeStageVolume` hangs (e.g., kRBD waiting on an unreachable OSD), the rbd-plugin's in-memory operation tracker locks the volume ID. Every retry returns `rpc error: code = Aborted desc = an operation with the given Volume ID ... already exists`. Restarting the rbd-nodeplugin pod usually clears the lock — but if the underlying cause (network unreachable, msgr2 silent drop) persists, the new plugin will hit the same hang on the first retry. **Don't chase the lock; chase what's keeping the first call stuck.** Check `/sys/bus/rbd/devices/` on the host via `oc debug node/<name>` — empty = the hang is in plugin userspace, not kernel.
+- **Stuck VolumeAttachments need finalizer force-clear.** When CSI mount fails repeatedly, VAs accumulate with the `external-attacher/rook-ceph-rbd-csi-ceph-com` finalizer and `attached: true` even though no mount succeeded. If the PV is also gone (e.g., test PVC deleted), normal `oc delete` hangs forever. Unstick: `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. Same pattern can affect `rook-ceph-mon-endpoints` ConfigMap / `rook-ceph-mon` Secret after teardown — same force-clear works.
 
-### Network provider — locked on `host`, do not attempt `multus` migration
+### Network provider — `host` (with required `addressRanges`)
 
-The `CephCluster.spec.network.provider` is `host` and **must stay there** until the cluster has drain headroom (4+ OSDs). A 2026-05-12 attempt to follow Rook's documented `host → "" → multus` two-step path failed cleanly and required a manual rollback. The failure mode is reproducible on this topology and is not a one-off; future sessions should not retry the same shape. Full chronology in `blog/blog-multus-ceph-migration-draft.md` (Phase 2 section).
+The `CephCluster.spec.network.provider` is `host`. Two ways this rule has been validated:
 
-What actually breaks:
+**1. In-place `host → multus` migration is forbidden.** A 2026-05-12 attempt to follow Rook's documented `host → "" → multus` two-step deadlocks on this 3-OSD no-drain topology. During the intermediate `provider: ""` state, the first-rolled OSD goes onto the pod network while the other two stay on host; **PG peering hangs indefinitely** under that mixed-network shape (msgr2 between asymmetric-address peers stalls); Rook's `ceph osd ok-to-stop` then refuses to roll any further OSD because peering is hung, including the one that needs to roll back. Chicken-and-egg with no Rook-native escape. Bonus snag: the operator does NOT clear `public_network` from the Ceph config DB across provider changes — the first OSD on the new shape crashloops because it can't find an interface matching the stale CIDR.
 
-1. Rook's admission webhook refuses a direct `host → multus` transition (`network provider must be disabled (reverted to empty string) before a new provider is enabled`). The documented escape is the two-step.
-2. During the intermediate `provider: ""` state, the first-rolled OSD goes onto the pod network while the other two stay on host network. **PG peering hangs indefinitely under that mixed-network shape** — 220/220 PGs stuck `peering`, slow ops climbing monotonically, client I/O blocked. The connectivity exists (OVN passes pod↔host traffic) but msgr2 session establishment between asymmetric-address peers stalls.
-3. Rook's own `ceph osd ok-to-stop` safety check then refuses to roll any OSD because peering is hung — including the one that needs to roll back to host network to fix the situation. **Chicken-and-egg deadlock with no Rook-native escape.**
-4. Bonus snag: the operator updates Deployment shape on a provider change but does **not** clear `public_network` from the Ceph config DB. The first OSD on the new shape then crashloops because it can't find an interface matching the stale CIDR. Has to be cleared manually from the toolbox.
+**2. Multus fresh-rebuild on a clean cluster (2026-05-14) also failed.** Skipped the in-place migration entirely; tore down and rebuilt on `provider: multus` from the first daemon. Initial measurements were promising (1.6 GB/s 1M seqread vs. ~118 MB/s baseline), but the moment we tried to refine the design (Phase 6.5 — split the two NADs onto disjoint /26 IPAM ranges + pin explicit public/cluster_network CIDRs), kRBD mount silently broke: the host-side `ceph-shim` macvlan IP (`.16`) ended up outside the narrowed public `/26`, so msgr2 from the host stack hung. **The regression survived a clean chart revert** — CSI plugin restarts, ctrlplugin restarts, operator restart, VA finalizer force-clears, none of it cleared the stuck `NodeStageVolume` goroutine in the rbd-plugin. Recovery required full teardown.
 
-Recovery from that state required `oc patch` directly on the OSD-0 Deployment to set `hostNetwork: true`, bypassing Rook's safety check. That's a direct GitOps-owner-bypassing mutation — only justifiable here because Rook was deadlocked applying its *own* desired state. Don't ever do that to "speed up" a non-stuck reconciliation.
+**Rule for re-attempting multus:** if a future session wants multus, **mandatory pre-flight is `kubectl-rook-ceph multus validation run`**. OpenShift-compatible RBAC ships in upstream Rook at `deploy/examples/multus-validation-test-openshift.yaml` (grants `hostnetwork-v2` SCC to a dedicated SA the tool uses). Skipping this step burned a full session day. The validation tool exists exactly to catch the host↔pod reachability + source-IP issues that bit us in Phase 6.5. Do not propose multus changes without committing to running the tool first.
 
-**Rule:** do not change `network.provider` away from `host` on this cluster. If a future session is tempted, this paragraph is the answer. Revisit when a 4th OSD exists or a non-empty-intermediate path is found upstream.
+**Critical for `provider: host` on this cluster: `addressRanges` is required.** Without it, Rook uses each node's K8s-registered IP as the mon endpoint. On nodes with both a frontnet (1G, kubelet-registered) and backnet (10G, storage-dedicated), that means **mons + OSDs bind to the 1G frontnet IP** by default — which caps Ceph throughput at ~118 MB/s. This was the original source of the "host caps at 1G" diagnosis. The fix is not multus; it's:
 
-**Scheduling implication of host network: RGW must avoid router-co-located nodes.** With `network.provider: host`, every Ceph daemon binds the node's host ports. RGW listens on `:80` (`gateway.port: 80`). The cluster's edge `openshift-ingress/router-default` IngressController also runs hostNetwork on `:80/:443`, and the default HA mode places 2 router replicas on a 3-node bare-metal cluster — meaning 2 of 3 nodes have host port 80 occupied at all times. RGW therefore has exactly one collision-free node available. 2026-05-13 incident: a Multus rollback rescheduled RGW onto a router-co-located node, RGW crashlooped silently for ~21h with `EADDRINUSE` (exit 98), and Loki's S3 path was non-functional throughout. The `components/storage/ceph-object-store/` chart now carries a `required` podAntiAffinity selecting on `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default` in `openshift-ingress` namespace; **don't remove or downgrade to `preferred`** — co-residence is functionally broken and Pending+observable is the right alarm shape. Any future RGW-class daemon (multi-instance RGW, NFS-ganesha, an NVMe-of gateway) binding host ports needs the same anti-affinity treatment.
+```yaml
+network:
+  provider: host
+  addressRanges:
+    public:
+      - "192.168.10.0/24"
+    cluster:
+      - "192.168.10.0/24"
+```
+
+`addressRanges` tells Rook to set Ceph `public_network`/`cluster_network` to the backnet CIDR. Daemons then bind to whichever interface has an IP in that subnet (the 10G `enp1s0f0np0`). The host still has its kubelet-registered frontnet IP for K8s control-plane traffic; only Ceph daemon msgr2 traffic moves to the backnet.
+
+If a future change to `addressRanges` is needed, daemons need a rollout restart (`oc rollout restart deploy -l app=rook-ceph-{mon,mgr,osd,rgw} -n rook-ceph`) — Rook applies the cephConfig keys to the Ceph config DB but does NOT auto-roll daemons on a network-only change. Also clear stale config DB entries first: `ceph config rm global public_network ; ceph config rm global cluster_network` from the toolbox.
+
+**Scheduling implication of host network: RGW must avoid router-co-located nodes.** With `network.provider: host`, every Ceph daemon binds the node's host ports. RGW listens on `:80` (`gateway.port: 80`). The cluster's edge `openshift-ingress/router-default` IngressController also runs hostNetwork on `:80/:443`, and the default HA mode places 2 router replicas on a 3-node bare-metal cluster — meaning 2 of 3 nodes have host port 80 occupied at all times. RGW therefore has exactly one collision-free node available. 2026-05-13 incident: a Multus rollback rescheduled RGW onto a router-co-located node, RGW crashlooped silently for ~21h with `EADDRINUSE` (exit 98), and Loki's S3 path was non-functional throughout. The `components/storage/ceph-object-store/` chart carries a `required` podAntiAffinity selecting on `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default` in `openshift-ingress` namespace; **don't remove or downgrade to `preferred`** — co-residence is functionally broken and Pending+observable is the right alarm shape. Any future RGW-class daemon (multi-instance RGW, NFS-ganesha, an NVMe-of gateway) binding host ports needs the same anti-affinity treatment.
+
+### Post-teardown leftover state blocks fresh bootstrap
+
+When tearing down a CephCluster via `cleanupPolicy.confirmation: "yes-really-destroy-data"`, Rook's cleanup-jobs zap OSD disks but do NOT clean up two namespace-level objects:
+
+- ConfigMap `rook-ceph-mon-endpoints` — mon topology + Service IPs
+- Secret `rook-ceph-mon` — mon auth keyring
+
+Both persist with finalizers from the previous cluster. On fresh bootstrap, Rook reads these and tries to reconcile from a partial-state view (endpoints exist, mons don't) — it does NOT simply re-bootstrap. Symptom: operator log stops at `"detecting the ceph image version for image quay.io/ceph/ceph:vX.Y.Z..."` and no mon/detect-version pod ever spawns. CR phase stays `Progressing` indefinitely.
+
+Recovery (do BEFORE re-enabling the cluster app, or as soon as you notice the stuck bootstrap):
+
+```bash
+oc -n rook-ceph delete cm rook-ceph-mon-endpoints rook-ceph-pdbstatemap
+oc -n rook-ceph delete secret rook-ceph-mon
+# If the above hang on finalizers (common):
+oc -n rook-ceph patch cm rook-ceph-mon-endpoints -p '{"metadata":{"finalizers":[]}}' --type=merge
+oc -n rook-ceph patch secret rook-ceph-mon -p '{"metadata":{"finalizers":[]}}' --type=merge
+# Then bounce the operator so it re-reconciles from a clean slate:
+oc -n rook-ceph delete pod -l app=rook-ceph-operator
+```
+
+Within ~30s after operator restart, fresh mon "a" is created with new Service IPs and bootstrap proceeds normally.
 
 ### `CephCluster` SSA gotcha — `managedFields: []` makes field removal sticky
 
@@ -176,6 +212,8 @@ If a future spec change needs guaranteed field removal: either re-establish SSA 
 - Always state the impact on the degraded window first. "Rolling restart of OSDs" = degraded cluster, not a free operation.
 - For pool/CRUSH changes: `helm template … | oc diff -f -` against the live `CephCluster` / `CephBlockPool` so the deltas are inspected before commit.
 - The toolbox is `oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph …`. Read-only `ceph` commands are fine; Ceph-internal mutations (e.g. `ceph mgr fail`, `ceph orch ...`, `rbd trash purge schedule add`) are different from K8s mutations and may be appropriate — but flag them and confirm before running.
+- **30-minute cap on storage-mode debugging.** If a `network.provider` change, `addressRanges` change, NAD/IPAM change, or other cluster-level network/topology mutation breaks CSI mounts and isn't recovered within ~30 min of focused debugging, **stop and teardown** instead of continuing to debug. The 2026-05-14 multus-rebuild round spent 4+ hours trying to recover a CSI mount regression that survived a clean code revert; teardown + rebuild took ~10 min. Teardown is cheap on a no-client-load cluster (Phase 7 not done yet) and the polluted state is harder to debug than a fresh bootstrap. If client workloads are active, the trade-off is different — but then you wouldn't be making a network-mode change in the first place.
+- **`network.provider` or multus changes require running `kubectl-rook-ceph multus validation run` first.** OpenShift-compatible RBAC ships in upstream Rook at `deploy/examples/multus-validation-test-openshift.yaml`. No exceptions — skipping this step was the 2026-05-14 process failure that cost a session day.
 - **Observability stack is on Ceph-RBD PVCs** (Prometheus TSDB, Grafana, Loki, ArgoCD repo cache). When Ceph I/O hangs, all dashboards go dark — confirmed by the 2026-05-12 incident. Don't rely on Grafana to debug a storage incident; use the toolbox + `oc -n rook-ceph logs/exec` directly. If observability is dark during an incident, that's a *symptom* of the storage problem, not a separate failure to chase.
 
 ### Storage actions are always blog-worthy
