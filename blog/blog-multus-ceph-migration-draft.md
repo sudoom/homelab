@@ -720,3 +720,63 @@ No `addressRanges` block in the rendered output — confirmed clean.
 - **Phase 8**: rebind `media-data-pvc` to the Released `nfs-csi` PV — preserves the 500 GiB media library across the rebuild (data was always on NFS, never on Ceph).
 
 **Rollback plan if multus-bootstrap fails**: revert `provider: multus` → `host` in the chart values, restore `addressRanges`, drop `selectors`, commit. Fresh cluster comes up on host networking. Worst case +1 h.
+
+### Phase 5+6 — outcome (shipped, 2026-05-14)
+
+Phase 5 (`rook-ceph-cluster.enabled: true`) committed at `4133cb6` and Phase 6 (`ceph-object-store.enabled: true` + drop router-anti-affinity hack) at `c5d70a6`. End-to-end timing:
+
+- **Phase 5 → CephCluster HEALTH_OK**: ~2m11s wall (mons → mgrs → OSDs all Running, status `Progressing` finalizing OSD prep, but already `HEALTH_OK`).
+- **Phase 6 → RGW `Running 2/2`**: ~3m05s wall after Application creation; RGW pod landed on `node6` (which IS one of the router-co-located nodes — exactly the case the old `required-podAntiAffinity` hack used to block). With RGW on the pod network (`eth0 10.128.0.137` + `net1 192.168.10.143` from the ceph-public NAD), the host-port-80 collision is structurally impossible. The 2026-05-13 21h crashloop pattern cannot recur on this shape. Hack drop is validated.
+- Both pg_num_min bootstrap chicken-and-egg hits expected: `nvme-replicated` autocreated at `pg_num=1` (operator log: `Error EINVAL: specified pg_num_min 128 > pg_num 1`), then unblocked by toolbox `ceph osd pool set ... pg_num 128 ; pgp_num 128 ; pg_num_min 128`. Same shape on `ceph-objectstore.rgw.buckets.data` with floor 32. Final state: `nvme-replicated` at 128/128/min=128, RGW data pool at 32/32/min=32, `HEALTH_OK`, 217 PGs `active+clean`.
+
+Multus pod-attachment confirmed on a representative mon + OSD via `pod.metadata.annotations.k8s.v1.cni.cncf.io/network-status`:
+- `rook-ceph-mon-a`: `eth0 10.130.1.200` (OVN) + `net1 192.168.10.132` (`rook-ceph/ceph-public`)
+- `rook-ceph-osd-0`: `eth0 10.130.1.207` + `net1 192.168.10.137` (public) + `net2 192.168.10.138` (`rook-ceph/ceph-cluster`)
+
+Every Ceph daemon came up multus-attached from the first second — no `provider: ""` intermediate state ever existed, so the PG-peering-hangs failure mode of the 2026-05-12 in-place attempt cannot occur on this path.
+
+### Phase 5+6 — fio benchmark (`tests/ceph-storage-test-libaio.yaml`)
+
+Recipe: 50 GiB PVC on `ceph-nvme-block`; pod runs (a) `dd if=/dev/zero of=/data/testfile bs=1M count=30720 conv=fsync` to spill BlueStore metadata cache; then four `fio --ioengine=libaio --direct=1` workloads (60s each, group reporting). Full output saved to `data/post-multus/fio-libaio-2026-05-14.txt`. Test pod landed on `node5` (co-located with `osd-1`); the other two OSDs are on `node4` and `node6`.
+
+Headline numbers vs. the OVN-SDN baseline documented earlier in this draft (`~118 MB/s sustained on 1M seqwrite`, capped by the 1G frontnet hairpin):
+
+| Workload | This run (multus) | OVN baseline | Δ |
+|---|---|---|---|
+| pre-fill 1M seqwrite (30 GiB) | 80.9 MB/s wall-time | n/a | first-write allocation penalty, not comparable |
+| 4k QD32 randwrite | 1710 IOPS, 6.8 MB/s, p50=97 ms | not measured | latency-bound (PM9A1 kv_commit_lat + size=3 amp) |
+| 4k QD32 randread | **66.8k IOPS**, 261 MB/s, p50=5 ms | not measured | cache-warm; serves from primary only |
+| **1M QD8 seqwrite** | **89.6 MB/s**, p50=97 ms, p99=176 ms | 118 MB/s | **regressed ~24%** |
+| **1M QD8 seqread** | **1.6 GB/s**, p50=5 ms, p99=12 ms | 118 MB/s | **+13.5×** ✅ |
+
+So multus delivered the read-side promise — and then some. Writes did not move.
+
+### Why writes did not scale
+
+The original migration plan projected `~118 MB/s → 700-800 MB/s` on 1M seqwrite. Reality: writes are **slower** than baseline, not faster. Root cause is structural, not a config bug we can fix by tweaking knobs. Three contributing factors, in order of impact:
+
+1. **`public_network` and `cluster_network` collapse to the same `/24` in the mon config DB.** `ceph config dump` shows both as `192.168.10.0/24`. Looking at `ceph osd dump` for `osd.0`:
+   ```
+   public:  [v2:192.168.10.137:6800/...] [v1:192.168.10.137:6801/...]
+   cluster: [v2:192.168.10.137:6802/...] [v1:192.168.10.137:6803/...]
+   ```
+   Public and cluster addresses share the same IP, only ports differ — meaning **OSD-to-OSD replication is going over net1 (ceph-public)**, not net2 (ceph-cluster). Net2 is bound but unused. Ceph picks the first interface matching `cluster_network`; net1 matches `192.168.10.0/24` just as well as net2 does, so it wins.
+
+2. **Even if separated, both NADs share the same physical NIC.** Both `ceph-public` and `ceph-cluster` NADs have `"master": "enp1s0f0np0"`, `"mode": "bridge"`, same MTU. The two interfaces are virtual macvlans on the same 10G NIC. Splitting traffic at the OSI layer 3 level doesn't add bandwidth — it just lets Ceph attribute traffic correctly. The wire ceiling is the same.
+
+3. **Single-stream msgr2 write bottleneck.** 89.6 MB/s × 1M block = 89.6 ops/s, which at QD8 means avg 89 ms per 1M write. Hardware floor for PM9A1 commit-latency × 3-way replication should be ~10-15 ms per 1M write (3 ms commit × pipelined replication). We're 7× above the floor. The disk-stats `rbd0 util=99.87%` confirms the client-side block device is saturated waiting on Ceph, not on the local NVMe or the wire. Most likely msgr2 serialization through one TCP flow per OSD-pair, blocking on replica acks before the next op in the QD can issue.
+
+The same NAD also explains why reads scale: reads serve from the primary OSD only (no replication amplification), and `osd-1` is local to the test pod's node, so 33% of reads loopback through the macvlan on node5 — inflating the average to 1.6 GB/s. Even discounting the local-loopback share, reads on the wire are around 1.0 GB/s per remote OSD, which is line-rate enough.
+
+**Verdict on the 5× target**: hit on reads (+13.5×), missed on writes (-24%). For this cluster's actual workload mix (Prometheus TSDB read scans, Grafana panel renders, image-registry pulls, Loki search) reads dominate, so the net effect is strongly positive. But the multus migration should not be sold as a write-throughput win — it isn't one.
+
+### NAD-IPAM-split — follow-up option, deferred
+
+To actually use net2 for cluster traffic, the two NADs need distinct IPAM ranges. Concretely: change `components/cluster-config/ceph-network-attachments/` so `ceph-public` uses (say) `192.168.10.128/26` and `ceph-cluster` uses `192.168.10.192/26`; update the chart values' `public_network` / `cluster_network` accordingly via `cephConfig.global`. Whereabouts also needs different `network_name` values (currently both use `ceph-storage`) so the IPAM pool isn't shared.
+
+This is a follow-up — not blocking the migration:
+- Expected uplift on writes is modest (the physical NIC is shared, msgr2 single-stream is still the dominant limit).
+- Costs a daemon roll on every OSD + every mon — i.e. another degraded window on this 3-OSD topology.
+- Higher-value next step is **fix `osd_pool_default_min_size` for the RGW pool path** and queue Loki/CNPG back online; we already validated the network shape works for clients.
+
+Queue this as a "if write throughput becomes the actual workload-limiting metric" item — not a pre-Phase-7 blocker.
