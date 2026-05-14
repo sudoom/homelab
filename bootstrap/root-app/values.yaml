@@ -136,10 +136,8 @@ applications:
     namespace: rook-ceph
     syncWave: "3"
 
-  # Disabled 2026-05-13 for the Multus-from-scratch CephCluster rebuild
-  # (Phase 2 of that work). Re-enables come after fresh-cluster bootstrap.
   ceph-object-store:
-    enabled: false
+    enabled: true
     path: components/storage/ceph-object-store
     namespace: rook-ceph
     syncWave: "4"
