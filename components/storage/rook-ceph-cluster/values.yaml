@@ -158,11 +158,13 @@ rook-ceph-cluster:
       osdMaintenanceTimeout: 30
       manageMachineDisruptionBudgets: false
 
-    # Empty = safe. Set non-empty only when intentionally wiping (last
-    # use: rebuild Phase A on 2026-05-14, then reverted here for fresh
-    # bootstrap on provider: host).
+    # 2026-05-14 end-of-day teardown: cluster came up healthy on
+    # provider: host + addressRanges (10G backnet binding) but CSI
+    # provisioner got tangled in orphan-PV serialization. Tearing down
+    # to start tomorrow clean from this proven chart shape. Reverts
+    # to "" after fresh-cluster bootstrap on next session.
     cleanupPolicy:
-      confirmation: ""
+      confirmation: "yes-really-destroy-data"
 
     removeOSDsIfOutAndSafeToRemove: false
 
