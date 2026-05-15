@@ -117,6 +117,9 @@ apps:
       limits:
         memory: 12000Mi
     mountData: true
+    # Same NFS-access workaround as Sonarr — see sonarr.puid above.
+    puid: "0"
+    pgid: "0"
 
   transmission:
     enabled: true
