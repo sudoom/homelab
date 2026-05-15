@@ -1,0 +1,29 @@
+Starting pod/node4okdsudopspl-debug-mklc5 ...
+To use host binaries, run `chroot /host`. Instead, if you need to access host namespaces, run `nsenter -a -t 1`.
+Smart Log for NVME device:nvme0n1 namespace-id:ffffffff
+critical_warning			: 0
+temperature				: 49 °C (322 K)
+available_spare				: 95%
+available_spare_threshold		: 5%
+percentage_used				: 6%
+endurance group critical warning summary: 0
+Data Units Read				: 35299418 (18.07 TB)
+Data Units Written			: 32810330 (16.80 TB)
+host_read_commands			: 538493267
+host_write_commands			: 606740636
+controller_busy_time			: 5548
+power_cycles				: 365
+power_on_hours				: 4481
+unsafe_shutdowns			: 39
+media_errors				: 0
+num_err_log_entries			: 0
+Warning Temperature Time		: 0
+Critical Composite Temperature Time	: 0
+Temperature Sensor 1			: 49 °C (322 K)
+Temperature Sensor 2			: 55 °C (328 K)
+Thermal Management T1 Trans Count	: 0
+Thermal Management T2 Trans Count	: 0
+Thermal Management T1 Total Time	: 0
+Thermal Management T2 Total Time	: 0
+
+Removing debug pod ...
