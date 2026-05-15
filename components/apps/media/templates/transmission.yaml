@@ -1,5 +1,8 @@
 {{- if .Values.apps.transmission.enabled }}
 {{- $app := .Values.apps.transmission }}
+# Shared ConfigMap for VPN + Transmission settings — same across all
+# instances (master/slave/etc.). Per-instance overrides go in values via
+# $inst.envOverrides if a difference becomes necessary.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -17,14 +20,16 @@ data:
   TRANSMISSION_INCOMPLETE_DIR_ENABLED: "false"
   TRANSMISSION_DOWNLOAD_QUEUE_ENABLED: "false"
   WEBPROXY_ENABLED: "false"
+{{- range $i, $inst := $app.instances }}
+{{- $pvcName := $inst.configPvcName | default (printf "transmission-%s-config-pvc" $inst.name) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: transmission-config-pvc
-  namespace: {{ .Values.namespace }}
+  name: {{ $pvcName }}
+  namespace: {{ $.Values.namespace }}
 spec:
-  storageClassName: {{ .Values.storage.configClass }}
+  storageClassName: {{ $.Values.storage.configClass }}
   accessModes:
     - ReadWriteOnce
   resources:
@@ -34,20 +39,20 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: transmission
-  namespace: {{ .Values.namespace }}
+  name: transmission-{{ $inst.name }}
+  namespace: {{ $.Values.namespace }}
 spec:
   revisionHistoryLimit: 3
   replicas: 1
   selector:
     matchLabels:
-      app: transmission
+      app: transmission-{{ $inst.name }}
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app: transmission
+        app: transmission-{{ $inst.name }}
     spec:
       containers:
         - name: transmission
@@ -94,7 +99,7 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: transmission-config-pvc
+            claimName: {{ $pvcName }}
         - name: data
           persistentVolumeClaim:
             claimName: media-data-pvc
@@ -102,21 +107,21 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: transmission
-  namespace: {{ .Values.namespace }}
+  name: transmission-{{ $inst.name }}
+  namespace: {{ $.Values.namespace }}
 spec:
   ports:
     - port: {{ $app.port }}
   selector:
-    app: transmission
+    app: transmission-{{ $inst.name }}
 ---
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: transmission
-  namespace: {{ .Values.namespace }}
+  name: transmission-{{ $inst.name }}
+  namespace: {{ $.Values.namespace }}
 spec:
-  host: {{ $app.host | default "transmission" }}.{{ .Values.domain }}
+  host: {{ $inst.host }}.{{ $.Values.domain }}
   port:
     targetPort: {{ $app.port }}
   tls:
@@ -124,5 +129,6 @@ spec:
     insecureEdgeTerminationPolicy: Redirect
   to:
     kind: Service
-    name: transmission
+    name: transmission-{{ $inst.name }}
+{{- end }}
 {{- end }}

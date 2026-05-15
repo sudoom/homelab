@@ -49,14 +49,14 @@ clusters:
         # them owned by the shared `media` user. Toggle each app's
         # postgres block in the media chart's values to actually use
         # these — having the DBs sitting empty is harmless.
+        # Bazarr left on SQLite (Python/Flask, different env var shape)
+        # — no bazarr-main/log DBs here.
         - CREATE DATABASE "sonarr-main" OWNER media
         - CREATE DATABASE "sonarr-log" OWNER media
         - CREATE DATABASE "radarr-main" OWNER media
         - CREATE DATABASE "radarr-log" OWNER media
         - CREATE DATABASE "prowlarr-main" OWNER media
         - CREATE DATABASE "prowlarr-log" OWNER media
-        - CREATE DATABASE "bazarr-main" OWNER media
-        - CREATE DATABASE "bazarr-log" OWNER media
     resources:
       requests:
         cpu: 100m

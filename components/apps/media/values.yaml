@@ -113,11 +113,25 @@ apps:
     image: haugene/transmission-openvpn:5.4.1
     port: 9091
     configSize: 5Gi
-    host: media-download
     resources:
       requests:
         cpu: 100m
         memory: 1500Mi
       limits:
         memory: 2000Mi
-    mountData: true
+    # Multi-instance: each instance is an independent Deployment with its
+    # own config PVC, both mounting the shared media-data-pvc. Sharing the
+    # VPN-creds Secret + the transmission-config ConfigMap. Two instances
+    # share the same NORDVPN egress; if a third is added later, consider
+    # spreading countries to avoid IP collision on the same exit node.
+    #
+    # configPvcName override: master reuses the existing `transmission-config-pvc`
+    # to preserve its state across the rename (the old Deployment was named
+    # `transmission`, pruned by ArgoCD; the PVC stays because we still
+    # render it in the chart). Slave defaults to `transmission-slave-config-pvc`.
+    instances:
+      - name: master
+        host: media-download
+        configPvcName: transmission-config-pvc
+      - name: slave
+        host: media-download-slave
