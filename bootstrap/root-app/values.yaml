@@ -165,18 +165,17 @@ applications:
     syncWave: "4"
 
   # Wave 5 — Monitoring + observability config
-  # grafana-config / monitoring-config / gatus / logging-stack disabled
-  # 2026-05-13 for the Multus-from-scratch CephCluster rebuild — every
-  # one of these has PVCs on ceph-nvme-block that need to drain cleanly
-  # before Ceph teardown. Re-enables come after fresh-cluster bootstrap.
+  # Re-enabled 2026-05-15 after the GitOps-only Ceph rebuild test. Each
+  # of these consumes ceph-nvme-block PVCs (Prometheus TSDB, Grafana,
+  # Loki, Gatus state) so they could not come up until storage was back.
   grafana-config:
-    enabled: false
+    enabled: true
     path: components/cluster-config/grafana-config
     namespace: grafana
     syncWave: "5"
 
   monitoring-config:
-    enabled: false
+    enabled: true
     path: components/cluster-config/monitoring-config
     namespace: openshift-monitoring
     syncWave: "5"
@@ -194,13 +193,13 @@ applications:
     syncWave: "5"
 
   gatus:
-    enabled: false
+    enabled: true
     path: components/cluster-config/gatus
     namespace: gatus
     syncWave: "5"
 
   logging-stack:
-    enabled: false
+    enabled: true
     path: components/cluster-config/logging-stack
     namespace: openshift-logging
     syncWave: "5"
