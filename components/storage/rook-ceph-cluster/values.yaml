@@ -247,3 +247,20 @@ rbdTrashPurgeSchedule:
     - nvme-replicated
   # Pinned to the same image we use for the cluster.
   image: quay.io/ceph/ceph:v19.2.3
+
+# Bootstrap Job that applies the canonical caps to the CSI RBD provisioner
+# user, working around an upstream Rook 1.19.5 bug where the user is
+# generated with missing `osd profile rbd` cap (full write-up in
+# bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md). Idempotent
+# because `ceph auth caps` replaces caps with the specified set — running
+# it on an already-correct user is a no-op. Runs at sync-wave 10 so the
+# cluster's mons are up and toolbox keyring is available.
+#
+# Generations to fix: Rook suffixes each CSI user with `.1`, `.2`, etc. on
+# key rotation. Fresh bootstraps always produce `.1`. If a future rotation
+# creates `.2`, add it here.
+csiRbdProvisionerCapsFix:
+  enabled: true
+  image: quay.io/ceph/ceph:v19.2.3
+  users:
+    - client.csi-rbd-provisioner.1
