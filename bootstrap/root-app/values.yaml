@@ -44,7 +44,7 @@ applications:
     syncWave: "1"
 
   rook-ceph-operator:
-    enabled: true
+    enabled: false
     path: components/operators/rook-ceph
     namespace: rook-ceph
     syncWave: "1"
@@ -109,7 +109,7 @@ applications:
     syncWave: "2"
 
   csi-driver-config:
-    enabled: true
+    enabled: false
     path: components/cluster-config/csi-driver-config
     namespace: rook-ceph
     syncWave: "2"
