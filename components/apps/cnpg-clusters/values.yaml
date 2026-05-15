@@ -32,7 +32,7 @@ clusters:
     # (routes via OVN-K → host stack → backnet per today's routingViaHost
     # change, so PG replication uses the 10G backnet).
     instances: 3
-    imageName: ghcr.io/cloudnative-pg/postgresql:16
+    imageName: ghcr.io/cloudnative-pg/postgresql:18
     storage:
       size: 10Gi
       storageClass: ceph-nvme-block
