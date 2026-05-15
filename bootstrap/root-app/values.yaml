@@ -24,6 +24,12 @@ applications:
     namespace: default
     syncWave: "0"
 
+  cluster-network-config:
+    enabled: true
+    path: components/cluster-config/cluster-network-config
+    namespace: openshift-network-operator
+    syncWave: "0"
+
   # Wave 1 — Operators (subscriptions + instances)
   nmstate-operator:
     enabled: true

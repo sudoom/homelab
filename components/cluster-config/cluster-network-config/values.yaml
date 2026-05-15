@@ -1,0 +1,20 @@
+# OVN-Kubernetes gateway mode for this cluster.
+#
+# routingViaHost: true switches OVN-K from shared-gateway mode (default) to
+# local-gateway mode. In shared-gateway mode, pod egress traffic skips the
+# host IP stack — OVN routes directly out the external bridge — so the
+# host's connected routes for non-cluster networks aren't consulted. With
+# routingViaHost: true, every egress packet traverses the host stack and
+# follows the host's routing table.
+#
+# Required for this cluster because Ceph daemons are bound to the 10G
+# storage backnet (192.168.10.0/24, enp1s0f0np0) via the CephCluster
+# network.addressRanges. The host has a connected route for 192.168.10.0/24
+# (auto-added by the kernel), so traffic from any pod-network client
+# (CSI ctrlplugin, in-cluster RGW S3 consumers, Prometheus scrapes, …)
+# can reach the OSDs once OVN routes it through the host first.
+#
+# Trade-off: a small latency hit on every pod egress. Acceptable for this
+# cluster. Full chronology in blog/blog-multus-ceph-migration-draft.md
+# (2026-05-15 section).
+routingViaHost: true
