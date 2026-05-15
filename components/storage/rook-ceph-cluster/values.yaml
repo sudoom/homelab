@@ -158,6 +158,13 @@ rook-ceph-cluster:
       osdMaintenanceTimeout: 30
       manageMachineDisruptionBudgets: false
 
+    # Set to authorize full teardown: Rook's cleanup-jobs will zap each
+    # OSD disk and delete the underlying state on apply. Remove this
+    # block before re-enabling, otherwise the next bootstrap will zap
+    # the freshly-created OSDs.
+    cleanupPolicy:
+      confirmation: "yes-really-destroy-data"
+
     removeOSDsIfOutAndSafeToRemove: false
 
   cephBlockPools:
