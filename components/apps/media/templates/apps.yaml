@@ -32,6 +32,33 @@ spec:
       labels:
         app: {{ $name }}
     spec:
+      {{- with $app.postgres }}
+      {{- if .enabled }}
+      initContainers:
+        # Block startup until media-postgres Cluster's primary is actually
+        # listening. Servarr apps give up after only 3 short retries on
+        # "Connection refused" and exit non-recoverable — without this
+        # wait, any race where the app starts before CNPG primary is
+        # accepting connections crashes the app permanently until a manual
+        # pod delete.
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ .host }} {{ .port | default 5432 }}; do
+                echo "waiting for {{ .host }}:{{ .port | default 5432 }}"
+                sleep 5
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+      {{- end }}
+      {{- end }}
       containers:
         - name: {{ $name }}
           image: {{ $app.image }}
