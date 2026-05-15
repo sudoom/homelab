@@ -241,6 +241,20 @@ for ob in $(oc get objectbucket -o name 2>/dev/null); do
   oc patch $ob -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
   oc delete $ob --ignore-not-found 2>/dev/null
 done
+# IMPORTANT: if the OBC also already exists (e.g., ArgoCD recreated it
+# between the OB delete and now), the bucket-provisioner will recreate
+# a new OB but record the OLD OBC's UID in its claimRef — perpetual
+# mismatch loop. Delete the OBC too in the same step:
+for obc in $(oc get obc -A --no-headers 2>/dev/null | awk '{print "-n "$1" "$2}'); do
+  : # The for-loop construction above is wrong for namespaced OBC,
+    # so handle the specific OBC names you know about (the Helm
+    # charts in this repo create: logging-stack/loki, oadp/oadp once
+    # OADP ships, etc.). Pattern per OBC:
+done
+oc -n openshift-logging patch obc loki -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+oc -n openshift-logging delete obc loki --ignore-not-found 2>/dev/null
+# Then ArgoCD re-creates the OBC + the bucket-provisioner creates a
+# fresh OB, UIDs match, OBC reaches Bound on the next reconcile.
 
 # 2d. Stale clientprofiles.csi.ceph.io — blocks rook-ceph namespace
 # termination on operator chart removal. Symptom in ns status:
