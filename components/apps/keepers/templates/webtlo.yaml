@@ -1,0 +1,97 @@
+{{- $app := .Values.apps.webtlo }}
+{{- if $app.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webtlo-config
+  namespace: {{ .Values.namespace }}
+data:
+  {{- range $k, $v := $app.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: webtlo-data-pvc
+  namespace: {{ .Values.namespace }}
+spec:
+  storageClassName: {{ .Values.sharedData.storageClassName }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $app.dataSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webtlo
+  namespace: {{ .Values.namespace }}
+spec:
+  revisionHistoryLimit: 3
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webtlo
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: webtlo
+    spec:
+      containers:
+        - name: webtlo
+          image: {{ $app.image }}
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: webtlo-config
+          ports:
+            - containerPort: {{ $app.port }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ $app.port }}
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: {{ $app.resources.requests.cpu }}
+              memory: {{ $app.resources.requests.memory }}
+            limits:
+              memory: {{ $app.resources.limits.memory }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: webtlo-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webtlo
+  namespace: {{ .Values.namespace }}
+spec:
+  ports:
+    - port: {{ $app.port }}
+  selector:
+    app: webtlo
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: webtlo
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ $app.host }}.{{ .Values.domain }}
+  port:
+    targetPort: {{ $app.port }}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: webtlo
+{{- end }}

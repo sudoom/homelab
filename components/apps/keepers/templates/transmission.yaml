@@ -1,0 +1,128 @@
+{{- $app := .Values.apps.transmission }}
+{{- if $app.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transmission-config
+  namespace: {{ .Values.namespace }}
+data:
+  LOCAL_NETWORK: {{ $app.vpn.localNetworks | quote }}
+  OPENVPN_OPTS: "--inactive 3600 --ping 10 --ping-exit 60"
+  CREATE_TUN_DEVICE: "true"
+  OPENVPN_PROVIDER: {{ $app.vpn.provider | quote }}
+  NORDVPN_CATEGORY: {{ $app.vpn.category | quote }}
+  NORDVPN_COUNTRY: {{ $app.vpn.country | quote }}
+  TRANSMISSION_ENCRYPTION: {{ $app.vpn.transmissionEncryption | quote }}
+  TRANSMISSION_DOWNLOAD_DIR: {{ $app.vpn.downloadDir | quote }}
+  TRANSMISSION_INCOMPLETE_DIR_ENABLED: "false"
+  TRANSMISSION_DOWNLOAD_QUEUE_ENABLED: "false"
+  WEBPROXY_ENABLED: "false"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: transmission-config-pvc
+  namespace: {{ .Values.namespace }}
+spec:
+  storageClassName: {{ .Values.sharedData.storageClassName }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $app.configSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transmission
+  namespace: {{ .Values.namespace }}
+spec:
+  revisionHistoryLimit: 3
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transmission
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: transmission
+    spec:
+      containers:
+        - name: transmission
+          image: {{ $app.image }}
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: transmission-config
+            - secretRef:
+                name: vpn-creds
+          ports:
+            - containerPort: {{ $app.port }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ $app.port }}
+            initialDelaySeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 2
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - exit $(test $(date +%H) -eq 3 && echo 1 || echo 0)
+            failureThreshold: 1
+            initialDelaySeconds: 3600
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: {{ $app.resources.requests.cpu }}
+              memory: {{ $app.resources.requests.memory }}
+            limits:
+              memory: {{ $app.resources.limits.memory }}
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: transmission-config-pvc
+        - name: data
+          persistentVolumeClaim:
+            claimName: keepers-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transmission
+  namespace: {{ .Values.namespace }}
+spec:
+  ports:
+    - port: {{ $app.port }}
+  selector:
+    app: transmission
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: transmission
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ $app.host }}.{{ .Values.domain }}
+  port:
+    targetPort: {{ $app.port }}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: transmission
+{{- end }}

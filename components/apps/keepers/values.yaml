@@ -1,0 +1,59 @@
+namespace: keepers
+domain: apps.okd.sudops.pl
+
+# Shared data volume for keepers (transmission downloads → webtlo reads
+# torrent state). RWO since both mounters land on the same node via
+# default scheduling; flip to RWX (cephfs / nfs) if you spread them.
+sharedData:
+  storageClassName: ceph-nvme-block
+  size: 50Gi
+
+apps:
+  transmission:
+    enabled: true
+    image: haugene/transmission-openvpn:5.4.1
+    port: 9091
+    configSize: 5Gi
+    host: keepers-trans
+    resources:
+      requests:
+        cpu: 200m
+        memory: 500Mi
+      limits:
+        memory: 2000Mi
+    # VPN settings — same shape as the media-stack transmission. NORDVPN
+    # category P2P / country DE; spread to a different country if you
+    # don't want both media + keepers exiting through the same NORDVPN
+    # IP at the same time (NORDVPN allows it but trackers may rate-limit).
+    vpn:
+      provider: NORDVPN
+      category: P2P
+      country: DE
+      transmissionEncryption: "2"
+      downloadDir: /data
+      localNetworks: "192.168.1.0/24,10.0.0.0/8"
+    # vpn-creds Secret (keys: OPENVPN_USERNAME, OPENVPN_PASSWORD) must
+    # exist in the keepers namespace before transmission can start.
+    # The media namespace's sealed blob is bound to media/, so this
+    # needs a fresh kubeseal targeting keepers/. Until applied,
+    # transmission will CrashLoopBackOff with "missing credentials".
+
+  webtlo:
+    enabled: true
+    image: berkut174/webtlo:3.5.6
+    port: 80
+    dataSize: 1Gi
+    host: webtlo
+    resources:
+      requests:
+        cpu: 30m
+        memory: 32Mi
+      limits:
+        memory: 256Mi
+    config:
+      TZ: Europe/Zurich
+      WEBTLO_CRON: "true"
+      CRON_UPDATE: "15 0 * * *"
+      CRON_CONTROL: "false"
+      CRON_KEEPERS: "45 0 * * *"
+      CRON_REPORTS: "0 1 * * *"

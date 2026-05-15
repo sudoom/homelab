@@ -201,3 +201,15 @@ applications:
     path: components/apps/media
     namespace: media
     syncWave: "6"
+
+  # Disabled until you re-seal vpn-creds for the keepers namespace —
+  # `kubeseal --controller-namespace sealed-secrets --format yaml < <(kubectl
+  # create secret generic vpn-creds -n keepers --from-literal=OPENVPN_USERNAME=...
+  # --from-literal=OPENVPN_PASSWORD=... --dry-run=client -o yaml)`
+  # then commit the resulting SealedSecret into the chart (or apply
+  # out-of-band) and flip enabled: true.
+  keepers:
+    enabled: false
+    path: components/apps/keepers
+    namespace: keepers
+    syncWave: "6"
