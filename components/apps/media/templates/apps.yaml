@@ -65,15 +65,22 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ $app.port }}
-          {{- with $app.postgres }}
-          {{- if .enabled }}
-          # CNPG-managed Postgres for this app — Cluster CR shipped from
-          # components/apps/cnpg-clusters. CNPG auto-generates `<cluster>-app`
-          # Secret (keys: username, password) + `<cluster>-rw` Service.
-          # Servarr apps use .NET's IConfiguration env-var override syntax:
-          # double-underscore separates section/key, prefix matches the app
-          # name. Sonarr v4 source: src/NzbDrone.Core/Datastore/PostgresOptions.cs
           env:
+            # Match NFS file owner so the abc user inside the linuxserver
+            # image isn't anon-squashed by the Synology export. s6-init
+            # also chowns /config to this UID on first start.
+            - name: PUID
+              value: {{ $.Values.defaultUid | quote }}
+            - name: PGID
+              value: {{ $.Values.defaultGid | quote }}
+            {{- with $app.postgres }}
+            {{- if .enabled }}
+            # CNPG-managed Postgres for this app — Cluster CR shipped from
+            # components/apps/cnpg-clusters. CNPG auto-generates `<cluster>-app`
+            # Secret (keys: username, password) + `<cluster>-rw` Service.
+            # Servarr apps use .NET's IConfiguration env-var override syntax:
+            # double-underscore separates section/key, prefix matches the app
+            # name. Sonarr v4 source: src/NzbDrone.Core/Datastore/PostgresOptions.cs
             - name: {{ .envPrefix }}__Postgres__Host
               value: {{ .host }}
             - name: {{ .envPrefix }}__Postgres__Port
@@ -92,8 +99,8 @@ spec:
               value: {{ .mainDb }}
             - name: {{ .envPrefix }}__Postgres__LogDb
               value: {{ .logDb }}
-          {{- end }}
-          {{- end }}
+            {{- end }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: {{ $app.readinessPath }}

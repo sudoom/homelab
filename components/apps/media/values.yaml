@@ -6,6 +6,17 @@ storage:
   dataClass: nfs-csi
   dataSize: 500Gi
 
+# Run linuxserver.io and haugene images as the UID/GID that owns the
+# NFS-backed media-data-pvc (Synology DSM user). Without this, the
+# container's default abc user (PUID 911) hits the NFS export's anon
+# mapping and reads back ENOENT on /data/media/* — even though the
+# directory is 0777, the export squashes unmapped UIDs to nobody and
+# denies traversal. Setting PUID/PGID = 1026/100 aligns the running
+# process with the file owner; the linuxserver s6-init also chowns
+# /config to this UID on first start.
+defaultUid: "1026"
+defaultGid: "100"
+
 apps:
   bazarr:
     enabled: true
