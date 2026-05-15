@@ -231,6 +231,25 @@ for bp in $(oc -n rook-ceph get cephblockpool -o name 2>/dev/null); do
   oc -n rook-ceph patch $bp -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 done
 
+# 2c. Stale ObjectBuckets from prior cluster — these are cluster-scoped
+# (objectbuckets.objectbucket.io) and survive RGW teardown. On a fresh
+# bootstrap, the new OBC reconcile fails with:
+#   "obc \"<name>\" bucketName has changed compared to ob \"<obc-ns-name>\""
+# Operator log on rook-ceph-operator. Loki, OADP, CNPG OBCs stay Pending
+# forever. Force-clear:
+for ob in $(oc get objectbucket -o name 2>/dev/null); do
+  oc patch $ob -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+  oc delete $ob --ignore-not-found 2>/dev/null
+done
+
+# 2d. Stale clientprofiles.csi.ceph.io — blocks rook-ceph namespace
+# termination on operator chart removal. Symptom in ns status:
+#   "Some resources are remaining: clientprofiles.csi.ceph.io has 1 resource instances"
+# Force-clear:
+for cp in $(oc -n rook-ceph get clientprofiles.csi.ceph.io -o name 2>/dev/null); do
+  oc -n rook-ceph patch $cp -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+done
+
 # 3. Orphan PVs (Released or Failed status) — block csi-provisioner cluster-wide:
 for PV in $(oc get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' | grep ceph-nvme); do
   oc patch pv $PV -p '{"metadata":{"finalizers":[]}}' --type=merge
@@ -264,6 +283,8 @@ The SA dockercfg secrets (`builder-dockercfg-*`, `ceph-csi-*-dockercfg-*`, `rook
 | Bootstrap hangs at `"detecting the ceph image version"` | `rook-ceph-mon-endpoints` CM + `rook-ceph-mon` Secret |
 | ArgoCD app stuck `OutOfSync`, `Job is invalid: spec.selector: Required value` | Any bootstrap Job from prior cluster — `rbd-trash-purge-schedule-bootstrap`, `csi-rbd-provisioner-caps-fix-bootstrap`, etc. (immutable; can't be `kubectl replace`'d) |
 | Teardown stops with `CephObjectStore` / `CephBlockPool` / `CephCluster` stuck in `Deleting` for >5min | Rook finalizer can't reconcile (operator stopped watching) — force-clear `metadata.finalizers` to `[]` |
+| ObjectBucketClaim (OBC) stays `Pending`, operator log says `"bucketName has changed compared to ob"` | Stale cluster-scoped `ObjectBucket` from prior cluster — delete it |
+| `rook-ceph` namespace stuck `Terminating`, status says `clientprofiles.csi.ceph.io has 1 resource instances` | Stale `clientprofile.csi.ceph.io` finalizer — force-clear |
 | csi-provisioner spins forever on volume IDs unrelated to current PVCs | Orphan Released PVs |
 | New PVC stuck `Pending` even after provisioner restart | Combination of orphan PVs + stale VAs blocking the serialized provisioner |
 | `NodeStageVolume` returns "operation already exists" immediately on first mount | Stale VA + plugin in-memory tracker on a volume that no longer exists |
