@@ -44,7 +44,7 @@ applications:
     syncWave: "1"
 
   rook-ceph-operator:
-    enabled: false
+    enabled: true
     path: components/operators/rook-ceph
     namespace: rook-ceph
     syncWave: "1"
