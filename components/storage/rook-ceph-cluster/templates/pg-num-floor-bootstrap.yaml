@@ -1,0 +1,105 @@
+{{- if .Values.pgNumFloor.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pg-num-floor-bootstrap
+  namespace: rook-ceph
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-wave: "11"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 30
+  template:
+    metadata:
+      labels:
+        app: pg-num-floor-bootstrap
+    spec:
+      serviceAccountName: rook-ceph-default
+      restartPolicy: OnFailure
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: ceph
+          image: {{ .Values.pgNumFloor.image | quote }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              CEPH_CONFIG="/etc/ceph/ceph.conf"
+              MON_CONFIG="/etc/rook/mon-endpoints"
+              KEYRING_FILE="/etc/ceph/keyring"
+
+              cat <<KEYEOF > "$KEYRING_FILE"
+              [client.admin]
+              key = $(cat /var/lib/rook-ceph-mon/secret.keyring)
+              KEYEOF
+
+              cat <<EOF > "$CEPH_CONFIG"
+              [global]
+              mon_host = $(cat "$MON_CONFIG" | sed 's/[a-z0-9_-]\+=//g; s/=/ /; s/  */ /g')
+
+              [client.admin]
+              keyring = $KEYRING_FILE
+              EOF
+
+              # Workaround for upstream Ceph bug — file is at
+              # bugs/upstream-ceph-pg-autoscaler-bulk-ignored.md.
+              # The Squid 19.2.3 pg_autoscaler returns empty status for
+              # bulk: true pools, so they stay at pg_num=1. Ceph also
+              # rejects pg_num_min > pg_num (EINVAL), so the chart's
+              # pg_num_min floor can't enforce until we bump pg_num past
+              # 1 one time. Idempotent: skips when pg_num already >= floor.
+              {{- range .Values.pgNumFloor.pools }}
+              POOL="{{ .name }}"
+              FLOOR="{{ .floor }}"
+              echo "[$POOL] waiting for pool to exist (up to 600s)"
+              for i in $(seq 1 60); do
+                if ceph osd pool get "$POOL" pg_num >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 10
+              done
+              if ! ceph osd pool get "$POOL" pg_num >/dev/null 2>&1; then
+                echo "[$POOL] still missing after 600s — failing so K8s retries the Job"
+                exit 1
+              fi
+              CURRENT=$(ceph osd pool get "$POOL" pg_num | awk '/^pg_num:/ {print $2}')
+              if [ "$CURRENT" -lt "$FLOOR" ]; then
+                echo "[$POOL] pg_num=$CURRENT < floor=$FLOOR — bumping"
+                ceph osd pool set "$POOL" pg_num "$FLOOR"
+                ceph osd pool set "$POOL" pgp_num "$FLOOR"
+              else
+                echo "[$POOL] pg_num=$CURRENT >= floor=$FLOOR — no-op"
+              fi
+              {{- end }}
+          volumeMounts:
+            - name: ceph-config
+              mountPath: /etc/ceph
+            - name: mon-endpoint-volume
+              mountPath: /etc/rook
+            - name: ceph-admin-secret
+              mountPath: /var/lib/rook-ceph-mon
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              memory: "128Mi"
+      volumes:
+        - name: ceph-config
+          emptyDir: {}
+        - name: mon-endpoint-volume
+          configMap:
+            name: rook-ceph-mon-endpoints
+            items:
+              - key: data
+                path: mon-endpoints
+        - name: ceph-admin-secret
+          secret:
+            secretName: rook-ceph-mon
+            items:
+              - key: ceph-secret
+                path: secret.keyring
+{{- end }}

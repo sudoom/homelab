@@ -264,3 +264,23 @@ csiRbdProvisionerCapsFix:
   image: quay.io/ceph/ceph:v19.2.3
   users:
     - client.csi-rbd-provisioner.1
+
+# Bootstrap Job that bumps pg_num past 1 on the listed pools, working
+# around the Squid 19.2.3 pg_autoscaler bug (full write-up in
+# bugs/upstream-ceph-pg-autoscaler-bulk-ignored.md). Idempotent: skips
+# any pool where pg_num is already >= floor. Runs at sync-wave 11 so it
+# fires after the cluster is up + after the CephObjectStore at wave 4
+# has had time to create its pools.
+#
+# nvme-replicated floor 128: 100 PGs/OSD × 3 OSDs / replication 3 = 100
+#   → next pow2 = 128 (per Ceph's PG sizing formula).
+# ceph-objectstore.rgw.buckets.data floor 32: smaller pool, single RGW,
+#   32 PGs is comfortable; metadata pool stays at chart default 8.
+pgNumFloor:
+  enabled: true
+  image: quay.io/ceph/ceph:v19.2.3
+  pools:
+    - name: nvme-replicated
+      floor: 128
+    - name: ceph-objectstore.rgw.buckets.data
+      floor: 32
