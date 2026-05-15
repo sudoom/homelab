@@ -1,0 +1,163 @@
+# `homelab.sudops.pl` zone — design draft
+
+Working notes for the new LAN-appliance DNS zone + automated wildcard cert
+delivery. Pulled out of a 2026-05-15 thread about adding the Synology NAS
+to a "real" hostname with a valid TLS cert.
+
+## Goal
+
+Make every non-OKD LAN appliance addressable as `<name>.homelab.sudops.pl`
+with a valid public TLS cert, without leaking any LAN IPs to the public
+internet. Today's targets: Synology NAS, `dns-master` (Technitium box).
+Future: anything else worth a name on the LAN.
+
+## DNS architecture (where each name resolves)
+
+```
+sudops.pl                                 ← Cloudflare (public registrar)
+├── okd.sudops.pl                         ← cluster: split-horizon
+│   ├── api.okd.sudops.pl                 (Technitium internal + Cloudflare DNS-01)
+│   └── *.apps.okd.sudops.pl
+└── homelab.sudops.pl                     ← NEW: LAN-only authoritative
+    ├── nas.homelab.sudops.pl             → NAS LAN IP
+    ├── dns.homelab.sudops.pl             → 192.168.1.12 (dns-master)
+    └── … (future)
+```
+
+**Split-horizon**: Technitium serves `homelab.sudops.pl` authoritatively to
+LAN clients with real LAN IPs. Cloudflare doesn't have any A records for
+this subdomain — external queries return NXDOMAIN. No public LAN-IP leak.
+
+**Cert delivery**: even though Cloudflare doesn't serve A records for
+`homelab.sudops.pl`, the parent `sudops.pl` zone IS on Cloudflare, so the
+DNS-01 challenge mechanism works — cert-manager creates a transient
+`_acme-challenge.foo.homelab.sudops.pl` TXT in the `sudops.pl` zone via
+the Cloudflare API, LE validates, cert issued. Same pattern as the
+existing `*.apps.okd.sudops.pl` wildcard.
+
+## Implementation plan
+
+### 1. Technitium — add the zone (Ansible)
+
+Touches `ansible/technitium/`. Add a new zone via Technitium's API:
+
+```yaml
+# tasks/main.yml addition
+- name: Add homelab.sudops.pl as authoritative zone
+  ansible.builtin.uri:
+    url: "{{ technitium_api }}/api/zones/create"
+    method: GET
+    body_format: form-urlencoded
+    body:
+      token: "{{ technitium_api_token }}"
+      zone: homelab.sudops.pl
+      type: Primary
+
+- name: Add A records under homelab.sudops.pl
+  ansible.builtin.uri:
+    url: "{{ technitium_api }}/api/zones/records/add"
+    body:
+      token: "{{ technitium_api_token }}"
+      domain: "{{ item.name }}.homelab.sudops.pl"
+      type: A
+      ipAddress: "{{ item.ip }}"
+      ttl: 3600
+  loop:
+    - { name: nas, ip: 192.168.1.<NAS_IP> }
+    - { name: dns, ip: 192.168.1.12 }
+```
+
+`ansible.builtin.uri` (not `community.general.uri`) keeps with the
+"all-builtin" invariant in CLAUDE.md.
+
+### 2. cert-manager — wildcard Certificate
+
+Touches `components/cluster-config/cert-manager-config/`. Add a sibling
+to the existing `*.apps.okd.sudops.pl` Certificate:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: homelab-wildcard
+  namespace: cert-manager
+spec:
+  secretName: homelab-wildcard-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: "*.homelab.sudops.pl"
+  dnsNames:
+    - "*.homelab.sudops.pl"
+    - "homelab.sudops.pl"
+```
+
+The Cloudflare API token already has permission on the parent `sudops.pl`
+zone — no token re-seal needed.
+
+### 3. Synology DSM cert auto-import (CronJob)
+
+Touches `components/cluster-config/` (new chart, e.g. `synology-cert-sync/`).
+Daily CronJob that:
+
+1. Reads `homelab-wildcard-tls` Secret
+2. Logs into DSM via the API (auth → SID cookie)
+3. Computes a hash of the in-cluster cert + the current DSM cert
+4. If different: uploads the new cert via DSM's certificate API
+5. Else: no-op
+
+DSM API endpoints (per Synology docs):
+- `POST /webapi/auth.cgi?api=SYNO.API.Auth&method=login&...`
+- `POST /webapi/entry.cgi?api=SYNO.Core.Certificate&method=import` (multipart upload)
+
+Auth: a dedicated DSM user with **Certificate management** permission
+only (not full admin). Creds land in a SealedSecret in the cluster.
+
+Pseudocode:
+```bash
+#!/bin/bash
+set -euo pipefail
+DSM_HOST=nas.homelab.sudops.pl
+SID=$(curl -sk "https://$DSM_HOST/webapi/auth.cgi?api=SYNO.API.Auth&version=3&method=login&account=$DSM_USER&passwd=$DSM_PASS&format=sid" | jq -r .data.sid)
+# pull current cert serial from DSM and compare to /tls/tls.crt — short-circuit if equal
+# else multipart-upload the new cert+key+chain
+curl -sk -b "id=$SID" -F "file=@/tls/tls.crt" -F "key=@/tls/tls.key" \
+  "https://$DSM_HOST/webapi/entry.cgi?api=SYNO.Core.Certificate&method=import&version=1"
+curl -sk "https://$DSM_HOST/webapi/auth.cgi?api=SYNO.API.Auth&method=logout&version=2&_sid=$SID"
+```
+
+Mount the `homelab-wildcard-tls` Secret at `/tls`. Schedule: `0 3 * * *`
+(once daily; LE renews 30d before expiry so daily-poll is fine).
+
+### 4. Open questions before implementation
+
+- **Hostname list** — `nas` + `dns` confirmed; anything else (mikrotik?
+  printer? camera? other)? Want all of them in the initial zone or grow
+  organically?
+- **NAS LAN IP** — needs the actual IP for the A record
+- **DSM cert-import user** — caller needs to create it on the NAS before
+  the CronJob can land. Username + password get sealed.
+- **DSM hostname** — once DNS + cert are in place, change DSM's
+  "FQDN/Hostname" in Control Panel → Info Center to `nas.homelab.sudops.pl`
+  so its self-issued links + email notifications use the new name.
+- **Renaming `dns-master`** — the technitium ansible inventory currently
+  uses `dns-master` (also the literal hostname of the RPi). Cosmetic
+  question: bump to match `dns.homelab.sudops.pl`, or leave as-is. Lean
+  toward leaving — the hostname is `dns-master`, the FQDN-with-zone is
+  `dns.homelab.sudops.pl`. They don't have to match.
+
+## Not in scope
+
+- Public-facing services on `homelab.sudops.pl` (router exposure, port
+  forwarding, etc.). The zone is LAN-only by design.
+- Per-host certs (vs wildcard). One wildcard simplifies renewal + delivery.
+- HA Technitium — separate ongoing TODO (RPi Zero 2W as `dns-secondary`).
+  If `dns-master` goes down, `homelab.sudops.pl` resolution dies with it.
+  Same exposure as today's `okd.sudops.pl`.
+
+## Renovate / lifecycle
+
+- LE renews 30d before expiry; cert-manager triggers automatically
+- CronJob picks up new cert within 24h of renewal; no DSM touch
+- Re-seal DSM creds only when password rotates
+- No code changes between renewals
