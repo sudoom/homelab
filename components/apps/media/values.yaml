@@ -38,8 +38,12 @@ apps:
     # Sonarr v4 native Postgres backend. Cluster CR shipped from
     # components/apps/cnpg-clusters (cluster name: sonarr → namespace: media).
     # CNPG generates the `sonarr-app` Secret + `sonarr-rw` Service.
+    # envPrefix = the .NET config root name; Sonarr's IConfiguration reads
+    # Sonarr__Postgres__* env vars on startup and writes them into
+    # /config/config.xml on first run.
     postgres:
       enabled: true
+      envPrefix: Sonarr
       host: sonarr-rw
       port: 5432
       secretName: sonarr-app
