@@ -1,0 +1,28 @@
+{{- range $name, $cluster := .Values.clusters }}
+{{- if $cluster.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $name }}
+  namespace: {{ $cluster.namespace }}
+spec:
+  instances: {{ $cluster.instances }}
+  imageName: {{ $cluster.imageName }}
+  storage:
+    size: {{ $cluster.storage.size }}
+    storageClass: {{ $cluster.storage.storageClass }}
+  bootstrap:
+    initdb:
+      database: {{ $cluster.bootstrap.database }}
+      owner: {{ $cluster.bootstrap.owner }}
+      {{- with $cluster.bootstrap.postInitApplicationSQL }}
+      postInitApplicationSQL:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- with $cluster.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

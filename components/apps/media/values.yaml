@@ -35,6 +35,16 @@ apps:
       limits:
         memory: 1000Mi
     mountData: true
+    # Sonarr v4 native Postgres backend. Cluster CR shipped from
+    # components/apps/cnpg-clusters (cluster name: sonarr → namespace: media).
+    # CNPG generates the `sonarr-app` Secret + `sonarr-rw` Service.
+    postgres:
+      enabled: true
+      host: sonarr-rw
+      port: 5432
+      secretName: sonarr-app
+      mainDb: sonarr-main
+      logDb: sonarr-log
 
   radarr:
     enabled: true

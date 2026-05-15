@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cnpg-clusters
+description: Per-app CloudNativePG Cluster CRs (one PostgreSQL instance per consumer)
+version: 1.0.0
+type: application

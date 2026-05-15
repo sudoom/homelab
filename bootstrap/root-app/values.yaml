@@ -186,6 +186,15 @@ applications:
     namespace: openshift-logging
     syncWave: "5"
 
+  # Wave 5 — CNPG Cluster CRs (per-app Postgres instances; renders before
+  # the consumer apps at wave 6 so the Cluster + auto-generated Secret +
+  # Service are ready when the app pod starts).
+  cnpg-clusters:
+    enabled: true
+    path: components/apps/cnpg-clusters
+    namespace: default
+    syncWave: "5"
+
   # Wave 6 — Applications
   media:
     enabled: true

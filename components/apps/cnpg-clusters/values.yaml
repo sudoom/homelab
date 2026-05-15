@@ -1,0 +1,35 @@
+# Per-app PostgreSQL Cluster CRs managed by CloudNativePG.
+#
+# Each entry under `clusters:` renders one Cluster CR (and CNPG auto-generates
+# the per-cluster Service + app-user Secret + per-instance PVC). The app
+# Deployment then references the auto-generated `<cluster-name>-app` Secret
+# for credentials and the `<cluster-name>-rw` Service for the read-write
+# endpoint.
+#
+# Sync-wave: 5 (after CNPG operator at wave 1, after Ceph storage at wave 3,
+# before consumer apps at wave 6).
+#
+# CNPG creates the initial database via spec.bootstrap.initdb. For apps that
+# need >1 database (e.g. Sonarr needs main + log), use `postInitSQL` to
+# create the second database after init runs.
+
+clusters:
+  sonarr:
+    enabled: true
+    namespace: media
+    instances: 1
+    imageName: ghcr.io/cloudnative-pg/postgresql:16
+    storage:
+      size: 5Gi
+      storageClass: ceph-nvme-block
+    bootstrap:
+      database: sonarr-main
+      owner: sonarr
+      postInitApplicationSQL:
+        - CREATE DATABASE "sonarr-log" OWNER sonarr
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi

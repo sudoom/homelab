@@ -38,6 +38,34 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ $app.port }}
+          {{- with $app.postgres }}
+          {{- if .enabled }}
+          # CNPG-managed Postgres for this app — Cluster CR shipped from
+          # components/apps/cnpg-clusters. CNPG auto-generates `<cluster>-app`
+          # Secret (keys: username, password) + `<cluster>-rw` Service.
+          # Servarr apps (Sonarr v4+, Radarr v5+, Prowlarr v1.10+) read these
+          # env vars natively per servarr.com/sonarr/postgres-setup.
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .host }}
+            - name: POSTGRES_PORT
+              value: {{ .port | default 5432 | quote }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: password
+            - name: POSTGRES_MAIN_DB
+              value: {{ .mainDb }}
+            - name: POSTGRES_LOG_DB
+              value: {{ .logDb }}
+          {{- end }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: {{ $app.readinessPath }}
