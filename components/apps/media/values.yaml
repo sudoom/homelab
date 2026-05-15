@@ -95,7 +95,7 @@ apps:
 
   jellyfin:
     enabled: true
-    image: lscr.io/linuxserver/jellyfin:10.10.7
+    image: lscr.io/linuxserver/jellyfin:10.11.8
     port: 8096
     configSize: 30Gi
     readinessPath: /web/index.html
