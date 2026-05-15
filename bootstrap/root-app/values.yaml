@@ -108,6 +108,12 @@ applications:
     namespace: rook-ceph
     syncWave: "2"
 
+  csi-driver-config:
+    enabled: true
+    path: components/cluster-config/csi-driver-config
+    namespace: rook-ceph
+    syncWave: "2"
+
   # Wave 3 — TLS consumers (depends on certs being issued)
   ingress-controller:
     enabled: true

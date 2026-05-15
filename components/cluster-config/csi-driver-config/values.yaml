@@ -1,0 +1,26 @@
+# CSI Driver CR customizations.
+#
+# The Driver CRs (drivers.csi.ceph.io/{rbd,cephfs}.csi.ceph.com) are created
+# and managed by ceph-csi-operator (a separate operator from rook-ceph).
+# Rook does NOT propagate every operator-config knob to these CRs — notably
+# `CSI_ENABLE_HOST_NETWORK: "true"` is set in rook-ceph-operator-config but
+# only ever applied to the nodeplugin DaemonSet, not the ctrlplugin
+# Deployment. We patch the Driver CR directly via ServerSideApply.
+#
+# Why we need controllerPlugin.hostNetwork: true:
+#   CephCluster is on `network.provider: host` + `network.addressRanges:
+#   192.168.10.0/24`, so OSDs are bound to the 10G storage backnet. The
+#   default ctrlplugin (pod network) cannot reach the backnet across nodes
+#   — every CreateVolume hangs while trying to write the CSI omap, producing
+#   the well-known "operation already exists" lock storm. With hostNetwork:
+#   true the ctrlplugin uses the node's host network stack and reaches OSDs
+#   directly via enp1s0f0np0.
+#
+# Trade-off: ctrlplugin pods bind host ports (9090 for metrics, etc.) — a
+# replicas=2 deployment is fine since OKD nodes don't have anything else on
+# those ports. cephfs ctrlplugin is patched the same way for future-proofing
+# (CephFS storage class is planned once bulk HDDs land — see README TODO).
+#
+# This whole patch becomes obsolete the moment Rook propagates
+# CSI_ENABLE_HOST_NETWORK to the Driver CR. Track upstream-rook PRs.
+hostNetwork: true

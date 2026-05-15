@@ -1,0 +1,5 @@
+apiVersion: v2
+name: csi-driver-config
+description: Patches to the Rook CSI Driver CRs (ceph-csi-operator managed)
+version: 1.0.0
+type: application

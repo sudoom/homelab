@@ -1,0 +1,18 @@
+---
+apiVersion: csi.ceph.io/v1
+kind: Driver
+metadata:
+  name: rook-ceph.rbd.csi.ceph.com
+  namespace: rook-ceph
+spec:
+  controllerPlugin:
+    hostNetwork: {{ .Values.hostNetwork }}
+---
+apiVersion: csi.ceph.io/v1
+kind: Driver
+metadata:
+  name: rook-ceph.cephfs.csi.ceph.com
+  namespace: rook-ceph
+spec:
+  controllerPlugin:
+    hostNetwork: {{ .Values.hostNetwork }}
