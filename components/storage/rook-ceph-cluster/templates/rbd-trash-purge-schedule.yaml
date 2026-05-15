@@ -5,7 +5,7 @@ metadata:
   name: rbd-trash-purge-schedule-bootstrap
   namespace: rook-ceph
   annotations:
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
     argocd.argoproj.io/sync-wave: "10"
 spec:
   ttlSecondsAfterFinished: 3600
