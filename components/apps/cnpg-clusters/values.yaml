@@ -36,6 +36,11 @@ clusters:
     storage:
       size: 10Gi
       storageClass: ceph-nvme-block
+    # CNPG ships a Prometheus exporter sidecar; enablePodMonitor: true
+    # creates a PodMonitor CR that the user-workload Prometheus picks up
+    # automatically (monitoring-config app already wires the SCC + RBAC).
+    monitoring:
+      enabled: true
     bootstrap:
       database: media
       owner: media

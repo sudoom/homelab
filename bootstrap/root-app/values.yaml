@@ -197,7 +197,7 @@ applications:
 
   # Wave 6 — Applications
   media:
-    enabled: false
+    enabled: true
     path: components/apps/media
     namespace: media
     syncWave: "6"

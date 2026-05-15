@@ -12,6 +12,10 @@ spec:
   storage:
     size: {{ $cluster.storage.size }}
     storageClass: {{ $cluster.storage.storageClass }}
+  {{- if $cluster.monitoring.enabled }}
+  monitoring:
+    enablePodMonitor: true
+  {{- end }}
   bootstrap:
     initdb:
       database: {{ $cluster.bootstrap.database }}
