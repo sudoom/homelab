@@ -62,6 +62,14 @@ apps:
       limits:
         memory: 512Mi
     mountData: true
+    postgres:
+      enabled: true
+      envPrefix: Radarr
+      host: media-postgres-rw
+      port: 5432
+      secretName: media-postgres-app
+      mainDb: radarr-main
+      logDb: radarr-log
 
   prowlarr:
     enabled: true
@@ -76,6 +84,14 @@ apps:
       limits:
         memory: 512Mi
     mountData: false
+    postgres:
+      enabled: true
+      envPrefix: Prowlarr
+      host: media-postgres-rw
+      port: 5432
+      secretName: media-postgres-app
+      mainDb: prowlarr-main
+      logDb: prowlarr-log
 
   jellyfin:
     enabled: true
