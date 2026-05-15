@@ -50,6 +50,14 @@ spec:
                 name: webtlo-config
           ports:
             - containerPort: {{ $app.port }}
+          # berkut174/webtlo uses s6-overlay which has to start as root
+          # to mkdir /run/s6 + drop privileges. OpenShift's restricted-v2
+          # SCC assigns a random non-zero UID and would block this. Explicit
+          # runAsUser: 0 forces admission to pick the `privileged` SCC the
+          # keepers-privileged-scc ClusterRoleBinding grants to the default SA.
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
           livenessProbe:
             tcpSocket:
               port: {{ $app.port }}
