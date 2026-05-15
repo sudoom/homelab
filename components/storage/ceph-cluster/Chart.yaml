@@ -1,5 +1,0 @@
-apiVersion: v2
-name: ceph-cluster
-description: Ceph cluster configuration (CephCluster CR + toolbox)
-version: 1.0.0
-type: application
