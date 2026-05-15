@@ -148,6 +148,26 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - **`operation already exists` mount lock can outlive plugin restarts.** When `NodeStageVolume` hangs (e.g., kRBD waiting on an unreachable OSD), the rbd-plugin's in-memory operation tracker locks the volume ID. Every retry returns `rpc error: code = Aborted desc = an operation with the given Volume ID ... already exists`. Restarting the rbd-nodeplugin pod usually clears the lock — but if the underlying cause (network unreachable, msgr2 silent drop) persists, the new plugin will hit the same hang on the first retry. **Don't chase the lock; chase what's keeping the first call stuck.** Check `/sys/bus/rbd/devices/` on the host via `oc debug node/<name>` — empty = the hang is in plugin userspace, not kernel.
 - **Stuck VolumeAttachments need finalizer force-clear.** When CSI mount fails repeatedly, VAs accumulate with the `external-attacher/rook-ceph-rbd-csi-ceph-com` finalizer and `attached: true` even though no mount succeeded. If the PV is also gone (e.g., test PVC deleted), normal `oc delete` hangs forever. Unstick: `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. Same pattern can affect `rook-ceph-mon-endpoints` ConfigMap / `rook-ceph-mon` Secret after teardown — same force-clear works.
 - **Orphan Released PVs block the csi-provisioner cluster-wide.** When CSI's `DeleteVolume` for a PV fails (e.g., earlier mount regression left an unfinishable rbd image), the PV stays `Released` and the provisioner re-attempts deletion forever. CSI plugins serialize operations cluster-wide, so a stuck DeleteVolume blocks every new CreateVolume too — symptom looks identical to the "operation already exists" lock from the per-volume tracker, but the cause is a different volume's stuck deletion. **Before applying any test PVC, check for orphan Released PVs**: `oc get pv | grep Released`. Clear them with `oc patch pv <name> -p '{"metadata":{"finalizers":[]}}' --type=merge && oc delete pv <name>`. Also clear any stale VolumeAttachments to the now-gone PV. The "stuck VA + stuck PV" duo can survive plugin restarts, controlplugin restarts, and operator restarts — must be manually cleared.
+- **Fresh-bootstrap workaround: `client.csi-rbd-provisioner.<gen>` is missing its `osd` cap.** On every fresh `CephCluster` bootstrap, Rook 1.19.5 generates the CSI provisioner user (`client.csi-rbd-provisioner.1` on first bootstrap; suffix increments on key rotation) with **only** `mgr "allow rw"` + `mon "profile rbd, allow command 'osd blocklist'"` — no `osd` cap. CSI then authenticates fine but every `CreateVolume` hangs on the first RADOS op → gRPC `DeadlineExceeded → CANCEL` → "operation already exists" lock storm. The companion users (`csi-rbd-node.1`, both cephfs users) get correct caps; only the RBD provisioner template is buggy. **Confirmed Rook bug, filed locally at `bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md`.** Until upstream lands a fix, every fresh bootstrap needs this three-step workaround before the first PVC will bind:
+  ```
+  # 1. Fix the caps
+  oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    ceph auth caps client.csi-rbd-provisioner.1 \
+      mgr "allow rw" \
+      mon "profile rbd, allow command 'osd blocklist'" \
+      osd "profile rbd"
+
+  # 2. If a PVC was already attempted, clear orphan CSI omap state.
+  # The failed CreateVolume leaves a half-written entry that re-triggers
+  # "operation already exists" even after plugin restart.
+  oc -n rook-ceph exec deploy/rook-ceph-tools -- rados -p nvme-replicated listomapkeys csi.volumes.default
+  # → for each csi.volume.pvc-<uuid> key, read its value (the orphan UUID),
+  #   then `rmomapkey` + `rm csi.volume.<orphan-uuid>`.
+
+  # 3. Restart the rbd-csi ctrlplugin to clear the in-memory tracker
+  oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin
+  ```
+  After all three steps, the queued PVC binds within seconds. If a key rotation later creates `csi-rbd-provisioner.2`/`.3`, the same `ceph auth caps` needs to be re-run against the new generation suffix.
 
 ### Network provider — `host` (with required `addressRanges`)
 

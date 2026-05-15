@@ -904,3 +904,152 @@ and re-roll daemons to bind on the 10G backnet, then re-test for the apples-to-a
 - Stuck VolumeAttachments with broken finalizers need `oc patch` force-clear
 
 The "see CLAUDE.md" rules are dated and will outlive these blog drafts as the source of truth.
+
+## 2026-05-15 — fresh bootstrap on `host + addressRanges` + Rook 1.19.5 csi-rbd-provisioner cap bug
+
+Picked up from yesterday's end-of-day teardown with the chart already at `provider: host` + `network.addressRanges.public/cluster: ["192.168.10.0/24"]`. Removed the `cleanupPolicy.confirmation` override (else first reconcile would re-zap OSDs), flipped `rook-ceph-cluster.enabled` + `ceph-object-store.enabled` back to `true`, single commit (`6a7f43a`), push, ArgoCD picked it up within ~90 s.
+
+### Pre-flight (from the new CLAUDE.md "Clean teardown procedure" sweep)
+
+```
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get cephcluster,cephblockpool,cephobjectstore,cephfilesystem
+# → No resources found in rook-ceph namespace. ✓
+
+oc get pv | grep -E "Released|Failed"
+# → only the intentional NFS media PV; doesn't touch Ceph CSI ✓
+
+oc get volumeattachment
+# → No resources found ✓
+
+oc -n rook-ceph get cm rook-ceph-mon-endpoints rook-ceph-pdbstatemap
+# → NotFound (cleared at teardown last night) ✓
+```
+
+Three leftover `cluster-cleanup-job-*` Jobs from yesterday's teardown were still present (immutable, would block ArgoCD on re-sync). Deleted manually with `oc -n rook-ceph delete jobs -l rook-ceph-cleanup`.
+
+### Bootstrap timings
+
+ArgoCD picked up the commit at T+90 s. Then in order:
+
+- T+90 s: `rook-ceph-cluster` + `ceph-object-store` Applications created
+- T+1 m 45 s: mon-a `Init:1/2`, toolbox running
+- T+3 m: 3 mons `Running 2/2`, prepare jobs done on all nodes
+- T+3 m 10 s: 3 OSDs `Running 2/2`
+- T+3 m 26 s: `phase=Ready`, `health=HEALTH_OK`, `Cluster created successfully`
+
+Total ~3.5 min from zero to operational. RGW followed shortly after, scheduled on `node5` (the only router-free node — the chart's `required` podAntiAffinity worked as designed).
+
+### Verifying `addressRanges` did its job
+
+```
+$ ceph osd dump | grep ^osd
+osd.0  [v2:192.168.10.2:6800,v1:192.168.10.2:6801]  [v2:192.168.10.2:6802,v1:192.168.10.2:6803]  exists,up
+osd.1  [v2:192.168.10.3:6800,v1:192.168.10.3:6801]  [v2:192.168.10.3:6802,v1:192.168.10.3:6803]  exists,up
+osd.2  [v2:192.168.10.4:6800,v1:192.168.10.4:6801]  [v2:192.168.10.4:6802,v1:192.168.10.4:6803]  exists,up
+
+$ ceph config dump | grep network
+global  advanced  cluster_network  192.168.10.0/24  *
+global  advanced  public_network   192.168.10.0/24  *
+```
+
+OSDs bound to `192.168.10.{2,3,4}` (10G `enp1s0f0np0`) from first boot. `public_network` + `cluster_network` in the Ceph config DB. Exactly the design.
+
+### Surprise #1: mons stayed on frontnet
+
+```
+$ ceph mon dump
+0: [v2:192.168.1.7:3300/0,v1:192.168.1.7:6789/0] mon.a
+1: [v2:192.168.1.8:3300/0,v1:192.168.1.8:6789/0] mon.b
+2: [v2:192.168.1.9:3300/0,v1:192.168.1.9:6789/0] mon.c
+```
+
+Mons bound to the **1G frontnet** despite `addressRanges`. The K8s pod IP shown in the console for an OSD also reflects the frontnet (`192.168.1.8` on node5) because the pod is `hostNetwork: true` and kubelet's nodeIP is the frontnet — but the Ceph daemon socket inside binds based on `public_network`, which is why OSDs ARE on backnet despite the pod-IP display.
+
+Mons are different: Rook tracks pod IP (kubelet-registered nodeIP) for mon-endpoint advertisement, populates `rook-ceph-mon-endpoints` CM with those, and propagates to clients via the CSI config. The Ceph config DB has `public_network=192.168.10.0/24`, but mons are already bound to frontnet at startup and Rook doesn't re-bind them.
+
+Impact: mon traffic (clustermap, heartbeats, fencing) goes over 1G; OSD data + replication is on 10G. Mon traffic is small per-op but every client opens with the mon first. Not ideal but probably not the dominant bottleneck for I/O throughput. Filing-worthy as a Rook investigation item — capture before deciding whether to fix.
+
+### pg_num bumps (chicken-and-egg, documented)
+
+```
+$ ceph osd pool ls detail | grep -E "nvme-replicated|rgw.buckets.data" | grep -oE "pg_num [0-9]+"
+pg_num 1
+pg_num 1
+```
+
+Both pools start at `pg_num=1`. Ceph rejects `pg_num_min > pg_num` (EINVAL), so the chart's `pg_num_min: 128` / `pg_num_min: 32` floors can't enforce until we manually bump:
+
+```
+$ ceph osd pool set nvme-replicated pg_num 128
+$ ceph osd pool set nvme-replicated pgp_num 128
+$ ceph osd pool set ceph-objectstore.rgw.buckets.data pg_num 32
+$ ceph osd pool set ceph-objectstore.rgw.buckets.data pgp_num 32
+```
+
+PGs went 59 → 217, all `active+clean` within seconds. `pgp_num_target=128/32` reflects the gradual PG split; Rook's next reconcile will apply `pg_num_min` from the chart to make the floor sticky.
+
+### Surprise #2: csi-rbd-provisioner.1 has no `osd` cap (Rook 1.19.5 bug)
+
+Applied the libaio test PVC. Got stuck `Pending` for 7+ minutes with this event chain:
+
+```
+Normal   Provisioning      80s   External provisioner is provisioning ...
+Warning  ProvisioningFailed     rpc error: code = DeadlineExceeded desc = stream terminated by RST_STREAM with error code: CANCEL
+Warning  ProvisioningFailed     rpc error: code = Aborted desc = an operation with the given Volume ID pvc-... already exists
+[repeating forever]
+```
+
+Surface symptom looked like the well-known "operation already exists" rbd-plugin in-memory tracker lock (documented in CLAUDE.md). Tried the documented fixes — restart all CSI plugin pods (3 rbd-nodeplugin + 2 rbd-ctrlplugin + 5 cephfs plugins). Fresh plugins came up, new leader acquired the lease, same error pattern resumed within seconds. So the lock wasn't local to a pod's memory.
+
+Toolbox sanity check `rbd create` from the cluster admin keyring worked instantly. So the cluster was fine.
+
+Listed all CSI users:
+
+```
+$ ceph auth ls | grep -A4 csi-rbd
+client.csi-rbd-node.1
+    caps: [mgr] allow rw
+    caps: [mon] profile rbd
+    caps: [osd] profile rbd       ← present
+client.csi-rbd-provisioner.1
+    caps: [mgr] allow rw
+    caps: [mon] profile rbd, allow command 'osd blocklist'
+    (no osd cap)                  ← MISSING
+```
+
+The provisioner user is missing `osd profile rbd`. Without it, CSI can authenticate to mons and read the monmap, but every actual RADOS write hangs trying to authenticate against an OSD — gRPC deadline expires, the stream cancels, the per-volume operation tracker stays locked, and every subsequent retry returns "operation already exists".
+
+`csi-cephfs-provisioner.1`, `csi-cephfs-node.1`, and `csi-rbd-node.1` all got correct caps. Only the **rbd-provisioner** template is buggy on Rook 1.19.5.
+
+Confirmed Rook bug. Filed locally at `bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md` (ready to paste as a github.com/rook/rook issue).
+
+### Three-step workaround
+
+```
+# 1. Fix the caps
+$ ceph auth caps client.csi-rbd-provisioner.1 \
+    mgr "allow rw" \
+    mon "profile rbd, allow command 'osd blocklist'" \
+    osd "profile rbd"
+
+# 2. Clear orphan CSI omap state left by the failed CreateVolume
+$ rados -p nvme-replicated listomapkeys csi.volumes.default
+csi.volume.pvc-42036e5a-7947-430c-9089-39066c154388
+
+$ rados -p nvme-replicated getomapval csi.volumes.default csi.volume.pvc-42036e5a-7947-430c-9089-39066c154388
+value (36 bytes) : 30cc2b1c-a1c8-4505-8226-bffb2fbd6929
+
+$ rados -p nvme-replicated rmomapkey csi.volumes.default csi.volume.pvc-...
+$ rados -p nvme-replicated rm csi.volume.30cc2b1c-a1c8-4505-8226-bffb2fbd6929
+
+# 3. Restart the rbd-ctrlplugin to clear the in-memory tracker
+$ oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin
+```
+
+The original PVC's UID was so tainted that I re-created it from scratch (`oc delete pvc + oc apply`) for the actual benchmark. With a fresh UID and clean OMAP, provisioning works as expected.
+
+### Open items for next session
+
+- Libaio benchmark on the 10G-backnet host shape — apples-to-apples comparison vs. yesterday's `data/post-multus/` and `data/post-host-frontnet/` numbers.
+- Investigate Rook mon-endpoint binding: does `addressRanges` ever apply to mons, or is it OSD-only by design? If the latter, document it; if the former, file another bug.
+- Phase 7 consumer re-enable (`monitoring-config`, `logging-stack`, `grafana-config`, `gatus`, `media` + media-data-pvc NFS rebind).
