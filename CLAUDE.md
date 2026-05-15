@@ -212,8 +212,24 @@ oc -n rook-ceph patch cm rook-ceph-mon-endpoints -p '{"metadata":{"finalizers":[
 oc -n rook-ceph patch secret rook-ceph-mon -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 
 # 2. Bootstrap Jobs from previous cluster (immutable; ArgoCD can't re-apply, blocks sync):
+# Every bootstrap Job in the rook-ceph-cluster chart is fair game here. As of
+# 2026-05-15 there are TWO: rbd-trash-purge-schedule-bootstrap +
+# csi-rbd-provisioner-caps-fix-bootstrap. Add new ones as the chart grows.
+# The error you see if you skip this:
+#   error when replacing "...": Job.batch "<name>" is invalid:
+#   [spec.selector: Required value, spec.template.metadata.labels: Invalid value: ]
 oc -n rook-ceph delete job rbd-trash-purge-schedule-bootstrap --ignore-not-found
+oc -n rook-ceph delete job csi-rbd-provisioner-caps-fix-bootstrap --ignore-not-found
 oc -n rook-ceph delete jobs -l rook-ceph-cleanup --ignore-not-found  # any cluster-cleanup-job-* still around
+
+# 2b. Stuck Ceph CR finalizers — Rook's finalizer can't reconcile its own
+# delete after the operator stops watching (which happens once the CR enters
+# `Deleting` phase or once the operator pod is gone). Force-clear:
+oc -n rook-ceph patch cephcluster rook-ceph -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+oc -n rook-ceph patch cephobjectstore ceph-objectstore -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+for bp in $(oc -n rook-ceph get cephblockpool -o name 2>/dev/null); do
+  oc -n rook-ceph patch $bp -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
+done
 
 # 3. Orphan PVs (Released or Failed status) — block csi-provisioner cluster-wide:
 for PV in $(oc get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' | grep ceph-nvme); do
@@ -246,10 +262,12 @@ The SA dockercfg secrets (`builder-dockercfg-*`, `ceph-csi-*-dockercfg-*`, `rook
 | Symptom | Likely leftover |
 |---|---|
 | Bootstrap hangs at `"detecting the ceph image version"` | `rook-ceph-mon-endpoints` CM + `rook-ceph-mon` Secret |
-| ArgoCD app stuck `OutOfSync`, `Job is invalid: spec.selector: Required value` | Old `rbd-trash-purge-schedule-bootstrap` Job |
+| ArgoCD app stuck `OutOfSync`, `Job is invalid: spec.selector: Required value` | Any bootstrap Job from prior cluster — `rbd-trash-purge-schedule-bootstrap`, `csi-rbd-provisioner-caps-fix-bootstrap`, etc. (immutable; can't be `kubectl replace`'d) |
+| Teardown stops with `CephObjectStore` / `CephBlockPool` / `CephCluster` stuck in `Deleting` for >5min | Rook finalizer can't reconcile (operator stopped watching) — force-clear `metadata.finalizers` to `[]` |
 | csi-provisioner spins forever on volume IDs unrelated to current PVCs | Orphan Released PVs |
 | New PVC stuck `Pending` even after provisioner restart | Combination of orphan PVs + stale VAs blocking the serialized provisioner |
 | `NodeStageVolume` returns "operation already exists" immediately on first mount | Stale VA + plugin in-memory tracker on a volume that no longer exists |
+| Every `CreateVolume` returns "operation already exists" on a freshly-bootstrapped cluster | `client.csi-rbd-provisioner.<gen>` missing `osd profile rbd` cap (Rook 1.19.5 bug — see RBD CSI quirks above; chart-shipped Job auto-fixes on next sync if it ran) |
 
 If you're tearing down, run the full sweep. If you discover one of these symptoms during a botched bootstrap, the table above tells you which subset of the sweep to apply.
 
