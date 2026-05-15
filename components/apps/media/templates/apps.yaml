@@ -65,14 +65,23 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ $app.port }}
+          {{- $pgEnabled := and $app.postgres $app.postgres.enabled }}
+          {{- if or $app.puid $pgEnabled }}
           env:
-            # Match NFS file owner so the abc user inside the linuxserver
-            # image isn't anon-squashed by the Synology export. s6-init
-            # also chowns /config to this UID on first start.
+            {{- if $app.puid }}
+            # Per-app PUID/PGID override (linuxserver s6 init reads these
+            # on container start). Only set when an app needs to deviate
+            # from the image's default abc user — most don't. Sonarr is
+            # the canonical case: Synology NFSv4 export uses idmap, so
+            # the `abc` username on the client doesn't match any user on
+            # the server and gets denied. Setting PUID=0/PGID=0 keeps
+            # Sonarr running as root post-s6-init; NFS root_squash maps
+            # root → admin on the Synology side, which has access.
             - name: PUID
-              value: {{ $.Values.defaultUid | quote }}
+              value: {{ $app.puid | quote }}
             - name: PGID
-              value: {{ $.Values.defaultGid | quote }}
+              value: {{ $app.pgid | quote }}
+            {{- end }}
             {{- with $app.postgres }}
             {{- if .enabled }}
             # CNPG-managed Postgres for this app — Cluster CR shipped from
@@ -101,6 +110,7 @@ spec:
               value: {{ .logDb }}
             {{- end }}
             {{- end }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: {{ $app.readinessPath }}

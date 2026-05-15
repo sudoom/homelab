@@ -58,14 +58,6 @@ spec:
         - name: transmission
           image: {{ $app.image }}
           imagePullPolicy: IfNotPresent
-          env:
-            # haugene/transmission-openvpn also respects PUID/PGID. Match
-            # the NFS file owner so downloaded files inherit the right
-            # UID and sonarr/radarr can hardlink/move into the library.
-            - name: PUID
-              value: {{ $.Values.defaultUid | quote }}
-            - name: PGID
-              value: {{ $.Values.defaultGid | quote }}
           envFrom:
             - configMapRef:
                 name: transmission-config
