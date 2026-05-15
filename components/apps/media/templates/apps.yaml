@@ -42,7 +42,7 @@ spec:
         # accepting connections crashes the app permanently until a manual
         # pod delete.
         - name: wait-for-postgres
-          image: busybox:1.36
+          image: busybox:1.37
           command:
             - sh
             - -c
