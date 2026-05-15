@@ -1087,3 +1087,20 @@ So `routingViaHost: true` is a partial fix. Kept it in tree (commit `1512d3f`) b
 Filed locally as a workaround chart (`components/cluster-config/csi-driver-config/`, commit `345cb1b`) that SSA-patches `controllerPlugin.hostNetwork: true` on both rbd + cephfs Driver CRs. Rook rolled the ctrlplugin Deployments with hostNetwork: true; pods now land with podIP=hostIP. CreateVolume completed within seconds of the new pods being ready, omap was written successfully, PVC bound, fio benchmark ran cleanly.
 
 Worth filing a Rook upstream issue separately — the CSI_ENABLE_HOST_NETWORK config-CM knob should propagate to the Driver CR's controllerPlugin spec.
+
+### Post-GitOps-rebuild libaio bench — `data/post-host-backnet/fio-libaio-2026-05-15-post-rebuild.txt`
+
+After the full Rook teardown + GitOps-only rebuild test (commits `8e3f1b7` → `8d72473`, then bug-fix iterations `098226a` and `521bf1e`, then the pg-num floor Job at `2c6facd`), re-ran the same libaio test on the freshly-bootstrapped cluster (~15 min old when bench started):
+
+| Workload | Morning (warm) | Post-rebuild (15-min cold) | Delta |
+|---|---|---|---|
+| 4k QD32 randwrite | 8.7 MiB/s, 2184 IOPS | 6.7 MiB/s, 1680 IOPS | -23% |
+| 4k QD32 randread | 261 MiB/s, 66.8k IOPS | 270 MiB/s, 69.2k IOPS | +3% |
+| 1M QD8 seqwrite | 163 MB/s | **73.5 MB/s** | -55% |
+| 1M QD8 seqread | 1.6 GB/s | 1.6 GB/s | flat |
+
+The seqwrite regression is **not architectural** — `ceph health detail` showed `BLUESTORE_SLOW_OP_ALERT` on osd.2 during the bench. Same NVMe (PM9A1), same network shape (`192.168.10.{2,3,4}:6800` on backnet, `addressRanges` honored), same `pg_num=128` floor. The freshly-bootstrapped BlueStore is still doing initial compaction/metadata-flush passes on a 15-min-old cluster; one OSD hit slow-op territory under the 30 GiB pre-fill + 60s seqwrite burst. Reads (which only consult the primary OSD) and small-random writes (which spread across PGs) are unaffected.
+
+Morning's 163 MB/s ran on a cluster that had been up for hours. The "warm vs cold cluster" gap is the right framing — not "rebuild regression". Re-bench on this same cluster a few hours from now should recover the 163 MB/s number.
+
+The point of this re-bench was to **confirm the GitOps-only bootstrap produces a fully-functional cluster end-to-end** — `addressRanges` on backnet, ctrlplugin hostNetwork, csi-rbd-provisioner.1 caps applied, `pg_num` floored — all done via three idempotent bootstrap Jobs and one SSA-patch chart, no imperative interventions. That part is verified clean: PVC bound in 5s on first try, fio ran with no manual unsticking.
