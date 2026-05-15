@@ -35,18 +35,16 @@ apps:
       limits:
         memory: 1000Mi
     mountData: true
-    # Sonarr v4 native Postgres backend. Cluster CR shipped from
-    # components/apps/cnpg-clusters (cluster name: sonarr → namespace: media).
-    # CNPG generates the `sonarr-app` Secret + `sonarr-rw` Service.
-    # envPrefix = the .NET config root name; Sonarr's IConfiguration reads
-    # Sonarr__Postgres__* env vars on startup and writes them into
-    # /config/config.xml on first run.
+    # Sonarr v4 native Postgres backend. Shared Cluster CR shipped from
+    # components/apps/cnpg-clusters (cluster name: media-postgres). All
+    # servarr apps share one Cluster + one user (`media`), each app uses
+    # its own MainDb + LogDb. envPrefix = .NET IConfiguration root name.
     postgres:
       enabled: true
       envPrefix: Sonarr
-      host: sonarr-rw
+      host: media-postgres-rw
       port: 5432
-      secretName: sonarr-app
+      secretName: media-postgres-app
       mainDb: sonarr-main
       logDb: sonarr-log
 

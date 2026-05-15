@@ -1,32 +1,57 @@
 # Per-app PostgreSQL Cluster CRs managed by CloudNativePG.
 #
-# Each entry under `clusters:` renders one Cluster CR (and CNPG auto-generates
-# the per-cluster Service + app-user Secret + per-instance PVC). The app
-# Deployment then references the auto-generated `<cluster-name>-app` Secret
-# for credentials and the `<cluster-name>-rw` Service for the read-write
-# endpoint.
+# Pattern A (shared cluster, single user, multiple databases): one Cluster
+# per namespace (or per logical grouping), with all consumer databases
+# pre-created via postInitApplicationSQL and owned by the same app user.
+# Consumers reference different MainDb/LogDb names via their own env vars.
+#
+# Trade-off vs Pattern B (per-user roles): no DB-level isolation between
+# apps in the same Cluster — acceptable in a single-namespace homelab; if
+# isolation becomes important later, refactor by adding managed.roles +
+# Database CRs without rebuilding the Cluster.
+#
+# Each entry under `clusters:` renders one Cluster CR. CNPG auto-generates:
+#   <cluster>-app                Secret (username, password for the app user)
+#   <cluster>-superuser          Secret (superuser creds — operator use only)
+#   <cluster>-rw / -ro / -r      Services (rw = primary; ro = sync replicas;
+#                                          r  = round-robin across all)
+#   <cluster>-<n>                Pods (1..instances, one per node via
+#                                       built-in PodAntiAffinity)
 #
 # Sync-wave: 5 (after CNPG operator at wave 1, after Ceph storage at wave 3,
 # before consumer apps at wave 6).
-#
-# CNPG creates the initial database via spec.bootstrap.initdb. For apps that
-# need >1 database (e.g. Sonarr needs main + log), use `postInitSQL` to
-# create the second database after init runs.
 
 clusters:
-  sonarr:
+  media-postgres:
     enabled: true
     namespace: media
-    instances: 1
+    # 3 instances: 1 primary + 2 hot-standby replicas, one per node via
+    # CNPG's default pod anti-affinity. Total storage = instances × size,
+    # all on ceph-nvme-block (3-way replicated underneath). Stream
+    # replication between Postgres instances stays on the K8s pod network
+    # (routes via OVN-K → host stack → backnet per today's routingViaHost
+    # change, so PG replication uses the 10G backnet).
+    instances: 3
     imageName: ghcr.io/cloudnative-pg/postgresql:16
     storage:
-      size: 5Gi
+      size: 10Gi
       storageClass: ceph-nvme-block
     bootstrap:
-      database: sonarr-main
-      owner: sonarr
+      database: media
+      owner: media
       postInitApplicationSQL:
-        - CREATE DATABASE "sonarr-log" OWNER sonarr
+        # Servarr apps need two DBs each (main + log). Pre-create all of
+        # them owned by the shared `media` user. Toggle each app's
+        # postgres block in the media chart's values to actually use
+        # these — having the DBs sitting empty is harmless.
+        - CREATE DATABASE "sonarr-main" OWNER media
+        - CREATE DATABASE "sonarr-log" OWNER media
+        - CREATE DATABASE "radarr-main" OWNER media
+        - CREATE DATABASE "radarr-log" OWNER media
+        - CREATE DATABASE "prowlarr-main" OWNER media
+        - CREATE DATABASE "prowlarr-log" OWNER media
+        - CREATE DATABASE "bazarr-main" OWNER media
+        - CREATE DATABASE "bazarr-log" OWNER media
     resources:
       requests:
         cpu: 100m
