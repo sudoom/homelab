@@ -1053,3 +1053,37 @@ The original PVC's UID was so tainted that I re-created it from scratch (`oc del
 - Libaio benchmark on the 10G-backnet host shape — apples-to-apples comparison vs. yesterday's `data/post-multus/` and `data/post-host-frontnet/` numbers.
 - Investigate Rook mon-endpoint binding: does `addressRanges` ever apply to mons, or is it OSD-only by design? If the latter, document it; if the former, file another bug.
 - Phase 7 consumer re-enable (`monitoring-config`, `logging-stack`, `grafana-config`, `gatus`, `media` + media-data-pvc NFS rebind).
+
+### 10G backnet libaio benchmark — `data/post-host-backnet/fio-libaio-2026-05-15.txt`
+
+Three-way comparison against yesterday's runs:
+
+| Workload | post-host-frontnet (1G) | post-multus (pod net) | **post-host-backnet (10G)** |
+|---|---|---|---|
+| 4k QD32 randwrite | ~14 MiB/s, 3.7k IOPS | ~9.8 MiB/s, 2.5k IOPS | **8.7 MiB/s, 2.2k IOPS** |
+| 4k QD32 randread | — | — | **261 MiB/s, 67k IOPS** |
+| 1M QD8 seqwrite | 64.5 MB/s | 89.6 MB/s | **163 MB/s** |
+| 1M QD8 seqread | 182 MB/s | 1.6 GB/s | **1.6 GB/s** |
+
+Seqwrite +83% vs. multus, +153% vs. frontnet baseline. Reads match the multus ceiling (msgr2 single-stream + PM9A1 read ceiling, not network shape). Random writes essentially unchanged — that workload is fsync-bottlenecked at the OSD level, not in the network.
+
+The seqwrite gain is the real prize: 163 MB/s is the new sustained write ceiling for pod-network clients on this cluster. The math checks out — with `size=3` replication, every client-MB on the primary becomes 2 MB outbound on the backnet (replication to two secondaries). 163 × 2 = 326 MB/s per primary OSD on the backnet wire, well within the 10G NIC's capacity. The actual cap is msgr2 single-stream TCP throughput, not NIC bandwidth.
+
+### Surprise #3: `routingViaHost: true` doesn't help cross-node pod→backnet
+
+After the auth-cap fix, the PVC still hung. Drilled in and found the CSI ctrlplugin is on the pod network (not hostNetwork) — and pod-network → cross-node backnet IPs is unreachable on this cluster's OVN-K shared-gateway-mode default.
+
+Tried OVN-K `routingViaHost: true` first (commit `1512d3f`), thinking it'd make pod egress traverse the host's IP stack where the connected backnet route lives. Result:
+
+- Pod → same-node backnet IP: **OK** (local-host routing engaged) ✓
+- Pod → cross-node backnet IP: **FAIL** — host stack routes the packet out `enp1s0f0np0`, but the source IP after SNAT is still a pod-CIDR address. Remote OSD can't route the reply back to pod-CIDR (no overlay path on the bare backnet wire) → packet drops on return.
+
+So `routingViaHost: true` is a partial fix. Kept it in tree (commit `1512d3f`) because same-node pod→backnet does benefit some workloads, but it's not the answer for the cross-node case.
+
+### Surprise #4: Rook 1.19 doesn't propagate `CSI_ENABLE_HOST_NETWORK` to the Driver CR
+
+`rook-ceph-operator-config.CSI_ENABLE_HOST_NETWORK: "true"` is set on this cluster. The CSI **nodeplugin** DaemonSet IS `hostNetwork: true` (one reason mount works — kRBD via the nodeplugin on the host directly reaches OSDs). But the **ctrlplugin** Deployment was on the pod network — Rook's operator did NOT translate the config-CM knob to the new `Driver.csi.ceph.io` CR's `spec.controllerPlugin.hostNetwork` field.
+
+Filed locally as a workaround chart (`components/cluster-config/csi-driver-config/`, commit `345cb1b`) that SSA-patches `controllerPlugin.hostNetwork: true` on both rbd + cephfs Driver CRs. Rook rolled the ctrlplugin Deployments with hostNetwork: true; pods now land with podIP=hostIP. CreateVolume completed within seconds of the new pods being ready, omap was written successfully, PVC bound, fio benchmark ran cleanly.
+
+Worth filing a Rook upstream issue separately — the CSI_ENABLE_HOST_NETWORK config-CM knob should propagate to the Driver CR's controllerPlugin spec.
