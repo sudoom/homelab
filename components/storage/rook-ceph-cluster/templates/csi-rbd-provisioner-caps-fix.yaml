@@ -54,7 +54,19 @@ spec:
               # we specify, so this Job is idempotent — running it on a
               # user that already has correct caps is a no-op (same caps
               # restated).
+              #
+              # On a fresh bootstrap the CSI users don't exist yet when
+              # ArgoCD applies the chart at sync-wave 10 — Rook hasn't
+              # created them yet (mons still coming up). Poll up to
+              # ~10 min for each user to appear, then apply caps.
               for USER in {{ range .Values.csiRbdProvisionerCapsFix.users }}{{ . | quote }} {{ end }}; do
+                echo "[$USER] waiting for user to be created by Rook (up to 600s)"
+                for i in $(seq 1 60); do
+                  if ceph auth get "$USER" >/dev/null 2>&1; then
+                    break
+                  fi
+                  sleep 10
+                done
                 if ceph auth get "$USER" >/dev/null 2>&1; then
                   echo "[$USER] applying canonical caps"
                   ceph auth caps "$USER" \
@@ -63,7 +75,8 @@ spec:
                     osd "profile rbd"
                   ceph auth get "$USER"
                 else
-                  echo "[$USER] does not exist yet — skipping (Rook will create on next reconcile)"
+                  echo "[$USER] still missing after 600s — failing so K8s retries the Job"
+                  exit 1
                 fi
               done
           volumeMounts:
