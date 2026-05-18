@@ -457,6 +457,8 @@ For mutations against the cluster (apply/delete/patch/scale, etc.), still go thr
 
   Compaction summaries are lossy by design; the markdown is the source of truth.
 
+- **Always run the cluster health sweep before the first real work in a new session.** Same procedure as the end-of-session sweep documented under "Ending a session" below (nodes / ArgoCD apps / CSVs / certificates / restart outliers / non-Running pods / Ceph health). Reason: starting work on a stale assumption about cluster state is how the 2026-05-13 RGW outage went unnoticed for 21h — bounding that to "one session length" requires *both* end-of-session and start-of-session checks. A clean sweep is one line in the first reply ("cluster sweep clean: HEALTH_OK / 31 apps Synced+Healthy / no outliers"); a dirty sweep blocks the user's requested work until investigated — even if the symptom looks unrelated, surface it before proceeding. Use the readonly kubeconfig (`KUBECONFIG=~/.kube/config-readonly`).
+
 ## Ending a session ("call it")
 
 When the user says **"call it"**, **"call it for the night"**, **"wrap up"**, **"end of session"**, or anything semantically equivalent, treat it as a trigger to do a final pass *before* the goodbye summary — don't just summarize and stop. Three things, in order:
