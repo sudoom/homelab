@@ -213,3 +213,70 @@ Not a CNPG problem; it's the recurring pi-hole rate-limit issue documented in `b
 - **Backup target**: `CephObjectStore` is live (shipped 2026-05-01). First `Cluster` ships with `barmanObjectStore` pointing at a per-cluster bucket on the existing RGW; no PVC-dump interim.
 - **Operator metrics scraping**: not done. Low priority; revisit if reconcile latency or error rates ever need investigating.
 - **Cluster sizing defaults**: keep `instances: 1` as the default for all apps; bump only the specific Cluster where 30–60s of downtime per pod kill matters.
+
+## 2026-05-18 — `barmanObjectStore` for `media-postgres` (continuous WAL + daily base)
+
+Wired CNPG's barman-based backup pipeline to the existing `ceph-objectstore` RGW. Pattern is per the "Backup target" open follow-up above — per-cluster bucket on the RGW, daily base + continuous WAL.
+
+### Why now
+
+Three .NET servarrs (Sonarr/Radarr/Prowlarr) are now using the shared `media-postgres` Cluster (Pattern A: one Cluster, one user, multiple DBs). Schemas are reproducible from the apps if needed, but the **app-level config** (indexers, profiles, history, queue) lives inside Postgres for the v4+ servarrs. Losing the cluster meant manual re-onboarding of every servarr. Cheap to wire; high return.
+
+### Design pivot vs the Loki precedent
+
+LokiStack consumes credentials from a bundled-shape Secret (`endpoint` + `bucketnames` + `access_key_id` + `access_key_secret` + `region` as five keys in one Secret). That's why `components/cluster-config/logging-stack/` ships a secret-translator Job — translate the OBC controller's auto-Secret (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`) into the LokiStack-shaped Secret.
+
+CNPG's `barmanObjectStore.s3Credentials` is different: it references **individual keys by name** in any Secret:
+
+```yaml
+s3Credentials:
+  accessKeyId:
+    name: <secret-name>
+    key: AWS_ACCESS_KEY_ID
+  secretAccessKey:
+    name: <secret-name>
+    key: AWS_SECRET_ACCESS_KEY
+```
+
+So the OBC's auto-Secret works directly — no translator needed. Saves a chart-internal Job + RBAC + 60 lines. The plumbing is just OBC → wait for binding → Cluster CR references the auto-Secret.
+
+### Bucket-name pinning
+
+barman wants the bucket name baked into `destinationPath` as a static string (`s3://<bucket>/`). The Loki OBC uses `generateBucketName: loki` and the bucket comes out as `loki-<random-suffix>` — fine because Loki reads the actual bucket name from the OBC's ConfigMap at runtime. CNPG can't do that — `destinationPath` is a literal in the spec.
+
+Fix: OBC uses `bucketName: media-postgres-backups` (pinned, deterministic). lib-bucket-provisioner honors `bucketName` and creates that exact bucket. The Cluster CR then references `s3://media-postgres-backups/` directly. If a second CNPG cluster ships later, it gets its own OBC + its own bucket; `serverName` (set to the cluster name) keeps the in-bucket prefix distinct if we ever decide to share.
+
+### `ceph-bucket-retain` StorageClass added
+
+Spotted a footgun while wiring this: `ceph-bucket` SC has `reclaimPolicy: Delete`. If the OBC ever gets pruned (ArgoCD selfHeal on a removed manifest, accidental `oc delete`, etc.), **the bucket and every byte in it gets wiped**. For Loki logs that's fine — the data is regeneratable. For DB backups that's the difference between "I have backups" and "I had backups."
+
+Added a sibling SC `ceph-bucket-retain` with `reclaimPolicy: Retain` in `components/storage/rook-ceph-cluster/templates/object-bucket-storageclass.yaml`, gated on `objectBucket.retainStorageClassName`. The CNPG OBC uses it. Trade-off: if the OBC needs to be recreated, the leftover `ObjectBucket` in Released state needs manual cleanup (force-clear finalizers; same pattern as the teardown procedure in CLAUDE.md). Acceptable cost for the safety.
+
+Loki's OBC is untouched — still on `ceph-bucket` (Delete). The two SCs co-exist by design.
+
+`reclaimPolicy` is immutable on StorageClass, so we couldn't have just flipped `ceph-bucket` to Retain in place — that'd require deleting and recreating the SC, which would re-roll Loki's OBC too. Two SCs is the clean shape anyway: different intent, different SC.
+
+### Schedule
+
+Daily base backup at 04:00 UTC (`schedule: "0 0 4 * * *"`, CNPG-style 6-field cron). Combined with continuous WAL archiving, that gives PITR back to the last 30 days (`retentionPolicy: "30d"`). Quiet hour for the media stack — ahead of any morning use.
+
+### Sync ordering
+
+- OBC: intra-chart sync-wave `4` (before the Cluster at the chart's outer sync-wave `5`).
+- Cluster: outer wave 5 (existing).
+- ScheduledBackup: intra-chart sync-wave `6` (after the Cluster is up + the OBC's auto-Secret has materialized).
+
+CNPG's reconciler retries archive setup, so if the Cluster comes up before the OBC's Secret exists, it self-heals on next loop. The waves are guidance, not strict ordering.
+
+### Validation plan (post-merge)
+
+- `oc -n media get obc media-postgres-backups -o yaml` → `phase: Bound`
+- `oc -n rook-ceph exec deploy/rook-ceph-tools -- radosgw-admin bucket list --rgw-realm=ceph-objectstore --rgw-zonegroup=ceph-objectstore --rgw-zone=ceph-objectstore` → bucket present
+- `oc -n media get cluster media-postgres -o jsonpath='{.status.firstRecoverabilityPoint}'` → timestamp populated after first WAL archives
+- `oc -n media exec media-postgres-1 -c postgres -- barman-cloud-backup-list --cloud-provider aws-s3 --endpoint-url http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80 s3://media-postgres-backups/ media-postgres` → at least one base backup after the first scheduled run
+
+### Open
+
+- **WAL archive interval default** — CNPG defaults to checkpoint-on-archive. Fine for the workload (low write rate). Revisit if the WAL bucket grows fast.
+- **Restore drill** — never tested. The first real validation should be standing up a sister Cluster via `bootstrap.recovery.source` pointing at this same bucket. TODO once the first base backup completes.
+- **OADP follows** — uses the same OBC + retain-SC pattern, different bucket. Next item.

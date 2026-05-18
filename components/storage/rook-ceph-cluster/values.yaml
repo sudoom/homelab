@@ -231,6 +231,10 @@ mgrServiceMonitor:
 objectBucket:
   enabled: true
   storageClassName: ceph-bucket
+  # Secondary SC for buckets that must outlive their OBC (CNPG backups,
+  # OADP). reclaimPolicy: Retain is hard-coded in the template; empty
+  # string here skips the extra StorageClass.
+  retainStorageClassName: ceph-bucket-retain
   objectStoreName: ceph-objectstore
   objectStoreNamespace: rook-ceph
   reclaimPolicy: Delete

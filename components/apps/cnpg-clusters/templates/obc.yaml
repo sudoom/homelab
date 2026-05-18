@@ -1,0 +1,29 @@
+{{- range $name, $cluster := .Values.clusters }}
+{{- if and $cluster.enabled $cluster.backup $cluster.backup.enabled }}
+---
+# OBC against the ceph-bucket StorageClass (CephObjectStore-backed).
+# `bucketName` is pinned (not `generateBucketName`) because barman's
+# destinationPath is a static string in the Cluster CR — we need a
+# deterministic, predictable name. The OBC controller materialises:
+#   ConfigMap/<obc-name>           BUCKET_HOST / BUCKET_PORT / BUCKET_NAME
+#   Secret/<obc-name>              AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# CNPG's barmanObjectStore.s3Credentials reads the auto-Secret directly —
+# no secret-translator needed (LokiStack needs one because it wants a
+# bundled-shape Secret; CNPG references individual keys by name).
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: {{ $cluster.backup.obcName }}
+  namespace: {{ $cluster.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  bucketName: {{ $cluster.backup.bucketName }}
+  # ceph-bucket-retain (reclaimPolicy: Retain) so an accidental OBC
+  # prune does NOT wipe the backups — the bucket survives the OBC.
+  # Trade-off: if we ever rename/recreate the OBC, the leftover
+  # ObjectBucket needs manual cleanup (force-clear finalizers; see
+  # CLAUDE.md teardown procedure).
+  storageClassName: ceph-bucket-retain
+{{- end }}
+{{- end }}

@@ -28,5 +28,48 @@ spec:
   resources:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- if and $cluster.backup $cluster.backup.enabled }}
+  backup:
+    # WAL archiving + base backups land in the ceph-objectstore RGW.
+    # destinationPath is the bucket pinned in the OBC (see obc.yaml).
+    # serverName makes the in-bucket prefix deterministic if a future
+    # cluster ever shares the same bucket (we don't today — one bucket
+    # per cluster).
+    barmanObjectStore:
+      destinationPath: s3://{{ $cluster.backup.bucketName }}/
+      endpointURL: {{ $cluster.backup.endpointURL }}
+      serverName: {{ $name }}
+      s3Credentials:
+        # OBC controller auto-creates Secret/<obcName> with these keys.
+        accessKeyId:
+          name: {{ $cluster.backup.obcName }}
+          key: AWS_ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ $cluster.backup.obcName }}
+          key: AWS_SECRET_ACCESS_KEY
+      wal:
+        compression: gzip
+      data:
+        compression: gzip
+    retentionPolicy: {{ $cluster.backup.retentionPolicy | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- range $name, $cluster := .Values.clusters }}
+{{- if and $cluster.enabled $cluster.backup $cluster.backup.enabled $cluster.backup.scheduledBackup }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $name }}-daily
+  namespace: {{ $cluster.namespace }}
+  annotations:
+    # After the Cluster + OBC are both ready.
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  schedule: {{ $cluster.backup.scheduledBackup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ $name }}
 {{- end }}
 {{- end }}

@@ -5,6 +5,13 @@
 # cephObjectStores[] because the CephObjectStore CR itself is still in a
 # separate ArgoCD app — see the migration plan in
 # blog/blog-rook-ceph-draft.md.
+#
+# Two flavors:
+#   ceph-bucket          reclaimPolicy: Delete — OBC delete = bucket wipe.
+#                         Use for ephemeral / regeneratable data (Loki).
+#   ceph-bucket-retain   reclaimPolicy: Retain — OBC delete = bucket kept.
+#                         Use for stateful workloads where the bucket
+#                         outlives the OBC (CNPG backups, OADP backups).
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -14,4 +21,16 @@ reclaimPolicy: {{ .Values.objectBucket.reclaimPolicy }}
 parameters:
   objectStoreName: {{ .Values.objectBucket.objectStoreName }}
   objectStoreNamespace: {{ .Values.objectBucket.objectStoreNamespace }}
+{{- if .Values.objectBucket.retainStorageClassName }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.objectBucket.retainStorageClassName }}
+provisioner: rook-ceph.ceph.rook.io/bucket
+reclaimPolicy: Retain
+parameters:
+  objectStoreName: {{ .Values.objectBucket.objectStoreName }}
+  objectStoreNamespace: {{ .Values.objectBucket.objectStoreNamespace }}
+{{- end }}
 {{- end }}
