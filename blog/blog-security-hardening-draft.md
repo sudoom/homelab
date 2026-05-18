@@ -170,3 +170,102 @@ proactively — same logic as the first enable.
   generates its own master key on first start and never rotates by
   default. Should be on a quarterly rotation; coupled with re-sealing
   the in-repo SealedSecrets. Add to the security-followups list.
+
+### Proof: same etcd key, before vs after
+
+Created a canary Secret in `default` before the rollout and read it
+directly from etcd via `etcdctl` on a master node — both reads bypass
+the API server, so they see the raw stored bytes:
+
+```bash
+oc create secret generic etcd-encryption-canary \
+  --from-literal=plaintext-marker=DEMO_SECRET_VALUE_2026_05_18 \
+  -n default
+
+oc -n openshift-etcd exec etcd-node4.okd.sudops.pl -c etcdctl -- \
+  etcdctl get /kubernetes.io/secrets/default/etcd-encryption-canary
+```
+
+**Before** (spec.encryption.type not yet set):
+```
+/kubernetes.io/secrets/default/etcd-encryption-canary
+k8s
+v1Secret
+  etcd-encryption-canary default" *$977f7cb5-7436-43c5-...
+  plaintext-markerDEMO_SECRET_VALUE_2026_05_18Opaque
+```
+
+The marker string `DEMO_SECRET_VALUE_2026_05_18` is plainly visible in
+the binary protobuf — `grep` against the etcd snapshot would find it.
+
+**After** (post-`EncryptionMigrationController` sweep):
+```
+/kubernetes.io/secrets/default/etcd-encryption-canary
+k8s:enc:aescbc:v1:1:P�`�z/��Ȫ�E<* �#����B�� v���,r��2���V%p��SkP�c�...
+```
+
+The envelope is the irrefutable proof:
+- `k8s:enc:aescbc:v1:1:` = AES-CBC v1, key index 1
+- Key index `1` matches the `encryption-key-openshift-kube-apiserver-1`
+  Secret in `openshift-config-managed` (gets rotated weekly by the
+  operator; index increments on each rotation).
+- The marker string is no longer grep-able — the ciphertext is
+  AES-CBC-encrypted under the in-memory key.
+
+### What gets encrypted — actual list
+
+The Progressing message during rollout showed only
+`[core/configmaps core/secrets]` being migrated by the
+`EncryptionMigrationController`. That looked too narrow at first, but
+post-rollout there are **three separate encryption configs** in
+`openshift-config-managed`:
+
+```
+encryption-config-openshift-apiserver         # OpenShift-specific APIs
+encryption-config-openshift-kube-apiserver    # core kube APIs
+encryption-config-openshift-oauth-apiserver   # OAuth tokens
+encryption-key-openshift-apiserver-1
+encryption-key-openshift-kube-apiserver-1
+encryption-key-openshift-oauth-apiserver-1
+```
+
+Each API server runs its own migration cycle against its own keys. So
+the original docs claim holds:
+
+- **kube-apiserver** encrypts: core `secrets`, core `configmaps`.
+- **openshift-apiserver** encrypts: `routes.route.openshift.io` and a
+  few other OpenShift-specific resources.
+- **oauth-apiserver** encrypts: `oauthaccesstokens.oauth.openshift.io`,
+  `oauthauthorizetokens.oauth.openshift.io`.
+
+The `EncryptionMigrationControllerProgressing` message visible during
+rollout was only the kube-apiserver's portion because that's the
+component my watch was scoped to. The other two API servers run their
+migrations independently and update their own clusteroperator messages.
+
+### Rollout timing
+
+For reference, on this 3-node cluster on PM9A1 NVMe:
+
+- Spec change to first Progressing=True: ~30s (kube-apiserver-operator
+  reconcile cycle).
+- Each node revision install: ~2-3 min (new static pod manifest +
+  kubelet roll + readiness wait).
+- Three-node revision roll (23 → 24): ~9 min wall-clock.
+- Re-encryption migration of all existing Secrets+ConfigMaps:
+  ~tens-of-seconds (the workload is tiny — ~hundreds of objects total,
+  not the thousands a production cluster would have).
+- Total wall-clock from `git push` to ciphertext-confirmed:
+  approximately 12 minutes (including ArgoCD poll lag).
+
+No app-visible disruption observed throughout — API requests stayed
+responsive (ArgoCD apps held `Synced+Healthy`, ScheduledBackup
+continued archiving WAL).
+
+### Cleanup
+
+```bash
+oc -n default delete secret etcd-encryption-canary
+```
+
+Trivial demo artifact; not worth keeping in etcd as historical noise.
