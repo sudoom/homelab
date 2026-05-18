@@ -67,7 +67,7 @@ components/
     csi-driver-config/     # Wave 2 — SSA-patches Driver CR's controllerPlugin.hostNetwork
     ceph-network-attachments/ # Wave 2 — Multus NADs (DISABLED; for future multus retry)
     ingress-controller/    # Wave 3 — wildcard cert wired to openshift-ingress
-    api-server/            # Wave 3 — APIServer serving cert
+    api-server/            # Wave 3 — APIServer serving cert + etcd encryption at rest
     grafana-config/        # Wave 5 — dashboards, datasources, Grafana CR
     monitoring-config/     # Wave 5 — user-workload-monitoring + alert routing
     logging-stack/         # Wave 5 — LokiStack + ClusterLogForwarder + OBC for RGW chunks
