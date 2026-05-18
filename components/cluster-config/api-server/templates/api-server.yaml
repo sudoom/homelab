@@ -10,3 +10,15 @@ spec:
           - {{ .Values.apiDomain }}
         servingCertificate:
           name: {{ .Values.certSecretName }}
+  {{- if .Values.encryption.type }}
+  encryption:
+    # Encrypts Secrets, ConfigMaps, OAuth access/authorize tokens, and
+    # routes in etcd at rest. kube-apiserver-operator handles key
+    # generation + weekly auto-rotation + re-encryption of existing
+    # resources (no manual key management). aescbc is the OpenShift
+    # default; aesgcm is the newer option with authenticated encryption.
+    # First-time enable triggers a ~minutes-long re-encryption pass over
+    # existing objects; no app-visible impact, but watch
+    # `oc get apiserver/cluster -o yaml` for `Encrypted` condition.
+    type: {{ .Values.encryption.type }}
+  {{- end }}

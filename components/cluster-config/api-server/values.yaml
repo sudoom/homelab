@@ -1,2 +1,9 @@
 apiDomain: api.okd.sudops.pl
 certSecretName: api-cert-tls
+
+# etcd encryption at rest. aescbc is the OpenShift-recommended default
+# (FIPS-compatible, well-tested); aesgcm is newer with authenticated
+# encryption. Empty string disables (omits the spec.encryption block,
+# leaving etcd-stored Secrets in plaintext).
+encryption:
+  type: aescbc
