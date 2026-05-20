@@ -288,3 +288,14 @@ pgNumFloor:
       floor: 128
     - name: ceph-objectstore.rgw.buckets.data
       floor: 32
+
+# VolumeSnapshotClass for CSI snapshots against the RBD pool. CNPG uses
+# this for its volumeSnapshot backup method (shipped 2026-05-20 in lieu
+# of the deprecated barmanObjectStore native path). Any other workload
+# that wants CSI snapshots references this class name.
+volumeSnapshotClass:
+  enabled: true
+  name: ceph-rbd-snapshot
+  # clusterID == the rook-ceph namespace name == the operator-managed
+  # ClusterCR name. All three are "rook-ceph" on this cluster.
+  clusterID: rook-ceph

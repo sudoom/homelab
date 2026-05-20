@@ -1,0 +1,29 @@
+# VolumeSnapshotClass for Rook-Ceph RBD CSI snapshots.
+#
+# Why this exists:
+#   CNPG (and any future workload that wants CSI snapshots) needs a
+#   VolumeSnapshotClass bound to the rook-ceph.rbd.csi.ceph.com driver.
+#   2026-05-20 — CNPG backup migrated off barman (deprecated in CNPG 1.30,
+#   only ships :testing:main images today) to CSI-native volume snapshots.
+#
+# Snapshots are stored as CoW RBD snapshots in the same nvme-replicated
+# pool as the live data — cheap initially, grows as data diverges. No
+# external object store needed.
+#
+# deletionPolicy: Delete = when the VolumeSnapshot is deleted, the
+# underlying RBD snapshot is purged. CNPG-managed Backup CRs own their
+# VolumeSnapshots and retention sweeps drop them; if you want manual
+# snapshots to survive accidental deletion, create a sibling class
+# with deletionPolicy: Retain.
+{{- if .Values.volumeSnapshotClass.enabled }}
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: {{ .Values.volumeSnapshotClass.name }}
+driver: rook-ceph.rbd.csi.ceph.com
+deletionPolicy: Delete
+parameters:
+  clusterID: {{ .Values.volumeSnapshotClass.clusterID }}
+  csi.storage.k8s.io/snapshotter-secret-name: rook-csi-rbd-provisioner
+  csi.storage.k8s.io/snapshotter-secret-namespace: {{ .Values.volumeSnapshotClass.clusterID }}
+{{- end }}

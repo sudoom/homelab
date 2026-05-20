@@ -1,21 +1,42 @@
-# One-shot restore drill: stand up a sister Cluster from the
-# media-postgres-backups bucket and confirm schema + data come back.
+# One-shot restore drill: stand up a sister Cluster from a CSI volume
+# snapshot taken by CNPG ScheduledBackup and confirm schema + data come back.
 #
-# NOT ArgoCD-managed. Apply with:
-#   oc apply -f tests/cnpg-restore-drill.yaml
-# Inspect, then tear down:
-#   oc -n media delete -f tests/cnpg-restore-drill.yaml
+# 2026-05-20 migration: was barmanObjectStore restore (s3 pull + WAL
+# replay). Now volume-snapshot-based — the operator clones the RBD
+# snapshot into a new PVC and starts PostgreSQL on it. Much faster
+# (~seconds for the clone), no S3 traffic, but loses PITR — you restore
+# to the snapshot's exact moment, not an arbitrary timestamp.
+#
+# NOT ArgoCD-managed. To use:
+#
+#   1. Find the most recent Backup:
+#      oc -n media get backup --sort-by=.status.startedAt | tail -3
+#      (or look at .status.phase=completed)
+#
+#   2. Edit BACKUP_NAME_HERE below to the chosen Backup's name.
+#
+#   3. Apply:
+#      oc apply -f tests/cnpg-restore-drill.yaml
+#
+#   4. Watch:
+#      oc -n media get cluster media-postgres-restore-drill -w
+#      Expect: phase 'Setting up primary' → 'Cluster in healthy state' in
+#      under a minute (RBD clones are CoW so creation is near-instant).
+#
+#   5. Verify (psql exec → compare row counts vs source).
+#
+#   6. Tear down:
+#      oc -n media delete -f tests/cnpg-restore-drill.yaml
 #
 # Notes:
 #  - single instance (drill, not HA)
-#  - 10Gi storage (matches source so WAL replay can reconstitute)
-#  - NO backup section — we don't want to overwrite the source's
-#    backups by writing to the same serverName path
-#  - externalCluster.barmanObjectStore points at the EXACT same
-#    destinationPath + serverName as the source, so the operator
-#    pulls the latest base backup + replays WAL up to "now"
-#  - reuses the OBC-managed Secret `media-postgres-backups` for S3
-#    creds (operator auto-grants the restore SA `get` on it)
+#  - storage block is intentionally absent — bootstrap.recovery.backup
+#    pre-populates the PVC from the snapshot, so the StatefulSet's
+#    volumeClaimTemplates use the existing snapshot-cloned PV
+#  - NO backup section — we don't want this drill cluster taking its own
+#    snapshots
+#  - Different SA + namespace creds inheritance: CNPG operator auto-grants
+#    the new SA `view` on the source Backup CR
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -30,21 +51,6 @@ spec:
     storageClass: ceph-nvme-block
   bootstrap:
     recovery:
-      source: media-postgres-source
-  externalClusters:
-    - name: media-postgres-source
-      barmanObjectStore:
-        destinationPath: s3://media-postgres-backups/
-        endpointURL: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
-        serverName: media-postgres
-        s3Credentials:
-          accessKeyId:
-            name: media-postgres-backups
-            key: AWS_ACCESS_KEY_ID
-          secretAccessKey:
-            name: media-postgres-backups
-            key: AWS_SECRET_ACCESS_KEY
-        wal:
-          compression: gzip
-        data:
-          compression: gzip
+      # >>> CHANGE THIS to the latest Backup name before applying <<<
+      backup:
+        name: BACKUP_NAME_HERE

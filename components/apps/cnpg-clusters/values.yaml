@@ -63,17 +63,20 @@ clusters:
         memory: 256Mi
       limits:
         memory: 512Mi
-    # WAL archiving + base backups to ceph-objectstore RGW for PITR.
-    # The OBC creates the bucket + provides creds via its auto-Secret;
-    # the Cluster references the same Secret by key name. ScheduledBackup
-    # runs daily — combined with continuous WAL archiving this gives
-    # PITR back to the last 30 days (retentionPolicy).
+    # CSI volume snapshots against ceph-nvme-block (Rook-Ceph RBD).
+    # No PITR; restore granularity == schedule cadence (daily). The
+    # 2026-05-20 OSD_FULL incident pushed us off barman (eats RGW +
+    # CNPG 1.30 deprecates native barman + upstream plugin still ships
+    # :testing:main images), and the servarr config-DB workload doesn't
+    # need PITR — daily snapshot, lose <24h on disaster, accept.
     backup:
       enabled: true
-      obcName: media-postgres-backups
-      bucketName: media-postgres-backups
-      endpointURL: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
-      retentionPolicy: "30d"
+      volumeSnapshotClassName: ceph-rbd-snapshot
+      # 7d retention vs the previous 30d barman target — snapshots are
+      # CoW but compound on the same nvme-replicated pool as live data.
+      # 7 base-states × ~10 GiB cluster = ~70 GiB worst-case raw delta
+      # × 3 replication = 210 GiB ceiling. Well within today's headroom.
+      retentionPolicy: "7d"
       scheduledBackup:
         # 04:00 UTC daily = 05:00 / 06:00 local (CET/CEST). Quiet hour
         # for the media stack; ahead of any morning use.

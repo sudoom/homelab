@@ -30,27 +30,21 @@ spec:
   {{- end }}
   {{- if and $cluster.backup $cluster.backup.enabled }}
   backup:
-    # WAL archiving + base backups land in the ceph-objectstore RGW.
-    # destinationPath is the bucket pinned in the OBC (see obc.yaml).
-    # serverName makes the in-bucket prefix deterministic if a future
-    # cluster ever shares the same bucket (we don't today — one bucket
-    # per cluster).
-    barmanObjectStore:
-      destinationPath: s3://{{ $cluster.backup.bucketName }}/
-      endpointURL: {{ $cluster.backup.endpointURL }}
-      serverName: {{ $name }}
-      s3Credentials:
-        # OBC controller auto-creates Secret/<obcName> with these keys.
-        accessKeyId:
-          name: {{ $cluster.backup.obcName }}
-          key: AWS_ACCESS_KEY_ID
-        secretAccessKey:
-          name: {{ $cluster.backup.obcName }}
-          key: AWS_SECRET_ACCESS_KEY
-      wal:
-        compression: gzip
-      data:
-        compression: gzip
+    # CSI volume snapshots against the Rook-Ceph RBD pool. No external
+    # object store, no plugin, no PITR. Restore granularity == snapshot
+    # cadence (see ScheduledBackup.spec.schedule). Acceptable for
+    # config-DB workloads (servarrs); install the barman-cloud plugin
+    # later only when a write-heavy workload needs PITR.
+    #
+    # Migration history: shipped barman→volumeSnapshot 2026-05-20 after
+    # CNPG 1.30 announced native barman removal AND the upstream plugin
+    # was only available as :testing:main images. Snapshots avoid both
+    # issues and free ~120 GiB RGW raw that the old base backups held.
+    volumeSnapshot:
+      className: {{ $cluster.backup.volumeSnapshotClassName }}
+      # cluster ownership → snapshots cascade-delete when the Cluster
+      # CR is deleted. Avoids orphan snapshots after a teardown.
+      snapshotOwnerReference: cluster
     retentionPolicy: {{ $cluster.backup.retentionPolicy | quote }}
   {{- end }}
 {{- end }}
@@ -64,12 +58,17 @@ metadata:
   name: {{ $name }}-daily
   namespace: {{ $cluster.namespace }}
   annotations:
-    # After the Cluster + OBC are both ready.
+    # After the Cluster is ready (Cluster at outer wave 5).
     argocd.argoproj.io/sync-wave: "6"
 spec:
   schedule: {{ $cluster.backup.scheduledBackup.schedule | quote }}
   backupOwnerReference: self
   cluster:
     name: {{ $name }}
+  # Tells CNPG to use the CSI VolumeSnapshot path instead of
+  # barmanObjectStore. Each ScheduledBackup fires triggers a Backup CR
+  # with the same method; the Backup CR materialises a VolumeSnapshot
+  # per PVC on the primary.
+  method: volumeSnapshot
 {{- end }}
 {{- end }}
