@@ -37,4 +37,19 @@ routingViaHost: true
 # half of the encryption story. Doesn't replace future workload-mTLS via
 # service mesh (different layer: L3 host-to-host vs L7 per-workload).
 ipsec:
-  mode: Full
+  # ROLLED BACK 2026-05-20: enabling Full surfaced multiple cluster-breaking
+  # interactions on this 3-node bare-metal cluster:
+  #   - IPsec mode change triggers MCO reroll (kernel modules + NM service
+  #     install) -> 3-node serial reboot, drain headroom issues
+  #   - Loki ingester PDB MinAvailable=2 with 2 replicas -> drain blocked
+  #     permanently on any maintenance event
+  #   - Cross-node image pulls extremely slow once IPsec is active (~15-19 min
+  #     for the ceph/cephcsi images)
+  #   - RGW + router anti-affinity contention left only 1 node available
+  #     for RGW when routers re-balanced; node5's IPsec policy broke
+  #     cross-node host-network traffic to etcd (apiserver couldn't
+  #     reach 192.168.1.{7,9}:2379 -> openshift-apiserver Degraded)
+  # Full chronology in blog/blog-security-hardening-draft.md 2026-05-20.
+  # Re-enable only after upstream Descheduler + larger Loki PDB headroom
+  # are in place AND the cross-node host-network behavior is understood.
+  mode: Disabled
