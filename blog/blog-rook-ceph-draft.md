@@ -1994,3 +1994,227 @@ ceph health:         HEALTH_OK
 ### Phase D — what's left
 
 Only the repo-side cleanup: delete `components/storage/ceph-cluster/` and `components/storage/ceph-storage-classes/` directories, remove the disabled entries from `bootstrap/root-app/values.yaml`, drop the migration TODO from the README. Pure repo hygiene — no cluster impact, the cluster is already on the new chart and stable. Can ship immediately or hold for 24h soak as belt-and-suspenders.
+
+
+## 2026-05-20 — OSD_FULL incident: Loki WAL ate the cluster
+
+### What I saw
+
+Start-of-session cluster health sweep returned `HEALTH_ERR`. Full output:
+
+```
+HEALTH_ERR 3 OSD(s) experiencing slow operations in BlueStore;
+           3 full osd(s); 10 pool(s) full
+[ERR] OSD_FULL: 3 full osd(s)
+    osd.0 is full
+    osd.1 is full
+    osd.2 is full
+[WRN] POOL_FULL: 10 pool(s) full   (nvme-replicated + every RGW pool)
+```
+
+`ceph df`:
+```
+--- RAW STORAGE ---
+CLASS     SIZE   AVAIL     USED  RAW USED  %RAW USED
+nvme   1.4 TiB  71 GiB  1.3 TiB   1.3 TiB      95.05
+TOTAL  1.4 TiB  71 GiB  1.3 TiB   1.3 TiB      95.05
+
+--- POOLS ---
+POOL                              ID  PGS   STORED  OBJECTS  USED   MAX AVAIL
+nvme-replicated                    1  128  412 GiB  109.00k  1.2 TiB        0 B
+ceph-objectstore.rgw.buckets.data 10   32   40 GiB   45.25k  119 GiB        0 B
+```
+
+Every OSD at 95.05% (the default `mon_osd_full_ratio` backstop). Once
+that backstop trips, Ceph blocks **all** writes cluster-wide — including
+the RGW writes Loki needed to flush its WAL → chunks → object storage.
+
+### Why the cluster filled
+
+`rbd du -p nvme-replicated` revealed the smoking gun — three RBD images
+dominated the pool:
+
+```
+csi-vol-b4ec34fe-...   150 GiB  140 GiB used   (loki ingester WAL)
+csi-vol-0a4d846b-...   150 GiB  137 GiB used   (loki ingester WAL)
+csi-vol-9f065672-...   150 GiB   63 GiB used   (loki ingester WAL)
+```
+
+340 GiB of WAL on the RBD pool, replicated 3× = **~1020 GiB raw** out of
+1.4 TiB cluster total. The Loki ingester StatefulSet was shipped with
+three 150Gi WAL PVCs (the `1x.pico` size class default in
+`loki-operator`), and the LokiStack CR had **no `spec.limits.global.retention`
+set**. Chunks accumulated forever in RGW and the WAL never had a reason
+to truncate aggressively.
+
+Loki ingester logs confirmed the deadlock from the other end —
+`HTTP 507 InsufficientCapacity` from RGW on every flush attempt:
+
+```
+failed to flush chunks: store put chunk: InsufficientCapacity:
+status code: 507, request id: ...-ceph-objectstore, num_chunks: 2
+```
+
+So the failure mode was self-reinforcing: WAL grew until pool was full;
+pool full blocked RGW writes; blocked RGW writes prevented WAL flush;
+unflushed WAL grew further.
+
+### The recovery
+
+Three steps, escalating:
+
+**Step 1 — bump full_ratio to 0.97 (reversible Ceph runtime config):**
+
+```bash
+ceph osd set-full-ratio 0.97
+ceph osd set-backfillfull-ratio 0.96
+```
+
+Result: `HEALTH_ERR → HEALTH_WARN`, MAX_AVAIL per pool 0 B → 9.2 GiB.
+Writes flowing again. But: cluster kept *growing* (95.05% → 96.10% over
+~5 min) because ingestion now competed with backlog flush on the same
+RBD pool, and WAL truncation was lagging behind chunk flush.
+
+**Step 2 — pause log ingestion via `cluster-logging-operator` scaledown
++ daemonset nodeSelector patch:**
+
+```bash
+oc -n openshift-logging scale deploy/cluster-logging-operator --replicas=0
+oc -n openshift-logging patch daemonset instance --type=merge \
+  -p '{"spec":{"template":{"spec":{"nodeSelector":{"logging-paused":"true"}}}}}'
+```
+
+(Scaling the daemonset directly via `oc scale daemonset` is unsupported;
+the impossible-nodeSelector trick is the canonical pause pattern. Scaling
+the CLO first is mandatory — without it, CLO reconciles the daemonset's
+nodeSelector back to `kubernetes.io/os: linux` within ~30 seconds.)
+
+Result: cluster stabilized at 96.10% but didn't drain. Loki ingesters
+were idle (no new ingest = no flush triggers), and the WAL bytes on
+disk weren't going anywhere because no chunk rotation was happening.
+
+**Step 3 — drop the WAL PVCs entirely:**
+
+```bash
+# Pause loki-operator so it doesn't fight the StatefulSet scale-down
+oc -n openshift-operators-redhat scale \
+  deploy/loki-operator-controller-manager --replicas=0
+
+# Wait for operator to actually go down (~3s), then scale ingesters
+oc -n openshift-logging scale statefulset/logging-loki-ingester --replicas=0
+
+# Wait ~85s for all 3 ingester pods to fully terminate, then delete WAL PVCs
+oc -n openshift-logging delete pvc \
+  wal-logging-loki-ingester-{0,1,2}
+```
+
+Result, immediately after PVC delete:
+```
+%RAW USED:  96.10 → 87.63   (-8.5 points, +121 GiB AVAIL)
+nvme-replicated stored:  412 GiB → 376 GiB
+```
+
+(Initial drop was less than the 340 GiB WAL footprint because the trash
+purge hadn't yet completed on the RBD images. The remaining ~880 GiB
+raw freed when the trashed images finished purging a few minutes
+later — final state was 25.70% used / 1.0 TiB AVAIL.)
+
+### The chart-side fixes (committed)
+
+Two separate commits, both to `components/cluster-config/logging-stack/`:
+
+**1. Set retention to 3 days** (`5d1d14a`):
+```yaml
+spec:
+  limits:
+    global:
+      retention:
+        days: 3
+```
+The compactor sweeps old chunks out of RGW and drops corresponding
+WAL ranges. 3 days is generous for a homelab — tune up if audit/debug
+needs the window.
+
+**2. Reduce ingester replicas 3 → 2** (`62fc8de`):
+```yaml
+spec:
+  template:
+    ingester:
+      replicas: 2
+```
+Saves 1× 150Gi WAL + 1× 10Gi storage PVC ≈ 480 GiB raw. Tradeoff:
+50% capacity hit if one ingester rolls vs 33% with 3 replicas;
+acceptable for homelab ingest rate (<100 KB/s vs 1x.pico's 4 MB/s
+target).
+
+### Why we couldn't just shrink the WAL PVC to 20 GiB
+
+`oc explain lokistack.spec.template.ingester` exposes only
+`replicas`, `nodeSelector`, `podAntiAffinity`, and `tolerations` —
+**no per-component storage size override.** The 150Gi WAL PVC is
+hardcoded in the `1x.pico` size class template inside the
+upstream `loki-operator`. To get smaller PVCs we'd need to either
+switch size class (1x.demo is single-replica — defeats HA) or
+abandon LokiStack for the raw Loki Helm chart (loses the operator's
+OpenShift tenancy/gateway/RBAC integration). Living with 150Gi WAL
+PVCs is fine *as long as retention is set* — the WAL will never
+grow to 150 again because chunks now flush + compactor sweeps
+keep WAL turnover bounded.
+
+### Webhook ordering gotcha
+
+`LokiStack` has a validating admission webhook served by the
+loki-operator. When loki-operator was scaled to 0, ArgoCD's
+attempt to sync the new LokiStack spec failed with:
+
+```
+failed calling webhook "vlokistack.loki.grafana.com": no endpoints
+available for service "loki-operator-controller-manager-service"
+```
+
+Order matters: scale loki-operator back to 1 **before** triggering
+the ArgoCD sync (or just wait — ArgoCD's exponential-backoff retry
+eventually catches up).
+
+### StatefulSet PVC retention gotcha
+
+When the loki-operator first scaled the StatefulSet from 0 → 3 (its
+default reconcile, before ArgoCD applied the new `replicas: 2`
+spec), three fresh WAL PVCs were auto-provisioned via the
+StatefulSet's `volumeClaimTemplates`. When the spec then went to
+2, the StatefulSet scaled down ingester-2 — but the PVC stayed
+behind (default `volumeClaimRetentionPolicy.whenScaled: Retain`).
+Manual cleanup needed:
+```bash
+oc -n openshift-logging delete pvc wal-logging-loki-ingester-2
+```
+
+### Final state
+
+```
+HEALTH_WARN  (only the known BLUESTORE_SLOW_OP_ALERT)
+%RAW USED:   25.70%
+AVAIL:       1.0 TiB
+nvme-replicated stored:  81 GiB / 330 GiB MAX_AVAIL
+Loki ingester flushes:   6 attempts/30s, 0 failures, 0 InsufficientCapacity
+ArgoCD apps:             31/31 Synced + Healthy
+```
+
+`full-ratio` reset to default 0.95.
+
+### Follow-ups
+
+- **Prometheus alert on `ceph_cluster_total_used_bytes /
+  ceph_cluster_total_bytes > 0.80`** with a 1-hour `for` so it doesn't
+  flap on transient deltas. This whole episode was undetected for
+  5 days because there was no alert until the 95% backstop tripped
+  hard. Should be the highest-priority observability follow-up.
+- **Audit the rest of the `1x.pico` PVC footprint** — `storage-*`
+  PVCs for ingester (10Gi), index-gateway (50Gi each ×2), compactor,
+  ruler are all similarly over-allocated. Same fix shape (live with
+  hardcoded size; trust retention; reduce replicas where the spec
+  allows).
+- **File upstream `loki-operator` feature request** — expose
+  per-component storage size in `spec.template.<component>` so size
+  classes become starting templates not concrete contracts.
+
