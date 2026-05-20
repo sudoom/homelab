@@ -17,3 +17,9 @@ spec:
   storageClassName: {{ .Values.lokistack.storageClassName }}
   tenants:
     mode: {{ .Values.lokistack.tenantsMode }}
+  {{- if .Values.lokistack.retentionDays }}
+  limits:
+    global:
+      retention:
+        days: {{ .Values.lokistack.retentionDays }}
+  {{- end }}

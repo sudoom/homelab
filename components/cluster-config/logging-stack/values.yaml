@@ -36,6 +36,15 @@ lokistack:
   # openshift-logging mode wires Vector's tenant-per-source push and
   # the in-cluster gateway for read-side multi-tenancy.
   tenantsMode: openshift-logging
+  # Global retention. Compactor sweeps old chunks out of RGW + drops
+  # corresponding WAL ranges. Without this set, chunks accumulate
+  # forever — the 2026-05-20 OSD_FULL incident traced back to no
+  # retention here: 5 days of unbounded WAL growth ate 1 TiB raw on
+  # the RBD pool before Ceph hit the 95% backstop and blocked all
+  # writes (including the very RGW writes Loki needed to flush WAL).
+  # 3 days is generous for a homelab; tune up if audit/debugging
+  # needs the window.
+  retentionDays: 3
 
 # ClusterLogForwarder — Vector pipeline that picks up app + audit +
 # infra logs and pushes them to the LokiStack via its gateway.
