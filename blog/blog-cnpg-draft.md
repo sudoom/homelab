@@ -373,3 +373,127 @@ to the chart-migration backlog: bump CNPG operator past whichever
 release introduces the plugin contract, install the plugin, then move
 both `spec.backup.barmanObjectStore` and the restore-drill
 `externalClusters[].barmanObjectStore` to plugin-shaped configs.
+
+## 2026-05-20 — migrate `media-postgres` off barman to CSI volume snapshots
+
+### Why the plugin path was rejected
+
+CNPG 1.30 hard-removes native `barmanObjectStore`. Cluster is on 1.29.0
+today — literally one minor from the cliff. The official replacement is
+the upstream `plugin-barman-cloud` operator. Pulled the v0.12.0 release
+manifest and found the deal-breaker: both the operator and the per-pod
+sidecar reference `:main` tags from `-testing` repos
+(`plugin-barman-cloud-testing:main`,
+`plugin-barman-cloud-sidecar-testing:main`).
+
+A mutable tag on a backup path is the kind of thing that turns into a
+2 AM page. Not willing to put production backups behind that until
+upstream ships stable `:vX.Y.Z` tags from a non-`-testing` repo.
+
+### Why CSI volume snapshots fit our workload
+
+Looked at what's actually in `media-postgres`: servarr config DBs
+(sonarr/radarr/prowlarr — both `-main` + `-log`) plus the `media`
+default DB. These are write-light config stores; losing the last 24h
+means re-running a Trakt sync and re-importing some naming edits.
+**PITR is overkill for this workload.**
+
+Trade-offs CSI snapshots vs barman:
+
+| Aspect | CSI snapshot | barman |
+|---|---|---|
+| Granularity | Snapshot time (daily here) | PITR — any second within retention |
+| Speed | Instant (CoW RBD snap) | Minutes (S3 push) |
+| External deps | None | RGW bucket + OBC + plugin |
+| Storage location | Same RBD pool as live data | Separate object store |
+| DR if Ceph dies | Snapshots die with it | Off-cluster RGW survives |
+| CNPG 1.30 ready | Yes | Needs plugin migration |
+
+DR-if-Ceph-dies isn't a real homelab concern — if Ceph is gone, the
+servarr config DBs aren't the only thing being rebuilt.
+
+### What shipped
+
+**`components/storage/rook-ceph-cluster/templates/volume-snapshot-class.yaml`**
+— new `VolumeSnapshotClass/ceph-rbd-snapshot` tied to
+`rook-ceph.rbd.csi.ceph.com`. deletionPolicy `Delete` so CNPG retention
+sweeps actually free underlying RBD snapshots. Snapshotter secret refs
+taken from the live `ceph-nvme-block` StorageClass.
+
+**`components/apps/cnpg-clusters/`** — chart migration:
+- `templates/clusters.yaml`: `spec.backup.barmanObjectStore` →
+  `spec.backup.volumeSnapshot`; `ScheduledBackup.spec.method:
+  volumeSnapshot`
+- `values.yaml`: `media-postgres.backup` — removed bucketName /
+  endpointURL / obcName; added `volumeSnapshotClassName`; retention
+  30d → 7d (snapshots compound on live pool, shorter window matches
+  the trade-off)
+- `templates/obc.yaml`: deleted — no bucket needed
+
+**`tests/cnpg-restore-drill.yaml`** — rewritten for volume-snapshot
+recovery. `bootstrap.recovery.backup.name` with `BACKUP_NAME_HERE`
+placeholder; user fills in the latest Backup name before applying.
+
+### SSA cleanup gotcha that didn't bite
+
+CLAUDE.md warns about the empty-managedFields gotcha. `oc diff` against
+the new chart showed only the `volumeSnapshot` block being added — no
+`barmanObjectStore` removal. Worried it was the gotcha.
+
+It wasn't. ArgoCD's `argocd-controller` field manager had clean
+ownership of the barman block (originally created via SSA), so dropping
+it from the chart caused SSA to remove it cleanly on apply. Post-apply
+`oc get cluster -o jsonpath='{.spec.backup.barmanObjectStore}'` was
+empty. The diff output was just showing context lines, not preserved
+fields.
+
+(Lesson: read `oc diff` more carefully before pre-emptively planning
+the cleanup `oc patch`.)
+
+### Validation
+
+On-demand `Backup` CR with `spec.method: volumeSnapshot` to validate
+the path without waiting until 04:00 UTC tomorrow.
+
+| Step | Wall clock |
+|------|------------|
+| apply to `Backup.phase: completed` | <3s |
+| `VolumeSnapshot READYTOUSE: true` | same |
+| Restore-drill Cluster `Setting up primary` to `Cluster in healthy state` | ~30s total |
+
+(vs barman: ~90s end-to-end. RBD snapshot clone + in-snapshot pg_control
+replay, no S3 round-trip.)
+
+Source ↔ restored row-count comparisons across `sonarr-main.Config`
+(12), `sonarr-main.RootFolders` (3), `radarr-main.Indexers` (2),
+`prowlarr-main.Indexers` (2), `prowlarr-main.Tags` (0) — all match.
+
+### Cleanup of barman artifacts
+
+- Drop the test snapshot (`snapshotOwnerReference: cluster` means
+  Backup delete doesn't cascade)
+- Old barman-era `Backup` CRs (immutable archive references — once the
+  bucket is gone they're useless pointers)
+- RGW bucket survived the ArgoCD-OBC delete via `reclaimPolicy: Retain`
+  on the `ceph-bucket-retain` StorageClass — manual purge via
+  `radosgw-admin bucket rm --purge-objects`. ~100 MiB freed (the 119
+  GiB figure from earlier was the cluster-full state, not the bucket
+  data itself).
+
+### Snapshot-ownership note
+
+Used `snapshotOwnerReference: cluster` — snapshots survive Backup
+deletion and are managed via CNPG retention sweeps on the 7d window.
+If we ever want Backup-scoped lifetime (snapshot purged when its Backup
+CR is deleted), switch to `snapshotOwnerReference: backup`.
+
+### Follow-ups
+
+- Tomorrow 04:00 UTC: verify the first ScheduledBackup-triggered
+  volumeSnapshot lands.
+- Watch the RBD pool over the next week — 7 days × ~10 GiB per
+  snapshot × 3 replication = ~210 GiB raw ceiling. Reality should be
+  much less since servarr writes are tiny.
+- No need to install the plugin yet. Re-evaluate when upstream publishes
+  a stable `:vX.Y.Z` tag from a non-`-testing` repo, OR when a future
+  workload actually needs PITR.

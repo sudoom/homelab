@@ -13,7 +13,7 @@
 #      oc -n media get backup --sort-by=.status.startedAt | tail -3
 #      (or look at .status.phase=completed)
 #
-#   2. Edit BACKUP_NAME_HERE below to the chosen Backup's name.
+#   2. Edit media-postgres-snapshot-test-20260520 below to the chosen Backup's name.
 #
 #   3. Apply:
 #      oc apply -f tests/cnpg-restore-drill.yaml
