@@ -18,6 +18,12 @@ applications:
     namespace: default
     syncWave: "0"
 
+  nm-search-strip:
+    enabled: true
+    path: components/cluster-config/nm-search-strip
+    namespace: default
+    syncWave: "0"
+
   automation-sa:
     enabled: true
     path: components/cluster-config/automation-sa

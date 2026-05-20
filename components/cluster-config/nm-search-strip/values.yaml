@@ -1,0 +1,5 @@
+# Name of the MachineConfig. Same as the on-cluster resource that was
+# manually applied 2026-05-08 from tests/mc-nm-strip-okd-search.yaml —
+# keeping the name identical lets ArgoCD adopt it via SSA without an
+# MCO reroll (spec is bit-identical).
+machineConfigName: 99-master-nm-strip-okd-search

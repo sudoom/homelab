@@ -1,0 +1,5 @@
+apiVersion: v2
+name: nm-search-strip
+description: NetworkManager dispatcher script to strip the cluster ingress
+  wildcard from /etc/resolv.conf search list on every node.
+version: 0.1.0
