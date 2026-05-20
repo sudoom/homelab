@@ -410,6 +410,17 @@ oc -n <ns> patch pvc <name> -p '{"metadata":{"finalizers":[]}}' --type=merge
 
 Why this matters: the csi-provisioner serializes operations cluster-wide. A stuck `DeleteVolume` for an orphan PV blocks every new `CreateVolume` for unrelated PVCs — symptom looks identical to the per-volume "operation already exists" lock from the rbd-plugin's in-memory tracker, but the root cause is across PVs. Skipping this check sent us down a multi-hour rabbit hole on 2026-05-14 chasing the wrong symptom.
 
+### Pre-flight for any change that might trigger an MCO master-pool reroll
+
+Anything that changes `MachineConfig` content (directly or transitively via `Network/cluster`, `KubeletConfig`, `APIServer/cluster.spec.encryption`, etc.) triggers a serial reboot of all 3 masters. On this 3-OSD no-drain cluster that's a 30-45 min degraded window per attempt with multiple compounding failure modes. **Audit the change for transitive MachineConfig generation before applying** — render the operator's expected MC and diff it against current. Specific gotchas surfaced 2026-05-20:
+
+- **OVN-K `Network/cluster` IPsec mode change DOES trigger an MCO reroll** (kernel modules + NetworkManager IPsec service install). The CR field looks small; the MachineConfig delivery is what costs you. Same is likely true for other OVN-K field changes (egress firewall, multus enable, MTU change).
+- **PDBs with `MinAvailable: N` where current replicas == N block ALL voluntary evictions.** The `logging-loki-ingester` PDB has MinAvailable=2 hardcoded in LokiStack; we run 2 replicas → 0 disruption budget → MCO drain stuck forever. The LokiStack CRD does NOT expose PDB tunables. Before any MCO event, verify `oc get pdb -A` ALLOWED DISRUPTIONS column has at least 1 for every pool — if not, fix that first or accept the manual force-delete-pod workaround during drain.
+- **RGW + router anti-affinity contention on a 3-node cluster.** Routers default to 2 replicas with anti-affinity; RGW has `requiredDuringSchedulingIgnoredDuringExecution` against routers. When 2 routers occupy 2 nodes, only 1 node is router-free for RGW. If that node is the one being drained, RGW becomes unschedulable cluster-wide → Loki S3 puts fail → ingester readiness loops. Either scale routers to 1 pre-MCO-event or accept the cascade.
+- **Cross-node host-network can break between mismatched-MC nodes during IPsec rollouts.** Empirically observed 2026-05-20: `openshift-apiserver` on the post-IPsec-reboot node couldn't reach etcd on host-network IPs (`192.168.1.{7,9}:2379`) of the still-old-MC nodes. Root cause TBD; do not re-attempt IPsec without diagnosing this.
+
+If a MachineConfig-class change is unavoidable, schedule it with 2+ hour headroom, not after-hours. Storage chaos compounds with MCO chaos rapidly.
+
 ## Guardrails — do not do these
 
 Claude should refuse these actions and explain why briefly:

@@ -364,3 +364,55 @@ One field flip. OVN-K operator tears down SAs automatically, kernel removes the 
 - **Re-encryption key rotation policy**: OVN-K's IPsec SAs use the IKE SAs to rotate. Default lifetime is operator-managed; check `oc get network.operator/cluster -o yaml` for the actual lifetime once rollout completes.
 - **Pre-capture pattern for next encryption flip**: when we eventually enable Ceph msgr2 secure mode (cluster-storage TODO), capture cleartext OSD↔OSD traffic on the storage backnet BEFORE the flip, then compare to the encrypted-mode capture.
 
+
+## 2026-05-20 (cont.) — IPsec rollback
+
+The Full mode triggered a cascade of compounding failures:
+
+### What broke
+
+1. **MCO reroll on IPsec mode change** — the field flip looks small in the Network CR, but enabling IPsec installs kernel modules + NetworkManager IPsec service via MachineConfig. So the apply triggered a serial reboot of the master pool. **Should have flagged this pre-apply.**
+
+2. **Loki ingester PDB MinAvailable=2 with 2 replicas** — earlier today we dropped Loki ingester replicas from 3→2 during the OSD_FULL emergency. With MinAvailable=2 / 2 replicas, ANY drain is blocked because the PDB can never tolerate an eviction. Hit MCO drain on the first node and stuck for 50 min until force-delete bypassed it. **This is a structural drain-headroom problem we created earlier and didn't notice.**
+
+3. **Image pulls extremely slow across IPsec** — observed mon-b pulling its image in 14m59s and cephfs-nodeplugin in 19m07s on the node that was being rolled. Cause not fully diagnosed; suspect MTU or path-MTU issues with ESP overhead on a 1400 MTU geneve. Need to investigate before next attempt.
+
+4. **RGW + router anti-affinity contention** — RGW has `requiredDuringSchedulingIgnoredDuringExecution` against router pods. With 2 routers spreading across 2 of 3 nodes, only 1 node is router-free. When that 1 node is the one being drained, RGW becomes unschedulable cluster-wide. Cascade: RGW Pending → Loki S3 puts return ConnectionRefused → ingesters never Ready → PDB stays blocked.
+
+5. **Cross-node host-network breakage** — most surprising. `openshift-apiserver` on the post-IPsec-reboot node couldn't reach etcd on the other masters (`192.168.1.7:2379`, `192.168.1.9:2379`). These are HOST network IPs, not pod overlay. IPsec is supposed to only encrypt the geneve overlay, not host-network traffic. But empirically, host-network traffic between mismatched-MC nodes was unreliable. Root cause TBD.
+
+### The rollback
+
+```yaml
+# components/cluster-config/cluster-network-config/values.yaml
+ipsec:
+  mode: Disabled
+```
+
+ArgoCD repo-server was timing out generating manifests (`DeadlineExceeded`) — likely under stress from the cluster chaos. Bypassed by `oc patch network.operator/cluster --type=merge` directly. Operator immediately tore down the IPsec daemonsets, kernel SAs cleared, traffic returned to cleartext geneve. **Cluster networking recovered within seconds of the spec patch.**
+
+The MachineConfig-layer rollback is a separate, slower process — MCO will roll the kernel-modules/NM-service MC off each node over the coming hour(s). The cluster is functional during this; daemonsets are gone so runtime IPsec is off; the only residue is the now-idle IPsec service/modules on whichever nodes still have the with-IPsec MC.
+
+### Cluster state at end-of-session 2026-05-20
+
+- ✅ IPsec daemonsets removed (0 ovn-ipsec pods)
+- ✅ Cross-node networking healthy (Loki ingesters running, apiservers reachable)
+- ⚠️ MCP master `Degraded=True` (node5 left in MCD `state=Degraded` from the earlier stuck drain)
+- ⚠️ node6 cycling (MCO rolling rollback MC onto it)
+- ⚠️ `argocd-repo-server` returning `DeadlineExceeded` on manifest generation — likely a transient stress effect; should recover once cluster settles
+- ⚠️ **Multiple manual interventions in place** that need cleanup tomorrow:
+  - `loki-operator-controller-manager` Deployment scaled to 0
+  - `logging-loki-ingester` PDB patched to `MinAvailable: 1` (will revert when operator comes back)
+  - `default` IngressController replicas patched to 1 (revert to 2 once cluster stable)
+
+### Pre-flight checklist before next IPsec attempt
+
+Do NOT re-enable IPsec without:
+
+1. **Restore Loki ingester drain headroom** — either bump replicas to 3 OR patch LokiStack operator to expose PDB tunables OR accept manual pod-delete during every drain. Filed as TODO.
+2. **Install Kube Descheduler** — exactly the symptom the queue rationale called out: pod clustering after node reboots. Bumped to "next priority" in the TODO.
+3. **Diagnose cross-node host-network breakage** — reproduce in a smaller test (one MC-changed node) and inspect IPsec policy + kernel SAs to understand why host traffic was affected. Without understanding this, IPsec will break the same way again.
+4. **Diagnose slow cross-node image pulls** — possibly MTU. Try `ovnKubernetesConfig.mtu: 1380` (or lower) on the next attempt to leave room for ESP overhead inside a 1400 MTU underlay.
+5. **Schedule attempt for a quiet window with 2h headroom** — not after-hours-into-evening. Storage chaos on top of network chaos compounds rapidly.
+6. **Capture pre-state tcpdump** — etcd-style "before vs after" proof; was the explicit miss this attempt.
+
