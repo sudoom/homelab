@@ -280,3 +280,96 @@ CNPG's reconciler retries archive setup, so if the Cluster comes up before the O
 - **WAL archive interval default** — CNPG defaults to checkpoint-on-archive. Fine for the workload (low write rate). Revisit if the WAL bucket grows fast.
 - **Restore drill** — never tested. The first real validation should be standing up a sister Cluster via `bootstrap.recovery.source` pointing at this same bucket. TODO once the first base backup completes.
 - **OADP follows** — uses the same OBC + retain-SC pattern, different bucket. Next item.
+
+## 2026-05-20 — restore drill against `media-postgres-backups`
+
+### Setup
+
+Wrote a single-file restore Cluster manifest at
+`tests/cnpg-restore-drill.yaml`. Single instance, 10Gi storage, no
+backup section (don't overwrite the source's backup path), and an
+`externalClusters[0].barmanObjectStore` pointing at the same
+`destinationPath` + `serverName` as the source. Reuses the OBC-managed
+Secret `media-postgres-backups` for S3 creds — CNPG operator auto-grants
+the new SA `get` on it.
+
+```yaml
+spec:
+  bootstrap:
+    recovery:
+      source: media-postgres-source
+  externalClusters:
+    - name: media-postgres-source
+      barmanObjectStore:
+        destinationPath: s3://media-postgres-backups/
+        endpointURL: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
+        serverName: media-postgres
+        s3Credentials:
+          accessKeyId:    { name: media-postgres-backups, key: AWS_ACCESS_KEY_ID }
+          secretAccessKey: { name: media-postgres-backups, key: AWS_SECRET_ACCESS_KEY }
+```
+
+### Timeline
+
+| Step | Wall clock |
+|------|------------|
+| `oc apply` → Cluster created, phase `Setting up primary` | t=0 |
+| `media-postgres-restore-drill-1-full-recovery-<hash>` Job running (pulls base backup + replays WAL) | t=0…75s |
+| Recovery Job → `Completed`; instance pod transitions `Init → Running` | t=80s |
+| `phase: Cluster in healthy state`, `readyInstances: 1` | t=90s |
+
+Source DB has ~140 tables across 7 user databases plus seeded
+config rows; total restore wall-clock was ~90 seconds. Most of that
+was barman-cloud-restore pulling the base backup from RGW; WAL replay
+on a 13h-old backup was sub-second.
+
+### Validation
+
+| Check | Source | Restored | |
+|-------|--------|----------|---|
+| User databases | 7 | 7 | match (+`app` default DB CNPG creates on init — expected) |
+| `sonarr-main` public tables | 38 | 38 | match |
+| `radarr-main` public tables | 41 | 41 | match |
+| `prowlarr-main` public tables | 20 | 20 | match |
+| `sonarr-main.Config` rows | 12 | 12 | match |
+| `sonarr-main.RootFolders` rows | 3 | 3 | match |
+| `radarr-main.Indexers` rows | 2 | 2 | match |
+| `prowlarr-main.Indexers` rows | 2 | 2 | match |
+
+All counts byte-identical. Restore pipeline validated end-to-end.
+
+### Teardown
+
+```bash
+oc -n media delete -f tests/cnpg-restore-drill.yaml
+```
+
+The CNPG operator cascade-deletes the StatefulSet → pods → PVCs (via
+ownerReference). Took ~12 seconds end-to-end. Ceph went from 27.06% →
+26.78% used as the restore-drill PVC was trashed and the RBD image
+purged.
+
+### Worth keeping
+
+The manifest stays in `tests/` so future drills are a single
+`oc apply` away. The blast radius is trivially small (separate cluster
+name + namespace state isolation) and the validation is mechanical.
+Recommend re-running quarterly, or after any chart change that touches
+the backup path.
+
+### Aside: deprecation warning
+
+```
+Native support for Barman Cloud backups and recovery is deprecated and
+will be completely removed in CloudNativePG 1.30.0.
+Found usage in: spec.externalClusters.0.barmanObjectStore.
+Please migrate existing clusters to the new Barman Cloud Plugin.
+```
+
+CNPG is moving the barman integration from in-tree to an external
+plugin (`barman-cloud-plugin`). Not urgent — current 1.x line is at
+1.27 today — but it's an explicit deprecation, not a soft hint. Adds
+to the chart-migration backlog: bump CNPG operator past whichever
+release introduces the plugin contract, install the plugin, then move
+both `spec.backup.barmanObjectStore` and the restore-drill
+`externalClusters[].barmanObjectStore` to plugin-shaped configs.

@@ -1,0 +1,50 @@
+# One-shot restore drill: stand up a sister Cluster from the
+# media-postgres-backups bucket and confirm schema + data come back.
+#
+# NOT ArgoCD-managed. Apply with:
+#   oc apply -f tests/cnpg-restore-drill.yaml
+# Inspect, then tear down:
+#   oc -n media delete -f tests/cnpg-restore-drill.yaml
+#
+# Notes:
+#  - single instance (drill, not HA)
+#  - 10Gi storage (matches source so WAL replay can reconstitute)
+#  - NO backup section — we don't want to overwrite the source's
+#    backups by writing to the same serverName path
+#  - externalCluster.barmanObjectStore points at the EXACT same
+#    destinationPath + serverName as the source, so the operator
+#    pulls the latest base backup + replays WAL up to "now"
+#  - reuses the OBC-managed Secret `media-postgres-backups` for S3
+#    creds (operator auto-grants the restore SA `get` on it)
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: media-postgres-restore-drill
+  namespace: media
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18
+  storage:
+    size: 10Gi
+    storageClass: ceph-nvme-block
+  bootstrap:
+    recovery:
+      source: media-postgres-source
+  externalClusters:
+    - name: media-postgres-source
+      barmanObjectStore:
+        destinationPath: s3://media-postgres-backups/
+        endpointURL: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
+        serverName: media-postgres
+        s3Credentials:
+          accessKeyId:
+            name: media-postgres-backups
+            key: AWS_ACCESS_KEY_ID
+          secretAccessKey:
+            name: media-postgres-backups
+            key: AWS_SECRET_ACCESS_KEY
+        wal:
+          compression: gzip
+        data:
+          compression: gzip
