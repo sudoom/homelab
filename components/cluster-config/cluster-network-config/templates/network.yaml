@@ -9,3 +9,7 @@ spec:
     ovnKubernetesConfig:
       gatewayConfig:
         routingViaHost: {{ .Values.routingViaHost }}
+      {{- if .Values.ipsec.mode }}
+      ipsecConfig:
+        mode: {{ .Values.ipsec.mode }}
+      {{- end }}

@@ -18,3 +18,23 @@
 # cluster. Full chronology in blog/blog-multus-ceph-migration-draft.md
 # (2026-05-15 section).
 routingViaHost: true
+
+# OVN-Kubernetes IPsec mode. Encrypts the geneve overlay between every
+# pair of nodes — all pod-to-pod traffic crossing a host boundary rides
+# inside an IPsec ESP tunnel (ip-protocol 50). Pod-on-same-node traffic
+# stays in cleartext on the local OVS bridge (no host crossing).
+#
+# Values:
+#   Disabled  — no IPsec (default; geneve is integrity-checked but not encrypted)
+#   External  — IPsec only for external-host workloads (nodeports etc)
+#   Full      — geneve overlay encrypted between every node (what we want)
+#
+# Cost: ~10-15% east-west CPU overhead. Reversible — flip back to
+# Disabled and the operator tears down IPsec SAs automatically (brief
+# east-west blip during rollout).
+#
+# Pairs with the 2026-05-18 etcd-at-rest enable to close the in-transit
+# half of the encryption story. Doesn't replace future workload-mTLS via
+# service mesh (different layer: L3 host-to-host vs L7 per-workload).
+ipsec:
+  mode: Full
