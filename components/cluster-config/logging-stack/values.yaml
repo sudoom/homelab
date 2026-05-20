@@ -45,6 +45,18 @@ lokistack:
   # 3 days is generous for a homelab; tune up if audit/debugging
   # needs the window.
   retentionDays: 3
+  # 1x.pico ships 3 ingester replicas with 150Gi WAL PVCs each
+  # (450Gi logical, 1.35 TiB raw replicated 3×) — way more than this
+  # homelab needs. The LokiStack CRD does NOT expose per-component
+  # storage size overrides (spec.template.ingester only exposes
+  # replicas/nodeSelector/podAntiAffinity/tolerations), so the
+  # 150Gi WAL size is locked in until upstream loki-operator adds it
+  # or we move off LokiStack entirely. Reducing replicas to 2 is the
+  # one knob we have to cut WAL footprint: saves 1× 150Gi + 1× 10Gi
+  # storage PVC = ~480 GiB raw. Tradeoff: 50% capacity hit if one
+  # ingester is rolling vs 33% with 3 replicas; acceptable for
+  # homelab ingest rate (<100 KB/s vs 1x.pico's 4 MB/s target).
+  ingesterReplicas: 2
 
 # ClusterLogForwarder — Vector pipeline that picks up app + audit +
 # infra logs and pushes them to the LokiStack via its gateway.

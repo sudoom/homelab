@@ -23,3 +23,8 @@ spec:
       retention:
         days: {{ .Values.lokistack.retentionDays }}
   {{- end }}
+  {{- if .Values.lokistack.ingesterReplicas }}
+  template:
+    ingester:
+      replicas: {{ .Values.lokistack.ingesterReplicas }}
+  {{- end }}
