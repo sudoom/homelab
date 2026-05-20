@@ -269,3 +269,98 @@ oc -n default delete secret etcd-encryption-canary
 ```
 
 Trivial demo artifact; not worth keeping in etcd as historical noise.
+
+## 2026-05-20 — OVN-Kubernetes IPsec (in-transit encryption for the overlay)
+
+### What
+
+Flipped `Network/cluster` `spec.defaultNetwork.ovnKubernetesConfig.ipsecConfig.mode` from `Disabled` → `Full`. Every packet between pods on different nodes now rides inside an IPsec ESP tunnel (IP protocol 50) between the host IPs. Pod-on-same-node traffic stays on the local OVS bridge in cleartext (no host crossing, no IPsec scope).
+
+### Why now
+
+In-transit counterpart to the 2026-05-18 etcd-at-rest enable. Closes the "what's on the wire" half of the cluster encryption story:
+
+| | Before | After |
+|---|---|---|
+| etcd on disk | plaintext base64 | AES-CBC |
+| pod ↔ pod over geneve | cleartext UDP/6081 | IPsec ESP |
+
+Host-network workloads (Ceph daemons on the storage backnet, CSI hostNetwork plugins, RGW) bypass OVN-K entirely and stay unaffected. That's fine — the storage backnet is a dedicated VLAN with no other hosts on it.
+
+### Doesn't replace service-mesh mTLS
+
+These are different layers, not competing options:
+- **OVN-K IPsec**: L3 host-to-host (kernel ESP), blanket coverage, no workload identity
+- **Mesh mTLS (Istio/OSSM)**: L7 per-connection, workload identity (SPIFFE), fine-grained AuthorizationPolicy
+
+IPsec gives cheap blanket cover today. Mesh stays a separate decision (still queued under "platform expansion") for when a workload genuinely needs per-request auth or traffic shifting. If/when mesh ships, mTLS would ride on top of IPsec.
+
+### Implementation
+
+Extended the existing `components/cluster-config/cluster-network-config/` chart (already managed the `Network/cluster` CR for `routingViaHost: true`). Single new conditional block:
+
+```yaml
+{{- if .Values.ipsec.mode }}
+ipsecConfig:
+  mode: {{ .Values.ipsec.mode }}
+{{- end }}
+```
+
+`helm template ... | oc diff -f -` showed exactly one field change (Disabled → Full). Clean SSA, no surprises in the diff.
+
+### Surprise: MCO reroll on IPsec mode change
+
+**Process miss I should have flagged pre-apply.** I scoped IPsec as "non-storage" (it's a `Network/cluster` field, not a `MachineConfig`), but enabling IPsec needs IPsec kernel modules + NetworkManager service config delivered to each node — and that delivery rides MCO. So the apply triggered a rolling master-pool reboot.
+
+Symptoms within seconds:
+- `MCP master: UPDATED=False UPDATING=True`
+- node4 → `Ready,SchedulingDisabled`
+- node4's mon + OSD down → Ceph `HEALTH_WARN`, 1/3 mons down, 33% objects degraded
+
+This is the same shape as any MCO change and Ceph held (size=3, min_size=2 quorum). But it's a degraded window I should have explicitly named in the pre-flight on a 3-OSD no-drain cluster.
+
+For the future: any change to `Network/cluster` that adds new daemon-set-class functionality (IPsec, egress firewall, multus, etc.) is likely an MCO event. Diff the new ovnkube-master/node spec against the current rendered MachineConfig; if there are deltas, expect a serial reboot of the master pool (3 × ~10-15 min on this cluster).
+
+### Proof: ESP-only, no cleartext geneve
+
+Captured post-rollout on node4 via `oc debug node`:
+
+```bash
+# 15-second filter for cleartext geneve overlay (UDP/6081):
+oc debug node/node4.okd.sudops.pl --quiet -- \
+  timeout 15 tcpdump -ln -i any 'udp port 6081'
+# → 0 packets captured (190 packets received by filter, all dropped)
+
+# 5-second filter for IPsec ESP (IP proto 50):
+oc debug node/node4.okd.sudops.pl --quiet -- \
+  timeout 5 tcpdump -ln -i any 'ip proto 50' | grep -c "ESP(spi"
+# → 1632 packets
+
+# Sample line:
+# 18:04:14.116131 br-ex Out IP 192.168.1.7 > 192.168.1.9: ESP(spi=0xd74fa6bd,seq=0x2b9b), length 1472
+#                          node4               node6     IP-protocol 50 = ESP
+```
+
+`spi=0xd74fa6bd` (outbound node4→node6) and `spi=0x19f54f87` (inbound node6→node4) are the two unidirectional security parameter indexes that identify the SA pair between these two nodes. With 3 nodes there are 3 SA-pairs (n×(n-1)/2): node4↔node5, node4↔node6, node5↔node6.
+
+### Etcd-style "before vs after" miss
+
+For etcd-at-rest I created a canary Secret BEFORE enabling encryption, read it via `etcdctl` to see plaintext, enabled encryption, re-read to see `k8s:enc:aescbc:v1:1:` ciphertext envelope. Side-by-side proof of behavior change.
+
+For IPsec I went straight to push without the pre-capture of cleartext geneve. The post-state proof above shows encryption is active (zero UDP/6081, abundant ESP), but it doesn't have the side-by-side. Next dual-state change (msgr2 secure mode is the natural one), do the pre-capture first.
+
+### Reversibility
+
+```yaml
+ipsec:
+  mode: Disabled
+```
+
+One field flip. OVN-K operator tears down SAs automatically, kernel removes the IPsec state, traffic returns to cleartext geneve UDP/6081. **But** the reversal also triggers an MCO reroll (same MachineConfig-class change in reverse), so undoing costs another ~30-45 min wall-clock. Not free.
+
+### Open follow-ups
+
+- **Verify per-node latency impact**: tcpdump-based throughput proof (e.g., a simple `iperf3` between two pods on different nodes) before vs after. Skipped today; would be useful for confirming the "10-15% CPU overhead" handwave on this hardware.
+- **Re-encryption key rotation policy**: OVN-K's IPsec SAs use the IKE SAs to rotate. Default lifetime is operator-managed; check `oc get network.operator/cluster -o yaml` for the actual lifetime once rollout completes.
+- **Pre-capture pattern for next encryption flip**: when we eventually enable Ceph msgr2 secure mode (cluster-storage TODO), capture cleartext OSD↔OSD traffic on the storage backnet BEFORE the flip, then compare to the encrypted-mode capture.
+
