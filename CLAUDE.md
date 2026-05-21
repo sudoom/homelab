@@ -414,12 +414,25 @@ Why this matters: the csi-provisioner serializes operations cluster-wide. A stuc
 
 Anything that changes `MachineConfig` content (directly or transitively via `Network/cluster`, `KubeletConfig`, `APIServer/cluster.spec.encryption`, etc.) triggers a serial reboot of all 3 masters. On this 3-OSD no-drain cluster that's a 30-45 min degraded window per attempt with multiple compounding failure modes. **Audit the change for transitive MachineConfig generation before applying** — render the operator's expected MC and diff it against current. Specific gotchas surfaced 2026-05-20:
 
-- **OVN-K `Network/cluster` IPsec mode change DOES trigger an MCO reroll** (kernel modules + NetworkManager IPsec service install). The CR field looks small; the MachineConfig delivery is what costs you. Same is likely true for other OVN-K field changes (egress firewall, multus enable, MTU change).
+- **OVN-K `Network/cluster` IPsec mode change DOES trigger an MCO reroll** (kernel modules + NetworkManager IPsec service install). The CR field looks small; the MachineConfig delivery is what costs you.
+- **OVN-K MTU change does NOT (empirically, 2026-05-21).** Setting `defaultNetwork.ovnKubernetesConfig.mtu` (with or without the documented `spec.migration.mtu.{network,machine}` declare/clear dance) produces operator-side MC reconciles, but the resulting rendered MC converges to the SAME `rendered-master-…` name the cluster was on pre-change. The MCO events fire but cycle nodes without delivering any actual MachineConfig delta. MTU is a runtime-only knob (OVN-K reconfigures the geneve interface MTU directly). For future OVN-K MTU changes, consider `oc patch network.operator/cluster …mtu` directly without the migration field — verify on a smaller cluster first.
 - **PDBs with `MinAvailable: N` where current replicas == N block ALL voluntary evictions.** The `logging-loki-ingester` PDB has MinAvailable=2 hardcoded in LokiStack; we run 2 replicas → 0 disruption budget → MCO drain stuck forever. The LokiStack CRD does NOT expose PDB tunables. Before any MCO event, verify `oc get pdb -A` ALLOWED DISRUPTIONS column has at least 1 for every pool — if not, fix that first or accept the manual force-delete-pod workaround during drain.
 - **RGW + router anti-affinity contention on a 3-node cluster.** Routers default to 2 replicas with anti-affinity; RGW has `requiredDuringSchedulingIgnoredDuringExecution` against routers. When 2 routers occupy 2 nodes, only 1 node is router-free for RGW. If that node is the one being drained, RGW becomes unschedulable cluster-wide → Loki S3 puts fail → ingester readiness loops. Either scale routers to 1 pre-MCO-event or accept the cascade.
 - **Cross-node host-network can break between mismatched-MC nodes during IPsec rollouts.** Empirically observed 2026-05-20: `openshift-apiserver` on the post-IPsec-reboot node couldn't reach etcd on host-network IPs (`192.168.1.{7,9}:2379`) of the still-old-MC nodes. Root cause TBD; do not re-attempt IPsec without diagnosing this.
 
 If a MachineConfig-class change is unavoidable, schedule it with 2+ hour headroom, not after-hours. Storage chaos compounds with MCO chaos rapidly.
+
+**Pre-flight runbook for any MCO event** (added 2026-05-21 after the second IPsec/MTU cascade re-tripped the same chain):
+
+1. Scale `openshift-operators-redhat/loki-operator-controller-manager` to 0. The `loki-pdb-override` 5-min CronJob loses the race against operator reconciles during drain, blocking eviction; scaling the operator to 0 holds the PDB at `MinAvailable: 1` throughout.
+2. Scale `openshift-ingress-operator` `IngressController/default` to `replicas: 1`. With 2 routers + RGW anti-affinity, every node-drain stranddes RGW. Reducing to 1 router ensures RGW always has a target node.
+3. Apply the change. Monitor MCP master with `oc get mcp master -w`.
+4. **During the rollout**, watch for stuck VolumeAttachments via `oc get volumeattachment | awk '$5=="true" && /node[X]/'` — RBD VAs frequently stay bound to the previous node after pod move. Force-clear via `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`.
+5. **After MCP `Updated=True`**, restart all 3 `ovnkube-node` pods one at a time (`oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node`). Pod-to-host-network egress consistently breaks across MCO events; restart restores it. Symptom: ArgoCD apps show `sync=Unknown` because repo-server can't reach github.com.
+6. Restart `openshift-gitops` repo-server pod (`oc -n openshift-gitops delete pod -l app.kubernetes.io/name=openshift-gitops-repo-server`). Resolves the `DeadlineExceeded` on manifest generation that always lingers after the cluster has been thrashed.
+7. Restore: scale `loki-operator` back to 1, `IngressController` back to 2, trigger one-shot run of `loki-pdb-override` CronJob to re-patch PDB if loki-operator has reconciled it.
+
+Skipping any of these steps re-trips the cascade — observed 2026-05-20 (IPsec) and 2026-05-21 (MTU).
 
 ## Guardrails — do not do these
 

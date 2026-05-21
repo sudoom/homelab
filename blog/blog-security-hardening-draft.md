@@ -559,3 +559,57 @@ Throughput dropped ~3% — expected since smaller MTU means more packets per byt
 
 Down to one item — (3) is the qualitative work remaining (reproduce in test, understand what libreswan startup does to host networking).
 
+
+## 2026-05-21 — MTU rollout lessons learned (in detail)
+
+What looked like a clean 23-min MCO event turned into a 3-hour saga of 3 sequential MCO events and a familiar drain-interlock cascade. Worth documenting because the **biggest finding inverts the original assumption**: OVN-K MTU changes have **no MachineConfig artifacts** on this stack.
+
+### What the operator actually rolled out
+
+| MCO event | Trigger | Resulting MC | What was in it |
+|---|---|---|---|
+| #1 | `oc patch network.operator/cluster ...defaultNetwork.ovnKubernetesConfig.mtu: 1340` | `rendered-master-c20be5dbe1f44717b1b83bb1a24d25d4` (new) | Operator-rendered intermediate; ~23 min serial rollout, drains proceeded with the loki-pdb-override CronJob keeping the PDB at MinAvailable=1 |
+| #2 | `oc patch network.operator/cluster ...migration:null` | `rendered-master-c20be5dbe1f...` -> same | Re-rendered; second-pass rollout fired even though MC content matched — generation/annotation diff was enough |
+| #3 | None (operator-side reconcile) | Back to **`rendered-master-72361e71434ff638b25ff5b9762c11cb`** (the ORIGINAL pre-MTU MC) | The operator decided no MC delta was required for `mtu: 1340` and reconciled all 3 nodes back to the original baseline MC |
+
+**End state:** every node on the same `rendered-master-72361e71...` they started on — the MC name that was already there BEFORE today's MTU work. The MTU change persists only in the live OVN-K runtime config (`spec.defaultNetwork.ovnKubernetesConfig.mtu: 1340`), enforced at the OVS/geneve interface level by ovnkube-node, not via any MachineConfig artifact.
+
+### The drain-interlock cascade (same as 2026-05-20)
+
+Once MCO event #2 fired, we re-tripped the familiar chain:
+
+1. **Loki PDB**: loki-operator reconciled `MinAvailable: 2` back (the 5-min CronJob is too slow to outrun the operator). Worked around by scaling `loki-operator-controller-manager` to 0 for the duration.
+2. **VolumeAttachment stuck**: ingester-0 + ingester-1 PVCs stayed bound to the old node after pod move → Multi-Attach errors → pod stuck `0/1 Running`. Force-cleared `metadata.finalizers` to break them loose; new VAs created for the new node.
+3. **RGW + router scheduling deadlock**: routers default to 2 replicas with anti-affinity; RGW requires a router-free node. After node6 came back, routers spread to node5+node6, RGW had only node4 → MCO drain of node4 (later) would evict RGW with nowhere to go. Worked around by scaling `IngressController` to 1 router. **Ceph PRECONDITION**: RGW endpoint must be reachable for Loki ingesters to flush chunks; if it's not, ingester readiness probe returns 503, PDB stays at 0 disruptions, drain blocks. The cycle: drain → RGW evicted → Loki readiness fails → drain blocks. This is the same trap as 2026-05-20.
+4. **Pod-network egress broken after rollout**: same symptom as 2026-05-20 — restarting all 3 `ovnkube-node` pods cleared stale gateway state.
+5. **ArgoCD repo-server `DeadlineExceeded`**: same as 2026-05-20 — repo-server pod restart cleared it.
+
+### Key takeaways for next IPsec attempt
+
+1. **OVN-K MTU change is functionally a runtime config knob.** No MC artifacts. The MCO events fired by the migration declare/clear are operator bookkeeping overhead. **Don't conflate runtime changes with MachineConfig-class changes.**
+
+2. **IPsec WILL be different.** IPsec install drops real files via MachineConfig (`ipsec.service`, `wait-for-ipsec-connect.service`, `ipsecenabler.service`, `/usr/local/bin/ipsec-connect-wait.sh`). That MCO event will produce a genuinely new rendered MC and require a full serial reboot — not just operator overhead.
+
+3. **Loki PDB workaround is fragile.** The 5-min CronJob lets the operator win the race during high-frequency PDB writes. For MCO events, **scale `loki-operator-controller-manager` to 0 before applying the change** and back to 1 only after the rollout completes.
+
+4. **RGW + router pre-flight before any MCO event**: scale `IngressController` to 1 BEFORE applying anything that triggers a master-pool drain. Restore to 2 after.
+
+5. **ovnkube-node restart is mandatory post-MCO-event** (regardless of whether MCO actually changed any MachineConfig). Pod-to-host-network egress consistently breaks across MCO drains on this stack; ovnkube-node restart is the only known fix.
+
+6. **OpenShift docs were misleading about the MTU procedure** (or my reading of them). The "3-step migration" reads like a single rollout. In practice each step's spec write produces an MC reconcile, and the final state turned out identical to the pre-migration MC. For a runtime-only knob, a direct `oc patch` of `ovnKubernetesConfig.mtu` would have worked just as well — without needing the migration field gymnastics. Verify this claim before saving time on the next attempt.
+
+### Updated IPsec pre-flight checklist
+
+| Item | Status |
+|---|---|
+| (1) Loki ingester drain headroom — `loki-pdb-override` CronJob | DONE |
+| (2) Kube Descheduler installed | DONE |
+| (3) Cross-node host-network IPsec interaction diagnosed | **OPEN** |
+| (4) MTU pre-flight (1400 -> 1340) | DONE |
+| **NEW (5)** Scale `loki-operator` to 0 before applying; scale back to 1 after | runbook step |
+| **NEW (6)** Scale `IngressController` to 1 before; back to 2 after | runbook step |
+| **NEW (7)** Restart all 3 `ovnkube-node` pods post-rollout | runbook step |
+| **NEW (8)** Restart `openshift-gitops-repo-server` pod post-rollout | runbook step |
+
+(3) remains the blocker. Best path: stand up a single-node test of just the libreswan service + `wait-for-ipsec-connect.sh` without OVN-K daemonset involvement; capture what `ip xfrm policy` looks like immediately after libreswan starts; verify host-network traffic to 2379/etc. isn't affected. Without understanding (3), the next IPsec attempt risks the same `openshift-apiserver` Degraded state as 2026-05-20.
+
