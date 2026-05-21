@@ -471,6 +471,7 @@ For mutations against the cluster (apply/delete/patch/scale, etc.), still go thr
 
 ## Session hygiene
 
+- **Minimize Bash output tokens.** Long sessions on this repo routinely eat 20%+ of context on diagnostic dumps. Pipe through `head`, `tail`, `grep`, `awk` to extract only the lines that drive a decision. For files, use `Read` with `offset`/`limit` instead of `cat`. Specifically avoid: `oc describe pod ...` without a grep filter (the events tail is what matters, the spec block isn't), `oc get xxx -o yaml` for anything bigger than a small CR (jsonpath-targeted reads instead), `oc adm top` or `ceph -s` dumps where a single-line jsonpath would do. The 2026-05-20 / 2026-05-21 sessions both hit context-pressure warnings before reaching natural end of day specifically because of unfiltered diagnostic captures.
 - Before the context window is compacted, run `/export` to preserve the full conversation.
 - When diagnosing a live issue, paste real `oc` / `argocd` output into chat rather than describing it — diagnoses from raw output are much better than from paraphrase.
 - **At session start and immediately after a context compaction**, re-read the markdown files that carry working state, in this order — don't rely on the post-compaction summary alone:
