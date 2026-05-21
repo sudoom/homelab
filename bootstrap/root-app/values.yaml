@@ -180,6 +180,12 @@ applications:
     namespace: mikrotik-exporter
     syncWave: "5"
 
+  shelly-exporter:
+    enabled: true
+    path: components/cluster-config/shelly-exporter
+    namespace: shelly-exporter
+    syncWave: "5"
+
   gatus:
     enabled: true
     path: components/cluster-config/gatus

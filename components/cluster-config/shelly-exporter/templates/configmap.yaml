@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shelly-exporter-config
+  namespace: {{ .Values.namespace }}
+data:
+  config.yml: |
+    # JSONPath mappings for Shelly Gen 2/3 /rpc/Switch.GetStatus?id=0 response.
+    # Fields verified against the Gen 3 Plus Plug S firmware.
+    modules:
+      default:
+        metrics:
+          - name: shelly_power_watts
+            type: gauge
+            help: Instantaneous active power consumed by the load (W).
+            path: '{ .apower }'
+          - name: shelly_voltage_volts
+            type: gauge
+            help: Line voltage measured at the plug (V).
+            path: '{ .voltage }'
+          - name: shelly_current_amperes
+            type: gauge
+            help: Instantaneous current draw (A).
+            path: '{ .current }'
+          - name: shelly_energy_total_wh
+            type: counter
+            help: Cumulative energy delivered to the load since boot (Wh). Resets on plug reboot.
+            path: '{ .aenergy.total }'
+          - name: shelly_temperature_celsius
+            type: gauge
+            help: Internal temperature of the plug (degrees Celsius).
+            path: '{ .temperature.tC }'

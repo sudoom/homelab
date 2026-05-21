@@ -1,0 +1,32 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shelly-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: shelly-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shelly-exporter
+  endpoints:
+    {{- range .Values.plugs }}
+    - port: metrics
+      path: /probe
+      interval: {{ $.Values.scrapeInterval }}
+      scheme: http
+      # Multi-target probe pattern: Prometheus scrapes the json_exporter and
+      # asks it to probe a specific Shelly RPC URL. The `target` query param
+      # tells json_exporter which URL to fetch + extract from.
+      params:
+        target:
+          - {{ .rpcUrl | quote }}
+      # The default scrape rewrites __address__ to the exporter Service. We
+      # keep that, but stamp an `instance` label per plug so multi-plug
+      # deployments stay distinguishable. The default `instance=<podIP>:7979`
+      # would collapse all plugs onto the same series.
+      relabelings:
+        - sourceLabels: []
+          targetLabel: instance
+          replacement: {{ .instance | quote }}
+    {{- end }}

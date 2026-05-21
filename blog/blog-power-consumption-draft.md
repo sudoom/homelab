@@ -184,3 +184,84 @@ have measurement.
 Enable measurement on node4 — either IPMI DCMI (if supported) or a
 wall meter for the initial 24h baseline. Once we have a number, the
 sequencing of tuning changes can be data-driven instead of guessing.
+
+## 2026-05-21 — Shelly exporter shipped; measurement unblocked
+
+The "open question" about per-outlet metering is now closed: a Shelly
+Plus Plug S Gen3 sits between node6's PSU and the wall socket
+(192.168.1.77, static, no auth on its LAN-only HTTP RPC API). Today's
+work wires that into Prometheus so the 24h baseline can begin tonight.
+
+### Why json_exporter instead of a dedicated Shelly exporter
+
+Initial expectation was to drop in a Shelly-specific Prometheus
+exporter container like `geerlingguy/shelly-plug-prometheus`. That
+project ships no released container image; its Gen 3 support is also
+unverified (README only covers Gen 1/Gen 2). The other Gen 3-aware
+projects I found on GitHub (`sparklingSausage/shelly-prometheus`,
+`simonjur/shelly-plug-s-g3-prometheus-exporter`) are 0-2 stars,
+single-developer, no tagged releases, `:latest` only. Not what I want
+sitting in the scrape path for power-tuning A/B work.
+
+The Shelly Gen 2/3 RPC API returns clean JSON at
+`/rpc/Switch.GetStatus?id=0`:
+
+```json
+{
+  "id": 0,
+  "source": "switch",
+  "output": true,
+  "apower": 12.34,
+  "voltage": 230.5,
+  "current": 0.054,
+  "aenergy": { "total": 1234.5, "by_minute": [...], "minute_ts": ... },
+  "temperature": { "tC": 45.2, "tF": 113.4 }
+}
+```
+
+That's exactly what `prometheus-community/json_exporter` is for —
+scrape one HTTP endpoint, extract numeric fields via JSONPath, emit
+Prometheus exposition format. Stable project, versioned releases
+(v0.7.0, Feb 2025), official `quay.io/prometheuscommunity/json-exporter`
+image. Multi-target probe pattern (`/probe?target=<url>`) means a
+single Deployment handles all future plugs by adding entries to the
+chart's `plugs:` list — no per-plug pod.
+
+### Chart shape
+
+```
+components/cluster-config/shelly-exporter/
+├── Chart.yaml
+├── README.md
+├── values.yaml                          plugs list, image tag, scrape interval
+└── templates/
+    ├── namespace.yaml                   cluster-monitoring="false" → UWM scrape
+    ├── serviceaccount.yaml
+    ├── configmap.yaml                   JSONPath → metric mapping
+    ├── deployment.yaml                  single replica json_exporter
+    ├── service.yaml                     headless, port 7979
+    └── servicemonitor.yaml              one endpoint per plug, params.target
+```
+
+Wave 5 (`bootstrap/root-app/values.yaml`), same wave as the other
+observability exporters (smartctl, mikrotik, gatus). UWM scrape, not
+platform Prometheus — pattern matches mikrotik-exporter.
+
+### Metrics emitted
+
+| Metric | Type | Source field |
+|---|---|---|
+| `shelly_power_watts{instance="node6"}` | gauge | `.apower` |
+| `shelly_voltage_volts{instance="node6"}` | gauge | `.voltage` |
+| `shelly_current_amperes{instance="node6"}` | gauge | `.current` |
+| `shelly_energy_total_wh{instance="node6"}` | counter | `.aenergy.total` |
+| `shelly_temperature_celsius{instance="node6"}` | gauge | `.temperature.tC` |
+
+Note: `shelly_energy_total_wh` is a per-boot counter — it resets when
+the plug reboots. For lifetime kWh, `rate(shelly_power_watts[24h])`
+integrated over a day is more reliable.
+
+### Next step
+
+Capture 24h idle baseline (Grafana panel: `avg_over_time(shelly_power_watts{instance="node6"}[24h])`).
+Then move to the lever-ranking work documented above.

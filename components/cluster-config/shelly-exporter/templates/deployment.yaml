@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shelly-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: shelly-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shelly-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: shelly-exporter
+      annotations:
+        # Force pod restart when the json_exporter config changes (path map,
+        # added/removed fields). Without this, ConfigMap update reaches the
+        # mounted file but json_exporter only reads at startup.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: shelly-exporter
+      containers:
+        - name: json-exporter
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/config/config.yml
+          ports:
+            - containerPort: {{ .Values.port }}
+              name: metrics
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: shelly-exporter-config

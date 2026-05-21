@@ -1,0 +1,7 @@
+apiVersion: v2
+name: shelly-exporter
+description: |
+  Shelly power-plug metrics into Prometheus via prometheus-community/json_exporter
+  scraping each plug's Gen 2/3 RPC endpoint (/rpc/Switch.GetStatus?id=0). One
+  json_exporter Deployment handles N plugs via the multi-target probe pattern.
+version: 0.1.0

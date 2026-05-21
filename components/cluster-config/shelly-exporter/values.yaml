@@ -1,0 +1,25 @@
+namespace: shelly-exporter
+
+image:
+  repository: quay.io/prometheuscommunity/json-exporter
+  tag: "v0.7.0"
+
+# json_exporter default port
+port: 7979
+
+scrapeInterval: 30s
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi
+
+# Plugs to scrape. Each entry becomes one ServiceMonitor endpoint targeting
+# the json_exporter's /probe?target=<rpcUrl> for that plug. The `instance`
+# label is what shows up on every metric — keep it stable + descriptive.
+plugs:
+  - instance: node6
+    rpcUrl: http://192.168.1.77/rpc/Switch.GetStatus?id=0
