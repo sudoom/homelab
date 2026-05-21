@@ -47,3 +47,45 @@ stops hitting 0 MB/s troughs as often.
 The OSD that didn't move (osd.2 stayed at 9ms commit_lat) may be
 the local-write OSD whose latency is purely BlueStore-bound; the
 ones that improved are bound by network ack from the replicas.
+
+---
+
+## Update — second post-MTU run after pod-network recovery
+
+The first post-MTU bench (129.4 MB/s) hit an unusually clean OSD state
+(osd.1 commit_lat 6 ms vs typical 9 ms). It also overlapped with the
+pod-network-to-host-network cascade that broke etcd-operator + ArgoCD
+repo-server in parallel — though those run on the pod network and
+shouldn't have affected an in-cluster `rados bench` directly, the
+timing was suspicious.
+
+Re-ran the exact same bench after recovering the pod-network
+(restart of ovnkube-node ×3 + repo-server):
+
+- HEALTH state: WARN (BLUESTORE_SLOW_OP_ALERT on osd.1 then osd.0)
+- OSD perf: 8/11/8 ms at start, 11/13/8 ms by end of bench
+- **rados bench write: 101.5 MB/s** (avg lat 631 ms, stddev 147.6)
+
+So the **honest gain is ~+10% over the pre-MTU baseline**, not +40%.
+The cluster's BlueStore latency variability (8-13 ms range, with
+intermittent slow alerts on whichever OSD happens to be compacting)
+is large enough that single 60s benchmarks are noisy.
+
+What's still genuinely true:
+- End-to-end MTU 9000 verified via DF-ping at 8972-byte payload
+- Stddev / max-latency improvements appear robust across runs
+- The architectural reasoning (6× fewer packets) is sound
+- For larger / sustained workloads (RGW puts, future CephFS bulk),
+  the gain should materialize more clearly
+
+What was wrong in the original writeup:
+- "+40%" was a single lucky measurement
+- The "+1 OSD improved from 9→6 ms" was a transient state, not a
+  jumbo-attributable change — the same OSD now reads 11-13 ms
+- Headline figure should be more conservative: "+10-15% under
+  typical state, dependent on BlueStore latency variability"
+
+This is also a reminder to take multiple benchmark samples on this
+cluster, not just one — the 8-13 ms commit_lat noise floor makes
+single runs untrustworthy. Two or three runs separated by a few
+minutes would have caught the inflated number.

@@ -2423,3 +2423,42 @@ port, NNCP one-line change). Effort was maybe 30 min of pre-flight
 took longer than the work itself.
 
 Full pre/post data + summary in `data/jumbo-frames-2026-05-21/`.
+
+### 2026-05-21 (later) — Correction: +40% was a lucky measurement
+
+After the post-MTU bench, the pod-network-to-host-network cascade
+mentioned earlier (etcd-operator + authentication + ArgoCD repo-server
+all unable to reach host-network IPs) needed a recovery: rolling
+restart of ovnkube-node ×3 + repo-server. That cascade was triggered
+by the nmstate apply for the MTU change — even though no MachineConfig
+was involved, the OVN-K gateway state still flapped.
+
+Once recovery was done, I re-ran the same bench out of curiosity.
+**101.5 MB/s** — only +10% over the pre-MTU baseline, not +40%.
+
+The cluster was in HEALTH_WARN at re-run time
+(`BLUESTORE_SLOW_OP_ALERT` cycling between osd.0 and osd.1, commit_lat
+8-13 ms vs the pre-MTU 9/9/9 reference). The 8-13 ms range is wide
+enough that a single 60s rados bench can land anywhere from 92 to 130
+MB/s purely based on whichever OSD happens to be compacting RocksDB.
+
+So the **honest jumbo-frame gain on this cluster is ~+10-15% under
+typical state, not the +40% I posted earlier**. What's robust:
+
+- End-to-end MTU 9000 verified (DF-ping at 8972 bytes worked)
+- Stddev + max-latency improvements appear across both post-MTU runs
+- Architectural reasoning (6× fewer packets per replicated write)
+  remains sound — but the BlueStore-side variability dominates the
+  measurable throughput on a 3-OSD cluster
+
+What changed in the takeaway: jumbo is still worth shipping (zero
+cost, hardware supports it, helps RGW/CephFS bulk workloads down the
+road), but the headline is now "+10-15%" not "+40%". The first
+measurement was the cluster being briefly in an unusually-clean OSD
+state.
+
+**Process lesson:** single benchmark samples on this cluster are
+untrustworthy because of the BlueStore latency noise floor (8-17 ms
+spread observed across the day). Two or three samples spaced by a few
+minutes would have caught the inflated number. Adding that to my
+mental model for future "did this change help?" measurements.
