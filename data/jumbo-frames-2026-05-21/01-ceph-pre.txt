@@ -1,0 +1,19 @@
+  cluster:
+    id:     c5b62d4e-df58-4bf3-acf0-01e7315b847e
+    health: HEALTH_OK
+ 
+  services:
+    mon: 3 daemons, quorum a,b,c (age 2h)
+    mgr: b(active, since 4h), standbys: a
+    osd: 3 osds: 3 up (since 2h), 3 in (since 6d)
+    rgw: 1 daemon active (1 hosts, 1 zones)
+ 
+  data:
+    pools:   10 pools, 217 pgs
+    objects: 67.72k objects, 155 GiB
+    usage:   464 GiB used, 967 GiB / 1.4 TiB avail
+    pgs:     217 active+clean
+ 
+  io:
+    client:   1.1 KiB/s rd, 2.2 MiB/s wr, 1 op/s rd, 22 op/s wr
+ 

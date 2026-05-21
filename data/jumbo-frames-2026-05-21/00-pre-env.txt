@@ -1,0 +1,14 @@
+=== nodes ===
+node4.okd.sudops.pl: kernel=6.12.0-142.el10.x86_64 runtime=cri-o://1.33.4
+node5.okd.sudops.pl: kernel=6.12.0-142.el10.x86_64 runtime=cri-o://1.33.4
+node6.okd.sudops.pl: kernel=6.12.0-142.el10.x86_64 runtime=cri-o://1.33.4
+=== storage interface MTU (live) ===
+node4:
+  ceph-shim: mtu=1500 max-mtu=9978
+  enp1s0f0np0: mtu=1500 max-mtu=9978
+node5:
+  ceph-shim: mtu=1500 max-mtu=9978
+  enp1s0f0np0: mtu=1500 max-mtu=9978
+node6:
+  ceph-shim: mtu=1500 max-mtu=9978
+  enp1s0f0np0: mtu=1500 max-mtu=9978

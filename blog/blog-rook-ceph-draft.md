@@ -2270,3 +2270,156 @@ no effect on Ceph behavior — which is the right separation.
   so it reaches Prometheus intact
 - `kubeconform`: 15 valid / 0 invalid / 1 skipped (CephCluster CRD)
 - Live: rule not previously present (`oc get prometheusrule rook-ceph-cluster-utilization` → NotFound)
+
+## 2026-05-21 — Jumbo frames (MTU 9000) on storage backnet
+
+Bumped the storage backnet (192.168.10.0/24, VLAN-isolated, dedicated
+to OSD↔OSD replication) from MTU 1500 to MTU 9000 on all three nodes.
+Result: **+40% sequential 4M write throughput** on the `nvme-replicated`
+pool. That's a much bigger win than I'd predicted (5-15%); root cause
+analysis below.
+
+### Pre-flight (cluster + switch)
+
+NIC side: all three nodes report `max-mtu: 9978` on `enp1s0f0np0` via
+NodeNetworkState, well above 9000. Hardware was never the constraint.
+
+```
+node4 enp1s0f0np0: mtu=1500 max-mtu=9978
+node5 enp1s0f0np0: mtu=1500 max-mtu=9978
+node6 enp1s0f0np0: mtu=1500 max-mtu=9978
+```
+
+Switch side: the MikroTik storage-fabric bridge has the three node
+SFP+ ports (sfp-sfpplus2/4/6) at the default `l2mtu=1584`, which is too
+low for MTU 9000 frames (need ≥9022 for the L2 payload + headers).
+Raised to MikroTik's standard `l2mtu=9214` (covers MTU 9000 + headroom
+for VLAN tag + various L2 features):
+
+```
+/interface ethernet set [find name=sfp-sfpplus2] l2mtu=9214
+/interface ethernet set [find name=sfp-sfpplus4] l2mtu=9214
+/interface ethernet set [find name=sfp-sfpplus6] l2mtu=9214
+```
+
+Each L2MTU change triggers a brief port link-flap (1-3s). Three flaps in
+sequence; Ceph registered transient OSD/peer wobbles but stayed
+HEALTH_OK throughout.
+
+The Mac mini port (port 12) on the same bridge stays at `l2mtu=1584` —
+MikroTik forwards frames between asymmetric-L2MTU ports just fine as
+long as the destination port can handle the frame size. Mac mini sends
+MTU 1500 from its host stack regardless, so no risk of dropped jumbo
+frames from that side.
+
+### Cluster-side change
+
+Single chart edit: `components/cluster-config/nmstate-nncp/` adds
+`mtu: 9000` to both the physical NIC and the `ceph-shim` macvlan
+(the latter is a leftover from the 2026-05-12 multus attempt; setting
+it consistent so a future multus revival doesn't reintroduce a 1500-byte
+chokepoint on the shim path).
+
+```yaml
+- name: enp1s0f0np0
+  type: ethernet
+  mtu: 9000
+  state: up
+  ipv4: { ... }
+- name: ceph-shim
+  type: mac-vlan
+  mtu: 9000
+  state: up
+  mac-vlan: { base-iface: enp1s0f0np0, mode: bridge, promiscuous: true }
+```
+
+Applied in-place by nmstate handler — no node reboot, no Ceph daemon
+restart, no OSD flap. The three NodeNetworkConfigurationPolicy CRs
+went `SuccessfullyConfigured` within a minute of ArgoCD sync.
+
+### End-to-end verification
+
+ping with DF flag at 8972-byte payload (= 9000 MTU - 20 IP - 8 ICMP),
+node4 → node5 across the storage backnet:
+
+```
+8980 bytes from 192.168.10.3: icmp_seq=3 ttl=64 time=0.194 ms
+3 packets transmitted, 3 received, 0% packet loss, time 2085ms
+rtt min/avg/max/mdev = 0.115/0.149/0.194/0.033 ms
+```
+
+`-M do` (DF) means the kernel won't fragment, so a successful round-trip
+proves every hop (NIC → switch port → switch ASIC → switch port → NIC)
+can pass 9000-byte frames intact.
+
+### Pre/post benches
+
+Same command in both runs: `rados bench -p nvme-replicated 60 write
+-t 16 -b 4194304 --no-cleanup`.
+
+| Metric | Pre (MTU 1500) | Post (MTU 9000) | Δ |
+|---|---|---|---|
+| **Write avg bandwidth** | 92.5 MB/s | **129.4 MB/s** | **+40%** |
+| Write stddev | 178.9 | 147.3 | -18% |
+| Write avg latency | 692 ms | 494 ms | **-29%** |
+| Write max latency | 4.90 s | 2.50 s | -49% |
+| OSD commit_lat (3 OSDs) | 9 / 9 / 9 ms | 8 / 6 / 9 ms | -33% on one OSD |
+
+Sequential read benches both saturated cache (1647 → 1724 MB/s) — not
+a meaningful comparison.
+
+### Why the gain was bigger than predicted
+
+Going in, I expected 5-15%. The actual +40% is explained by what the
+pre-MTU profile was telling us about the bottleneck, which I hadn't
+read carefully enough:
+
+- **Stddev 178.9 with a mean of 92.5 MB/s + frequent 0 MB/s troughs**
+  (the `cur MB/s` column showed 0 every other second) is the
+  signature of **stall-and-burst** behaviour. The drives weren't
+  the limit (max bursts hit 852 MB/s); something was periodically
+  starving the write pipeline.
+- At MTU 1500, every 4M client write produces ~2,700 packets per
+  replica copy (3x replication = ~8,100 packets). At MTU 9000,
+  that's ~450 per copy / ~1,350 total — **6× fewer packets**.
+- Each packet costs softirq + NAPI dispatch + ack handling on both
+  ends. With 16 concurrent writers × 8,100 packets each, the kernel
+  was likely batching/throttling acks during burst periods, leading
+  to the periodic 0 MB/s stalls.
+
+After the MTU bump, stddev dropped from 178.9 to 147.3 and max
+latency halved (4.9s → 2.5s) — the cluster doesn't sit idle for
+seconds at a time waiting for the replication path to drain.
+
+### The OSD that didn't move
+
+osd.2 stayed at `commit_latency: 9 ms`; osd.0 dropped to 8, osd.1 to
+6. The unchanged one is most likely the **local-write** OSD for many
+of the test PGs — its commit latency is purely BlueStore + NVMe
+bound, no network involvement. The two that improved are the replica
+acks coming back over the now-jumbo backnet.
+
+This matches the architectural prediction: jumbo helps the network
+hops, not the disk write itself.
+
+### Closing thoughts
+
+For this homelab at the current write-light workload, +40% is more
+headroom than the cluster needs day-to-day. The real value will show
+up later:
+
+- **RGW bulk puts** (OADP backups when that ships, Loki chunk flushes
+  during high log volume, future CNPG `barmanObjectStore` backups) —
+  these are the workloads that look like the test.
+- **Scrub / deep-scrub** — currently bandwidth-throttled at the OSD
+  config level; can probably loosen those throttles now without
+  client-IO impact.
+- **CephFS data pool on HDDs** when those land — bulk sequential
+  writes from media ingest, etc.
+
+Cost was zero (hardware already supported it, switch one-liner per
+port, NNCP one-line change). Effort was maybe 30 min of pre-flight
++ commit + measurement. The blog material is the only thing that
+took longer than the work itself.
+
+Full pre/post data + summary in `data/jumbo-frames-2026-05-21/`.
