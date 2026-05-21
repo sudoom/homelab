@@ -9,7 +9,10 @@ data:
     kind: "DeschedulerPolicy"
     # All eviction goes through the kube-apiserver eviction API, so
     # PDBs are respected (drains we set up — e.g. loki-pdb-override —
-    # still gate this). Profile holds three "fix-the-placement" plugins.
+    # still gate this). Two profiles:
+    #   1. AffinityAndTaints — fix placement violations
+    #   2. LoadBalancing     — even out per-node pod count
+    # Both share the conservative DefaultEvictor (ignorePvcPods + nodeFit).
     profiles:
       - name: AffinityAndTaints
         pluginConfig:
@@ -47,3 +50,43 @@ data:
               - "RemovePodsViolatingNodeAffinity"
               - "RemovePodsViolatingNodeTaints"
               - "RemovePodsViolatingInterPodAntiAffinity"
+
+      # LowNodeUtilization redistributes pods from over-utilized to
+      # under-utilized nodes. On this 3-node cluster, CPU + memory
+      # utilization is barely 20% anywhere — pod-count is the only
+      # signal that meaningfully differs across nodes. Thresholds
+      # below tightened from upstream defaults (20/20/20 -> 50/50/50)
+      # because the default 20% under-floor was barely missed by the
+      # least-loaded node (~22% pod density) so the balancer wouldn't
+      # engage. Tighter shape: under if all of CPU<20% + mem<30% +
+      # pods<30%; over if ANY of CPU>50% + mem>60% + pods>50%.
+      - name: LoadBalancing
+        pluginConfig:
+          - name: "DefaultEvictor"
+            args:
+              ignorePvcPods: true
+              evictLocalStoragePods: false
+              evictSystemCriticalPods: false
+              evictFailedBarePods: false
+              evictDaemonSetPods: false
+              nodeFit: true
+
+          - name: "LowNodeUtilization"
+            args:
+              thresholds:
+                cpu: 20
+                memory: 30
+                pods: 30
+              targetThresholds:
+                cpu: 50
+                memory: 60
+                pods: 50
+              # If false, only "under and over" pairs trigger eviction.
+              # We keep it false — no point evicting if no over-utilized
+              # node actually exists.
+              useDeviationThresholds: false
+
+        plugins:
+          balance:
+            enabled:
+              - "LowNodeUtilization"
