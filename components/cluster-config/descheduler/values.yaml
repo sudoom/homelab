@@ -1,0 +1,12 @@
+# Where the descheduler lives. Standalone namespace; ArgoCD creates it.
+namespace: kube-descheduler
+
+# Upstream image (kubernetes-sigs/descheduler). v0.33.x targets k8s 1.33,
+# which matches OKD 4.20's k8s API version. Renovate watches this tag.
+image: registry.k8s.io/descheduler/descheduler:v0.33.0
+
+# Run every hour. Aggressive enough to catch post-reboot clustering
+# within the hour; not so aggressive that pod churn becomes visible.
+# Conservative interval — descheduler is supposed to be a corrective
+# tool, not a continuous rebalancer.
+schedule: "0 * * * *"

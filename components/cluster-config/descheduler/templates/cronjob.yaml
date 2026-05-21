@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: descheduler
+  namespace: {{ .Values.namespace }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          # Schedule on control-plane nodes only (we're a 3-node CP+worker
+          # cluster — every node is both, this is just a hygiene marker).
+          priorityClassName: system-cluster-critical
+          restartPolicy: Never
+          serviceAccountName: descheduler
+          containers:
+            - name: descheduler
+              image: {{ .Values.image }}
+              command:
+                - /bin/descheduler
+                - --policy-config-file=/policy-dir/policy.yaml
+                # One-shot run — terminate when the policy sweep is done.
+                # Combined with the CronJob this gives periodic eviction
+                # without a long-running pod (and no leader election).
+                - --v=2
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
+              volumeMounts:
+                - name: policy
+                  mountPath: /policy-dir
+                  readOnly: true
+          volumes:
+            - name: policy
+              configMap:
+                name: descheduler-policy
+                items:
+                  - key: policy.yaml
+                    path: policy.yaml

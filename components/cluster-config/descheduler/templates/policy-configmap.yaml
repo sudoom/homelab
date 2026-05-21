@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: descheduler-policy
+  namespace: {{ .Values.namespace }}
+data:
+  policy.yaml: |
+    apiVersion: "descheduler/v1alpha2"
+    kind: "DeschedulerPolicy"
+    # All eviction goes through the kube-apiserver eviction API, so
+    # PDBs are respected (drains we set up — e.g. loki-pdb-override —
+    # still gate this). Profile holds three "fix-the-placement" plugins.
+    profiles:
+      - name: AffinityAndTaints
+        pluginConfig:
+          # DefaultEvictor is the gate that ALL eviction goes through.
+          # Conservative settings — never touch stateful workloads.
+          - name: "DefaultEvictor"
+            args:
+              # Hard floor — ANY pod with a PVC is skipped. Covers
+              # CNPG primary/standby, Loki ingesters, Prometheus TSDB,
+              # Grafana, ArgoCD repo cache, anything stateful.
+              ignorePvcPods: true
+              # Defaults; restated for clarity.
+              evictLocalStoragePods: false
+              evictSystemCriticalPods: false
+              evictFailedBarePods: false
+              evictDaemonSetPods: false
+              # Skip pods that have nowhere to go — descheduler tries
+              # to schedule them somewhere before evicting; with
+              # nodeFit: true it won't evict a pod that would just
+              # land back where it came from.
+              nodeFit: true
+
+          - name: "RemovePodsViolatingNodeAffinity"
+            args:
+              nodeAffinityType:
+                - "requiredDuringSchedulingIgnoredDuringExecution"
+
+          - name: "RemovePodsViolatingNodeTaints"
+
+          - name: "RemovePodsViolatingInterPodAntiAffinity"
+
+        plugins:
+          deschedule:
+            enabled:
+              - "RemovePodsViolatingNodeAffinity"
+              - "RemovePodsViolatingNodeTaints"
+              - "RemovePodsViolatingInterPodAntiAffinity"

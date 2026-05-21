@@ -201,6 +201,16 @@ applications:
     namespace: openshift-logging
     syncWave: "6"
 
+  # Periodic CronJob that evicts pods violating node affinity / taints /
+  # inter-pod anti-affinity. Designed to unstick the post-MCO-reroll
+  # clustering pattern (routers, RGW, etc. landing on suboptimal nodes).
+  # Excludes anything with a PVC (CNPG, Loki, Prometheus, …).
+  descheduler:
+    enabled: true
+    path: components/cluster-config/descheduler
+    namespace: kube-descheduler
+    syncWave: "6"
+
   # Wave 5 — CNPG Cluster CRs (per-app Postgres instances; renders before
   # the consumer apps at wave 6 so the Cluster + auto-generated Secret +
   # Service are ready when the app pod starts).

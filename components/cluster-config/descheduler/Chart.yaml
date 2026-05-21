@@ -1,0 +1,10 @@
+apiVersion: v2
+name: descheduler
+description: |
+  Kube Descheduler as a periodic CronJob. Vendored upstream
+  (kubernetes-sigs/descheduler v0.33.x) instead of via an operator
+  because the descheduler operator isn't in any of our catalogs.
+  Conservative profile: AffinityAndTaints plugins only, PVC-attached
+  pods + system-critical pods skipped. Will not touch stateful
+  workloads (CNPG, Rook OSDs/mons, Loki ingesters).
+version: 0.1.0
