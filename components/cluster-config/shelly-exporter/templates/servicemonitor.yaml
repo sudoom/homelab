@@ -26,7 +26,12 @@ spec:
       # deployments stay distinguishable. The default `instance=<podIP>:7979`
       # would collapse all plugs onto the same series.
       relabelings:
-        - sourceLabels: []
+        # `action: replace` is the default but Prometheus-operator stamps it
+        # on the live SM, which then drifts vs the rendered manifest and
+        # leaves ArgoCD reporting OutOfSync. Setting it explicitly here
+        # keeps the diff empty.
+        - action: replace
+          sourceLabels: []
           targetLabel: instance
           replacement: {{ .instance | quote }}
     {{- end }}

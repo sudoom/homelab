@@ -7,26 +7,31 @@ data:
   config.yml: |
     # JSONPath mappings for Shelly Gen 2/3 /rpc/Switch.GetStatus?id=0 response.
     # Fields verified against the Gen 3 Plus Plug S firmware.
+    #
+    # json_exporter v0.7.0 schema gotcha: `type:` is the SCRAPE-mode field
+    # ("value" or "object"), not the Prometheus type. Prometheus type goes
+    # in `valuetype:` ("gauge" / "counter" / "untyped"). Scalar-value
+    # scrapes can omit `type:` entirely (defaults to "value").
     modules:
       default:
         metrics:
           - name: shelly_power_watts
-            type: gauge
+            valuetype: gauge
             help: Instantaneous active power consumed by the load (W).
             path: '{ .apower }'
           - name: shelly_voltage_volts
-            type: gauge
+            valuetype: gauge
             help: Line voltage measured at the plug (V).
             path: '{ .voltage }'
           - name: shelly_current_amperes
-            type: gauge
+            valuetype: gauge
             help: Instantaneous current draw (A).
             path: '{ .current }'
           - name: shelly_energy_total_wh
-            type: counter
+            valuetype: counter
             help: Cumulative energy delivered to the load since boot (Wh). Resets on plug reboot.
             path: '{ .aenergy.total }'
           - name: shelly_temperature_celsius
-            type: gauge
+            valuetype: gauge
             help: Internal temperature of the plug (degrees Celsius).
             path: '{ .temperature.tC }'
