@@ -1,0 +1,32 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loki-pdb-override
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: loki-pdb-override
+  namespace: {{ .Values.namespace }}
+rules:
+  # Patch the single PDB we care about; get to check before patching.
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    resourceNames: [{{ .Values.pdbName | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: loki-pdb-override
+  namespace: {{ .Values.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: loki-pdb-override
+    namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: loki-pdb-override

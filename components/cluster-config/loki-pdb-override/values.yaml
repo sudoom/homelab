@@ -1,0 +1,17 @@
+# Target PDB to override. Hardcoded to LokiStack ingester since that's
+# the only one biting us; the index-gateway / compactor / etc. PDBs have
+# better shapes out of the box.
+namespace: openshift-logging
+pdbName: logging-loki-ingester
+desiredMinAvailable: 1
+
+# Image used by the CronJob to call `oc patch`. origin-cli is the
+# canonical OpenShift CLI image, available in OKD without auth.
+image: quay.io/openshift/origin-cli:4.22
+
+# Schedule. Every 5 min is enough — loki-operator doesn't actively
+# reconcile the PDB (verified 2026-05-21), it only writes it on
+# LokiStack spec changes / operator restart. 5 min worst-case window
+# between an unwanted reset and our re-patch is acceptable for the
+# planned-maintenance use case (MCO drains, node reboots).
+schedule: "*/5 * * * *"

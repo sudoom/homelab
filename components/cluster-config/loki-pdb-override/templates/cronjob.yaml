@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: loki-pdb-override
+  namespace: {{ .Values.namespace }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: loki-pdb-override
+          restartPolicy: OnFailure
+          containers:
+            - name: patch
+              image: {{ .Values.image }}
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -eo pipefail
+                  CURRENT=$(oc -n {{ .Values.namespace }} get pdb {{ .Values.pdbName }} -o jsonpath='{.spec.minAvailable}')
+                  TARGET={{ .Values.desiredMinAvailable }}
+                  if [ "$CURRENT" = "$TARGET" ]; then
+                    echo "PDB {{ .Values.pdbName }} already at minAvailable=$CURRENT, nothing to do."
+                    exit 0
+                  fi
+                  echo "PDB {{ .Values.pdbName }} has minAvailable=$CURRENT, patching to $TARGET."
+                  oc -n {{ .Values.namespace }} patch pdb {{ .Values.pdbName }} \
+                    --type=merge -p "{\"spec\":{\"minAvailable\":$TARGET}}"
+                  echo "patched."
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 64Mi

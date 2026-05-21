@@ -1,0 +1,8 @@
+apiVersion: v2
+name: loki-pdb-override
+description: Override loki-operator's hardcoded LokiStack ingester PDB
+  MinAvailable=2 to MinAvailable=1. Needed because we run 2 ingester
+  replicas (deliberate, to save WAL footprint) and the 2/2 PDB shape
+  blocks all voluntary drains. The LokiStack CRD doesn't expose PDB
+  tunables — the only way to override is to patch the live PDB.
+version: 0.1.0
