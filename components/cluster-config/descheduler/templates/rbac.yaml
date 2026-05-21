@@ -29,6 +29,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
+  # Required by descheduler v0.34+ to honour `ignorePvcPods: true`.
+  # Without this, the v0.36 watcher logs continuous "Failed to watch
+  # *v1.PersistentVolumeClaim: persistentvolumeclaims is forbidden"
+  # and falls back to evicting PVC-attached pods.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "watch", "list"]
   - apiGroups: ["scheduling.k8s.io"]
     resources: ["priorityclasses"]
     verbs: ["get", "watch", "list"]
