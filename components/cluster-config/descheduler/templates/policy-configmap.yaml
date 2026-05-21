@@ -52,14 +52,22 @@ data:
               - "RemovePodsViolatingInterPodAntiAffinity"
 
       # LowNodeUtilization redistributes pods from over-utilized to
-      # under-utilized nodes. On this 3-node cluster, CPU + memory
-      # utilization is barely 20% anywhere — pod-count is the only
-      # signal that meaningfully differs across nodes. Thresholds
-      # below tightened from upstream defaults (20/20/20 -> 50/50/50)
-      # because the default 20% under-floor was barely missed by the
-      # least-loaded node (~22% pod density) so the balancer wouldn't
-      # engage. Tighter shape: under if all of CPU<20% + mem<30% +
-      # pods<30%; over if ANY of CPU>50% + mem>60% + pods>50%.
+      # under-utilized nodes. CRITICAL: descheduler classifies on
+      # request-based utilization (sum of pod CPU/mem requests vs
+      # node allocatable), NOT actual usage. On this cluster the gap
+      # is large — node4/6 sit at ~80% CPU REQUESTS while ACTUAL CPU
+      # is ~8%, because most pods over-request CPU.
+      #
+      # Observed values 2026-05-21 (request-based, from descheduler logs):
+      #   node4: cpu 81%, mem 32%, pods 39%
+      #   node5: cpu 46%, mem 16%, pods 22%
+      #   node6: cpu 78%, mem 26%, pods 52%
+      #
+      # Thresholds tuned so node5 (the lone under-loaded node) qualifies
+      # as "under" without making the band trivially loose. Gap between
+      # under and over thresholds prevents oscillation:
+      #   under (AND): cpu<55%, mem<25%, pods<30%
+      #   over  (OR):  cpu>70%, mem>60%, pods>50%
       - name: LoadBalancing
         pluginConfig:
           - name: "DefaultEvictor"
@@ -74,16 +82,16 @@ data:
           - name: "LowNodeUtilization"
             args:
               thresholds:
-                cpu: 20
-                memory: 30
+                cpu: 55
+                memory: 25
                 pods: 30
               targetThresholds:
-                cpu: 50
+                cpu: 70
                 memory: 60
                 pods: 50
-              # If false, only "under and over" pairs trigger eviction.
-              # We keep it false — no point evicting if no over-utilized
-              # node actually exists.
+              # Absolute (not deviation-relative) thresholds. With this
+              # cluster's stable pod set, fixed thresholds are easier to
+              # reason about than chasing a moving cluster-wide average.
               useDeviationThresholds: false
 
         plugins:
