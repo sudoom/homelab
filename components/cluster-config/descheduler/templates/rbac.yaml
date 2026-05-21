@@ -17,6 +17,13 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "update", "patch"]
+  # v0.34+ posts eviction audit events via the newer events.k8s.io
+  # API group, not just the legacy core/events. Without this the
+  # eviction still works but every evicted pod logs "Server rejected
+  # event ... events.events.k8s.io is forbidden" — no audit trail.
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "update", "patch"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["create", "update"]
