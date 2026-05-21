@@ -19,6 +19,18 @@
 # (2026-05-15 section).
 routingViaHost: true
 
+# Pod-overlay (geneve) MTU. Default for OpenShift on a 1500-byte physical
+# interface is 1400 (leaves 100 bytes for geneve+outer-eth encapsulation).
+# Lowered to 1340 on 2026-05-21 to leave room for IPsec ESP overhead
+# (~58 bytes: ESP header + IV + ICV + padding). One value covers both
+# states — IPsec off (~120 bytes spare) and IPsec on (~12 bytes spare).
+# Changing this value triggers the OVN-K MTU live-migration procedure
+# (3-step: set spec.migration.mtu → change this field → clear migration).
+# Step 2 causes an MCO master-pool reroll (~23 min observed on this
+# cluster, 2026-05-21). Before/after baseline + procedure write-up in
+# data/mtu-migration-2026-05-21/ and blog/blog-security-hardening-draft.md.
+mtu: 1340
+
 # OVN-Kubernetes IPsec mode. Encrypts the geneve overlay between every
 # pair of nodes — all pod-to-pod traffic crossing a host boundary rides
 # inside an IPsec ESP tunnel (ip-protocol 50). Pod-on-same-node traffic

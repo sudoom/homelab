@@ -488,3 +488,74 @@ The baseline above gives us **comparison data**. It does NOT address the structu
 
 Plan: address (4) first (single config change, no MCO event), then (1) and (2) before any next IPsec apply.
 
+
+## 2026-05-21 — OVN-K MTU pre-flight (1400 → 1340) — standalone
+
+Raw data: `data/mtu-migration-2026-05-21/`.
+
+Shipped MTU change ahead of next IPsec attempt to isolate one variable. If something breaks during this MCO event, we know it's NOT MTU-related when we later layer IPsec on top.
+
+### Procedure (3-step, OpenShift OVN-K live migration)
+
+```bash
+# Step 1: declare migration intent (no MCO reroll on its own)
+oc patch network.operator/cluster --type=merge -p '{"spec":{"migration":{"mtu":{
+  "network":{"from":1400,"to":1340},
+  "machine":{"from":1500,"to":1500}
+}}}}'
+
+# Step 2: actually change MTU (THIS triggers the MCO master-pool reroll)
+oc patch network.operator/cluster --type=merge -p '{"spec":{"defaultNetwork":{
+  "ovnKubernetesConfig":{"mtu":1340}
+}}}'
+
+# Step 3: clear migration field after MCP master Updated=True
+oc patch network.operator/cluster --type=merge -p '{"spec":{"migration":null}}'
+```
+
+**Gotcha #1**: omitting the `machine` block (since we're not changing host MTU) made the operator immediately mark `Degraded=True` with `[invalid Migration.MTU, at least one of the required fields is missing]`. Schema requires both, even if `machine.from == machine.to`.
+
+**Gotcha #2**: after the MCO rollout completed, `ovn-k8s-mp0` and existing pod veth pairs still showed MTU 1400 — the operator updated the CR but ovnkube-node pods hadn't restarted to pick up the new config. Manually rolling all three ovnkube-node pods (one at a time) brought them onto MTU 1340. Existing application pods still on 1400; will pick up 1340 on next restart.
+
+**Gotcha #3**: post-rollout, node4 was left `Ready,SchedulingDisabled` by MCO (same bug as 2026-05-20). Manual `oc adm uncordon node4` to clear. Once node4 was schedulable again, the RGW pod (anti-affinity to routers; routers now occupied node5+node6) could move to node4 — without this, post-MTU RGW latency capture would have been against a Pending RGW pod.
+
+### Rollout timeline
+
+| Event | Wall clock | Notes |
+|---|---|---|
+| Step 1 (migration declared) | 13:24 | No MCO event |
+| Step 2 (MTU change) | 13:25 | MCP master `Updating=True`, drain starts on node4 |
+| node4 done | 13:30 (+5m) | Loki PDB MinAvailable=1 let drain proceed cleanly |
+| node5 done | 13:39 (+14m) | mid-rollout ceph quorum blips while mon-c evicted, recovered automatically |
+| node6 done | 13:48 (+23m) | Whole rollout 23 min — vs the 4+h cascade of 2026-05-20 IPsec attempt |
+| ovnkube-node rolled | 13:54 | Required to land new MTU on `ovn-k8s-mp0` |
+| Step 3 (clear migration) | 13:48 | Cosmetic |
+
+### Pre/post comparison
+
+| Measurement | Pre (MTU=1400) | Post (MTU=1340) | Delta |
+|---|---|---|---|
+| iperf3 cross-node 4×30s, sender | 879 Mbits/sec | 852 Mbits/sec | -3.1% |
+| iperf3 cross-node 4×30s, receiver | 877 Mbits/sec | 851 Mbits/sec | -3.0% |
+| iperf3 retransmits | 648 | 616 | -5% |
+| RGW p50 connect | 1.21 ms | 1.06 ms | ~unchanged (noise) |
+| RGW p50 total | 1.86 ms | 1.55 ms | ~unchanged (noise) |
+
+Throughput dropped ~3% — expected since smaller MTU means more packets per byte and fixed per-packet overhead is amortized over less payload. Still well above usable for our workload (the actual demand is single-digit Mbits/sec average). Latency essentially unchanged.
+
+### What this proved for the next IPsec attempt
+
+1. **The pre-flight items work.** Loki PDB drain headroom (`loki-pdb-override` CronJob) made every node's drain cycle proceed without manual force-delete-pod intervention. Compared to 2026-05-20 where every drain hung for 50+ min on the PDB wall.
+2. **Descheduler hasn't kicked yet** but didn't hurt either; first scheduled run was post-rollout, will see if it helps re-balance any clustered workloads.
+3. **The RGW/router anti-affinity gotcha is still real** — even after the cluster came back clean, RGW landed Pending until node4 was manually uncordoned. Worth scripting or documenting in the runbook.
+4. **No host-network cross-node breakage** like we saw with IPsec. So that issue specifically traces to the libreswan/IPsec layer, not to MachineConfig rollouts in general. Narrows the diagnosis space for item (3) of the IPsec pre-flight.
+
+### Remaining IPsec pre-flight
+
+- ~~(1) Loki ingester drain headroom~~ DONE
+- ~~(2) Kube Descheduler installed~~ DONE
+- (3) Cross-node host-network IPsec interaction — open, NOT MTU-related
+- ~~(4) MTU pre-flight~~ DONE 2026-05-21
+
+Down to one item — (3) is the qualitative work remaining (reproduce in test, understand what libreswan startup does to host networking).
+

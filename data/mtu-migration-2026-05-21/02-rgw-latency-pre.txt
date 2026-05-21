@@ -1,0 +1,11 @@
+connect=0.003615s ttfb=0.004366s total=0.004590s code=200
+connect=0.001493s ttfb=0.002039s total=0.002247s code=200
+connect=0.001364s ttfb=0.001768s total=0.002001s code=200
+connect=0.001265s ttfb=0.001746s total=0.001926s code=200
+connect=0.001350s ttfb=0.001760s total=0.001939s code=200
+connect=0.001306s ttfb=0.001726s total=0.001928s code=200
+connect=0.001091s ttfb=0.001482s total=0.001655s code=200
+connect=0.001087s ttfb=0.001479s total=0.001705s code=200
+connect=0.001223s ttfb=0.001641s total=0.001845s code=200
+connect=0.001189s ttfb=0.001679s total=0.001859s code=200
+pod "latency-pre" deleted from default namespace

@@ -7,6 +7,7 @@ spec:
   defaultNetwork:
     type: OVNKubernetes
     ovnKubernetesConfig:
+      mtu: {{ .Values.mtu }}
       gatewayConfig:
         routingViaHost: {{ .Values.routingViaHost }}
       {{- if .Values.ipsec.mode }}

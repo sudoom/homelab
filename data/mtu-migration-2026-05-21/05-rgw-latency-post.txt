@@ -1,0 +1,11 @@
+connect=0.003497s ttfb=0.004091s total=0.004260s code=200
+connect=0.001332s ttfb=0.001632s total=0.001772s code=200
+connect=0.001253s ttfb=0.001544s total=0.001677s code=200
+connect=0.001141s ttfb=0.001422s total=0.001553s code=200
+connect=0.001157s ttfb=0.001427s total=0.001561s code=200
+connect=0.001032s ttfb=0.001366s total=0.001505s code=200
+connect=0.001056s ttfb=0.001397s total=0.001529s code=200
+connect=0.001182s ttfb=0.001475s total=0.001614s code=200
+connect=0.001086s ttfb=0.001393s total=0.001530s code=200
+connect=0.001274s ttfb=0.001595s total=0.001735s code=200
+pod "latency-post" deleted from default namespace
