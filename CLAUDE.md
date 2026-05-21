@@ -410,7 +410,7 @@ oc -n <ns> patch pvc <name> -p '{"metadata":{"finalizers":[]}}' --type=merge
 
 Why this matters: the csi-provisioner serializes operations cluster-wide. A stuck `DeleteVolume` for an orphan PV blocks every new `CreateVolume` for unrelated PVCs — symptom looks identical to the per-volume "operation already exists" lock from the rbd-plugin's in-memory tracker, but the root cause is across PVs. Skipping this check sent us down a multi-hour rabbit hole on 2026-05-14 chasing the wrong symptom.
 
-### Pre-flight for any change that might trigger an MCO master-pool reroll
+### Pre-flight for any network-stack change (MCO reroll OR nmstate-only)
 
 Anything that changes `MachineConfig` content (directly or transitively via `Network/cluster`, `KubeletConfig`, `APIServer/cluster.spec.encryption`, etc.) triggers a serial reboot of all 3 masters. On this 3-OSD no-drain cluster that's a 30-45 min degraded window per attempt with multiple compounding failure modes. **Audit the change for transitive MachineConfig generation before applying** — render the operator's expected MC and diff it against current. Specific gotchas surfaced 2026-05-20:
 
@@ -422,17 +422,26 @@ Anything that changes `MachineConfig` content (directly or transitively via `Net
 
 If a MachineConfig-class change is unavoidable, schedule it with 2+ hour headroom, not after-hours. Storage chaos compounds with MCO chaos rapidly.
 
-**Pre-flight runbook for any MCO event** (added 2026-05-21 after the second IPsec/MTU cascade re-tripped the same chain):
+**Pre-flight runbook for any network-stack change** (added 2026-05-21; **expanded scope confirmed** by the storage-MTU jumbo-frame rollout the same day):
+
+**Scope clarification**: the original framing was "MCO event runbook". The 2026-05-21 jumbo-frame rollout proved this is too narrow — that change had **zero MachineConfig artifacts** (nmstate applied `mtu: 9000` in-place on `enp1s0f0np0` + `ceph-shim`, no rendered-master delta) but **still triggered the full pod→host-network cascade** (etcd-operator + authentication CO + ArgoCD repo-server all unable to reach host-network IPs of other nodes, requiring rolling `ovnkube-node` restart). The cascade triggers on any change that causes NetworkManager / OVS to reload gateway state, including:
+
+- IPsec mode flip on `Network/cluster` (MachineConfig delta — confirmed 2026-05-20)
+- OVN-K pod-overlay MTU change via `Network/cluster.spec.migration.mtu` (operator-side MC churn even when final MC is identical — confirmed 2026-05-21)
+- nmstate NNCP applying ANY interface change including MTU-only (no MachineConfig at all — confirmed 2026-05-21 jumbo)
+- Probably any future `Network/cluster` mutation, NNCP, multus NAD change
+
+Run the runbook below for any of these, not just for MachineConfig-class events.
 
 1. Scale `openshift-operators-redhat/loki-operator-controller-manager` to 0. The `loki-pdb-override` 5-min CronJob loses the race against operator reconciles during drain, blocking eviction; scaling the operator to 0 holds the PDB at `MinAvailable: 1` throughout.
 2. Scale `openshift-ingress-operator` `IngressController/default` to `replicas: 1`. With 2 routers + RGW anti-affinity, every node-drain stranddes RGW. Reducing to 1 router ensures RGW always has a target node.
-3. Apply the change. Monitor MCP master with `oc get mcp master -w`.
-4. **During the rollout**, watch for stuck VolumeAttachments via `oc get volumeattachment | awk '$5=="true" && /node[X]/'` — RBD VAs frequently stay bound to the previous node after pod move. Force-clear via `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`.
-5. **After MCP `Updated=True`**, restart all 3 `ovnkube-node` pods one at a time (`oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node`). Pod-to-host-network egress consistently breaks across MCO events; restart restores it. Symptom: ArgoCD apps show `sync=Unknown` because repo-server can't reach github.com.
+3. Apply the change. Monitor MCP master with `oc get mcp master -w` (if MachineConfig-class) OR `oc get nncp` (if nmstate-class).
+4. **During the rollout**, watch for stuck VolumeAttachments via `oc get volumeattachment | awk '$5=="true" && /node[X]/'` — RBD VAs frequently stay bound to the previous node after pod move. Force-clear via `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. (For nmstate-only changes where nothing reschedules, this step is usually a no-op.)
+5. **After the change settles**, restart all 3 `ovnkube-node` pods one at a time (`oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node`). Pod-to-host-network egress breaks across any of these network-stack changes; restart restores it. Symptom: ArgoCD apps show `sync=Unknown` because repo-server can't reach github.com (`dial tcp 140.82.121.x:22: connect: connection timed out`); etcd CO degrades (`EtcdMembersAvailable: 1 of 3 members are available`) even though etcd itself is healthy — the etcd-operator is on the pod network and can't reach host-network IPs.
 6. Restart `openshift-gitops` repo-server pod (`oc -n openshift-gitops delete pod -l app.kubernetes.io/name=openshift-gitops-repo-server`). Resolves the `DeadlineExceeded` on manifest generation that always lingers after the cluster has been thrashed.
 7. Restore: scale `loki-operator` back to 1, `IngressController` back to 2, trigger one-shot run of `loki-pdb-override` CronJob to re-patch PDB if loki-operator has reconciled it.
 
-Skipping any of these steps re-trips the cascade — observed 2026-05-20 (IPsec) and 2026-05-21 (MTU).
+Skipping steps 5-6 re-trips the cascade — observed 2026-05-20 (IPsec), 2026-05-21 (OVN-K pod MTU), 2026-05-21 (storage-NIC nmstate MTU).
 
 ## Guardrails — do not do these
 
