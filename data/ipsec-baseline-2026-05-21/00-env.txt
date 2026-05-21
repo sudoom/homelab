@@ -1,0 +1,15 @@
+=== ENVIRONMENT ===
+Captured: 2026-05-21T10:33:15Z
+IPsec mode (operator Network/cluster):
+Disabled
+
+OVN-K MTU:
+1400
+
+Nodes:
+node4.okd.sudops.pl   Ready   control-plane,master,worker   47d   v1.33.5   192.168.1.7   <none>   CentOS Stream CoreOS 10.0.20251023-0 (Coughlan)   6.12.0-142.el10.x86_64   cri-o://1.33.4
+node5.okd.sudops.pl   Ready   control-plane,master,worker   47d   v1.33.5   192.168.1.8   <none>   CentOS Stream CoreOS 10.0.20251023-0 (Coughlan)   6.12.0-142.el10.x86_64   cri-o://1.33.4
+node6.okd.sudops.pl   Ready   control-plane,master,worker   47d   v1.33.5   192.168.1.9   <none>   CentOS Stream CoreOS 10.0.20251023-0 (Coughlan)   6.12.0-142.el10.x86_64   cri-o://1.33.4
+
+ovn-ipsec daemonsets:
+NAME           DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE

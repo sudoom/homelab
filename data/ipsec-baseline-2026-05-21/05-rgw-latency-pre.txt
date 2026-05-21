@@ -1,0 +1,12 @@
+10 GET requests to RGW (across nodes, OVN-K overlay path):
+connect=0.003569s ttfb=0.004421s total=0.004645s code=200
+connect=0.001440s ttfb=0.001854s total=0.002044s code=200
+connect=0.001352s ttfb=0.001802s total=0.002002s code=200
+connect=0.001396s ttfb=0.001880s total=0.002069s code=200
+connect=0.001401s ttfb=0.001841s total=0.002057s code=200
+connect=0.001335s ttfb=0.001810s total=0.002025s code=200
+connect=0.001208s ttfb=0.001639s total=0.001807s code=200
+connect=0.001169s ttfb=0.001536s total=0.001733s code=200
+connect=0.001176s ttfb=0.001553s total=0.001764s code=200
+connect=0.001316s ttfb=0.001692s total=0.001894s code=200
+pod "latency-rgw" deleted from default namespace

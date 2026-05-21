@@ -416,3 +416,75 @@ Do NOT re-enable IPsec without:
 5. **Schedule attempt for a quiet window with 2h headroom** — not after-hours-into-evening. Storage chaos on top of network chaos compounds rapidly.
 6. **Capture pre-state tcpdump** — etcd-style "before vs after" proof; was the explicit miss this attempt.
 
+
+## 2026-05-21 — IPsec pre-flight baseline (captured before next attempt)
+
+Raw data: `data/ipsec-baseline-2026-05-21/`.
+
+### Environment
+
+- IPsec mode: `Disabled` (confirmed via `oc get network.operator/cluster -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.ipsecConfig.mode}'`)
+- OVN-K MTU: **1400**
+- 3 nodes, kernel 6.12.0-142.el10, cri-o 1.33.4
+- `ovn-ipsec-*` daemonsets: not deployed (clean baseline)
+
+### Cleartext geneve sample — what we're encrypting
+
+10s tcpdump on node4, UDP/6081 (geneve overlay): **200 packets captured** in <2s. Sample with full inner headers visible:
+
+```
+10:34:32.228734 enp0s31f6 In  IP 192.168.1.8.62614 > 192.168.1.7.geneve:
+  Geneve, Flags [C], vni 0xff0003, options [8 bytes]:
+  IP 10.129.0.10.pcsync-https > 10.130.0.2.55898: Flags [P.],
+  seq 1882865881:1882866124, ack 3736560695, win 376, length 243
+```
+
+Inner pod IPs (`10.129.0.10 → 10.130.0.2`), inner TCP sequence numbers, window sizes, payload length — **all readable on the wire**. Anyone with a span port between any two nodes can reconstruct pod-to-pod traffic.
+
+ESP-protocol filter in parallel: **0 packets in 5s** — confirms IPsec is not active.
+
+### East-west throughput baseline
+
+iperf3 4-stream 30s test, client on node6 → server on node5 (cross-node, rides OVN-K overlay):
+
+```
+[SUM]   0.00-30.00  sec  3.07 GBytes  879 Mbits/sec  944 retransmits  sender
+[SUM]   0.00-30.01  sec  3.06 GBytes  877 Mbits/sec                  receiver
+```
+
+**~879 Mbits/sec** — capped by the 1G frontnet (interface utilization at line rate). Retransmits ~1% (944/3700 segments).
+
+This is the number to compare post-IPsec. Expected: 10-15% drop due to ESP encryption overhead (per OpenShift docs handwave). On 1G we may not see CPU as the bottleneck since wire-rate caps below CPU saturation.
+
+### Cross-node service latency (RGW = the path that broke yesterday)
+
+Pod on node6 → RGW Service (`rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80`, RGW pod on node5). 10 sequential GET requests:
+
+| Sample | connect | ttfb | total | http |
+|---|---|---|---|---|
+| 1 | 3.57 ms | 4.42 ms | 4.65 ms | 200 |
+| 2 | 1.44 ms | 1.85 ms | 2.04 ms | 200 |
+| 3 | 1.35 ms | 1.80 ms | 2.00 ms | 200 |
+| 4 | 1.40 ms | 1.88 ms | 2.07 ms | 200 |
+| 5 | 1.40 ms | 1.84 ms | 2.06 ms | 200 |
+| 6 | 1.34 ms | 1.81 ms | 2.03 ms | 200 |
+| 7 | 1.21 ms | 1.64 ms | 1.81 ms | 200 |
+| 8 | 1.17 ms | 1.54 ms | 1.73 ms | 200 |
+| 9 | 1.18 ms | 1.55 ms | 1.76 ms | 200 |
+| 10 | 1.32 ms | 1.69 ms | 1.89 ms | 200 |
+
+p50 connect ≈ 1.3 ms, p50 total ≈ 2.0 ms, 100% HTTP 200.
+
+This is the exact path that timed out under IPsec yesterday (Loki ingester → RGW). The "after" number for this path is the single most important post-IPsec measurement.
+
+### What's still missing for a complete pre-flight
+
+The baseline above gives us **comparison data**. It does NOT address the structural pre-conditions for re-attempting IPsec:
+
+1. Loki ingester drain headroom (PDB still `MinAvailable: 2` with 2 replicas → 0 disruption budget).
+2. Kube Descheduler not installed.
+3. Cross-node host-network breakage during mismatched-MC window — root cause undiagnosed.
+4. MTU not lowered. Current geneve MTU is 1400. IPsec ESP adds ~58 bytes (header+IV+ICV+padding). Without dropping to ~1340, large packets will fragment or PMTU-discover, killing throughput. **The 14-19 min image pulls observed yesterday across IPsec likely trace to this.**
+
+Plan: address (4) first (single config change, no MCO event), then (1) and (2) before any next IPsec apply.
+

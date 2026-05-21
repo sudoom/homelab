@@ -1,0 +1,41 @@
+test 1: HEAD to RGW (cross-node likely)
+0.004624s
+0.001977s
+0.001723s
+0.001854s
+0.001703s
+0.001890s
+0.001548s
+0.001643s
+0.001684s
+0.001583s
+
+test 2: HEAD to iperf3-server-baseline Service (we know it is on node5)
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+
+test 3: PMTU check via tracepath-like (ping with DF, increasing sizes)
+curl: (1) Received HTTP/0.9 when not allowed
+size=1300 time=0.001424s code=000
+size=1300 FAIL
+curl: (1) Received HTTP/0.9 when not allowed
+size=1372 time=0.001539s code=000
+size=1372 FAIL
+curl: (1) Received HTTP/0.9 when not allowed
+size=1400 time=0.001366s code=000
+size=1400 FAIL
+curl: (1) Received HTTP/0.9 when not allowed
+size=1450 time=0.001522s code=000
+size=1450 FAIL
+curl: (1) Received HTTP/0.9 when not allowed
+size=1500 time=0.001646s code=000
+size=1500 FAIL
+pod "latency-test" deleted from default namespace
