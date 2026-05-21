@@ -1,0 +1,291 @@
+{
+  "title": "Shelly power telemetry",
+  "uid": "shelly-power",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "tags": ["power", "shelly"],
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "${DS_PROMETHEUS}" }
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(shelly_power_watts, instance)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Current draw",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "orange", "value": 120 },
+              { "color": "red", "value": 180 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "shelly_power_watts{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "24h average draw",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "orange", "value": 120 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "avg_over_time(shelly_power_watts{instance=~\"$instance\"}[24h])",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Projected daily energy",
+      "description": "24h moving-average power extrapolated to a full day (kWh).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kwatth",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "orange", "value": 3 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "avg_over_time(shelly_power_watts{instance=~\"$instance\"}[24h]) * 24 / 1000",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Plug temperature",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "orange", "value": 65 },
+              { "color": "red", "value": 80 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "shelly_temperature_celsius{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Power draw over time",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 15,
+            "spanNulls": true
+          }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "min", "max", "lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "shelly_power_watts{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Voltage",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 7 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "decimals": 1,
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 5 }
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "shelly_voltage_volts{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Current",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 7 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "amp",
+          "decimals": 3,
+          "custom": { "drawStyle": "line", "lineInterpolation": "linear", "fillOpacity": 5 }
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "shelly_current_amperes{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Plug temperature over time",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 7 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 }
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "shelly_temperature_celsius{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

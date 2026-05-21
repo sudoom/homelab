@@ -186,3 +186,22 @@ spec:
   datasources:{{ $bindings }}
   grafanaCom:
     id: 20417
+---
+# Shelly power telemetry (custom)
+# Per-plug power / voltage / current / energy / temperature. Template var
+# `instance` queries `label_values(shelly_power_watts, instance)`, so adding
+# new plugs to components/cluster-config/shelly-exporter/values.yaml makes
+# them appear here automatically.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: shelly-power
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: metrics
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  json: |
+{{ .Files.Get "files/shelly-power.json" | indent 4 }}
