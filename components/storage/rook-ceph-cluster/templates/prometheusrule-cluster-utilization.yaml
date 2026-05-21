@@ -1,0 +1,51 @@
+{{- if .Values.clusterUtilizationAlert.enabled }}
+# Cluster-wide raw-bytes utilization alert. Fills the warning-tier gap
+# between Rook's shipped per-OSD/per-pool fullness rules (which key off
+# Ceph's `OSD_NEARFULL` / `POOL_NEAR_FULL` health flags at the
+# mon_osd_nearfull_ratio default of 85%) and the 95% mon_osd_full_ratio
+# backstop that blocks all writes.
+#
+# Motivation: 2026-05-20 OSD_FULL incident sat undetected for 5 days
+# because the only signal anyone watched was the 95% backstop tripping,
+# by which time the cluster had already stopped accepting writes. An
+# 80% cluster-total warning gives multi-day headroom for capacity
+# planning or pool cleanup before per-OSD nearfull fires. Full incident
+# write-up in blog/blog-rook-ceph-draft.md (2026-05-20 section).
+#
+# Metric source: rook-ceph-mgr's prometheus module via the local
+# `rook-ceph-mgr` ServiceMonitor (see templates/servicemonitor.yaml).
+# `ceph_cluster_total_bytes` and `ceph_cluster_total_used_bytes` are
+# raw-bytes sums across all OSDs (replication-amplified), so a 3x
+# replicated 1 TiB of user data shows as 3 TiB used.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rook-ceph-cluster-utilization
+  namespace: rook-ceph
+  labels:
+    team: rook
+spec:
+  groups:
+    - name: ceph-cluster-utilization
+      rules:
+        - alert: CephClusterUtilizationHigh
+          expr: |
+            ceph_cluster_total_used_bytes / ceph_cluster_total_bytes > 0.80
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ceph cluster raw utilization >80% for 1h"
+            description: |
+              Cluster raw-bytes utilization has been above 80% for the
+              past hour ({{`{{ $value | humanizePercentage }}`}}). At
+              the default mon_osd_nearfull_ratio of 85%, per-OSD
+              CephOSDNearFull alerts will fire next; at 95%
+              mon_osd_full_ratio the cluster stops accepting writes.
+
+              Act now: identify the largest consumer
+              (`ceph df` from the toolbox), evict / shrink trashed RBD
+              images (`rbd trash ls -p nvme-replicated`), or schedule
+              the next storage expansion (bulk HDD addition; see
+              TODO in README.md).
+{{- end }}

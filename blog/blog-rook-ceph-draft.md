@@ -2218,3 +2218,55 @@ ArgoCD apps:             31/31 Synced + Healthy
   per-component storage size in `spec.template.<component>` so size
   classes become starting templates not concrete contracts.
 
+
+## 2026-05-21 — Cluster utilization >80% PrometheusRule shipped
+
+Filled the warning-tier observability gap that let the 2026-05-20 OSD_FULL
+incident sit undetected for 5 days. Rook's `createPrometheusRules: true`
+already ships `CephOSDNearFull` / `CephPoolNearFull` (keyed off Ceph's
+own `OSD_NEARFULL` / `POOL_NEAR_FULL` health flags at the default
+`mon_osd_nearfull_ratio` of 85%) and the 95% `OSD_FULL` backstop — but
+nothing fires at the much earlier 80% cluster-total threshold that
+gives multi-day capacity-planning headroom.
+
+### Chart change
+
+```
+components/storage/rook-ceph-cluster/
+├── templates/prometheusrule-cluster-utilization.yaml   (new)
+└── values.yaml                                          (clusterUtilizationAlert.enabled)
+```
+
+The new PrometheusRule lives in `rook-ceph` namespace (already labeled
+`openshift.io/cluster-monitoring=true`) and is discovered by platform
+Prometheus.  Single rule:
+
+```yaml
+- alert: CephClusterUtilizationHigh
+  expr: ceph_cluster_total_used_bytes / ceph_cluster_total_bytes > 0.80
+  for: 1h
+  labels:
+    severity: warning
+```
+
+`for: 1h` to avoid flapping on transient compaction / scrub deltas.
+`ceph_cluster_total_*_bytes` come from `rook-ceph-mgr`'s prometheus
+module via the local `rook-ceph-mgr` ServiceMonitor that this chart
+already maintains — no new scrape target needed.
+
+### Why a separate rule rather than tightening `mon_osd_nearfull_ratio`
+
+Lowering the ratio from 0.85 → 0.80 would also push Ceph's own write
+back-pressure earlier (PG mapping, backfill throttle), which is the
+opposite of what's wanted: at 80% cluster-total we want a human alert,
+not a behavioral change. The PrometheusRule is purely observability —
+no effect on Ceph behavior — which is the right separation.
+
+### Validation
+
+- `helm lint`: clean
+- `helm template`: rendered correctly; Prometheus template syntax
+  (`{{ $value | humanizePercentage }}`) escaped via Helm `{{`...`}}`
+  so it reaches Prometheus intact
+- `kubeconform`: 15 valid / 0 invalid / 1 skipped (CephCluster CRD)
+- Live: rule not previously present (`oc get prometheusrule rook-ceph-cluster-utilization` → NotFound)

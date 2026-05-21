@@ -224,6 +224,13 @@ prometheusScrapeRBAC:
 mgrServiceMonitor:
   enabled: true
 
+# Cluster-wide raw-bytes utilization warning at 80%. Fills the gap
+# between the rook-shipped 85% per-OSD nearfull alerts and the 95%
+# mon_osd_full_ratio backstop. Rationale in
+# templates/prometheusrule-cluster-utilization.yaml header.
+clusterUtilizationAlert:
+  enabled: true
+
 # StorageClass for ObjectBucketClaim provisioning against the existing
 # CephObjectStore (owned by components/storage/ceph-object-store/). Stays
 # as a local template here because that CR is still in a separate ArgoCD
