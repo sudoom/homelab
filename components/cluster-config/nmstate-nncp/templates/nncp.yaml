@@ -12,6 +12,7 @@ spec:
       - name: {{ $.Values.storageInterface }}
         type: ethernet
         state: up
+        mtu: {{ $.Values.storageMtu }}
         ipv4:
           enabled: true
           dhcp: false
@@ -30,6 +31,7 @@ spec:
       - name: {{ $.Values.shimInterface }}
         type: mac-vlan
         state: up
+        mtu: {{ $.Values.storageMtu }}
         mac-vlan:
           base-iface: {{ $.Values.storageInterface }}
           mode: bridge

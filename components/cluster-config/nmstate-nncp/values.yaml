@@ -1,6 +1,15 @@
 storageInterface: enp1s0f0np0
 unusedInterface: enp1s0f1np1
 
+# Jumbo frames on the storage backnet. NIC reports max-mtu=9978; MikroTik
+# switch L2MTU raised to 9214 on the three node-storage SFP+ ports (2026-05-21).
+# Applied to both the physical NIC and the ceph-shim macvlan so a future
+# multus revival doesn't reintroduce a 1500-byte chokepoint on the shim path.
+# Independent of the OVN-K pod MTU (1340) — that lives on the frontnet, this
+# is the dedicated storage VLAN. Pre/post benches in
+# data/jumbo-frames-2026-05-21/.
+storageMtu: 9000
+
 # Macvlan host-shim — required when CephCluster runs with network.provider: multus
 # over macvlan, because the kernel's bridge code drops same-host pod↔host frames.
 # The shim provides a second L2 endpoint on the storage NIC with a different MAC,
