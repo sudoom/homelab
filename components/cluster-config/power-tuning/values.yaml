@@ -1,0 +1,22 @@
+# Experimental runtime-only powersave profile.
+# Activates when a node carries the label `power-tuning/profile=experimental`.
+# As of 2026-05-23 only node6 carries this label (the node with the Shelly
+# wall-socket plug, so the savings are directly measurable).
+#
+# Knobs:
+#   - governor=powersave: schedutil/cpufreq picks the lowest acceptable
+#     freq for the current load instead of racing to high freqs.
+#   - energy_perf_bias=power: tells intel_pstate to favour idle/lower
+#     freqs in residency decisions.
+#   - min_perf_pct=0: removes the floor on intel_pstate's min performance
+#     percentage (default is 20 on RHCOS), allowing deeper idle.
+#
+# All three knobs apply live via the tuned-daemon DaemonSet — no node
+# reboot, no MachineConfig delta. Reverting is a label removal (or
+# delete this chart): tuned re-applies the baseline.
+experimental:
+  enabled: true
+  priority: 20
+  include: openshift-control-plane
+  matchLabel: power-tuning/profile
+  matchValue: experimental

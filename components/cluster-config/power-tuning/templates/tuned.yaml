@@ -1,0 +1,27 @@
+{{- if .Values.experimental.enabled }}
+apiVersion: tuned.openshift.io/v1
+kind: Tuned
+metadata:
+  name: powersave-experimental
+  namespace: openshift-cluster-node-tuning-operator
+spec:
+  profile:
+    - name: powersave-experimental
+      data: |
+        [main]
+        summary=Experimental powersave (runtime-only knobs) over {{ .Values.experimental.include }}
+        include={{ .Values.experimental.include }}
+
+        [cpu]
+        governor=powersave
+        energy_perf_bias=power
+        min_perf_pct=0
+  recommend:
+    - match:
+        - label: {{ .Values.experimental.matchLabel }}
+          value: {{ .Values.experimental.matchValue }}
+      # Priority lower than the cluster default (control-plane=30,
+      # node=40) so this wins on matching nodes.
+      priority: {{ .Values.experimental.priority }}
+      profile: powersave-experimental
+{{- end }}

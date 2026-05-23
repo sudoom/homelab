@@ -36,6 +36,12 @@ applications:
     namespace: openshift-network-operator
     syncWave: "0"
 
+  power-tuning:
+    enabled: true
+    path: components/cluster-config/power-tuning
+    namespace: openshift-cluster-node-tuning-operator
+    syncWave: "0"
+
   # Wave 1 — Operators (subscriptions + instances)
   nmstate-operator:
     enabled: true

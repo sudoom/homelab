@@ -1,0 +1,12 @@
+apiVersion: v2
+name: power-tuning
+description: |
+  Per-node power-tuning experiments via the cluster's built-in
+  node-tuning-operator. Profiles inherit from the active baseline
+  (openshift-control-plane on this combined CP+worker cluster) and
+  layer runtime-only powersave knobs. No [bootloader] section here
+  — those need a separate chart because they cause an MCO event.
+
+  Profile selection is by node label `power-tuning/profile=<name>`,
+  applied via components/cluster-config/node-labels.
+version: 0.1.0

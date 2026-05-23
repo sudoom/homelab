@@ -8,3 +8,8 @@ nodes:
   - hostname: node6.okd.sudops.pl
     labels:
       topology.kubernetes.io/zone: fd-c
+      # Opt this node into the experimental powersave Tuned profile
+      # (components/cluster-config/power-tuning). node6 carries the
+      # Shelly wall-socket plug, so the impact is directly measurable
+      # via the shelly_power_watts metric.
+      power-tuning/profile: experimental
