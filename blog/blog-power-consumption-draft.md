@@ -265,3 +265,56 @@ integrated over a day is more reliable.
 
 Capture 24h idle baseline (Grafana panel: `avg_over_time(shelly_power_watts{instance="node6"}[24h])`).
 Then move to the lever-ranking work documented above.
+
+## 2026-05-23 — Lever 1 sub-step A: runtime-only Tuned profile shipped
+
+24h baseline pre-apply: **avg 102.88 W, min 91.6 W, max 158.5 W, stddev 5.81 W**
+(100% coverage from 2880 samples). Max was the rados-bench spike during the
+2026-05-21 jumbo-frame work; everything else is steady-state.
+
+Shipped a new chart `components/cluster-config/power-tuning/` with a
+Tuned CR that inherits from `openshift-control-plane` (node6's active
+baseline as a combined CP+worker) and layers the runtime-only knobs:
+
+```ini
+[cpu]
+governor=powersave
+energy_perf_bias=power
+min_perf_pct=0
+```
+
+Scoped to nodes carrying `power-tuning/profile=experimental` — only
+node6 today (the node with the Shelly plug). The label is added via
+`components/cluster-config/node-labels/values.yaml`. Tuned operator
+applies live, no MachineConfig event, no reboot.
+
+### Kernel verification
+
+```
+scaling_governor (CPU0):                powersave   ✓
+/cpu0/power/energy_perf_bias (MSR):     15          ✓  (max powersave)
+intel_pstate/min_perf_pct:              16          partial — wanted 0
+```
+
+The min_perf_pct floor at 16 is the parent profile's value showing
+through; Tuned's `min_perf_pct=0` was accepted as the request, kernel
+clamped it. Default RHCOS value is ~20, so 16 is already a meaningful
+reduction. Not chasing further — the deeper savings come in sub-step B
+(intel_pstate=passive boot arg).
+
+### What to watch
+
+In ~24h, compare `avg_over_time(shelly_power_watts[24h])` vs today's
+102.88 W. Expected gain from runtime knobs alone: somewhere between
+5-10W (maybe half of the blog draft's full-lever 15-25W estimate, since
+sub-step B's `intel_pstate=passive + processor.max_cstate=9` are the
+bigger contributors).
+
+If the gain is ≥5W (≈5%), proceed to sub-step B — adds a `[bootloader]`
+section with `cmdline_powersave=intel_pstate=passive processor.max_cstate=9`,
+which triggers a MachineConfig delta and node reboot. Full cascade
+pre-flight applies (the runbook in CLAUDE.md).
+
+If the gain is <2W, the runtime knobs alone are noise and the savings
+must be coming from C-states / pstate-mode — go straight to sub-step B
+(or abandon the lever if the cost is too high).
