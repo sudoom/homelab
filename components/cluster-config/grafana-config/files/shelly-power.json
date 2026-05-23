@@ -2,7 +2,7 @@
   "title": "Shelly power telemetry",
   "uid": "shelly-power",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": { "from": "now-24h", "to": "now" },
   "tags": ["power", "shelly"],
@@ -188,11 +188,87 @@
       ]
     },
     {
+      "id": 5,
+      "type": "stat",
+      "title": "Projected daily cost",
+      "description": "24h moving-average power extrapolated to a full day, multiplied by the tariff (1.263 zł/kWh). Update the constant in the panel queries if the tariff changes.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyPLN",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "orange", "value": 4 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "avg_over_time(shelly_power_watts{instance=~\"$instance\"}[24h]) * 24 / 1000 * 1.263",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Projected monthly cost (30d)",
+      "description": "24h moving-average power × 24h × 30d × 1.263 zł/kWh. Rough monthly forecast.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyPLN",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "orange", "value": 120 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "avg_over_time(shelly_power_watts{instance=~\"$instance\"}[24h]) * 24 * 30 / 1000 * 1.263",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "id": 10,
       "type": "timeseries",
       "title": "Power draw over time",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 9 },
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 9 },
       "fieldConfig": {
         "defaults": {
           "unit": "watt",
@@ -223,7 +299,7 @@
       "type": "timeseries",
       "title": "Voltage",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 7 },
+      "gridPos": { "x": 0, "y": 17, "w": 12, "h": 7 },
       "fieldConfig": {
         "defaults": {
           "unit": "volt",
@@ -246,7 +322,7 @@
       "type": "timeseries",
       "title": "Current",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 7 },
+      "gridPos": { "x": 12, "y": 17, "w": 12, "h": 7 },
       "fieldConfig": {
         "defaults": {
           "unit": "amp",
@@ -269,7 +345,7 @@
       "type": "timeseries",
       "title": "Plug temperature over time",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 7 },
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 7 },
       "fieldConfig": {
         "defaults": {
           "unit": "celsius",
