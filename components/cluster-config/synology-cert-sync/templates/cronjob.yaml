@@ -1,0 +1,89 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: synology-cert-sync
+  namespace: {{ .Values.namespace }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: synology-cert-sync
+          restartPolicy: OnFailure
+          # OpenShift SCC: restricted-v2 is fine. No host network, no
+          # privileged, no host mounts. Writes only to two emptyDirs.
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            # Pulls homelab-wildcard-tls from cert-manager ns into /tls.
+            # `oc extract` writes each Secret key as a file in the target
+            # dir — cleaner than templating a YAML-pull + base64-decode.
+            # Cross-ns access granted by the Role/RoleBinding in
+            # cert-manager ns (templates/rbac.yaml).
+            - name: mirror-tls
+              image: registry.redhat.io/openshift4/ose-cli:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  cd /tls
+                  oc -n {{ .Values.sourceSecret.namespace }} extract secret/{{ .Values.sourceSecret.name }} --confirm
+                  ls -la /tls
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tls
+                  mountPath: /tls
+          containers:
+            - name: sync
+              image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+              imagePullPolicy: IfNotPresent
+              command: ["sh", "/script/sync.sh"]
+              env:
+                - name: DSM_HOST
+                  value: {{ .Values.dsmHost | quote }}
+                - name: DSM_PORT
+                  value: {{ .Values.dsmPort | quote }}
+                - name: DSM_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: dsm-credentials
+                      key: username
+                - name: DSM_PASS
+                  valueFrom:
+                    secretKeyRef:
+                      name: dsm-credentials
+                      key: password
+                - name: DSM_CERT_DESC
+                  value: {{ .Values.dsmCertDescription | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              volumeMounts:
+                - name: tls
+                  mountPath: /tls
+                  readOnly: true
+                - name: script
+                  mountPath: /script
+                  readOnly: true
+          volumes:
+            - name: tls
+              emptyDir: {}
+            - name: script
+              configMap:
+                name: synology-cert-sync-script
+                defaultMode: 0755

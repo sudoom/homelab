@@ -1,0 +1,37 @@
+namespace: synology-cert-sync
+
+# DSM API endpoint. Using the LAN IP rather than nas.homelab.sudops.pl
+# deliberately — avoids a dependency loop where the cert-sync needs DNS
+# to reach the host that's being given the cert that secures the
+# hostname. The IP is stable per the Technitium zone we own (Phase 2).
+dsmHost: "192.168.1.2"
+dsmPort: 5001          # HTTPS admin port (DSM default; 5000 is HTTP)
+
+# In-cluster source for the cert + key + chain. Comes from the
+# `homelab-wildcard` Certificate CR managed by cert-manager-config.
+sourceSecret:
+  namespace: cert-manager
+  name: homelab-wildcard-tls
+
+# Cron — daily at 03:14 UTC. LE renews 30d before expiry so the actual
+# cert change happens at most once a month; daily polling gives ~24h
+# upper bound on staleness post-renewal.
+schedule: "14 3 * * *"
+
+image:
+  # Lightweight base with curl + jq for the API calls + openssl for the
+  # fingerprint comparison. Pinned + Renovate-watched.
+  repository: quay.io/curl/curl
+  tag: "8.10.1"
+
+# Description shown in DSM's Certificate list for the imported cert.
+# Helps distinguish it from any other cert that might live there.
+dsmCertDescription: "homelab.sudops.pl (auto, from OKD cert-manager)"
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 64Mi

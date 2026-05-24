@@ -192,6 +192,16 @@ applications:
     namespace: shelly-exporter
     syncWave: "5"
 
+  # Phase 3 of the homelab.sudops.pl rollout. Daily CronJob; mirrors
+  # the homelab-wildcard-tls cert (from cert-manager-config) into the
+  # Synology DSM cert store via DSM's web API. DSM creds live in a
+  # SealedSecret — see the chart README for the kubeseal one-liner.
+  synology-cert-sync:
+    enabled: true
+    path: components/cluster-config/synology-cert-sync
+    namespace: synology-cert-sync
+    syncWave: "5"
+
   gatus:
     enabled: true
     path: components/cluster-config/gatus

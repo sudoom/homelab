@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: synology-cert-sync-script
+  namespace: {{ .Values.namespace }}
+data:
+  sync.sh: |
+    #!/bin/sh
+    # Sync the cert at /tls/tls.crt + /tls/tls.key to a Synology DSM via
+    # DSM's web API. Idempotent: fingerprint-compares the in-cluster cert
+    # vs the cert DSM is currently serving on https://$DSM_HOST:$DSM_PORT
+    # and only POSTs the import endpoint when they differ.
+    #
+    # Auth via DSM user with admin-group membership (DSM 7.x doesn't have
+    # per-section delegation for Certificate management — see the note in
+    # blog/blog-homelab-sudops-zone-draft.md). Credentials come from the
+    # SealedSecret-decoded `dsm-credentials` Secret in env vars.
+    set -eu
+
+    : "${DSM_HOST:?DSM_HOST not set}"
+    : "${DSM_PORT:?DSM_PORT not set}"
+    : "${DSM_USER:?DSM_USER not set}"
+    : "${DSM_PASS:?DSM_PASS not set}"
+    : "${DSM_CERT_DESC:?DSM_CERT_DESC not set}"
+
+    BASE="https://${DSM_HOST}:${DSM_PORT}"
+
+    # ---- Compare cluster cert vs DSM's currently-served cert -----------
+    # `openssl s_client | x509 -fingerprint` gives a stable per-cert hash.
+    cluster_fp=$(openssl x509 -in /tls/tls.crt -noout -fingerprint -sha256 | cut -d= -f2)
+    dsm_fp=$(echo | openssl s_client -connect "${DSM_HOST}:${DSM_PORT}" -servername "${DSM_HOST}" -showcerts 2>/dev/null \
+      | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+      | cut -d= -f2)
+
+    echo "cluster cert fp: ${cluster_fp}"
+    echo "dsm     cert fp: ${dsm_fp:-<none>}"
+
+    if [ -n "${dsm_fp}" ] && [ "${cluster_fp}" = "${dsm_fp}" ]; then
+      echo "Fingerprints match; no upload needed."
+      exit 0
+    fi
+
+    echo "Fingerprints differ; uploading."
+
+    # ---- DSM auth (cookie-based session) -------------------------------
+    # `format=cookie` makes DSM set an `id=<SID>` cookie we carry on
+    # subsequent requests. `format=sid` returns the SID as JSON instead;
+    # cookie is cleaner because curl handles the persistence.
+    cookie_jar=$(mktemp)
+    trap 'rm -f "${cookie_jar}"' EXIT
+
+    login_resp=$(curl -sk -c "${cookie_jar}" \
+      --data-urlencode "api=SYNO.API.Auth" \
+      --data-urlencode "version=6" \
+      --data-urlencode "method=login" \
+      --data-urlencode "account=${DSM_USER}" \
+      --data-urlencode "passwd=${DSM_PASS}" \
+      --data-urlencode "format=cookie" \
+      "${BASE}/webapi/auth.cgi")
+
+    if ! echo "${login_resp}" | grep -q '"success":true'; then
+      echo "DSM login failed:"
+      echo "${login_resp}" | head -c 500
+      exit 1
+    fi
+    echo "DSM login OK."
+
+    # ---- Build chain (cert + intermediates) ----------------------------
+    # cert-manager stores the leaf in tls.crt and the chain in ca.crt
+    # (when the issuer provides intermediates). DSM wants:
+    #   - cert:       leaf only
+    #   - key:        private key
+    #   - inter_cert: chain of intermediates
+    cp /tls/tls.crt /tmp/cert.pem
+    cp /tls/tls.key /tmp/key.pem
+    if [ -s /tls/ca.crt ]; then
+      cp /tls/ca.crt /tmp/chain.pem
+    else
+      : > /tmp/chain.pem
+    fi
+
+    # ---- Upload via multipart POST -------------------------------------
+    upload_resp=$(curl -sk -b "${cookie_jar}" \
+      -F "api=SYNO.Core.Certificate" \
+      -F "method=import" \
+      -F "version=1" \
+      -F "desc=${DSM_CERT_DESC}" \
+      -F "as_default=true" \
+      -F "key=@/tmp/key.pem" \
+      -F "cert=@/tmp/cert.pem" \
+      -F "inter_cert=@/tmp/chain.pem" \
+      "${BASE}/webapi/entry.cgi")
+
+    # ---- Logout (best effort; don't fail the job if it errors) ---------
+    curl -sk -b "${cookie_jar}" \
+      --data-urlencode "api=SYNO.API.Auth" \
+      --data-urlencode "version=6" \
+      --data-urlencode "method=logout" \
+      "${BASE}/webapi/auth.cgi" >/dev/null || true
+
+    if echo "${upload_resp}" | grep -q '"success":true'; then
+      echo "DSM cert import OK."
+      exit 0
+    fi
+
+    echo "DSM cert import FAILED:"
+    echo "${upload_resp}" | head -c 1000
+    exit 1

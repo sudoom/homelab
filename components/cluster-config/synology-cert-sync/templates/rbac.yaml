@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: synology-cert-sync
+  namespace: {{ .Values.namespace }}
+---
+# Cross-namespace read on the homelab-wildcard-tls Secret. The cert lives
+# in cert-manager; this CronJob needs the in-cluster copy to compare +
+# upload to DSM. Scoped to the single Secret by name — no broader access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: synology-cert-sync-source-secret-reader
+  namespace: {{ .Values.sourceSecret.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .Values.sourceSecret.name | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: synology-cert-sync-source-secret-reader
+  namespace: {{ .Values.sourceSecret.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: synology-cert-sync-source-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: synology-cert-sync
+    namespace: {{ .Values.namespace }}

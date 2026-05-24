@@ -1,0 +1,13 @@
+apiVersion: v2
+name: synology-cert-sync
+description: |
+  Daily CronJob that mirrors the `homelab-wildcard-tls` Secret
+  (LE-prod wildcard for *.homelab.sudops.pl, issued by cert-manager
+  per Phase 1 of the homelab.sudops.pl rollout) into the Synology
+  DSM certificate store via DSM's HTTP API. Idempotent: hashes the
+  in-cluster cert vs the one currently active on DSM and only POSTs
+  when they differ.
+
+  Phase 3 of the homelab.sudops.pl rollout — see
+  blog/blog-homelab-sudops-zone-draft.md.
+version: 0.1.0
