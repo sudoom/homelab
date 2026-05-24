@@ -22,7 +22,7 @@ image:
   # Lightweight base with curl + jq for the API calls + openssl for the
   # fingerprint comparison. Pinned + Renovate-watched.
   repository: quay.io/curl/curl
-  tag: "8.10.1"
+  tag: "8.20.0"
 
 # Description shown in DSM's Certificate list for the imported cert.
 # Helps distinguish it from any other cert that might live there.
