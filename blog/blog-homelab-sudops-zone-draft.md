@@ -161,3 +161,53 @@ Mount the `homelab-wildcard-tls` Secret at `/tls`. Schedule: `0 3 * * *`
 - CronJob picks up new cert within 24h of renewal; no DSM touch
 - Re-seal DSM creds only when password rotates
 - No code changes between renewals
+
+---
+
+## 2026-05-24 — Rollout chronology (all three phases shipped)
+
+### Phase 1: `*.homelab.sudops.pl` wildcard cert (a49a8d2)
+
+Added a Certificate entry in `components/cluster-config/cert-manager-config/values.yaml`:
+
+```yaml
+- name: homelab-wildcard
+  namespace: cert-manager
+  secretName: homelab-wildcard-tls
+  dnsNames:
+    - "*.homelab.sudops.pl"
+    - "homelab.sudops.pl"
+```
+
+DNS-01 challenge ran against the parent `sudops.pl` Cloudflare zone — even though Cloudflare carries no records under `homelab.sudops.pl`, the challenge only needs the parent zone, and the existing Cloudflare API token (from the okd wildcard) already has scope. Cert issued in ~2 min. Valid until 2026-08-22.
+
+### Phase 2: Technitium zone (4e20c77)
+
+Mirrored the okd zone pattern in `ansible/technitium/roles/technitium-config/tasks/main.yml`. Two new tasks: zone create + records add. Idempotent shape (status="error" + "already exists" tolerated) matches the okd zone.
+
+Initial A records:
+- `nas.homelab.sudops.pl → 192.168.1.2`
+- `dns.homelab.sudops.pl → 192.168.1.12`
+
+Ran via `ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --tags zones`. Verified with `dig +short @192.168.1.12 nas.homelab.sudops.pl` returning `192.168.1.2`.
+
+### Phase 3: Synology DSM cert-sync CronJob (47ecb54 + 4 fixes)
+
+Three rounds of bugs before this was happy:
+
+| Commit | Bug | Fix |
+|---|---|---|
+| `f53e39c` | `quay.io/curl/curl` had no `openssl` → fingerprint compare failed | Switched main container to `ose-cli` (already used by init container) |
+| (manual) | DSM login returned `code:406` → 2-step verification required | Disabled 2FA on the dedicated DSM admin user; CronJobs can't do interactive 2FA |
+| `3858f91` | DSM cert import returned `code:5512` | cert-manager bundles leaf+chain in `tls.crt`, DSM wants them SPLIT (leaf in `cert`, intermediates in `inter_cert`). Added an awk PEM-block splitter. |
+| `6010411` | Each run created a new DSM cert entry — duplicates accumulated | Look up existing by `desc` via `SYNO.Core.Certificate.CRT/list`, pass `id=<existing>` to import → DSM replaces in place |
+
+End-to-end now: cert-manager auto-renews 30d before expiry → next daily CronJob run fingerprint-detects the diff → replaces DSM cert by `id` (service bindings stick) → fingerprint check matches → no-op until next renewal. Zero-touch from here.
+
+### Lessons learned
+
+- **Wildcard DNS-01 works fine over a parent Cloudflare zone even when the subdomain has no Cloudflare records.** That's how LE validates the challenge — they don't care that the subdomain isn't otherwise public.
+- **DSM 7.x has no per-section admin delegation for Certificate management.** Service accounts have to be in the `administrators` group + 2FA disabled. Acceptable trade-off when the API is LAN-only and the password is sealed.
+- **cert-manager `tls.crt` is a bundle; DSM expects split.** The empty `inter_cert` form silently returns 5512 — diagnostic was clear once we knew to split.
+- **`SYNO.Core.Certificate.CRT/list` is the right endpoint for cert enumeration in DSM 7.x** (despite the `.import` call being on the non-`.CRT` namespace). Useful to remember if/when we automate other DSM cert operations.
+- **Wildcards cover ANY single-label subdomain** — `*.homelab.sudops.pl` is valid for `nas.homelab.sudops.pl`, `dns.homelab.sudops.pl`, and any future name. We don't need (or want) per-host certs in DSM. Confirmed visually: DSM cert list shows `*.homelab.sudops.pl` covering all services, no per-host cert needed.
