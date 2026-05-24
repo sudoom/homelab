@@ -19,10 +19,12 @@ sourceSecret:
 schedule: "14 3 * * *"
 
 image:
-  # Lightweight base with curl + jq for the API calls + openssl for the
-  # fingerprint comparison. Pinned + Renovate-watched.
-  repository: quay.io/curl/curl
-  tag: "8.10.1"
+  # ose-cli has curl + openssl + oc out of the box. Tried quay.io/curl/curl
+  # first but it's too minimal — no openssl binary, so the fingerprint
+  # compare path failed. Reusing the same image as the init container also
+  # saves a second image pull per Job.
+  repository: registry.redhat.io/openshift4/ose-cli
+  tag: latest
 
 # Description shown in DSM's Certificate list for the imported cert.
 # Helps distinguish it from any other cert that might live there.
