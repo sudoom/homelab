@@ -86,7 +86,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "smartctl_device_attribute{attribute_name=~\"Media_Wearout_Indicator|Workld_Media_Wear_Indic\",device=\"sda\",attribute_value_type=\"value\"}",
-          "legendFormat": "{{instance}} {{attribute_name}}",
+          "legendFormat": "{{node}} {{attribute_name}}",
           "instant": true,
           "format": "table",
           "refId": "A"
