@@ -157,6 +157,48 @@
     label: "{{ item.name }}.{{ okd_zone_name }} → {{ item.ip }}"
   tags: [config, zones]
 
+# ---- /api/zones/create — authoritative homelab.sudops.pl -------------------
+# LAN-only zone for non-OKD appliances (NAS, dns-master, future hosts).
+# Split-horizon: Cloudflare doesn't carry any A records here; Technitium
+# is the only resolver that knows these LAN IPs. Same idempotent shape as
+# the okd zone above — Technitium returns HTTP 200 with status="error"
+# on real failure, "already exists" tolerated.
+- name: Ensure homelab.sudops.pl primary zone exists
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/create"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ homelab_zone_name }}"
+      type: Primary
+    status_code: 200
+    return_content: true
+  register: homelab_primary_zone_response
+  failed_when:
+    - homelab_primary_zone_response.json.status != "ok"
+    - "'already exists' not in (homelab_primary_zone_response.json.errorMessage | default(''))"
+  tags: [config, zones]
+
+- name: Add/update homelab.sudops.pl A records (idempotent via overwrite=true)
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/records/add"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ homelab_zone_name }}"
+      domain: "{{ item.name }}.{{ homelab_zone_name }}"
+      type: A
+      ipAddress: "{{ item.ip }}"
+      ttl: "3600"
+      overwrite: "true"
+    status_code: 200
+  loop: "{{ homelab_records }}"
+  loop_control:
+    label: "{{ item.name }}.{{ homelab_zone_name }} → {{ item.ip }}"
+  tags: [config, zones]
+
 # ---- Blocked zones (NXDOMAIN locally, never recurse) -----------------------
 # An authoritative zone with no records returns NXDOMAIN for any query under it.
 # Same body-status quirk: `failed_when` surfaces silent status="error" responses,

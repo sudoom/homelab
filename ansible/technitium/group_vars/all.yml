@@ -23,6 +23,20 @@ okd_nodes:
   - { name: node5, ip: 192.168.1.8 }
   - { name: node6, ip: 192.168.1.9 }
 
+# ---- Authoritative LAN-only zone for homelab.sudops.pl ----
+# Real LAN-appliance hostnames with valid public TLS certs, without ever
+# publishing the LAN IPs to Cloudflare. Technitium serves these records
+# authoritatively to LAN clients; external queries for *.homelab.sudops.pl
+# return NXDOMAIN because Cloudflare doesn't carry any. The DNS-01
+# challenge for the wildcard cert (shipped 2026-05-24, lives in
+# cert-manager namespace as homelab-wildcard-tls) still works because LE
+# only needs the parent sudops.pl zone on Cloudflare. Full design in
+# blog/blog-homelab-sudops-zone-draft.md.
+homelab_zone_name: homelab.sudops.pl
+homelab_records:
+  - { name: nas, ip: 192.168.1.2  }
+  - { name: dns, ip: 192.168.1.12 }
+
 # ---- Blocked zones (return NXDOMAIN locally, never recurse) ----
 # Carry-over from pi-hole's `local=/.../` dnsmasq directives.
 # `cluster.local` catches any host-side process that tries to resolve a
