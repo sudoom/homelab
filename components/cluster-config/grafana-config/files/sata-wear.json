@@ -1,0 +1,97 @@
+{
+  "title": "SMART — SATA boot drives",
+  "uid": "sata-wear",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "tags": ["smart", "storage"],
+  "description": "Companion to the community SMARTctl Exporter Dashboard (id 22604). That dashboard's 'Wear Level on SATA Devices' panel hard-codes the Samsung/Crucial-style attribute name (Wear_Leveling_Count) which neither the Toshiba THNSF8400CCSE nor the Intel SSDSC2BX400G4 boot drives in this cluster report. This dashboard uses Media_Wearout_Indicator instead, which both vendors do report.\n\nGauge value is `100 - normalized` so it reads 'percentage worn' (0 = pristine, 100 = end-of-life), matching the semantic of the NVMe wear gauges in the community dashboard.",
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "${DS_PROMETHEUS}" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "gauge",
+      "title": "Wear Level on SATA Devices",
+      "description": "Media_Wearout_Indicator (normalized, 100 = pristine), displayed as 100 - value so it reads as percentage worn. Matches the visual semantic of the community dashboard's NVMe wear panel.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "orange", "value": 85 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "100 - smartctl_device_attribute{attribute_name=\"Media_Wearout_Indicator\",device=\"sda\",attribute_value_type=\"value\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Raw SMART wear attributes (debug)",
+      "description": "Side-by-side view of every wear-related attribute the SATA SSDs expose. Use this if you want to see Workld_Media_Wear_Indic on the Intel drive (workload-relative wear; differs slightly from the lifetime Media_Wearout_Indicator).",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 10, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "left" }
+        }
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "smartctl_device_attribute{attribute_name=~\"Media_Wearout_Indicator|Workld_Media_Wear_Indic\",device=\"sda\",attribute_value_type=\"value\"}",
+          "legendFormat": "{{instance}} {{attribute_name}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

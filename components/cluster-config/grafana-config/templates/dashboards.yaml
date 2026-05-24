@@ -156,6 +156,25 @@ spec:
   grafanaCom:
     id: 22604
 ---
+# SATA wear — custom companion to the community SMARTctl dashboard above.
+# That dashboard's SATA wear panel hard-codes the Samsung/Crucial attribute
+# name (Wear_Leveling_Count), which neither our Toshiba THNSF8400CCSE nor
+# Intel SSDSC2BX400G4 boot drives report. This panel uses
+# Media_Wearout_Indicator which both vendors do expose.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: sata-wear
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: metrics
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  json: |
+{{ .Files.Get "files/sata-wear.json" | indent 4 }}
+---
 # mktxp — MikroTik RouterOS exporter (akpw/mktxp)
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
