@@ -318,3 +318,32 @@ pre-flight applies (the runbook in CLAUDE.md).
 If the gain is <2W, the runtime knobs alone are noise and the savings
 must be coming from C-states / pstate-mode — go straight to sub-step B
 (or abandon the lever if the cost is too high).
+
+### 2026-05-24 — Sub-step A check at +24h: no measurable gain
+
+| Window | Avg power | Δ vs 2026-05-23 baseline |
+|---|---|---|
+| Pre-apply 24h | 102.88 W | (baseline) |
+| Post-apply 24h | **104.23 W** | **+1.35 W** |
+| Post-apply 12h | 104.35 W | +1.47 W |
+| Post-apply 1h  | 105.66 W | +2.78 W |
+
+Stddev on the baseline was 5.81 W, so +1.35 W is within noise (~0.23σ).
+Not a clear regression, but definitely not the ≥5W gain that would have
+triggered sub-step B.
+
+Hypothesis (matches the prediction in the earlier section): on the
+RHCOS default **`intel_pstate=active`** driver, the `powersave` governor
+is essentially decorative — intel_pstate makes its own race-to-idle
+decisions internally and the governor knob doesn't translate to real
+freq scaling. The actual savings live in **`intel_pstate=passive`**,
+which is the boot arg in sub-step B.
+
+Decision: hold sub-step A in place, recheck again on 2026-05-25
+(another 24h of data). If the average is still within noise of the
+102.88 W baseline, accept that the runtime-only knobs do nothing on
+this hardware/driver combo and either:
+- ship sub-step B in full (boot args via MachineConfig + the documented
+  cascade pre-flight), or
+- skip the CPU lever entirely and move to the next-biggest lever
+  (Mac mini Jellyfin decommission, ~10-30W, no cluster risk).
