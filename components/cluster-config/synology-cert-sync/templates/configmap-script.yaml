@@ -65,6 +65,45 @@ data:
     fi
     echo "DSM login OK."
 
+    # ---- Look up existing cert by description --------------------------
+    # Without this, each run creates a new DSM cert entry — duplicates
+    # accumulate. With it: pass `id=<existing>` on the import call, DSM
+    # replaces in place. Result is one cert in DSM regardless of how many
+    # times this CronJob has run.
+    list_resp=$(curl -sk -b "${cookie_jar}" \
+      --data-urlencode "api=SYNO.Core.Certificate.CRT" \
+      --data-urlencode "method=list" \
+      --data-urlencode "version=1" \
+      "${BASE}/webapi/entry.cgi")
+
+    EXISTING_ID=$(printf '%s' "$list_resp" | python3 -c '
+    import json, sys, os
+    desc = os.environ["DSM_CERT_DESC"]
+    try:
+        d = json.load(sys.stdin)
+        certs = d.get("data", {}).get("certificates", [])
+        matches = [c for c in certs if c.get("desc") == desc]
+        if matches:
+            defaults = [c for c in matches if c.get("is_default")]
+            chosen = (defaults[0] if defaults else matches[0])
+            print(chosen.get("id", ""))
+            if len(matches) > 1:
+                sys.stderr.write(
+                    f"WARN: {len(matches)} certs with desc={desc!r}; "
+                    f"replacing id={chosen.get(\"id\")}, leaving {len(matches)-1} duplicate(s) alone.\n"
+                )
+        else:
+            sys.stderr.write("INFO: no existing cert with matching desc; creating new.\n")
+    except Exception as e:
+        sys.stderr.write(f"WARN: failed to parse cert list ({e!r}); creating new.\n")
+    ')
+
+    if [ -n "${EXISTING_ID}" ]; then
+      echo "Replacing existing DSM cert id=${EXISTING_ID}."
+    else
+      echo "Creating new DSM cert entry."
+    fi
+
     # ---- Build cert + chain --------------------------------------------
     # cert-manager bundles leaf + intermediate in tls.crt (no separate
     # ca.crt). DSM wants them SPLIT:
@@ -86,14 +125,14 @@ data:
     fi
 
     # ---- Upload via multipart POST -------------------------------------
-    # `id=""` is required by some DSM API versions to signal "create new"
-    # vs "replace existing by id". `as_default=true` makes this the cert
-    # served by Web Station / File Station / DSM admin port.
+    # `id=<EXISTING_ID>` if found above → DSM replaces in place. Empty `id` →
+    # DSM creates a new entry. `as_default=true` preserves the service
+    # bindings already established for the cert with this `desc`.
     upload_resp=$(curl -sk -b "${cookie_jar}" \
       -F "api=SYNO.Core.Certificate" \
       -F "method=import" \
       -F "version=1" \
-      -F "id=" \
+      -F "id=${EXISTING_ID}" \
       -F "desc=${DSM_CERT_DESC}" \
       -F "as_default=true" \
       -F "key=@/tmp/key.pem" \
