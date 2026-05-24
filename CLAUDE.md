@@ -115,6 +115,7 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 
 - Migration from PNY CS1030 → PM9A1 completed 2026-05-07. Per-OSD `kv_commit_lat` dropped from ~95 ms (worn PNY lifetime) to ~3 ms (PM9A1). `BLUESTORE_SLOW_OP_ALERT` cleared and stays clear at the new hardware. Full chronology + bottleneck sweep in `blog/blog-rook-ceph-draft.md`.
 - For future drive purchases at this cluster scale, stay on PM9A1-class consumer NVMe — full PLP enterprise (Micron 7450 PRO etc.) is not justified by the workload. The bottleneck post-swap is replication-amplification at `size=3`, not per-drive fsync latency.
+- **BMH inventory is stale and cannot be refreshed on this cluster.** The OpenShift console's BareMetalHost "Disks" tab still shows the pre-swap PNY CS1030 drives because BMHs are in `state=unmanaged` with `externallyProvisioned=true` — Metal3 doesn't manage them (no BMC credentials configured), so it can't trigger re-inspection. The `inspect.metal3.io` annotation is a no-op in this state. The `smartctl-exporter` dashboard + the `smartctl_device_*` Prometheus metrics are the **live** source of truth for current hardware. Nothing in ArgoCD, Ceph, or operator reconciliation reads the BMH `.status.hardware.storage`, so the staleness is purely cosmetic.
 
 ### Pools and pg_num
 
