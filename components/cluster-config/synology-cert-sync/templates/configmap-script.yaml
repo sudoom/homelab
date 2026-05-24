@@ -65,25 +65,35 @@ data:
     fi
     echo "DSM login OK."
 
-    # ---- Build chain (cert + intermediates) ----------------------------
-    # cert-manager stores the leaf in tls.crt and the chain in ca.crt
-    # (when the issuer provides intermediates). DSM wants:
-    #   - cert:       leaf only
+    # ---- Build cert + chain --------------------------------------------
+    # cert-manager bundles leaf + intermediate in tls.crt (no separate
+    # ca.crt). DSM wants them SPLIT:
+    #   - cert:       leaf only (first PEM block in tls.crt)
     #   - key:        private key
-    #   - inter_cert: chain of intermediates
-    cp /tls/tls.crt /tmp/cert.pem
+    #   - inter_cert: intermediate(s) (remaining PEM blocks)
+    # Sending the bundle in `cert` with an empty `inter_cert` returns
+    # DSM error 5512 ("Invalid certificate"). Splitting fixes it.
+    awk '
+      /-----BEGIN CERTIFICATE-----/ { blockno++ }
+      blockno == 1                  { print > "/tmp/cert.pem" }
+      blockno >= 2                  { print > "/tmp/chain.pem" }
+    ' /tls/tls.crt
     cp /tls/tls.key /tmp/key.pem
-    if [ -s /tls/ca.crt ]; then
-      cp /tls/ca.crt /tmp/chain.pem
-    else
-      : > /tmp/chain.pem
+
+    # Sanity check — empty chain would also trigger 5512 on some DSM versions
+    if [ ! -s /tmp/chain.pem ]; then
+      echo "WARN: no intermediate certs extracted from tls.crt — DSM may reject."
     fi
 
     # ---- Upload via multipart POST -------------------------------------
+    # `id=""` is required by some DSM API versions to signal "create new"
+    # vs "replace existing by id". `as_default=true` makes this the cert
+    # served by Web Station / File Station / DSM admin port.
     upload_resp=$(curl -sk -b "${cookie_jar}" \
       -F "api=SYNO.Core.Certificate" \
       -F "method=import" \
       -F "version=1" \
+      -F "id=" \
       -F "desc=${DSM_CERT_DESC}" \
       -F "as_default=true" \
       -F "key=@/tmp/key.pem" \
