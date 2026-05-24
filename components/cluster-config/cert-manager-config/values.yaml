@@ -32,3 +32,14 @@ certificates:
     secretName: api-cert-tls
     dnsNames:
       - "api.okd.sudops.pl"
+  # LAN-only zone (split-horizon: Technitium serves real A records on the
+  # LAN; Cloudflare doesn't carry any). DNS-01 challenge still works because
+  # the parent sudops.pl zone IS on Cloudflare and the API token has scope
+  # there. Consumed by the Synology cert-sync CronJob (Phase 3 of the
+  # homelab.sudops.pl rollout — see blog/blog-homelab-sudops-zone-draft.md).
+  - name: homelab-wildcard
+    namespace: cert-manager
+    secretName: homelab-wildcard-tls
+    dnsNames:
+      - "*.homelab.sudops.pl"
+      - "homelab.sudops.pl"
