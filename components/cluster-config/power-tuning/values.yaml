@@ -22,8 +22,11 @@ experimental:
   enabled: true
   priority: 20
   include: openshift-control-plane
-  matchLabel: power-tuning/profile
-  matchValue: experimental
+  # MCP role NTO's generated MachineConfig is labelled for. The matching
+  # MCP picks up the MC; all nodes in it get both the bootloader args
+  # and the runtime [cpu] knobs. All nodes here are in `master` (the
+  # `worker` MCP is empty on this 3-node control-plane+worker cluster).
+  mcpRole: master
   # Sub-step B: kernel boot args. Empty string disables the bootloader
   # section entirely (use this to roll back without deleting the chart).
   bootArgs: "intel_pstate=passive processor.max_cstate=9"

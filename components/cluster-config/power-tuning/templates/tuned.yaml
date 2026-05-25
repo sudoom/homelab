@@ -22,11 +22,21 @@ spec:
         cmdline_powersave={{ .Values.experimental.bootArgs }}
 {{- end }}
   recommend:
-    - match:
-        - label: {{ .Values.experimental.matchLabel }}
-          value: {{ .Values.experimental.matchValue }}
+    # `machineConfigLabels` (not `match`) is REQUIRED when the profile
+    # contains a [bootloader] section. NTO uses these labels to tag the
+    # MachineConfig it generates; the MCP whose `machineConfigSelector`
+    # matches will pick up the MC. With `match` (node-label scoping) NTO
+    # applies the runtime knobs per-node but never generates the MC, so
+    # the bootloader args silently do nothing — confirmed empirically
+    # 2026-05-25 (profile reconciled, no MC appeared, no reroll).
+    # Side effect: the runtime [cpu] knobs from sub-step A also apply
+    # to every node in the targeted MCP (all 3 here) rather than only
+    # node6. That's fine — the runtime knobs are a confirmed no-op on
+    # this hardware, and cluster-wide consistency is cleaner.
+    - machineConfigLabels:
+        machineconfiguration.openshift.io/role: {{ .Values.experimental.mcpRole }}
       # Priority lower than the cluster default (control-plane=30,
-      # node=40) so this wins on matching nodes.
+      # node=40) so this wins on the targeted nodes.
       priority: {{ .Values.experimental.priority }}
       profile: powersave-experimental
 {{- end }}
