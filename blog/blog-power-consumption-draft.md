@@ -386,3 +386,138 @@ race-to-idle decisions and the governor knob doesn't gate freq scaling.
 
 Recommendation: **option 2**. Highest deterministic savings, no MCO
 risk, no CPU-lever guesswork.
+
+## 2026-05-25 — Sub-step B shipped (intel_pstate=passive + max_cstate=9)
+
+User overrode the recommendation and picked option 1 (ship sub-step B
+in full). Rationale: the pool-wide bootloader change applies to all 3
+masters, so 3× per-node savings; if it works, the absolute number
+beats the Jellyfin decom option.
+
+### Chart shape
+
+Initial commit (`b22b65f`) added the `[bootloader]` section but used
+`recommend.match` (node-label scoping). NTO's behavior surprised us:
+the runtime profile updated on node6 (NTO log: `updated profile
+node6.okd.sudops.pl [powersave-experimental]`) but **no MachineConfig
+was generated**, no MCO event triggered. Reading the NTO docs more
+carefully — `match` scopes runtime profile assignment per-node;
+generating a MachineConfig requires `machineConfigLabels:` which tells
+NTO which MCP role to tag the MC for. Fixed in `80c7b03`:
+
+```yaml
+recommend:
+  - machineConfigLabels:
+      machineconfiguration.openshift.io/role: master
+    priority: 20
+    profile: powersave-experimental
+```
+
+Side effect: the runtime `[cpu]` knobs now apply to every node in
+`master` MCP (all 3 here), not just node6. Fine — sub-step A's 48h
+data confirmed those knobs are a no-op on this hardware anyway, and
+cluster-wide consistency is cleaner. The `power-tuning/profile=
+experimental` label on node6 is now unused (cosmetic cleanup TODO).
+
+### Pre-flight (cascade per CLAUDE.md)
+
+```bash
+# 1. Hold loki ingester PDB at MinAvailable=1 throughout
+oc -n openshift-operators-redhat scale deploy/loki-operator-controller-manager --replicas=0
+# 2. Drop router replicas so RGW anti-affinity has a viable node during drains
+oc -n openshift-ingress-operator patch ingresscontroller default --type=merge -p '{"spec":{"replicas":1}}'
+```
+
+### Rollout chronology
+
+| Time (UTC) | Event |
+|---|---|
+| 15:03:11 | Baseline: argocd on prior commit, MCP idle |
+| 15:03:53 | ArgoCD synced to `2568b46` (initial sub-step B); Tuned CR carries `[bootloader]` but `nto_mcs=0` |
+| 15:10–15:13 | Diagnosis: NTO log shows profile update but no MC; root cause = `match` vs `machineConfigLabels` |
+| 15:14:19 | ArgoCD synced to `80c7b03` (fix); `nto_mcs=1` — NTO generated the MC |
+| 15:14:40 | node4 cordoned (MCO drain start) |
+| 15:19:13 | node4 NotReady (rebooting with new kernel) |
+| 15:20:57 | node4 back updated; node5 cordoned |
+| 15:24:48 | node5 NotReady (rebooting) |
+| 15:26:53 | node5 back Ready |
+| 15:27:14 | node6 cordoned |
+| 15:32:34 | node6 NotReady (rebooting) |
+| 15:34:25 | **Reroll complete: `upd=3/3`, rendered config flipped `72361e71` → `52e93850`** |
+
+**Total wall time: 20 minutes.** Much faster than the 90-min estimate
+from the original framing. The 3-OSD cluster drains quickly because
+the OSD/mon on each node are topology-pinned and just terminate (don't
+reschedule); the small Loki/Grafana footprint reschedules within
+seconds.
+
+### Post-cascade
+
+```bash
+# Restart all 3 ovnkube-node pods (intended one-at-a-time; my loop's
+# `oc wait` didn't actually wait so it ended up batch-deleting. No
+# data plane impact — OVS lives on the host, not in the pod. All 3
+# pods came back 8/8 Ready within ~40s.)
+oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node
+
+# Restart repo-server (clears the post-cascade `argocd=` empty
+# polling observation we saw during node6's reboot window)
+oc -n openshift-gitops delete pod -l app.kubernetes.io/name=openshift-gitops-repo-server
+```
+
+### Verification — all 3 nodes
+
+```
+cmdline:           intel_pstate=passive processor.max_cstate=9
+scaling_driver:    intel_cpufreq         ← KEY: passive mode marker
+scaling_governor:  powersave
+energy_perf_bias:  15                    ← max powersave
+max_cstate:        9                     (both intel_idle + processor modules)
+```
+
+`scaling_driver=intel_cpufreq` (not `intel_pstate`) is the proof that
+the driver flipped to passive mode. In passive mode, the cpufreq
+governor (`powersave`) actually drives frequency decisions instead of
+intel_pstate's internal "race to idle" logic. This is what sub-step A
+couldn't deliver alone.
+
+### Restore
+
+```bash
+oc -n openshift-operators-redhat scale deploy/loki-operator-controller-manager --replicas=1
+oc -n openshift-ingress-operator patch ingresscontroller default --type=merge -p '{"spec":{"replicas":2}}'
+# Run pdb-override CronJob to re-patch loki-ingester PDB → MinAvailable=1
+oc -n openshift-logging create job --from=cronjob/loki-pdb-override pdb-restore-$(date +%s)
+```
+
+Quirk noted: the first pdb-override job ran BEFORE loki-operator had
+finished reconciling MinAvailable back to 2 → "already at 1, nothing
+to do." Triggered a second job ~30s later, ingester PDB went 2 → 1
+correctly. Worth tightening: the CronJob is on a 5-min schedule, so
+the next regular run would have caught it anyway; manual re-trigger
+just for sub-minute closure.
+
+### Cascade-side regressions: **none observed**
+
+This is unusual — every prior network-stack change documented in
+CLAUDE.md (IPsec, OVN-K pod MTU, jumbo NIC) caused the pod↔host-
+network cascade and required ovnkube-node + repo-server restarts to
+recover. This rollout: the brief `argocd=` empty field during node6
+reboot was the only symptom, and even that cleared on its own before
+we ran the post-cascade restarts. Hypothesis: a pure kernel-cmdline
+bootloader change doesn't touch NetworkManager/OVS state at all, so
+the cascade trigger we documented (NetworkManager/OVS gateway-state
+reload) doesn't fire. We still ran the ovnkube-node + repo-server
+restarts because CLAUDE.md says to; future cmdline-only changes could
+probably skip them and just verify after.
+
+### What's next: 24h measurement
+
+The new kernel cmdline is in effect cluster-wide from 2026-05-25 15:34
+UTC. First valid 24h-window comparison is 2026-05-26 15:34 UTC.
+Query: `avg_over_time(shelly_power_watts[24h])` against the pre-apply
+102.88 W baseline.
+
+Expected per blog: 5-15 W per node × 3 = 15-45 W cluster-wide if it
+works. If the gain is <5 W cluster-wide, the CPU lever is exhausted
+on this hardware and the next move is Mac mini Jellyfin decom.
