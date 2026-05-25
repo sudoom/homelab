@@ -538,9 +538,34 @@ at T+15 min after MCO complete.
 
 The new kernel cmdline is in effect cluster-wide from 2026-05-25 15:34
 UTC. First valid 24h-window comparison is 2026-05-26 15:34 UTC.
-Query: `avg_over_time(shelly_power_watts[24h])` against the pre-apply
-102.88 W baseline.
 
-Expected per blog: 5-15 W per node × 3 = 15-45 W cluster-wide if it
-works. If the gain is <5 W cluster-wide, the CPU lever is exhausted
-on this hardware and the next move is Mac mini Jellyfin decom.
+**Two instances, two signals:**
+
+| Instance | What it captures | Pre-B baseline | Source |
+|---|---|---|---|
+| `node6` | Single-node wall-socket plug (1 of 3 cluster nodes) | 102.88 W avg | Prometheus, 24h 2026-05-23 |
+| `rack`  | Full rack upstream of PDU (3 nodes + Mac mini + NAS + RPi + switch + router + drives) | 372.5 W avg (range 370–377.5) | Shelly web UI, 24h 2026-05-23→05-24 |
+
+The rack instance was wired in late (commit `65a8e97`) — its baseline
+is from the Shelly's built-in chart rather than Prometheus, but the
+post-apply value will be Prometheus-backed and the comparison is
+apples-to-apples once 24h of post-apply data has accumulated.
+
+**The rack signal is the primary decision driver.** A 5 W cluster-wide
+gain shows as ~1.3% on the rack (5/372.5) vs ~5% on the node6 plug
+alone (5/103, but only if savings happen to land on node6 — they
+won't necessarily). The rack number doesn't lie about denominator.
+
+Queries:
+```promql
+avg_over_time(shelly_power_watts{instance="rack"}[24h])   # primary
+avg_over_time(shelly_power_watts{instance="node6"}[24h])  # cross-check
+```
+
+Decision tree:
+- **≥15 W rack-wide gain** (~5W per node × 3 nodes) — lever working as
+  the original blog estimated; keep + optionally try `max_cstate=10`.
+- **5–15 W rack-wide gain** — partial win; keep + move to Lever 2
+  (Jellyfin decom) for incremental.
+- **<5 W rack-wide gain** — CPU lever exhausted on this hardware,
+  skip straight to Lever 2.
