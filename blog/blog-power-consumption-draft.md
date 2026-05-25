@@ -497,19 +497,42 @@ correctly. Worth tightening: the CronJob is on a 5-min schedule, so
 the next regular run would have caught it anyway; manual re-trigger
 just for sub-minute closure.
 
-### Cascade-side regressions: **none observed**
+### Cascade-side regressions: **one delayed hit**
 
-This is unusual — every prior network-stack change documented in
-CLAUDE.md (IPsec, OVN-K pod MTU, jumbo NIC) caused the pod↔host-
-network cascade and required ovnkube-node + repo-server restarts to
-recover. This rollout: the brief `argocd=` empty field during node6
-reboot was the only symptom, and even that cleared on its own before
-we ran the post-cascade restarts. Hypothesis: a pure kernel-cmdline
-bootloader change doesn't touch NetworkManager/OVS state at all, so
-the cascade trigger we documented (NetworkManager/OVS gateway-state
-reload) doesn't fire. We still ran the ovnkube-node + repo-server
-restarts because CLAUDE.md says to; future cmdline-only changes could
-probably skip them and just verify after.
+Initial impression after the post-cascade ovnkube-node + repo-server
+restarts was "no cascade observed" — every prior network-stack change
+(IPsec, OVN-K pod MTU, jumbo NIC) caused the documented pod↔host-
+network cascade and required immediate restarts; this one looked
+clean. **Wrong.** During the final sweep, `cert-manager-config`
+ArgoCD app surfaced as `Synced/Degraded`:
+
+```
+ClusterIssuer/letsencrypt-prod  Degraded
+  Failed to register ACME account: Get "https://acme-v02.api.letsencrypt.org/directory":
+  dial tcp 172.65.32.248:443: i/o timeout
+```
+
+Same cascade symptom — pod can't reach external IPs. The cert-manager
+controller pod was on node4 (rebooted at 15:14, ran for 18 min after),
+so it had been retrying its ACME registration the whole time without
+network being reachable from its pod-network IP. Restarting the
+controller pod cleared it immediately:
+
+```bash
+oc -n cert-manager delete pod -l app.kubernetes.io/name=cert-manager,app.kubernetes.io/component=controller
+# → new pod, fresh ACME registration: Ready=True reason=ACMEAccountRegistered
+```
+
+Updated takeaway: **pure cmdline bootloader changes DO trigger the
+cascade, just on a longer fuse**. ovnkube-node + repo-server restarts
+cover the immediately-visible apps (ArgoCD itself, anything talking
+to host-network etcd); apps with longer-fuse external-egress retries
+(cert-manager talking to LE, anything pulling from external registries
+mid-stride) need their own pod restart. Future runbook update: extend
+post-cascade restart sweep to include cert-manager controller plus
+any other pod observed to do external-network polling, or have a
+generic "restart any pod with EgressFailure-shaped conditions" pass
+at T+15 min after MCO complete.
 
 ### What's next: 24h measurement
 
