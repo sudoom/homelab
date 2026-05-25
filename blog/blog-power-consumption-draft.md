@@ -347,3 +347,42 @@ this hardware/driver combo and either:
   cascade pre-flight), or
 - skip the CPU lever entirely and move to the next-biggest lever
   (Mac mini Jellyfin decommission, ~10-30W, no cluster risk).
+
+### 2026-05-25 — Sub-step A check at +48h: still no measurable gain
+
+| Window | Avg power | Δ vs 2026-05-23 baseline |
+|---|---|---|
+| Pre-apply 24h        | 102.88 W | (baseline)        |
+| Post-apply 48h       | **103.92 W** | **+1.04 W** |
+| Post-apply 24h (rolling) | 103.58 W | +0.70 W       |
+| Post-apply 12h           | 103.29 W | +0.41 W       |
+| Post-apply 1h            | 105.12 W | +2.24 W       |
+
+Trend is flat. The 48h average is +1.04 W vs baseline — 0.18σ on the
+baseline's 5.81 W stddev, i.e. statistical noise. Direction is even
+slightly *up*, which rules out any "lever working but slow to manifest"
+scenario.
+
+**Decision: the runtime-only Tuned profile delivered nothing measurable
+on this hardware.** Confirms the hypothesis: with `intel_pstate=active`
+(RHCOS default), the `powersave` governor + `energy_perf_bias=power` +
+`min_perf_pct=0` are mostly cosmetic — intel_pstate makes its own
+race-to-idle decisions and the governor knob doesn't gate freq scaling.
+
+**Next-step options** (user pick):
+1. **Ship sub-step B** — `cmdline_powersave=intel_pstate=passive processor.max_cstate=9`
+   via a `[bootloader]` section in the same Tuned CR. This *does*
+   trigger a MachineConfig delta and a serial reroll of all 3 masters
+   (30-45 min degraded window + the full network-stack cascade
+   pre-flight from CLAUDE.md). High effort for an uncertain payoff —
+   the blog estimate is 5-15 W; could land anywhere.
+2. **Skip the CPU lever, decommission the Mac mini Jellyfin** —
+   estimated 10-30 W standing draw, no cluster risk, deterministic
+   savings. Migrate Jellyfin into the cluster (or onto the Synology)
+   and shut the Mac mini down.
+3. **Hold sub-step A in place, defer the rest** — the runtime profile
+   does no harm; leave it for the day RHCOS flips intel_pstate driver
+   default. Move to a non-power task.
+
+Recommendation: **option 2**. Highest deterministic savings, no MCO
+risk, no CPU-lever guesswork.
