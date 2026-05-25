@@ -1,22 +1,29 @@
-# Experimental runtime-only powersave profile.
-# Activates when a node carries the label `power-tuning/profile=experimental`.
-# As of 2026-05-23 only node6 carries this label (the node with the Shelly
-# wall-socket plug, so the savings are directly measurable).
+# Powersave profile applied at the cluster level.
 #
-# Knobs:
-#   - governor=powersave: schedutil/cpufreq picks the lowest acceptable
-#     freq for the current load instead of racing to high freqs.
-#   - energy_perf_bias=power: tells intel_pstate to favour idle/lower
-#     freqs in residency decisions.
-#   - min_perf_pct=0: removes the floor on intel_pstate's min performance
-#     percentage (default is 20 on RHCOS), allowing deeper idle.
+# Sub-step A (runtime knobs, shipped 2026-05-23) — kept for nodes
+# carrying the label `power-tuning/profile=experimental`. The 48h
+# measurement (2026-05-25) confirmed runtime knobs alone deliver no
+# measurable gain on this hardware/driver combo.
 #
-# All three knobs apply live via the tuned-daemon DaemonSet — no node
-# reboot, no MachineConfig delta. Reverting is a label removal (or
-# delete this chart): tuned re-applies the baseline.
+# Sub-step B (boot args, shipped 2026-05-25) — the real lever. Tuned's
+# `[bootloader]` section generates a MachineConfig with kernel cmdline
+# args. NTO-rendered MC is MCP-scoped, not node-scoped, so this applies
+# to every node in the `master` pool (all 3 on this cluster). Triggers
+# a serial reroll of all 3 masters; cascade pre-flight per CLAUDE.md.
+#
+# Knobs in B:
+#   - intel_pstate=passive: switch the driver to passive mode so the
+#     cpufreq governor (powersave from sub-step A) actually drives freq
+#     decisions instead of intel_pstate's internal logic.
+#   - processor.max_cstate=9: allow the CPU to enter the deepest idle
+#     C-states. RHCOS default may cap at C6; 9 gives access to C7/C8/C10
+#     on Intel server SKUs that expose them.
 experimental:
   enabled: true
   priority: 20
   include: openshift-control-plane
   matchLabel: power-tuning/profile
   matchValue: experimental
+  # Sub-step B: kernel boot args. Empty string disables the bootloader
+  # section entirely (use this to roll back without deleting the chart).
+  bootArgs: "intel_pstate=passive processor.max_cstate=9"

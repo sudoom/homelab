@@ -9,13 +9,18 @@ spec:
     - name: powersave-experimental
       data: |
         [main]
-        summary=Experimental powersave (runtime-only knobs) over {{ .Values.experimental.include }}
+        summary=Powersave (runtime + boot args) over {{ .Values.experimental.include }}
         include={{ .Values.experimental.include }}
 
         [cpu]
         governor=powersave
         energy_perf_bias=power
         min_perf_pct=0
+{{- if .Values.experimental.bootArgs }}
+
+        [bootloader]
+        cmdline_powersave={{ .Values.experimental.bootArgs }}
+{{- end }}
   recommend:
     - match:
         - label: {{ .Values.experimental.matchLabel }}
