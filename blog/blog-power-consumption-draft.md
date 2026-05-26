@@ -659,3 +659,645 @@ Lever 1 final result delivered ~10× the original estimate. The CPU%
 metric noise + throttling are accepted as the cost of doing business.
 If anything starts actually failing (CO degraded, probe failures,
 slow reconciles), the runtime fallback is `min_perf_pct` 16 → 30.
+
+---
+
+# Final post
+
+# Cutting 146W off a homelab idle baseline with the OKD Node Tuning Operator
+
+I run a 3-node bare-metal OKD 4.20 cluster at home. Three identical
+nodes (16-core Intel, 128 GiB RAM, NVMe-backed Ceph storage), plus a
+Synology NAS, a Mac mini, an RPi for DNS, a switch, a router, and a
+handful of drives. Everything is on 24/7 because the cluster runs my
+media stack, Loki, Prometheus, Grafana, Gatus, ArgoCD, all the usual
+homelab plumbing — but the load is single-digit CPU% the vast majority
+of the day.
+
+Electricity isn't free in Poland (1.263 zł/kWh as I write this), and a
+W of standing draw compounds to ~11 zł/year. Standing draw at idle was
+the obvious thing to cut once I had a way to measure it. This post is
+about how I did that, and the surprises along the way — including a
+~20-line Helm chart that ended up shaving **146 W off the rack draw
+(−39%) and saving an estimated 1,615 zł/year**, plus the tradeoff that
+makes the CPU dashboard look terrifying for no real reason.
+
+TL;DR: ship a Tuned profile with `intel_pstate=passive` +
+`processor.max_cstate=9` via the Node Tuning Operator. Make sure to
+use `recommend.machineConfigLabels` (not `recommend.match`) or the
+kernel cmdline change never gets applied. Expect Cluster CPU%
+dashboards to triple — that's the kernel's CPU accounting, not real
+load.
+
+## 1. Measure first
+
+Rule one of tuning: don't tune blind. Without a measurement loop you
+can't tell whether a change is a real win, a regression, or noise.
+
+Three options were on the table for telemetry: IPMI DCMI on the boards
+(if the BMCs expose `dcmi power reading`), a smart PDU with SNMP per
+outlet, or an in-line wall meter that I could scrape. I went with the
+third: a **Shelly Plus Plug S Gen3**, a ~120 zł wifi-attached plug
+that sits between the wall socket and whatever you want to measure.
+It exposes an HTTP RPC API on its LAN IP:
+
+```bash
+$ curl -s 'http://192.168.1.77/rpc/Switch.GetStatus?id=0'
+{
+  "id": 0, "source": "switch", "output": true,
+  "apower": 102.8, "voltage": 230.5, "current": 0.451,
+  "aenergy": {"total": 1234.5, ...},
+  "temperature": {"tC": 45.2, "tF": 113.4}
+}
+```
+
+That's clean JSON. There are several community Prometheus exporters
+for Shelly devices on GitHub, but I checked their READMEs and they
+were uniformly 0–2 stars, no tagged releases, `:latest` only, and
+mostly missing Gen 3 support. Not what I want sitting in the scrape
+path.
+
+Instead, I used the **`prometheus-community/json_exporter`** with the
+multi-target probe pattern (one Deployment, N plugs, each ServiceMonitor
+endpoint passes `target=<rpcUrl>` as a query param). Mature project,
+tagged v0.7.0 release, official `quay.io/prometheuscommunity/json-exporter`
+image. The whole chart is six templates and a `plugs:` list in values:
+
+```yaml
+plugs:
+  - instance: node6
+    rpcUrl: http://192.168.1.77/rpc/Switch.GetStatus?id=0
+  - instance: rack
+    rpcUrl: http://192.168.1.50/rpc/Switch.GetStatus?id=0
+```
+
+The trick worth calling out: by default Prometheus stamps
+`instance=<pod-ip>:7979` on every scraped series, which would collapse
+all plugs into one indistinguishable mess. Each `endpoint` in the
+ServiceMonitor needs an explicit relabel to override `instance` to
+something meaningful:
+
+```yaml
+relabelings:
+  - action: replace
+    sourceLabels: []
+    targetLabel: instance
+    replacement: "{{ .instance | quote }}"   # "node6" or "rack"
+```
+
+Five metrics come out of this: `shelly_power_watts`, `shelly_voltage_volts`,
+`shelly_current_amperes`, `shelly_energy_total_wh`, `shelly_temperature_celsius`,
+each labeled by `instance`. A Grafana dashboard with template variables
+on `label_values(shelly_power_watts, instance)` got me real-time draw,
+24h average, projected daily/monthly kWh, and projected cost in zł in
+about 20 minutes.
+
+I started with one plug on node6 (the node already on my "test
+everything here first" list). Later I added a second plug upstream of
+the rack PDU, which measures everything: 3 nodes + NAS + Mac mini +
+RPi + switch + router. That's the rack-level signal, and it matters —
+more on that in §6.
+
+## 2. The baseline
+
+24h of idle telemetry, captured 2026-05-22 → 2026-05-23 with no
+tuning changes applied yet:
+
+| Instance | avg | min | max | stddev | samples |
+|---|---:|---:|---:|---:|---:|
+| node6 | 102.88 W | 91.6 W | 158.5 W | 5.81 W | 2880 (100% coverage) |
+
+The max was a `rados bench` write spike from earlier Ceph work; the
+steady-state baseline was 100–105 W with low variance. That's the
+number to beat.
+
+Rack baseline came in a couple days later (the second plug was wired
+in mid-rollout). 24h captured from the Shelly's built-in web UI:
+
+| Instance | avg | min | max |
+|---|---:|---:|---:|
+| rack | 372.5 W | 370 W | 377.5 W |
+
+Stable. ~373 W rack continuous = **3,266 kWh/year × 1.263 zł = ~4,125
+zł/year just to run the homelab idle.**
+
+## 3. Sub-step A: the runtime knobs that did nothing
+
+The OKD Node Tuning Operator (NTO) is the right mechanism here: it
+manages Tuned profiles on each node, can scope by node label, applies
+runtime knobs without a reboot, and can also generate MachineConfigs
+for bootloader-level changes (we'll need that for sub-step B).
+
+First attempt: a Tuned CR with the runtime-only knobs. No
+`[bootloader]` section, so no MachineConfig, no reboot.
+
+```yaml
+apiVersion: tuned.openshift.io/v1
+kind: Tuned
+metadata:
+  name: powersave-experimental
+  namespace: openshift-cluster-node-tuning-operator
+spec:
+  profile:
+    - name: powersave-experimental
+      data: |
+        [main]
+        summary=Runtime powersave knobs
+        include=openshift-control-plane
+
+        [cpu]
+        governor=powersave
+        energy_perf_bias=power
+        min_perf_pct=0
+  recommend:
+    - match:
+        - label: power-tuning/profile
+          value: experimental
+      priority: 20
+      profile: powersave-experimental
+```
+
+The node label was set on node6 only via a separate `node-labels`
+chart. Tuned-daemon applied the profile within seconds, no reboot
+needed. On the node:
+
+```
+scaling_governor:                       powersave   ✓
+/cpu0/power/energy_perf_bias:           15          ✓  (max powersave)
+intel_pstate/min_perf_pct:              16          partial  (kernel clamped from 0)
+```
+
+The `min_perf_pct=0` request was clamped to 16 — that's the parent
+profile's floor showing through the kernel's enforcement. Acceptable
+on its own; the deeper savings were always supposed to come from
+sub-step B.
+
+Then waited 24h. And another 24.
+
+| Window | Avg power | Δ vs 102.88 W baseline |
+|---|---:|---:|
+| Post-apply 48h | 103.92 W | **+1.04 W** |
+| Post-apply 24h (rolling) | 103.58 W | +0.70 W |
+| Post-apply 12h | 103.29 W | +0.41 W |
+
+Nothing. 0.18σ on the baseline stddev = statistical noise, and the
+direction was even slightly *up*.
+
+The reason, in hindsight, is documented in the kernel's pstate driver
+source but I had to learn it the hard way: **on `intel_pstate=active`
+(RHCOS's default), the `powersave` governor is decorative.** In active
+mode, the `intel_pstate` driver makes its own frequency decisions
+internally based on the workload's measured CPU utilization; the
+cpufreq governor sitting on top of it is informational and doesn't
+actually drive `scaling_cur_freq`. Same story for `energy_perf_bias`
+on most CPU SKUs — it influences the driver's internal heuristics
+but doesn't open the deeper idle states by itself.
+
+This is a real and useful learning, even though it cost two days of
+soak time. The fix is to flip the driver into `passive` mode, which
+turns control back over to the cpufreq governor. That's a kernel
+cmdline argument, which means a MachineConfig, which means a node
+reboot. Which means sub-step B.
+
+## 4. Sub-step B: the lever that actually works
+
+The change is small:
+
+```ini
+[bootloader]
+cmdline_powersave=intel_pstate=passive processor.max_cstate=9
+```
+
+Two args:
+- `intel_pstate=passive` — load the driver in passive mode. The
+  cpufreq governor (`powersave`, set in sub-step A) now actually
+  drives `scaling_cur_freq`.
+- `processor.max_cstate=9` — lift the cap on the deepest idle states
+  the kernel will request. Default may cap at C6; allowing C7/C8/C10
+  on Intel server SKUs that expose them means a deep-idle core pulls
+  almost no power.
+
+NTO generates a MachineConfig with these kernel args. MCO renders the
+new master pool config, then serially drains, reboots, and rejoins
+each node in the pool. On a 3-OSD no-drain Ceph cluster like mine
+this is a degraded-window event — every prior MCO-class change took
+30–45 minutes per node and required a pre-flight cascade runbook to
+avoid cluster outages. So I scheduled this with headroom.
+
+### 4a. The screw-up: `match` vs `machineConfigLabels`
+
+I shipped the chart change. ArgoCD synced, the Tuned CR updated, NTO
+log showed:
+
+```
+controller.go:740 updated profile node6.okd.sudops.pl [powersave-experimental] (deferred=never)
+```
+
+Good — profile assignment updated. Now waited for the MachineConfig
+to appear and the reroll to start.
+
+It didn't.
+
+Five minutes, ten minutes, no MachineConfig. `oc get mc | grep -i nto`
+returned the same two pre-existing MCs that have been there for 41
+days. `oc get mcp master` showed `Updated=True, Updating=False`. The
+Tuned CR had the `[bootloader]` block, NTO had reconciled it onto
+node6, but no MachineConfig was generated and no reroll happened.
+
+After re-reading the NTO docs more carefully:
+
+> For profile-matching that requires generating a MachineConfig, you
+> must use `machineConfigLabels` instead of `match`.
+
+The `recommend.match` block I'd used scopes which nodes get the
+runtime profile assigned — by node label, evaluated per-node. That
+works for runtime knobs (`[cpu]`, `[disk]`, `[net]`). But for
+`[bootloader]`, NTO doesn't know which MCP role to tag the generated
+MachineConfig with. Without `machineConfigLabels`, it just... doesn't
+generate one. Silently. No error, no warning in the operator log.
+
+The fix:
+
+```yaml
+recommend:
+  - machineConfigLabels:
+      machineconfiguration.openshift.io/role: master
+    priority: 20
+    profile: powersave-experimental
+```
+
+This tells NTO to label the generated MC as `role=master`. The master
+MCP's `machineConfigSelector` matches that label and picks the MC up.
+
+Side effect: `machineConfigLabels` also drives Tuned profile assignment
+based on MCP membership, not node label. So the runtime `[cpu]` knobs
+from sub-step A now apply to **every node in the master MCP** — all 3
+in my case — rather than just node6. Fine: sub-step A is a no-op on
+this hardware anyway, and cluster-wide consistency is cleaner. The
+`power-tuning/profile=experimental` node label became dead weight and
+got removed.
+
+Second push. NTO generated the MC within ~30 seconds. MCO started
+the reroll.
+
+### 4b. The reroll, faster than expected
+
+Pre-flight per my cluster's runbook (the cascade pre-flight is a long
+story documented in `CLAUDE.md` from prior MCO events; short version:
+on a 3-node cluster certain workload patterns deadlock node drains):
+
+```bash
+# Hold loki ingester PDB at MinAvailable=1 (LokiStack hardcodes it to 2
+# at this size class, with 2 replicas → 0 disruption budget → drains
+# hang forever). I have a CronJob that re-patches it every 5 min, but
+# loki-operator would reconcile it back during drain; scaling the
+# operator to 0 keeps the override in place.
+oc -n openshift-operators-redhat scale deploy/loki-operator-controller-manager --replicas=0
+
+# Drop router replicas. With 2 routers + RGW podAntiAffinity, every
+# node-drain strands RGW because the only RGW-eligible node is the
+# one being drained. One router = always a viable node.
+oc -n openshift-ingress-operator patch ingresscontroller default \
+  --type=merge -p '{"spec":{"replicas":1}}'
+```
+
+Then committed the Tuned fix. ArgoCD synced, NTO generated the MC,
+MCO started. I tailed `oc get mcp master -w` in a Monitor:
+
+| Time (UTC) | Event |
+|---|---|
+| 15:14:19 | NTO generated the MC |
+| 15:14:40 | node4 cordoned (drain start) |
+| 15:19:13 | node4 NotReady (rebooting) |
+| 15:20:57 | node4 back updated; node5 cordoned |
+| 15:24:48 | node5 NotReady |
+| 15:26:53 | node5 back Ready |
+| 15:27:14 | node6 cordoned |
+| 15:32:34 | node6 NotReady |
+| 15:34:25 | **Reroll complete — all 3 updated** |
+
+**20 minutes total** for all 3 nodes. I'd budgeted 90. The 3-OSD
+cluster drains quickly because the OSD and mon on each node are
+topology-pinned (`failureDomain: host`) and just terminate when their
+node drains — they don't reschedule onto a different node, so there's
+no "wait for the OSD to come up elsewhere" delay. The smaller
+observability footprint (Loki, Grafana, Prometheus) reschedules
+within seconds.
+
+### 4c. The cascade victim: cert-manager
+
+After the reroll completed, I ran the cascade post-flight:
+
+```bash
+# Restart all 3 ovnkube-node pods. Cross-node host-network can break
+# between pod-network pods and host-network IPs after any change that
+# causes NetworkManager / OVS to reload gateway state. Restart restores
+# it.
+oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node
+
+# Restart repo-server. Resolves the "DeadlineExceeded on manifest
+# generation" symptom that always lingers after the cluster has been
+# thrashed.
+oc -n openshift-gitops delete pod -l app.kubernetes.io/name=openshift-gitops-repo-server
+```
+
+ArgoCD apps came back. Everything looked clean. I started writing
+"cascade-side regressions: none observed" in the blog draft —
+unusually quiet, given that every prior network-stack change had
+caused the cascade and required the immediate restart sweep.
+
+Then the final session sweep before signing off picked up:
+
+```
+ClusterIssuer/letsencrypt-prod  Degraded
+  Failed to register ACME account: Get "https://acme-v02.api.letsencrypt.org/directory":
+  dial tcp 172.65.32.248:443: i/o timeout
+```
+
+cert-manager's controller pod had been on node4 (rebooted at 15:14,
+running for 18 minutes after that on the new kernel). It was retrying
+its ACME registration the whole time without external network being
+reachable from its pod-network IP. Standard cascade symptom, but
+cert-manager only polls LE on a long fuse (every 5–10 min during
+initial bootstrap, then every few hours), so it hadn't shown up in
+the short window where I was doing the post-cascade sweep.
+
+Restart fixed it:
+
+```bash
+oc -n cert-manager delete pod -l app.kubernetes.io/name=cert-manager,app.kubernetes.io/component=controller
+# → new pod, fresh ACME registration: Ready=True reason=ACMEAccountRegistered
+```
+
+Updated runbook takeaway: **pure cmdline bootloader changes still
+trigger the cascade, just on a longer fuse.** The standard
+ovnkube-node + repo-server restarts cover the immediately-visible
+apps (ArgoCD itself, anything talking to host-network etcd). Apps
+with longer-fuse external-egress retries — cert-manager talking to
+Let's Encrypt, anything pulling from external image registries
+mid-stride — need their own restart, and if you don't see them in
+the immediate sweep, you'll see them in the next session's sweep
+sitting `Synced/Degraded`. I extended my CLAUDE.md cascade runbook
+to include a generic "T+10–15 min after MCO complete: sweep for any
+ArgoCD app stuck on `dial tcp ... i/o timeout`-shaped conditions"
+pass.
+
+### 4d. Verification
+
+On each node, via `oc debug node/<name>`:
+
+```
+$ cat /proc/cmdline | tr ' ' '\n' | grep -E 'intel_pstate|max_cstate'
+intel_pstate=passive
+processor.max_cstate=9
+
+$ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver
+intel_cpufreq                          ← KEY: passive mode marker
+
+$ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+powersave
+
+$ cat /sys/devices/system/cpu/cpu0/power/energy_perf_bias
+15                                     ← max powersave (set by sub-step A's runtime knobs)
+
+$ cat /sys/module/intel_idle/parameters/max_cstate
+9
+$ cat /sys/module/processor/parameters/max_cstate
+9
+
+$ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq
+799915                                 ← cores parked at 800 MHz = scaling_min, deeply idle
+```
+
+The `scaling_driver=intel_cpufreq` is the key tell. In active mode it
+would read `intel_pstate`. `intel_cpufreq` is the passive-mode driver
+that exposes the governor knob as the real frequency selector. Cores
+parked at 800 MHz min while the cluster is otherwise idle = the
+governor doing its job.
+
+## 5. The result
+
+I'd planned to wait for a clean 24h post-apply window before calling
+the result official. Twelve hours in I pulled the average just to see
+the direction:
+
+```promql
+avg_over_time(shelly_power_watts[12h])
+```
+
+| Instance | Pre-B baseline | 12h post-B | Δ | Δ% |
+|---|---:|---:|---:|---:|
+| node6 | 102.88 W | **40.57 W** | **−62.31 W** | **−60.6%** |
+| rack | 372.50 W | **226.07 W** | **−146.43 W** | **−39.3%** |
+
+The 24h reading the next morning was essentially identical (rack
+227.55 W, node6 40.66 W). Result is stable.
+
+This is **way above** what I'd estimated. The original blog estimate
+for "CPU power tuning" was 5–15 W per node, so 15–45 W cluster-wide.
+What I actually got is ~10× that.
+
+A few sanity checks because the numbers were suspicious:
+- node6's individual draw dropped by 62 W. No external change (Mac
+  mini unplugged, NAS spin-down, etc.) could move node6 in isolation
+  by that much. It's the lever.
+- `scaling_cur_freq` on all 3 nodes was sitting at 800 MHz during the
+  reading. Not bursting.
+- Both Shelly plugs reported simultaneously to Prometheus, so it's
+  not a scrape glitch on one device.
+- Same draw a day later, in different time-of-day conditions.
+
+Cost back-of-envelope:
+
+```
+146 W × 8760 h/yr ÷ 1000 = 1279 kWh/year saved
+1279 kWh × 1.263 zł/kWh = 1,615 zł/year saved
+```
+
+That's roughly €375 / $400 / year, recurring, in exchange for a
+20-line Helm chart change and a 20-minute MCO reroll.
+
+## 6. The tradeoff: CPU utilization tripled (and what to do about it)
+
+Within a few hours of the apply, the Cluster CPU Utilization dashboard
+in OKD's built-in monitoring told me the cluster had gone from 8%
+idle to 30%. Per-node:
+
+| Node | Pre-B steady | Post-B steady |
+|---|---:|---:|
+| node4 | ~3% | ~35–40% |
+| node5 | ~3% | ~40% |
+| node6 | ~13% | ~16% |
+
+(node6 was already running the runtime profile from sub-step A, which
+had inflated its CPU% slightly without affecting power; that's why
+its jump is smaller.)
+
+If you only look at the dashboard, this looks like a regression: 4×
+more "load" for the same workload. It's not real load. It's a
+measurement artifact of how the kernel computes CPU%.
+
+CPU utilization in Linux is `busy_ticks / total_ticks`. `total_ticks`
+is wall time; `busy_ticks` is wall time minus idle time. When the
+cores are parked at 800 MHz instead of bursting to 3+ GHz, the same
+amount of work takes ~4× longer in wall time — `busy_ticks` grows
+proportionally, while `total_ticks` doesn't change, so apparent
+utilization quadruples. The cores are doing the same work; they're
+just doing it slower while running cooler and pulling less power.
+
+The dashboards don't lie, exactly — they're showing what the kernel
+reports. The kernel is correctly reporting that cores spent more
+wall-time busy. But "busy at 800 MHz" and "busy at 3 GHz" are very
+different things for power, and the dashboard doesn't have that
+context.
+
+### CPU throttling: real, but not breaking anything
+
+The dashboard noise is one thing; what would actually matter is if
+pods started failing because they couldn't get enough CPU. That's a
+real risk — workloads with CPU limits that were set under fast cores
+will now hit those limits faster, since the same task burns 4× more
+CPU-time at the lower clock.
+
+I checked the top throttling pods (5m rate, % of CPU periods throttled):
+
+```promql
+topk(10, sum by (namespace, pod) (rate(container_cpu_cfs_throttled_periods_total[5m]))
+       / sum by (namespace, pod) (rate(container_cpu_cfs_periods_total[5m])))
+```
+
+| Pod | Throttle % |
+|---|---:|
+| smartctl-exporter (×3 DaemonSet) | 72–81% |
+| nmstate-cert-manager | 78% |
+| mikrotik-exporter | 48% |
+| nmstate-handler (×3) | 8–16% |
+| openshift-gitops-server | 5% |
+
+These pods are throttling heavily. But: nothing is actually failing.
+No `CrashLoopBackOff`. No degraded `ClusterOperator`. ovnkube-control-plane
+stable. All workloads functional. They just spend 50–80% of their
+100ms CPU periods waiting on the cgroup throttle to release.
+
+The reason none of this manifests as a user-visible failure: the
+work itself is small. smartctl-exporter scrapes every 30 seconds;
+even at 80% throttled, an individual scrape that "should" take 200ms
+of CPU now takes ~1 second of wall time — still well within the 30s
+budget. mikrotik-exporter is similar. nmstate-cert-manager handles
+TLS for the nmstate operator's webhook; throttled, sure, but the
+operator isn't latency-critical.
+
+The root cause is that CPU limits in Kubernetes are an anti-pattern
+in general — they cause exactly this kind of throttling under load,
+and they don't provide any guarantees beyond what `requests` already
+does. But the affected pods are all from upstream charts (the
+smartctl-exporter community chart, the nmstate operator, etc.) and
+changing those would mean per-chart maintenance.
+
+### Decision: accept the tradeoff
+
+I looked at five options:
+
+1. **Raise `min_perf_pct`** from 16 → 30 or 50. Sets a floor on
+   intel_pstate's minimum performance percentage so deeply-idle cores
+   are less idle and wake faster. Runtime knob — no MCO event. Easiest
+   to reverse.
+2. **Switch governor `powersave` → `schedutil`.** `schedutil` uses the
+   scheduler's load signal to ramp frequency up faster. Smaller power
+   savings, less throttling.
+3. **Drop `max_cstate=9` → `max_cstate=6`.** Allow only shallow idle
+   states. Wake latency drops from ~100µs to ~5µs at the cost of C7+
+   residency. MCO event required.
+4. **Remove CPU limits on the throttled pods.** Correct k8s answer,
+   but means per-chart edits to vendored upstream charts.
+5. **Accept as-is.** Nothing is broken; savings are huge.
+
+I went with **option 5**. Net evaluation: a few observability pods
+are mathematically throttled but functionally fine, vs ~1,600 zł/year
+in real savings. The CPU% dashboard noise is annoying but I know
+what's causing it. If anything *actually* starts failing, option 1
+is a 1-line Helm-values change and a runtime push — no reboot, no
+risk.
+
+I also added a data-driven Grafana annotation to the `shelly-power`
+dashboard:
+
+```json
+"annotations": {
+  "list": [{
+    "name": "Node reboots (MCO events)",
+    "datasource": { "type": "prometheus", "uid": "${datasource}" },
+    "enable": true,
+    "iconColor": "rgb(255, 96, 96)",
+    "target": {
+      "expr": "changes(node_boot_time_seconds[5m]) > 0",
+      "queryType": "", "refId": "Anno", "step": "1m"
+    },
+    "titleFormat": "Node reboot",
+    "tagKeys": "instance",
+    "textFormat": "{{instance}}"
+  }]
+}
+```
+
+It fires on `changes(node_boot_time_seconds[5m]) > 0`, which means any
+node reboot — yesterday's reroll shows as 3 vertical markers on the
+power chart, one per node. Every future MCO event auto-annotates the
+same way. Cheap and durable.
+
+## 7. What I'd do differently
+
+A few things in retrospect:
+
+- **Read the NTO `recommend` docs before assuming `match` does what
+  you want.** The silent failure mode (profile assigned, no MC
+  generated, no log line indicating anything is wrong) cost me ~15
+  minutes of "why isn't the reroll happening". `machineConfigLabels`
+  is the right field for bootloader changes; `match` is for runtime-
+  only profiles.
+- **Sub-step A taught me something even though it did nothing.** The
+  48h of "no measurable change" was useful — it confirmed the
+  hypothesis that the governor knob alone is decorative on
+  `intel_pstate=active`, and that the real lever is the driver-mode
+  flip. If I'd skipped sub-step A and gone straight to B, I'd have
+  bundled two changes and been unable to attribute the result.
+- **Wait for the long-fuse cascade victims.** The cert-manager hit
+  was 18 minutes post-reroll, well after the standard post-cascade
+  restarts. Worth adding a T+15 min "check for `dial tcp ... i/o
+  timeout`-shaped conditions" sweep to the runbook. Done.
+- **Add the rack-level plug earlier.** I only added it after sub-step
+  B was already applied. The node6-only plug captures ~1/3 of total
+  draw, which is fine for relative measurement but undersells the
+  absolute number — if I'd had the rack plug from day 1, the
+  decision-tree thresholds would have been calibrated against the
+  rack signal from the start, and "what's the actual cost savings"
+  would have been answerable on day 1 instead of after 24h of
+  Prometheus-backed rack data.
+- **Don't expect the dashboards to make sense.** CPU% accounting is
+  load-time-relative, not work-relative. Frequency-scaled cores break
+  the assumption every utilization metric is built on. The dashboards
+  aren't lying; they're just not measuring what intuition expects.
+
+## 8. What's next
+
+Lever 1 is closed. The original blog draft had three more levers
+queued:
+
+- **Mac mini Jellyfin decommission** (estimated 10–30 W). Was the
+  recommended fallback if Lever 1 underdelivered. Now demoted to
+  "incremental if motivated" — Lever 1 over-delivered enough that
+  this isn't on the critical path.
+- **NVMe APST tuning** (1–2 W per drive). Still queued; PM9A1 supports
+  it, default kernel state may not be using deep PS states.
+- **PCIe ASPM + 10G NIC EEE.** Couple of watts each, free if supported.
+
+But honestly, after a 39% rack-wide reduction, the marginal value of
+these is small. The new baseline (227 W rack) is roughly where I'd
+hoped to end up after all four levers. The remaining levers stay
+queued as low-priority hygiene items.
+
+The chart, dashboard JSON, and the cascade runbook update are all in
+the [homelab GitOps repo](https://github.com/sudoom/homelab) under
+`components/cluster-config/power-tuning/`,
+`components/cluster-config/grafana-config/files/shelly-power.json`,
+and `CLAUDE.md` respectively.
