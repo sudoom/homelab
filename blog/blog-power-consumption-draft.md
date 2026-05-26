@@ -569,3 +569,93 @@ Decision tree:
   (Jellyfin decom) for incremental.
 - **<5 W rack-wide gain** — CPU lever exhausted on this hardware,
   skip straight to Lever 2.
+
+## 2026-05-26 — Sub-step B at +19h: Lever 1 SHIPPED, decision finalized
+
+Pulled `avg_over_time(shelly_power_watts[12h])` (cleanest post-apply
+window for both plugs) and called the result early — the data is so
+emphatic that waiting for the formal 24h window adds nothing.
+
+| Instance | Baseline | 12h post-B | Δ | Δ% |
+|---|---:|---:|---:|---:|
+| node6 | 102.88 W | **40.57 W** | **−62.31 W** | **−60.6%** |
+| rack  | 372.50 W | **226.07 W** | **−146.43 W** | **−39.3%** |
+
+Result is **way above** the original 5-15 W/node estimate. Cost
+back-of-envelope: 146 W × 8760 h/yr ÷ 1000 × 1.263 zł/kWh = **~1,615
+zł/year saved**.
+
+The numbers are real, not a measurement artifact. Sanity checks:
+- node6's individual reading dropped by 62 W (−60%) — too big to be
+  explained by anything other than the lever (no external change
+  could move node6 alone by that much)
+- `scaling_cur_freq` on all 3 nodes confirmed at 800 MHz (= scaling_min)
+  during the readings — cores in deep idle, not bursting
+- Both plugs reported simultaneously, so it's not a scrape glitch on
+  one device
+
+### The tradeoff: CPU utilization tripled
+
+Per-instance CPU% baseline → post-apply on the OCP "Cluster CPU
+Utilization" dashboard:
+
+| Node | Pre-B steady | Post-B steady |
+|---|---:|---:|
+| node4 | ~3% | **~35-40%** |
+| node5 | ~3% | **~40%** |
+| node6 | ~13% | **~16%** (smaller jump — sub-step A already inflated baseline) |
+
+This is a **measurement artifact**, not real load. The kernel's CPU%
+accounting is `busy_ticks / total_ticks`. With cores parked at 800 MHz,
+the same work takes ~4× longer in wall-time, so `busy_ticks` grows
+proportionally while `total_ticks` is unchanged — apparent utilization
+goes up despite identical workload.
+
+### CPU throttling: real, but not breaking anything
+
+Top throttling pods (5m rate, % of CPU periods throttled):
+
+| Pod | Throttle % |
+|---|---:|
+| smartctl-exporter (×3) | 72-81% |
+| nmstate-cert-manager | 78% |
+| mikrotik-exporter | 48% |
+| nmstate-handler (×3) | 8-16% |
+| openshift-gitops-server | 5% |
+
+These pods aren't failing — work still completes within scrape budgets,
+no CrashLoopBackOff, no CO degraded, ovnkube-control-plane stable.
+They just spend 50-80% of their 100ms CPU periods waiting on the
+cgroup throttle to release. Root cause: CPU limits set under
+`intel_pstate=active` assumed 3+ GHz cores; now tasks run at 800 MHz
+so the same work consumes 4× more CPU-time and hits the limit.
+
+### Decision: accept and move on (option 5)
+
+Tuning options considered:
+1. Raise `min_perf_pct` 16 → 30-50 (runtime knob, less aggressive idle)
+2. Switch governor `powersave` → `schedutil` (faster ramp-up)
+3. Drop `max_cstate=9` → `max_cstate=6` (shallower idle, faster wake)
+4. Remove CPU limits on throttled pods (proper k8s fix)
+5. **Accept as-is, document** ← user pick
+
+Rationale: nothing is broken, savings are huge, throttling is
+observable but not impactful. Falling back to option 1 (raise
+`min_perf_pct`) is a runtime knob that can be A/B-tested any time
+without an MCO event, so the safety net is cheap. Lever 2 (Mac mini
+Jellyfin decom, 10-30 W) is no longer the headline action; it
+becomes an "if we ever want even more" item.
+
+### Annotation in dashboards
+
+Added a data-driven Grafana annotation to `shelly-power` dashboard
+that fires on `changes(node_boot_time_seconds[5m]) > 0` — auto-marks
+any node reboot (yesterday's reroll shows as 3 markers, one per
+node), and future MCO events get the same treatment for free.
+
+### Status: closed (with a known monitorable)
+
+Lever 1 final result delivered ~10× the original estimate. The CPU%
+metric noise + throttling are accepted as the cost of doing business.
+If anything starts actually failing (CO degraded, probe failures,
+slow reconciles), the runtime fallback is `min_perf_pct` 16 → 30.

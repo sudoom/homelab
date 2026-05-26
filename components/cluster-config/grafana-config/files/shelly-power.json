@@ -15,6 +15,26 @@
       "pluginName": "Prometheus"
     }
   ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Node reboots (MCO events)",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "enable": true,
+        "iconColor": "rgb(255, 96, 96)",
+        "target": {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "changes(node_boot_time_seconds[5m]) > 0",
+          "queryType": "",
+          "refId": "Anno",
+          "step": "1m"
+        },
+        "titleFormat": "Node reboot",
+        "tagKeys": "instance",
+        "textFormat": "{{instance}}"
+      }
+    ]
+  },
   "templating": {
     "list": [
       {
