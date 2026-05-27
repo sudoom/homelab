@@ -1,0 +1,29 @@
+namespace: zot
+domain: apps.okd.sudops.pl
+host: zot
+
+image:
+  repository: ghcr.io/project-zot/zot-linux-amd64
+  tag: v2.1.17
+
+storage:
+  storageClassName: ceph-nvme-block
+  size: 50Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+# Upstream registries to pull-through cache. Zot iterates these in
+# order on a cache miss; first match wins. Order matters for paths
+# that exist in multiple upstreams (rare, e.g. `library/*` is
+# docker-only). Phase B will pin per-source mapping via
+# ImageDigestMirrorSet so this iteration becomes deterministic.
+syncRegistries:
+  - https://quay.io
+  - https://registry-1.docker.io
+  - https://ghcr.io
+  - https://registry.k8s.io

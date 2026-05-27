@@ -1,0 +1,5 @@
+apiVersion: v2
+name: zot
+description: Zot OCI registry — pull-through cache for upstream image registries
+version: 1.0.0
+type: application

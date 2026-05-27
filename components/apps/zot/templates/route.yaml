@@ -1,0 +1,15 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: zot
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.host }}.{{ .Values.domain }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: zot
