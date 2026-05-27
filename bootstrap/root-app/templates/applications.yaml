@@ -37,5 +37,19 @@ spec:
         duration: 5s
         factor: 2
         maxDuration: 3m
+  # Ignore the fields the StatefulSet controller defaults onto
+  # `volumeClaimTemplates[]` without claiming managedFields ownership —
+  # ServerSideDiff still flags them as drift otherwise (upstream
+  # argoproj/argo-cd#9123). Legit changes to storageClassName / size /
+  # accessModes are NOT in this list and still surface as drift.
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - '.spec.volumeClaimTemplates[].apiVersion'
+        - '.spec.volumeClaimTemplates[].kind'
+        - '.spec.volumeClaimTemplates[].metadata.creationTimestamp'
+        - '.spec.volumeClaimTemplates[].spec.volumeMode'
+        - '.spec.volumeClaimTemplates[].status'
 {{- end }}
 {{- end }}
