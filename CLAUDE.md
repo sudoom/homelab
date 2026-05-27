@@ -149,26 +149,7 @@ The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is s
 - **`operation already exists` mount lock can outlive plugin restarts.** When `NodeStageVolume` hangs (e.g., kRBD waiting on an unreachable OSD), the rbd-plugin's in-memory operation tracker locks the volume ID. Every retry returns `rpc error: code = Aborted desc = an operation with the given Volume ID ... already exists`. Restarting the rbd-nodeplugin pod usually clears the lock — but if the underlying cause (network unreachable, msgr2 silent drop) persists, the new plugin will hit the same hang on the first retry. **Don't chase the lock; chase what's keeping the first call stuck.** Check `/sys/bus/rbd/devices/` on the host via `oc debug node/<name>` — empty = the hang is in plugin userspace, not kernel.
 - **Stuck VolumeAttachments need finalizer force-clear.** When CSI mount fails repeatedly, VAs accumulate with the `external-attacher/rook-ceph-rbd-csi-ceph-com` finalizer and `attached: true` even though no mount succeeded. If the PV is also gone (e.g., test PVC deleted), normal `oc delete` hangs forever. Unstick: `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. Same pattern can affect `rook-ceph-mon-endpoints` ConfigMap / `rook-ceph-mon` Secret after teardown — same force-clear works.
 - **Orphan Released PVs block the csi-provisioner cluster-wide.** When CSI's `DeleteVolume` for a PV fails (e.g., earlier mount regression left an unfinishable rbd image), the PV stays `Released` and the provisioner re-attempts deletion forever. CSI plugins serialize operations cluster-wide, so a stuck DeleteVolume blocks every new CreateVolume too — symptom looks identical to the "operation already exists" lock from the per-volume tracker, but the cause is a different volume's stuck deletion. **Before applying any test PVC, check for orphan Released PVs**: `oc get pv | grep Released`. Clear them with `oc patch pv <name> -p '{"metadata":{"finalizers":[]}}' --type=merge && oc delete pv <name>`. Also clear any stale VolumeAttachments to the now-gone PV. The "stuck VA + stuck PV" duo can survive plugin restarts, controlplugin restarts, and operator restarts — must be manually cleared.
-- **Fresh-bootstrap workaround: `client.csi-rbd-provisioner.<gen>` is missing its `osd` cap.** On every fresh `CephCluster` bootstrap, Rook 1.19.5 generates the CSI provisioner user (`client.csi-rbd-provisioner.1` on first bootstrap; suffix increments on key rotation) with **only** `mgr "allow rw"` + `mon "profile rbd, allow command 'osd blocklist'"` — no `osd` cap. CSI then authenticates fine but every `CreateVolume` hangs on the first RADOS op → gRPC `DeadlineExceeded → CANCEL` → "operation already exists" lock storm. The companion users (`csi-rbd-node.1`, both cephfs users) get correct caps; only the RBD provisioner template is buggy. **Confirmed Rook bug, filed locally at `bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md`.** Until upstream lands a fix, every fresh bootstrap needs this three-step workaround before the first PVC will bind:
-  ```
-  # 1. Fix the caps
-  oc -n rook-ceph exec deploy/rook-ceph-tools -- \
-    ceph auth caps client.csi-rbd-provisioner.1 \
-      mgr "allow rw" \
-      mon "profile rbd, allow command 'osd blocklist'" \
-      osd "profile rbd"
-
-  # 2. If a PVC was already attempted, clear orphan CSI omap state.
-  # The failed CreateVolume leaves a half-written entry that re-triggers
-  # "operation already exists" even after plugin restart.
-  oc -n rook-ceph exec deploy/rook-ceph-tools -- rados -p nvme-replicated listomapkeys csi.volumes.default
-  # → for each csi.volume.pvc-<uuid> key, read its value (the orphan UUID),
-  #   then `rmomapkey` + `rm csi.volume.<orphan-uuid>`.
-
-  # 3. Restart the rbd-csi ctrlplugin to clear the in-memory tracker
-  oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin
-  ```
-  After all three steps, the queued PVC binds within seconds. If a key rotation later creates `csi-rbd-provisioner.2`/`.3`, the same `ceph auth caps` needs to be re-run against the new generation suffix.
+- **Fresh-bootstrap workaround: `client.csi-rbd-provisioner.<gen>` is missing its `osd` cap** (Rook 1.19.5 bug). The provisioner user gets `mgr "allow rw"` + `mon "profile rbd, ..."` but no `osd` cap → every `CreateVolume` hangs on the first RADOS op → "operation already exists" lock storm. **Auto-fixed on each bootstrap by** `components/storage/rook-ceph-cluster/templates/csi-rbd-provisioner-caps-fix.yaml`. Bug filed at `bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md`; full chronology + manual recovery steps in `blog/blog-rook-ceph-draft.md`. If a key rotation creates `csi-rbd-provisioner.2`/`.3`, the same `ceph auth caps … osd "profile rbd"` needs to be re-run against the new generation suffix.
 
 ### Network provider — `host` (with required `addressRanges`)
 
@@ -205,73 +186,47 @@ If a future change to `addressRanges` is needed, daemons need a rollout restart 
 After the cleanup-jobs complete (verify with `oc -n rook-ceph get jobs | grep cluster-cleanup-job` — all `Complete`), run the full sweep:
 
 ```bash
-# 1. Rook's mon-tracking state (causes "detecting the ceph image version" hang on next bootstrap):
+# 1. Rook mon-tracking state (else next bootstrap hangs at "detecting the ceph image version"):
 oc -n rook-ceph delete cm rook-ceph-mon-endpoints rook-ceph-pdbstatemap --ignore-not-found
 oc -n rook-ceph delete secret rook-ceph-mon --ignore-not-found
-# These usually need finalizer force-clear because Rook's finalizer can't reconcile against a deleted CR:
 oc -n rook-ceph patch cm rook-ceph-mon-endpoints -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 oc -n rook-ceph patch secret rook-ceph-mon -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 
-# 2. Bootstrap Jobs from previous cluster (immutable; ArgoCD can't re-apply, blocks sync):
-# Every bootstrap Job in the rook-ceph-cluster chart is fair game here. As of
-# 2026-05-15 there are TWO: rbd-trash-purge-schedule-bootstrap +
-# csi-rbd-provisioner-caps-fix-bootstrap. Add new ones as the chart grows.
-# The error you see if you skip this:
-#   error when replacing "...": Job.batch "<name>" is invalid:
-#   [spec.selector: Required value, spec.template.metadata.labels: Invalid value: ]
+# 2. Bootstrap Jobs from prior cluster (immutable; ArgoCD can't re-apply, blocks sync).
+# Every bootstrap Job in components/storage/rook-ceph-cluster/templates/*.yaml is fair game.
+# Current list as of 2026-05-15: rbd-trash-purge-schedule-bootstrap, csi-rbd-provisioner-caps-fix-bootstrap.
 oc -n rook-ceph delete job rbd-trash-purge-schedule-bootstrap --ignore-not-found
 oc -n rook-ceph delete job csi-rbd-provisioner-caps-fix-bootstrap --ignore-not-found
-oc -n rook-ceph delete jobs -l rook-ceph-cleanup --ignore-not-found  # any cluster-cleanup-job-* still around
+oc -n rook-ceph delete jobs -l rook-ceph-cleanup --ignore-not-found
 
-# 2b. Stuck Ceph CR finalizers — Rook's finalizer can't reconcile its own
-# delete after the operator stops watching (which happens once the CR enters
-# `Deleting` phase or once the operator pod is gone). Force-clear:
+# 2b. Stuck Ceph CR finalizers — Rook can't reconcile its own delete once the CR is in Deleting:
 oc -n rook-ceph patch cephcluster rook-ceph -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 oc -n rook-ceph patch cephobjectstore ceph-objectstore -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 for bp in $(oc -n rook-ceph get cephblockpool -o name 2>/dev/null); do
   oc -n rook-ceph patch $bp -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 done
 
-# 2c. Stale ObjectBuckets from prior cluster — these are cluster-scoped
-# (objectbuckets.objectbucket.io) and survive RGW teardown. On a fresh
-# bootstrap, the new OBC reconcile fails with:
-#   "obc \"<name>\" bucketName has changed compared to ob \"<obc-ns-name>\""
-# Operator log on rook-ceph-operator. Loki, OADP, CNPG OBCs stay Pending
-# forever. Force-clear:
+# 2c. Stale cluster-scoped ObjectBuckets + their OBCs (else new OBC stays Pending with "bucketName has changed compared to ob"):
 for ob in $(oc get objectbucket -o name 2>/dev/null); do
   oc patch $ob -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
   oc delete $ob --ignore-not-found 2>/dev/null
 done
-# IMPORTANT: if the OBC also already exists (e.g., ArgoCD recreated it
-# between the OB delete and now), the bucket-provisioner will recreate
-# a new OB but record the OLD OBC's UID in its claimRef — perpetual
-# mismatch loop. Delete the OBC too in the same step:
-for obc in $(oc get obc -A --no-headers 2>/dev/null | awk '{print "-n "$1" "$2}'); do
-  : # The for-loop construction above is wrong for namespaced OBC,
-    # so handle the specific OBC names you know about (the Helm
-    # charts in this repo create: logging-stack/loki, oadp/oadp once
-    # OADP ships, etc.). Pattern per OBC:
-done
+# Plus each known OBC by name (Helm charts in this repo create: logging-stack/loki, oadp/oadp once shipped):
 oc -n openshift-logging patch obc loki -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 oc -n openshift-logging delete obc loki --ignore-not-found 2>/dev/null
-# Then ArgoCD re-creates the OBC + the bucket-provisioner creates a
-# fresh OB, UIDs match, OBC reaches Bound on the next reconcile.
 
-# 2d. Stale clientprofiles.csi.ceph.io — blocks rook-ceph namespace
-# termination on operator chart removal. Symptom in ns status:
-#   "Some resources are remaining: clientprofiles.csi.ceph.io has 1 resource instances"
-# Force-clear:
+# 2d. Stale clientprofiles.csi.ceph.io (else rook-ceph namespace stuck Terminating):
 for cp in $(oc -n rook-ceph get clientprofiles.csi.ceph.io -o name 2>/dev/null); do
   oc -n rook-ceph patch $cp -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 done
 
-# 3. Orphan PVs (Released or Failed status) — block csi-provisioner cluster-wide:
+# 3. Orphan Released PVs (block csi-provisioner cluster-wide):
 for PV in $(oc get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' | grep ceph-nvme); do
   oc patch pv $PV -p '{"metadata":{"finalizers":[]}}' --type=merge
   oc delete pv $PV --ignore-not-found
 done
 
-# 4. Orphan VolumeAttachments referencing now-gone PVs:
+# 4. Orphan VolumeAttachments:
 for VA in $(oc get volumeattachment -o name); do
   oc patch $VA -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
 done
@@ -279,13 +234,13 @@ done
 # 5. Test-namespace PVCs still around from prior runs:
 oc -n default get pvc 2>/dev/null | awk 'NR>1 && $4=="ceph-nvme-block" {print $1}' | xargs -r -I {} oc -n default patch pvc {} -p '{"metadata":{"finalizers":[]}}' --type=merge
 
-# 6. CSI plugin in-memory state — kill all 6 plugin pods, fresh start (operator recreates):
+# 6. CSI plugin in-memory state — bounce all 6 plugin pods (operator recreates):
 oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-nodeplugin --wait=false
 oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin --wait=false
 oc -n rook-ceph delete pod -l app=rook-ceph.cephfs.csi.ceph.com-nodeplugin --wait=false
 oc -n rook-ceph delete pod -l app=rook-ceph.cephfs.csi.ceph.com-ctrlplugin --wait=false
 
-# 7. Bounce the rook-operator so it reconciles from a truly clean slate:
+# 7. Bounce the rook-operator for a fully clean reconcile slate:
 oc -n rook-ceph delete pod -l app=rook-ceph-operator
 ```
 
@@ -413,37 +368,32 @@ Why this matters: the csi-provisioner serializes operations cluster-wide. A stuc
 
 ### Pre-flight for any network-stack change (MCO reroll OR nmstate-only)
 
-Anything that changes `MachineConfig` content (directly or transitively via `Network/cluster`, `KubeletConfig`, `APIServer/cluster.spec.encryption`, etc.) triggers a serial reboot of all 3 masters. On this 3-OSD no-drain cluster that's a 30-45 min degraded window per attempt with multiple compounding failure modes. **Audit the change for transitive MachineConfig generation before applying** — render the operator's expected MC and diff it against current. Specific gotchas surfaced 2026-05-20:
+Full chronology + per-incident detail: `blog/blog-security-hardening-draft.md`.
 
-- **OVN-K `Network/cluster` IPsec mode change DOES trigger an MCO reroll** (kernel modules + NetworkManager IPsec service install). The CR field looks small; the MachineConfig delivery is what costs you.
-- **OVN-K MTU change does NOT (empirically, 2026-05-21).** Setting `defaultNetwork.ovnKubernetesConfig.mtu` (with or without the documented `spec.migration.mtu.{network,machine}` declare/clear dance) produces operator-side MC reconciles, but the resulting rendered MC converges to the SAME `rendered-master-…` name the cluster was on pre-change. The MCO events fire but cycle nodes without delivering any actual MachineConfig delta. MTU is a runtime-only knob (OVN-K reconfigures the geneve interface MTU directly). For future OVN-K MTU changes, consider `oc patch network.operator/cluster …mtu` directly without the migration field — verify on a smaller cluster first.
-- **PDBs with `MinAvailable: N` where current replicas == N block ALL voluntary evictions.** The `logging-loki-ingester` PDB has MinAvailable=2 hardcoded in LokiStack; we run 2 replicas → 0 disruption budget → MCO drain stuck forever. The LokiStack CRD does NOT expose PDB tunables. Before any MCO event, verify `oc get pdb -A` ALLOWED DISRUPTIONS column has at least 1 for every pool — if not, fix that first or accept the manual force-delete-pod workaround during drain.
-- **RGW + router anti-affinity contention on a 3-node cluster.** Routers default to 2 replicas with anti-affinity; RGW has `requiredDuringSchedulingIgnoredDuringExecution` against routers. When 2 routers occupy 2 nodes, only 1 node is router-free for RGW. If that node is the one being drained, RGW becomes unschedulable cluster-wide → Loki S3 puts fail → ingester readiness loops. Either scale routers to 1 pre-MCO-event or accept the cascade.
-- **Cross-node host-network can break between mismatched-MC nodes during IPsec rollouts.** Empirically observed 2026-05-20: `openshift-apiserver` on the post-IPsec-reboot node couldn't reach etcd on host-network IPs (`192.168.1.{7,9}:2379`) of the still-old-MC nodes. Root cause TBD; do not re-attempt IPsec without diagnosing this.
-
-If a MachineConfig-class change is unavoidable, schedule it with 2+ hour headroom, not after-hours. Storage chaos compounds with MCO chaos rapidly.
-
-**Pre-flight runbook for any network-stack change** (added 2026-05-21; **expanded scope confirmed** by the storage-MTU jumbo-frame rollout the same day):
-
-**Scope clarification**: the original framing was "MCO event runbook". The 2026-05-21 jumbo-frame rollout proved this is too narrow — that change had **zero MachineConfig artifacts** (nmstate applied `mtu: 9000` in-place on `enp1s0f0np0` + `ceph-shim`, no rendered-master delta) but **still triggered the full pod→host-network cascade** (etcd-operator + authentication CO + ArgoCD repo-server all unable to reach host-network IPs of other nodes, requiring rolling `ovnkube-node` restart). The cascade triggers on any change that causes NetworkManager / OVS to reload gateway state, including:
-
-- IPsec mode flip on `Network/cluster` (MachineConfig delta — confirmed 2026-05-20)
-- OVN-K pod-overlay MTU change via `Network/cluster.spec.migration.mtu` (operator-side MC churn even when final MC is identical — confirmed 2026-05-21)
-- nmstate NNCP applying ANY interface change including MTU-only (no MachineConfig at all — confirmed 2026-05-21 jumbo)
+**Scope** — the cascade triggers on any change that reloads NetworkManager / OVS gateway state, not just MachineConfig events:
+- IPsec mode flip on `Network/cluster` (MC delta)
+- OVN-K pod-overlay MTU change (operator-side MC churn even when final MC is identical)
+- nmstate NNCP applying any interface change incl. MTU-only (no MC at all)
 - Probably any future `Network/cluster` mutation, NNCP, multus NAD change
 
-Run the runbook below for any of these, not just for MachineConfig-class events.
+**Cluster-shape gotchas to remember**:
+- **`MinAvailable: N` PDB with replicas == N blocks ALL voluntary evictions.** LokiStack hardcodes ingester `MinAvailable=2` with 2 replicas → 0 disruption budget → drain hangs forever. CRD doesn't expose PDB tunables. Pre-flight: `oc get pdb -A`, ALLOWED DISRUPTIONS ≥ 1 everywhere.
+- **RGW + router anti-affinity on 3 nodes**: 2 routers + RGW `required` anti-affinity → only 1 router-free node for RGW. Drain that node → RGW unschedulable → Loki S3 puts fail → ingester readiness loops.
+- **Cross-node host-network breakage between mismatched-MC nodes during IPsec rollouts** (observed 2026-05-20, root cause TBD). Don't re-attempt IPsec without diagnosing.
+- **Storage chaos compounds with MCO chaos rapidly.** Schedule with 2+ hour headroom.
 
-1. Scale `openshift-operators-redhat/loki-operator-controller-manager` to 0. The `loki-pdb-override` 5-min CronJob loses the race against operator reconciles during drain, blocking eviction; scaling the operator to 0 holds the PDB at `MinAvailable: 1` throughout.
-2. Scale `openshift-ingress-operator` `IngressController/default` to `replicas: 1`. With 2 routers + RGW anti-affinity, every node-drain stranddes RGW. Reducing to 1 router ensures RGW always has a target node.
-3. Apply the change. Monitor MCP master with `oc get mcp master -w` (if MachineConfig-class) OR `oc get nncp` (if nmstate-class).
-4. **During the rollout**, watch for stuck VolumeAttachments via `oc get volumeattachment | awk '$5=="true" && /node[X]/'` — RBD VAs frequently stay bound to the previous node after pod move. Force-clear via `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. (For nmstate-only changes where nothing reschedules, this step is usually a no-op.)
-5. **After the change settles**, restart all 3 `ovnkube-node` pods one at a time (`oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node`). Pod-to-host-network egress breaks across any of these network-stack changes; restart restores it. Symptom: ArgoCD apps show `sync=Unknown` because repo-server can't reach github.com (`dial tcp 140.82.121.x:22: connect: connection timed out`); etcd CO degrades (`EtcdMembersAvailable: 1 of 3 members are available`) even though etcd itself is healthy — the etcd-operator is on the pod network and can't reach host-network IPs.
-6. Restart `openshift-gitops` repo-server pod (`oc -n openshift-gitops delete pod -l app.kubernetes.io/name=openshift-gitops-repo-server`). Resolves the `DeadlineExceeded` on manifest generation that always lingers after the cluster has been thrashed.
-6b. **Sweep for long-fuse external-egress retriers.** Pods that poll external endpoints on schedules longer than the cascade window (cert-manager controller → LE ACME, anything pulling from external image registries, anything calling out to Cloudflare etc.) keep retrying with stale connections and don't recover when egress restores. Symptom: ArgoCD app shows `Synced/Degraded` 10-20 min after MCO complete; condition message contains `dial tcp ...: i/o timeout` or `EgressFailure`-shaped wording. Fix: restart the pod. Known one as of 2026-05-25: `oc -n cert-manager delete pod -l app.kubernetes.io/name=cert-manager,app.kubernetes.io/component=controller`. Run this pass at T+10-15 min after MCO settles. Critical for bootloader-cmdline-only changes (those don't trigger the early-symptom cascade, so cert-manager may be the only victim and is easy to miss in the final sweep).
-7. Restore: scale `loki-operator` back to 1, `IngressController` back to 2, trigger one-shot run of `loki-pdb-override` CronJob to re-patch PDB if loki-operator has reconciled it.
+**Pre-flight runbook** (run for any of the trigger shapes above):
 
-Skipping steps 5-6 re-trips the cascade — observed 2026-05-20 (IPsec), 2026-05-21 (OVN-K pod MTU), 2026-05-21 (storage-NIC nmstate MTU). Skipping step 6b leaves cert-manager in a degraded loop — observed 2026-05-25 (Tuned bootloader cmdline change); cert-manager hit it 18 min after MCO complete and would have stayed broken until the next renewal attempt timed out.
+1. Scale `openshift-operators-redhat/loki-operator-controller-manager` → 0. The 5-min `loki-pdb-override` CronJob loses the race against operator reconciles; scaling the operator to 0 holds the PDB at `MinAvailable: 1` throughout.
+2. Scale `openshift-ingress-operator` `IngressController/default` replicas → 1. Ensures RGW always has a target node.
+3. Apply the change. Monitor `oc get mcp master -w` (MC-class) OR `oc get nncp` (nmstate-class).
+4. **During the rollout**, watch for stuck VolumeAttachments (`oc get volumeattachment | awk '$5=="true"'`) and force-clear with `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. RBD VAs frequently stay bound to the previous node after pod move.
+5. **After the change settles**, restart all 3 `ovnkube-node` pods one at a time (`oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node`). Pod→host-network egress breaks; restart restores it. Symptom: ArgoCD `sync=Unknown` (repo-server can't reach github.com), etcd CO degrades (`EtcdMembersAvailable: 1 of 3`) though etcd itself is healthy.
+6. Restart `openshift-gitops` repo-server pod (`oc -n openshift-gitops delete pod -l app.kubernetes.io/name=openshift-gitops-repo-server`). Clears the `DeadlineExceeded` on manifest generation.
+6b. **Sweep for long-fuse external-egress retriers** at T+10-15 min. Pods polling external endpoints on schedules longer than the cascade window (cert-manager → LE ACME, anything calling Cloudflare, etc.) keep retrying with stale connections and don't recover. Symptom: ArgoCD app `Synced/Degraded` with `dial tcp ...: i/o timeout` in conditions. Known one: `oc -n cert-manager delete pod -l app.kubernetes.io/name=cert-manager,app.kubernetes.io/component=controller`. Critical for cmdline-only changes (early-symptom cascade is silent there).
+7. Restore: scale `loki-operator` back to 1, `IngressController` back to 2, trigger `loki-pdb-override` CronJob one-shot if needed.
+
+Skipping 5-6 re-trips the cascade; skipping 6b leaves cert-manager in a degraded loop until the next renewal attempt times out.
 
 ## Guardrails — do not do these
 
