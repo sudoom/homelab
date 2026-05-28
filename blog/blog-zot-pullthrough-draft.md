@@ -108,24 +108,69 @@ podman pull zot.apps.okd.sudops.pl/library/alpine:latest
 curl -s https://zot.apps.okd.sudops.pl/v2/_catalog | jq .
 ```
 
-## Phase B preparation notes (not yet shipped)
+## 2026-05-28 — Phase B shipped (IDMS+ITMS, MCO event)
 
-When scheduling Phase B:
-1. Confirm Zot has been up for >1 day with no restarts and PVC headroom OK.
-2. Confirm there are no other queued MCO-event-class changes.
-3. Run the full pre-flight cascade per CLAUDE.md "Pre-flight for any network-stack change":
-   - `loki-operator` → 0
-   - `IngressController/default` replicas → 1
-   - Apply the IDMS/ITMS manifests (this is the trigger)
-   - `oc get mcp master -w` until rolled
-   - Post-cascade: restart all 3 `ovnkube-node` pods, repo-server, cert-manager controller
-   - Restore: scale `loki-operator` and `IngressController` back
-4. Validate by pulling a freshly-pulled image and confirming it appears in Zot's `_catalog`.
-5. Capture node-level pull times before/after to make the win measurable.
+Phase B ran cleanly. Total wall time pre-flight start → restore done was ~30 minutes; MCO master roll proper was 12 minutes (18:20 → 18:32 local).
+
+### Chart shipped
+
+`components/cluster-config/image-mirror-zot/` — Helm chart with `ImageDigestMirrorSet` + `ImageTagMirrorSet`. One entry per upstream registry (quay.io, docker.io, ghcr.io, registry.k8s.io), each mirrored to a single endpoint:
+
+```yaml
+- source: quay.io
+  mirrors:
+    - zot.apps.okd.sudops.pl
+  mirrorSourcePolicy: AllowContactingSource
+```
+
+`AllowContactingSource` is what makes the chicken-and-egg solvable — if Zot is down, the runtime falls back to upstream.
+
+### Timeline (local time, UTC+2)
+
+| Time | Event |
+|---|---|
+| 18:18 | Push `02af154` (Phase B chart enabled in root-app values) |
+| 18:18-18:20 | Pre-flight: `loki-operator` → 0, `IngressController/default` → 1, both settled |
+| 18:19 | ArgoCD synced IDMS+ITMS into cluster (CR `creationTimestamp: 16:19:40Z`) |
+| 18:20 | MCO rendered new MachineConfig, master MCP entered UPDATING=True |
+| 18:23 | node4 rolled (1/3) |
+| 18:27 | node5 rolled (2/3) |
+| 18:32 | node6 rolled (3/3) — new config `rendered-master-056bb4f5a72eddfd9c66a560eede2bd8` |
+| 18:32-18:33 | Post-cascade: rolled all 3 `ovnkube-node` pods (one at a time), restart repo-server |
+| 18:33 | Restore: `loki-operator` → 1, `IngressController` → 2 |
+| 18:47 | T+15 long-fuse sweep — clean. No cert-manager retry stuck, no app Degraded |
+
+### What got cached organically
+
+Within minutes of the rollout completing, `/v2/_catalog` showed:
+
+```json
+{"repositories":["okd/scos-content","okderators/catalog-index","openshift/origin-jenkins","operatorhubio/catalog"]}
+```
+
+All four are quay.io paths — confirms the IDMS rewrite is active for the cluster's own bootstrap and operator-catalog images. Subsequent pulls of any quay.io image will be cache hits.
+
+### What went well
+
+- **Pre-flight worked.** No Loki drain block. No RGW reschedule storm (only 1 router pre-set). No cross-node host-network breakage (consistent with the 2026-05-21 OVN-K MTU finding — non-IPsec MCO events don't trip that specific cascade).
+- **`mirrorSourcePolicy: AllowContactingSource` is doing its job.** Even during the brief windows when individual nodes were rebooting and Zot was momentarily unreachable from their kubelet, pulls succeeded by falling back to upstream.
+- **MCO event was fast.** 12 minutes for 3 masters; CLAUDE.md budgets 30-45 min, so we came in well under.
+- **T+15 sweep clean** — cert-manager survived. Bootloader-cmdline-class changes are where 6b matters most; an IDMS-class change has more general egress activity that keeps connections fresh.
+
+### What I'd do differently
+
+- **`ovnkube-node` serial restart loop was buggy.** My `until ... sort -u | tr` check exited the moment surviving pods showed 8/8 — didn't actually verify the replacement for the just-deleted pod was back. There were brief windows where two replacement pods were starting concurrently. No data plane impact (ovnkube-node is hostNetwork, OVS runs on the host), but the principle "one at a time" was violated. Fix for next time: count nodes with exactly N=3 pods in `Running` phase AND `READY=8/8`, not a unique value check.
+- **MCP `status.configuration.name` lags individual node progress.** The field only updates when the whole pool is converged. During rollout it shows the old name even as `updatedMachineCount` advances. Don't trust it as a per-node progress indicator — only as the final "all done" signal.
+
+### UI extension
+
+Phase A shipped only `extensions.search`. Followed Phase B with `9b96903` to also enable `extensions.ui` + `extensions.mgmt` — the latter required so the UI can hit the `/v2/_zot/ext/mgmt` config endpoint. Pod restart picked up the new ConfigMap via the `checksum/config` annotation pattern; PVC stayed bound, cache contents preserved.
+
+Browse the UI at `https://zot.apps.okd.sudops.pl/`. Shows the cached repos, tag inspection, layer details, search.
 
 ## Open items
 
-- Phase B (cluster-wide mirror wiring) — queued.
-- Trivy/CVE scanning — not added; appetite low, footprint cost high.
-- Off-cluster mirror for bootstrap images (etcd, kube-apiserver) — separate, bigger project.
-- RGW-S3-backed storage migration — only if PVC pressure shows up or a multi-replica need surfaces.
+- Trivy/CVE scanning — still not added; appetite low, footprint cost high.
+- Off-cluster mirror for bootstrap images (etcd, kube-apiserver) — separate, bigger project; only matters for cold-cluster restart scenarios.
+- RGW-S3-backed storage migration — only if PVC pressure shows up or a multi-replica need surfaces. 50 GiB on NVMe has plenty of headroom for the steady-state cache.
+- Capture pull-time before/after measurements at some point (no rush — the win is structural, not perf).
