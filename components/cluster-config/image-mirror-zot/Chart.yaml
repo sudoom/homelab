@@ -1,0 +1,5 @@
+apiVersion: v2
+name: image-mirror-zot
+description: Route cluster image pulls through Zot pull-through cache via IDMS + ITMS
+version: 1.0.0
+type: application

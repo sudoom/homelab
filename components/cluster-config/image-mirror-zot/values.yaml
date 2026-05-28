@@ -1,0 +1,18 @@
+# Cluster image-mirror config — routes pulls from the upstream registries
+# below through the Zot pull-through cache at `mirrorHost`. Applies via
+# MachineConfig (writes /etc/containers/registries.conf on each node) —
+# this manifest triggers a 3-master MCO reroll on first apply. Run the
+# cascade pre-flight (CLAUDE.md) before letting ArgoCD sync it.
+#
+# `mirrorSourcePolicy: AllowContactingSource` lets the runtime fall back
+# to the upstream registry if Zot is unreachable. This is what solves
+# the chicken-and-egg of Zot being self-hosted in the same cluster.
+
+mirrorHost: zot.apps.okd.sudops.pl
+mirrorSourcePolicy: AllowContactingSource
+
+sources:
+  - quay.io
+  - docker.io
+  - ghcr.io
+  - registry.k8s.io

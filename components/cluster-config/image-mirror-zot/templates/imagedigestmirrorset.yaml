@@ -1,0 +1,12 @@
+apiVersion: config.openshift.io/v1
+kind: ImageDigestMirrorSet
+metadata:
+  name: zot-pullthrough
+spec:
+  imageDigestMirrors:
+{{- range .Values.sources }}
+    - source: {{ . }}
+      mirrors:
+        - {{ $.Values.mirrorHost }}
+      mirrorSourcePolicy: {{ $.Values.mirrorSourcePolicy }}
+{{- end }}
