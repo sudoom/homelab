@@ -1,0 +1,33 @@
+apiVersion: oadp.openshift.io/v1alpha1
+kind: DataProtectionApplication
+metadata:
+  name: dpa
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  configuration:
+    velero:
+      defaultPlugins:
+        {{- range .Values.dpa.defaultPlugins }}
+        - {{ . }}
+        {{- end }}
+    nodeAgent:
+      enable: {{ .Values.dpa.nodeAgent.enable }}
+      uploaderType: {{ .Values.dpa.nodeAgent.uploaderType }}
+  backupLocations:
+    - name: default
+      velero:
+        provider: aws
+        default: true
+        objectStorage:
+          bucket: {{ .Values.obc.bucketName }}
+          prefix: velero
+        config:
+          region: us-east-1
+          profile: default
+          s3ForcePathStyle: "true"
+          s3Url: {{ .Values.s3Url }}
+        credential:
+          name: {{ .Values.secretTranslator.destinationSecretName }}
+          key: cloud

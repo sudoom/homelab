@@ -1,0 +1,4 @@
+namespace: openshift-adp
+channel: alpha
+source: okderators
+sourceNamespace: openshift-marketplace

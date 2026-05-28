@@ -1,0 +1,15 @@
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  schedule: {{ .Values.schedule.cron | quote }}
+  template:
+    ttl: {{ .Values.schedule.ttl }}
+    storageLocation: default
+    snapshotMoveData: {{ .Values.schedule.snapshotMoveData }}
+    defaultVolumesToFsBackup: false
+    includeClusterResources: true

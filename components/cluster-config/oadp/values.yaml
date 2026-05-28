@@ -1,0 +1,34 @@
+namespace: openshift-adp
+
+obc:
+  name: oadp
+  # Deterministic bucket name (vs generateBucketName) so the DPA can
+  # reference the bucket by name in its rendered manifest without a
+  # post-bind patch step.
+  bucketName: oadp
+
+secretTranslator:
+  image: quay.io/openshift/origin-cli:4.22
+  destinationSecretName: cloud-credentials
+
+# In-cluster S3 endpoint — bypasses Route + edge TLS, faster + reliable.
+s3Url: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
+
+dpa:
+  defaultPlugins:
+    - aws
+    - csi
+    - openshift
+  nodeAgent:
+    enable: true
+    uploaderType: kopia
+
+schedule:
+  # Daily at 02:00 UTC (= 04:00 local CEST in summer).
+  cron: "0 2 * * *"
+  # Retain 14 days of backups; older are GC'd by Velero.
+  ttl: "336h"
+  # CSI snapshot via the existing ceph-rbd-snapshot VolumeSnapshotClass;
+  # datamover uploads the snapshot to S3 so loss of Ceph still leaves
+  # restorable copies in RGW.
+  snapshotMoveData: true

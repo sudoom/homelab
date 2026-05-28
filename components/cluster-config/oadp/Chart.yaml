@@ -1,0 +1,5 @@
+apiVersion: v2
+name: oadp
+description: OADP DataProtectionApplication + RGW bucket plumbing + daily Schedule
+version: 1.0.0
+type: application

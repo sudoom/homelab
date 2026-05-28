@@ -79,6 +79,12 @@ applications:
     namespace: cnpg-system
     syncWave: "1"
 
+  oadp-operator:
+    enabled: true
+    path: components/operators/oadp
+    namespace: openshift-adp
+    syncWave: "1"
+
   loki-operator:
     enabled: true
     path: components/operators/loki-operator
@@ -134,6 +140,16 @@ applications:
     enabled: true
     path: components/cluster-config/image-mirror-zot
     namespace: default
+    syncWave: "5"
+
+  # OADP DataProtectionApplication + RGW bucket plumbing + daily
+  # Schedule. Daily backup at 02:00 UTC, 14d retention, CSI snapshot +
+  # datamover to RGW. Velero never modifies live state; restores are
+  # explicit operator actions.
+  oadp:
+    enabled: true
+    path: components/cluster-config/oadp
+    namespace: openshift-adp
     syncWave: "5"
 
   # Wave 3 — TLS consumers (depends on certs being issued)

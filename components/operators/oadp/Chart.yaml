@@ -1,0 +1,5 @@
+apiVersion: v2
+name: oadp-operator
+description: OADP — OpenShift API for Data Protection (Velero + nodeAgent) via OLM
+version: 1.0.0
+type: application
