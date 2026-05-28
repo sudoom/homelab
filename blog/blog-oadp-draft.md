@@ -114,9 +114,21 @@ RGW bucket inspection via toolbox (with explicit `--rgw-realm=ceph-objectstore -
 
 12 objects, ~423 KiB — Velero's standard per-backup metadata footprint (backup metadata, resource lists, logs, version info, several index files).
 
-## What's not done yet
+## Restore drill — 2026-05-28, passed end-to-end
 
-- **Restore drill.** Backups are only as useful as their restores. Need to take a known-good backup, delete a non-critical resource (e.g., a test ConfigMap), and verify the restore brings it back. Schedule this before relying on the backups for anything real.
+Ran a tight cycle the same session to verify backups actually round-trip content:
+
+| Step | Time | Result |
+|---|---|---|
+| Create ConfigMap `restore-drill-172715` (`test=value-172715`) in `default` | 19:27:15 | ok |
+| Backup `restore-drill-172715` (only ConfigMaps in `default`) | 19:27:15-21 | Completed in 6s |
+| Delete the ConfigMap | 19:27:21 | NotFound confirmed |
+| Restore from the backup | 19:27:22-27 | Completed in 5s |
+| Verify ConfigMap is back with the SAME data | 19:27:27 | `test=value-172715` — exact match |
+
+12 seconds total wall time. The restore put the actual value back, not just the resource shell — closes the loop on whether the backups are real.
+
+## What's not done yet
 - **Off-cluster bucket sync.** Today's backups live on the same Ceph cluster they're protecting. Loss of Ceph loses the backups too. A future job (rclone or s3cmd in a CronJob) could mirror the `oadp` bucket to an off-site target (Synology NAS, B2, cloud S3). Not blocking — even on-Ceph backups are useful for accidental-delete recovery.
 - **Backup notification webhooks.** Velero doesn't natively post to webhooks; consider a CronJob that diffs `oc get backup` and alerts on PartiallyFailed / Failed.
 - **CNPG `barmanObjectStore` separately.** CNPG has its own backup mechanism (continuous WAL streaming + base backups to S3). For Postgres DBs we'll likely run both: OADP for Kubernetes-resource snapshot of the Cluster CR, CNPG-barman for the actual database content with PITR. Not yet shipped.
