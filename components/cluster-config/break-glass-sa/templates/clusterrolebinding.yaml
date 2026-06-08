@@ -1,0 +1,17 @@
+# Bound to the built-in `cluster-admin` ClusterRole — equivalent privilege
+# to a kubeadmin login. Tighter scopes were considered (see ../values.yaml)
+# but the break-glass scenario by definition can't predict which API the
+# operator will need to call, so a narrower scope risks being too narrow
+# at exactly the moment it's needed.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.serviceAccount.name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}

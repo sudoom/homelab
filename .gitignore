@@ -19,3 +19,10 @@ Thumbs.db
 
 # Claude Code local session state
 .claude/
+
+# Kubeconfigs — canonical location is ~/.kube/, never the repo. This is
+# defense-in-depth in case one ever lands here by accident.
+kubeconfig
+*.kubeconfig
+config-breakglass
+config-readonly

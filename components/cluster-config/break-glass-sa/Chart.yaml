@@ -1,0 +1,5 @@
+apiVersion: v2
+name: break-glass-sa
+description: Long-lived cluster-admin ServiceAccount + token Secret for out-of-band recovery when OAuth/console is unreachable
+version: 1.0.0
+type: application

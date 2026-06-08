@@ -1,0 +1,30 @@
+# Reuses the `automation` namespace from `automation-sa` — this chart does NOT
+# create the namespace itself. Both charts ship at sync wave 0; ArgoCD applies
+# them alphabetically within a wave ("automation-sa" < "break-glass-sa"), so
+# the namespace is in place by the time this chart syncs.
+namespace: automation
+
+serviceAccount:
+  # Last-resort write kubeconfig. Used ONLY when the normal `oc login --token=...`
+  # path is broken — i.e. OAuth pods crashlooping, console route down, expired
+  # kubelet certs blocking the apps VIP, etc. SA-token auth bypasses oauth-server
+  # entirely (kube-apiserver validates the JWT directly against this Secret).
+  #
+  # See `blog/blog-cluster-shutdown-draft.md` (2026-06-08 return) for the
+  # cascade that motivated this — a fresh oc login required SSH'ing into a
+  # control-plane node and using `localhost-recovery.kubeconfig` for cert
+  # approval + ovnkube-node restart, which took ~90 minutes. With this
+  # kubeconfig pre-staged on the operator workstation, the same recovery
+  # is ~10 minutes.
+  #
+  # Blast radius: cluster-admin (equivalent to a kubeadmin login).
+  # Compromise of the extracted kubeconfig = total cluster compromise.
+  # Mitigations:
+  #   - Mode 0600 on the on-disk kubeconfig (bin/setup-breakglass-kubeconfig.sh enforces).
+  #   - .gitignore excludes the file pattern from the repo (paranoid belt-and-braces).
+  #   - Keep the kubeconfig off cloud-synced directories (no iCloud / Dropbox).
+  #
+  # Rotation: `oc -n automation delete secret break-glass-admin-token`;
+  # kube-controller-manager mints a fresh token within seconds; re-run
+  # bin/setup-breakglass-kubeconfig.sh to pick it up.
+  name: break-glass-admin

@@ -30,6 +30,12 @@ applications:
     namespace: default
     syncWave: "0"
 
+  break-glass-sa:
+    enabled: true
+    path: components/cluster-config/break-glass-sa
+    namespace: default
+    syncWave: "0"
+
   cluster-network-config:
     enabled: true
     path: components/cluster-config/cluster-network-config
