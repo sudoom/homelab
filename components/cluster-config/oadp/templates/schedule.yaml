@@ -13,3 +13,7 @@ spec:
     snapshotMoveData: {{ .Values.schedule.snapshotMoveData }}
     defaultVolumesToFsBackup: false
     includeClusterResources: true
+    {{- with .Values.schedule.excludedNamespaces }}
+    excludedNamespaces:
+{{ toYaml . | indent 6 }}
+    {{- end }}

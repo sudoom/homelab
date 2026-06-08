@@ -32,3 +32,21 @@ schedule:
   # datamover uploads the snapshot to S3 so loss of Ceph still leaves
   # restorable copies in RGW.
   snapshotMoveData: true
+  # Namespaces excluded from the daily backup. PVCs in these namespaces are
+  # either regeneratable scratch data (Loki/Prometheus WAL, TSDB blocks) or
+  # contain content already durable elsewhere — backing them up wastes RBD
+  # pool capacity and doubles cluster footprint for no DR benefit.
+  #
+  # The 2026-06-08 incident proved this: the daily backup tried to snapshot
+  # + S3-upload Loki's 2× 150 GiB WAL PVCs (~233 GiB of actual data) into
+  # the same Ceph cluster the backup is supposed to protect — filling Ceph
+  # to 97% and blocking writes cluster-wide. See blog/blog-oadp-draft.md.
+  excludedNamespaces:
+    # Loki — chunks already in RGW; ingester WAL/storage PVCs are regeneratable.
+    - openshift-logging
+    # Prometheus TSDB — regeneratable from scrape targets on restart.
+    - openshift-monitoring
+    # User-workload Prometheus — same reasoning.
+    - openshift-user-workload-monitoring
+    # OADP itself — backing up the backup tool is circular.
+    - openshift-adp
