@@ -24,7 +24,26 @@ dpa:
     uploaderType: kopia
 
 schedule:
-  # Daily at 02:00 UTC (= 04:00 local CEST in summer).
+  # PAUSED by default — the cluster's only Ceph pool is at ~83% post-2026-06-08
+  # incident, no headroom for backup snapshots until the HDD tier ships.
+  # OADP infrastructure (operator, DPA, Schedule CR) stays in place so the
+  # storage path is exercised and ready, but no actual backups fire.
+  #
+  # Postgres backup is already handled by CNPG's native volumeSnapshot-based
+  # ScheduledBackup (see components/apps/cnpg-clusters/values.yaml), so the
+  # one workload that needs DR isn't relying on this Schedule.
+  #
+  # When HDDs land and there's space for full-namespace backups, flip to
+  # paused: false (and pick an includedNamespaces / excludedNamespaces scope
+  # that doesn't double-back-up CNPG-handled PVCs).
+  #
+  # The 2026-06-08 incident showed why a default "back up every namespace"
+  # Schedule is dangerous on this cluster: the daily backup snapshotted
+  # Loki's 2× 150 GiB WAL PVCs (~233 GiB actual) into the same Ceph the
+  # backup is supposed to protect → cluster hit 97% full → writes blocked
+  # cluster-wide. See blog/blog-oadp-draft.md.
+  paused: true
+  # Daily at 02:00 UTC (= 04:00 local CEST in summer). Has no effect while paused.
   cron: "0 2 * * *"
   # Retain 14 days of backups; older are GC'd by Velero.
   ttl: "336h"
@@ -32,19 +51,3 @@ schedule:
   # datamover uploads the snapshot to S3 so loss of Ceph still leaves
   # restorable copies in RGW.
   snapshotMoveData: true
-  # Narrow scope: only the `media` namespace, where the CNPG `media-postgres`
-  # cluster lives. Everything else either has regeneratable data (Loki WAL,
-  # Prometheus TSDB) or is reproducible from GitOps manifests.
-  #
-  # The 2026-06-08 incident showed why a default "back up every namespace"
-  # Schedule is wrong on a single-cluster Ceph homelab: the daily backup
-  # snapshotted Loki's 2× 150 GiB WAL PVCs (~233 GiB actual) into the same
-  # Ceph the backup is supposed to protect → cluster hit 97% full → writes
-  # blocked → cascading outage. See blog/blog-oadp-draft.md.
-  #
-  # FUTURE: CNPG ships its own barman-based continuous WAL streaming +
-  # base-backup mechanism, which is better suited for Postgres PITR than
-  # OADP's PVC-snapshot approach. When that ships (see TODO in
-  # blog/blog-oadp-draft.md), this Schedule may be retired entirely.
-  includedNamespaces:
-    - media
