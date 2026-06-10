@@ -217,10 +217,10 @@ SMART dumps into a new subdirectory:
 
 ```
 data/hdd-burnin-2026-05-XX/
-  HUS726040ALE610-K7G5MZBE-smart-baseline.txt
-  HUS726040ALE610-K7G5MZBE-smart-postlong.txt
-  HUS726040ALE610-K7G5MZBE-smart-postbadblocks.txt
-  HUS726040ALE610-K7G5MZBE-badblocks.log
+  HUS726040ALA610-K7G5MZBE-smart-baseline.txt
+  HUS726040ALA610-K7G5MZBE-smart-postlong.txt
+  HUS726040ALA610-K7G5MZBE-smart-postbadblocks.txt
+  HUS726040ALA610-K7G5MZBE-badblocks.log
   ... (10 drives × 3-4 files each)
   SUMMARY.md      # one-line per-drive verdict + the post-install OSD mapping
 ```
@@ -863,9 +863,9 @@ All artifacts for the whole campaign (10 drives) go in **one** directory keyed b
 
 ```
 data/hdd-burnin-2026-06-10/
-  HUS726040ALE610-<serial>-baseline.txt        # smartctl -x, pre-test
-  HUS726040ALE610-<serial>-postbadblocks.txt   # smartctl -x, post-destructive
-  HUS726040ALE610-<serial>-badblocks.log       # full badblocks -wsv output
+  HUS726040ALA610-<serial>-baseline.txt        # smartctl -x, pre-test
+  HUS726040ALA610-<serial>-postbadblocks.txt   # smartctl -x, post-destructive
+  HUS726040ALA610-<serial>-badblocks.log       # full badblocks -wsv output
   ... (PASS drives × 3 files)
   SUMMARY.md
 ```
@@ -875,10 +875,10 @@ Use the **exact** serial string `smartctl -i` prints — it matches the Promethe
 ```bash
 # instantaneous SMART dumps — pipe straight into the keyed file (no host temp):
 cd ~/Projects/homelab/data/hdd-burnin-2026-06-10
-scp core@node4.okd.sudops.pl:/var/tmp/smart-baseline-${SERIAL}.txt     "HUS726040ALE610-${SERIAL}-baseline.txt"
-scp core@node4.okd.sudops.pl:/var/tmp/smart-postbadblocks-${SERIAL}.txt "HUS726040ALE610-${SERIAL}-postbadblocks.txt"
+scp core@node4.okd.sudops.pl:/var/tmp/smart-baseline-${SERIAL}.txt     "HUS726040ALA610-${SERIAL}-baseline.txt"
+scp core@node4.okd.sudops.pl:/var/tmp/smart-postbadblocks-${SERIAL}.txt "HUS726040ALA610-${SERIAL}-postbadblocks.txt"
 # multi-hour badblocks log — was tee'd to /var/tmp so it survived SSH drop; pull then tidy:
-scp core@node4.okd.sudops.pl:/var/tmp/badblocks-${SERIAL}.log "HUS726040ALE610-${SERIAL}-badblocks.log"
+scp core@node4.okd.sudops.pl:/var/tmp/badblocks-${SERIAL}.log "HUS726040ALA610-${SERIAL}-badblocks.log"
 ssh core@node4.okd.sudops.pl "rm -f /var/tmp/*-${SERIAL}.txt /var/tmp/badblocks-${SERIAL}.log"
 ```
 
@@ -915,3 +915,25 @@ oc debug node/node5.okd.sudops.pl --quiet -- chroot /host \
 ```
 
 Label each PASS drive physically with its serial before it leaves the bench, and record `node:bay -> serial -> wwn` in `SUMMARY.md` **as installed** (post-move, verified present in that chassis), not as planned. Every live OSD must trace back to a specific burned-in, verdict-`in service` serial.
+
+### 2026-06-10 run log (actual — what reality corrected)
+
+Bringing the 3 in-service drives through burn-in. Several runbook assumptions were corrected on first contact.
+
+**Execution vehicle pivot.** The runbook's primary path (`sudo toolbox`) and its debug-pod fallback both use `registry.access.redhat.com/rhel9/support-tools` — which **will not pull on node4** (`ImagePullBackOff`, ~9 min stuck; not in the Zot mirror set, direct pull blocked). Pivoted to `oc exec` into the existing on-node **`smartctl-exporter` DaemonSet pod** (node4 `smartctl-exporter-6zs2k`, node5 `-jn87j`, node6 `-7sc69`) — already has `smartctl` + host device access, zero pull. **Caveat that matters for Step 3d:** that image has `smartctl` but **not `badblocks`**, so the exporter pod covers Steps 3a–3c (baseline + short + long self-test) only. The destructive write test needs a badblocks-capable image — and since support-tools won't pull on node4, the realistic path is the USB3 dock off-node (the §5 fallback) or pre-mirroring a tool image. badblocks NOT yet run (also gated on operator go).
+
+**Every node was power-cycled to seat the drive → `/dev` re-enumerated, per node.** The 3.5" bay is not hot-swap, so node4/node5/node6 were each rebooted. `/dev/sd*` assignment differed: HDD took **`sda` on node4**, **`sdb` on node5 and node6** (boot SSD enumerated first there). Proves the by-id gate is mandatory cluster-wide. Per-node system disks also differ — node4 boot = Intel SSDSC2BX40, node5/node6 boot = Toshiba THNSF8, each with distinct WWNs — hence the multi-node WWN denylist in the gate.
+
+**Each node reboot re-tripped the ArgoCD OVN-egress cascade** (the same one in CLAUDE.md "Pre-flight for any network-stack change" — an HDD bay install is now a known trigger). The node5 reboot took all 42 ArgoCD apps to `sync=Unknown` with repo-server `DeadlineExceeded` on manifest generation. A bare repo-server bounce did **not** fix it (egress, not cold-cache). Fix: restart node5's `ovnkube-node` (resolved via `--field-selector spec.nodeName=` — an awk-column lookup broke on the `RESTARTS (x ago)` field shift) + bounce repo-server → recovered 42 → 11 → 0.
+
+**The 3 in-service drives — all gate-passed, baselines clean:**
+
+| Drive | Node | Serial | WWN | Pre POH | Realloc/Pend/Off/CRC | Long-test ETA |
+|---|---|---|---|---|---|---|
+| 1 | node4 | K4KTAEDL | 0x5000cca25df55694 | 43,725 (~5.0 yr) | 0/0/0/0 | 21:29Z |
+| 2 | node5 | K4KTD40L | 0x5000cca25df55cf3 | 43,707 (~5.0 yr) | 0/0/0/0 | 21:57Z |
+| 3 | node6 | K7GEKUBR | 0x5000cca269c62bb6 | 43,348 (~4.95 yr) | 0/0/0/0 | 23:29Z |
+
+All short self-tests "Completed without error"; long self-tests running (drive-internal, zero etcd-HBA load). Delivered model is **HUS726040ALA610** (512n), not the **ALE610** the listing named — caught at SMART baseline; CMR either way, fine for Ceph. Serial caution: drive 1 `K4KTAEDL` vs drive 2 `K4KTD40L` are near-identical — everything keyed by WWN.
+
+**Pending:** long-test completions (21:30–23:30Z) → per-drive post-long SMART diff → badblocks go/no-go (gated). These 3 *are* the in-service trio, so once they pass: install per Phases 1–5; the 7 shelf spares burn in after (parallelized when the USB3 dock lands + a badblocks-capable image is sorted).
