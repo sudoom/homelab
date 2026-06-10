@@ -102,7 +102,11 @@ ID would be catastrophic.
 ### Step 1 — Identify and baseline
 
 ```bash
-DRIVE=/dev/sdX                          # adjust per drive
+# WARNING: a bare /dev/sdX is acceptable ONLY on a dedicated burn-in box whose
+# only disks ARE the targets. On node4 (the actual 2026-06 setup) NEVER paste a
+# bare /dev/sdX — the boot+etcd disk is also SATA (/dev/sda) and /dev/sd* order is
+# unstable. Use the hardened by-id gate in "## 2026-06-10 - burn-in execution" below.
+DRIVE=/dev/sdX                          # dedicated-box placeholder only; node4 uses the gate
 SERIAL=$(sudo smartctl -i $DRIVE | awk '/Serial Number/{print $3}')
 
 # Full SMART dump — includes vendor attributes, error log, selftest log,
@@ -515,3 +519,380 @@ CLAUDE.md).
   (which has the multus/host-network rabbit hole documented in
   CLAUDE.md), SATA HDDs just plug into the on-board controllers.
   No network stack interaction.
+
+## 2026-06-10 - burn-in execution (node4, single internal bay, full depth)
+
+This is the concrete, copy-pasteable execution of the generic burn-in procedure (Steps 1-5 above) on the actual hardware we have: **node4's single internal 3.5" bay, on a live cluster node**. We run one drive at a time, full depth (SMART baseline -> short -> long -> destructive `badblocks` -> post-diff), per the decision to burn all 10 drives to full depth rather than sampling. The burn-in HDD is a transient SATA device in the bay; it is **not** an OSD, Ceph stays untouched, node4 is **not** cordoned. The only costs are extra CPU/IO load on node4 and the device-targeting risk — and that risk is lethal, which is the whole reason the gate below exists.
+
+### CRITICAL: node4's boot/etcd disk is SATA too
+
+node4 is the maximum-blast-radius node in the cluster: control-plane master **and** worker, the NVMe Ceph OSD host, an etcd member, and it usually holds the API VIP. Its OS/boot/etcd disk — `/dev/sda`, **INTEL SSDSC2BX40, SATA SSD**, WWN `0x55cd2e404c20c200`, serial `BTHC615501ED400VGN` — is in the **same `/dev/sd*` family** the burn-in HDD enumerates into. `/dev/sda` carries `/boot`, `/sysroot`, and etcd's data dir (`/var/lib/etcd` under `/sysroot`).
+
+**A `badblocks -w` pointed at `/dev/sda` bricks node4 and destroys an etcd member.** On a 3-of-3 etcd cluster with size=3 Ceph across 3 hosts and zero drain headroom, that is a simultaneously-degraded etcd and Ceph in one keystroke. `/dev/sd*` enumeration is **not stable** across reboots, controller resets, or hotplug — `sdb` today can be `sda` tomorrow. Therefore: **never type a literal `/dev/sdX` into any command in this runbook.** The target is resolved by `/dev/disk/by-id/wwn-*` only, validated by the gate, and re-verified by serial immediately before every write. Default-deny: anything the gate cannot positively prove safe is refused.
+
+### 1. Execution environment
+
+SCOS is immutable — there is no `smartctl`, `badblocks`, or `e2fsprogs` on the host PATH, and we do **not** `rpm-ostree install` them (that mutates the OS image and needs a reboot, and node4 is the worst node to reboot casually). The tools come from a container that bind-mounts the host's `/dev` and `/sys`.
+
+**Preferred path — toolbox over SSH.** `toolbox` ships in SCOS; it launches a privileged CentOS Stream `support-tools` container in the host namespaces with `/dev`, `/sys`, `/proc`, and the host root bind-mounted, so ATA/SCSI passthrough ioctls reach the real drive.
+
+```bash
+ssh core@node4.okd.sudops.pl          # key auth, same key used for cert recovery
+
+sudo toolbox                          # first run pulls support-tools (~1-2 min); then instant
+# base support-tools has smartctl but NOT badblocks; badblocks lives in e2fsprogs:
+dnf install -y smartmontools e2fsprogs util-linux   # idempotent, re-run safe
+smartctl --version | head -1
+badblocks -V 2>&1 | head -1
+```
+
+`smartctl` needs **no `-d` flag** on node4's on-board SATA HBA (default autodetect works). Note for the spare campaign later: **the future USB3 dock needs `-d sat`** on every invocation — USB-SATA bridges don't pass ATA commands transparently. On node4's internal bay, no `-d`.
+
+**Fallback — privileged debug pod.** If you'd rather drive everything through `oc` (no SSH), a privileged pod pinned to node4 with host `/dev` bind-mounted does the same job. It's the fallback, not the default — it leaves a privileged pod on the max-blast-radius node, and **for the destructive step you must `chroot /host` and re-run the gate inside the chroot** (an `oc debug` pod's `/dev` is the container's, not the host's, unless chrooted — see the `/dev` vs `/sys` self-check in the gate below).
+
+```yaml
+# hdd-burnin-pod.yaml — apply with the OPERATOR kubeconfig (privileged pod needs it;
+# this is a deliberate mutation that touches NO cluster/Ceph state, only spawns a tool pod).
+apiVersion: v1
+kind: Pod
+metadata: { name: hdd-burnin, namespace: default }
+spec:
+  nodeName: node4.okd.sudops.pl
+  serviceAccountName: hdd-burnin            # see SCC grant below
+  restartPolicy: Never
+  containers:
+    - name: tools
+      image: registry.access.redhat.com/rhel9/support-tools
+      command: ["sleep", "infinity"]
+      securityContext: { privileged: true }   # ATA/SCSI passthrough ioctls
+      volumeMounts:
+        - { name: dev, mountPath: /dev }
+        - { name: sys, mountPath: /sys }
+        - { name: hostlog, mountPath: /host-logs }
+  volumes:
+    - { name: dev,     hostPath: { path: /dev } }
+    - { name: sys,     hostPath: { path: /sys } }
+    - { name: hostlog, hostPath: { path: /var/tmp } }   # logs land on host, retrievable
+  tolerations: [ { operator: Exists } ]                 # node4 is a master; tolerate taints
+```
+
+```bash
+# operator kubeconfig — OpenShift rejects privileged:true without an SCC grant:
+oc -n default create sa hdd-burnin
+oc adm policy add-scc-to-user privileged -z hdd-burnin -n default
+oc apply -f hdd-burnin-pod.yaml
+oc -n default exec -it hdd-burnin -- bash
+#   inside: dnf install -y smartmontools e2fsprogs util-linux tmux
+#   then run the same gate + sequence. For the destructive write the pod path is
+#   keep-alive-trivial: badblocks is parented to the pod's PID 1, so a `nohup ... &`
+#   survives the exec disconnect on its own — no tmux/systemd gymnastics.
+#   Do NOT `oc delete pod hdd-burnin` until the run finishes and logs are copied off.
+```
+
+**Keep-alive (multi-hour runs must survive SSH drop).** Full depth is ~32-38 h/drive: the long self-test (~8 h) is disconnect-safe because the drive runs it internally (you only poll), but `badblocks` (~24-30 h) runs in the container and dies with its parent process. Pick one:
+
+- **`tmux` (preferred, reattachable):** `dnf install -y tmux; tmux new -s burnin`, run badblocks inside, detach `Ctrl-b d`. **Caveat:** a second `sudo toolbox` may spawn a *fresh* container rather than re-entering the running one — reattach via `sudo podman ps --filter name=toolbox` then `sudo podman exec -it <ctr> tmux attach -t burnin`.
+- **`systemd-run --scope` on the host (most robust):** decouples the run from both SSH and the toolbox shell. From the host: `sudo systemd-run --scope --unit=hdd-burnin podman exec <toolbox-ctr> bash -c '...badblocks...'`. Monitor `journalctl -u hdd-burnin.scope -f`, stop `sudo systemctl stop hdd-burnin.scope`.
+- **`nohup ... &`** in the pod path (process parented to pod PID 1).
+
+**If the keep-alive context is lost** (tmux pane dies, pod restarts), do **not** reattach-and-rerun `badblocks` against a saved `$DRIVE` from notes — the device topology may have changed. **Re-run the gate (Step 3) from scratch.** A badblocks that dies mid-run is never auto-restarted.
+
+Write all logs to a host-visible path (`/var/tmp` is bind-mounted in both paths) so captures can be pulled off node4 into `data/hdd-burnin-2026-06-10/` per Step 5.
+
+### 2. Device-safety pre-flight gate (hardened)
+
+This gate is the **only** way `DRIVE` gets set, and **nothing destructive or even identity-capturing runs before it passes.** It fails closed on anything it cannot positively evaluate. Paste the whole function into the toolbox shell.
+
+**Step 2a — empty-bay/full-bay diff to find the new device.** Snapshot rotational devices with the bay empty, insert one drive, snapshot again, assert exactly one new rotational device appeared. node4's only rotational device is the HDD (`/dev/sda` is ROTA=0, `nvme0n1` is NVMe), so the HDD stands out. **These checks return, they don't just print:**
+
+```bash
+BEFORE=$(mktemp); AFTER=$(mktemp)     # per-session files; stale /tmp can't be reused
+# --- BEFORE insertion (bay empty) ---
+lsblk -dno NAME,ROTA,TYPE | awk '$2==1 && $3=="disk"{print $1}' | sort > "$BEFORE"
+[ -s "$BEFORE" ] && echo "WARN: rotational disks already present before insert — confirm bay was empty:" && cat "$BEFORE"
+
+# --- INSERT one HDD into the single 3.5" bay, wait ~10s for SATA hotplug ---
+
+# --- AFTER insertion ---
+lsblk -dno NAME,ROTA,TYPE | awk '$2==1 && $3=="disk"{print $1}' | sort > "$AFTER"
+NEW_ROTA=$(comm -13 "$BEFORE" "$AFTER")
+NEW_COUNT=$(printf '%s\n' "$NEW_ROTA" | grep -c .)
+[ "$NEW_COUNT" -eq 1 ] || { echo "STOP: expected exactly 1 new rotational device, got $NEW_COUNT. REFUSING." >&2; return 1 2>/dev/null || exit 1; }
+[ -n "$NEW_ROTA" ]     || { echo "STOP: no new rotational device — drive not seated. REFUSING." >&2; return 1 2>/dev/null || exit 1; }
+echo "new rotational disk: /dev/$NEW_ROTA"
+
+# Resolve to a stable by-id wwn-*/ata-* symlink that points at exactly the new device:
+BYID=""
+for L in /dev/disk/by-id/wwn-* /dev/disk/by-id/ata-*; do
+  [ -e "$L" ] || continue
+  case "$L" in *-part*) continue ;; esac          # whole-disk symlinks only
+  [ "$(basename "$(readlink -f "$L")")" = "$NEW_ROTA" ] && { BYID="$L"; break; }
+done
+[ -n "$BYID" ] || { echo "STOP: no whole-disk wwn-/ata- symlink resolves to /dev/$NEW_ROTA. REFUSING." >&2; return 1 2>/dev/null || exit 1; }
+echo "by-id path: $BYID  ->  /dev/$NEW_ROTA"
+```
+
+**Step 2b — `assert_burnin_target`.** Returns 0 only on a fully-positive identity match plus a typed-serial confirmation. Every failure path `return`s; `_fail` is fatal-by-caller. On success it stamps the resolved identity into `GATE_*` globals the caller **must** use by value (closes the re-resolution TOCTOU).
+
+```bash
+assert_burnin_target() {
+  local RED=$'\e[1;31m' GRN=$'\e[1;32m' YEL=$'\e[1;33m' NC=$'\e[0m'
+  _fail() { printf '%s[GATE DENIED]%s %s\n' "$RED" "$NC" "$*" >&2; return 1; }
+  _ok()   { printf '%s[ok]%s %s\n' "$GRN" "$NC" "$*"; }
+
+  # ---- node4 invariants (this gate is node4-specific) ----
+  local BOOT_DEV="sda" OSD_DEV="nvme0n1"
+  local DENY_BOOT=55cd2e404c20c200          # Intel boot/etcd SSD WWN, bare hex (no 0x)
+  local DENY_OSD=002538ba11b25345           # Samsung NVMe OSD EUI, bare hex (defense-in-depth)
+  local MODEL_RE='HUS726040ALE610'          # exact model; ROTA=1 is the SSD discriminator
+  local MIN_BYTES=3900000000000 MAX_BYTES=4100000000000
+  local ARG="$1"
+  _norm() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d ' :' | sed -E 's/^0x//; s/^eui\.//'; }
+
+  [ -n "$ARG" ] || { _fail "no device path. Usage: assert_burnin_target /dev/disk/by-id/wwn-..."; return 1; }
+
+  # Check 1: by-id wwn-/ata- SYMLINK only — bare /dev/sdX forbidden (enumeration unstable):
+  case "$ARG" in /dev/disk/by-id/wwn-*|/dev/disk/by-id/ata-*) : ;;
+    *) _fail "'$ARG' is not a /dev/disk/by-id/{wwn,ata}-* path. Bare /dev/sdX REFUSED."; return 1 ;; esac
+  [ -L "$ARG" ] || { _fail "'$ARG' is not a symlink. REFUSING."; return 1; }
+
+  local REAL SDX
+  REAL=$(readlink -f "$ARG" 2>/dev/null) || { _fail "cannot readlink '$ARG'."; return 1; }
+  [ -b "$REAL" ] || { _fail "'$REAL' is not a block device."; return 1; }
+  SDX=$(basename "$REAL")
+  [ -e "/sys/block/$SDX/queue/rotational" ] || { _fail "no /sys/block/$SDX — not a whole disk."; return 1; }
+  # partition guard (the sysfs 'partition' file exists iff it's a partition):
+  [ -e "/sys/class/block/$SDX/partition" ] && { _fail "'$SDX' is a partition, not a whole disk."; return 1; }
+
+  # /dev vs /sys same-namespace self-check (catches toolbox/debug-pod divergence; fail closed):
+  local DEVT SYST
+  DEVT=$(stat -c '%t:%T' "$REAL" 2>/dev/null); SYST=$(cat "/sys/block/$SDX/dev" 2>/dev/null)
+  [ -n "$DEVT" ] && [ -n "$SYST" ] || { _fail "cannot cross-check /dev vs /sys for $SDX (container ns mismatch?)."; return 1; }
+  printf '%s[ok]%s /dev maj:min(hex)=%s  /sys=%s — operator: confirm these reference the same disk\n' "$GRN" "$NC" "$DEVT" "$SYST"
+
+  # Check: never-target name family (boot/OSD/RBD/NBD/dm/loop) — fail closed by name:
+  case "$SDX" in
+    "$BOOT_DEV") _fail "resolved /dev/$BOOT_DEV = node4 boot/etcd SSD. ABSOLUTE NO."; return 1 ;;
+    "$OSD_DEV"|nvme*) _fail "resolved '$SDX' is the NVMe OSD / an NVMe device. ABSOLUTE NO."; return 1 ;;
+    rbd*|nbd*|dm-*|loop*|sr*) _fail "resolved '$SDX' is a live/virtual device (RBD/NBD/dm/loop). REFUSING."; return 1 ;;
+  esac
+
+  # Identity via smartctl (fail closed if unreadable):
+  local SMART MODEL SERIAL WWN
+  SMART=$(smartctl -i "$REAL" 2>/dev/null) || { _fail "smartctl -i failed on '$REAL' — cannot identify. REFUSING."; return 1; }
+  MODEL=$(printf '%s\n' "$SMART" | sed -n -E 's/^(Device Model|Model Number):[[:space:]]+//p' | head -1)
+  SERIAL=$(printf '%s\n' "$SMART" | sed -n -E 's/^Serial Number:[[:space:]]+//p' | head -1)
+  WWN=$(printf '%s\n' "$SMART" | sed -n -E 's/^LU WWN Device Id:[[:space:]]+//p' | head -1)
+  [ -n "$MODEL" ] && [ -n "$SERIAL" ] || { _fail "could not read Model/Serial from smartctl. REFUSING."; return 1; }
+
+  # Check 2: exact model:
+  printf '%s' "$MODEL" | grep -qiE "$MODEL_RE" || { _fail "model '$MODEL' != expected ($MODEL_RE). REFUSING."; return 1; }
+  _ok "model: $MODEL"
+
+  # Check 3 (WWN denylist) — normalize BOTH sides (strip 0x/eui./spaces) so smartctl's
+  # space-separated no-0x form still matches. Sources: smartctl, by-id path, udev:
+  local WWN_BYID WWN_UDEV
+  WWN_BYID=$(printf '%s' "$ARG" | sed -n -E 's#.*/wwn-(0x[0-9a-fA-F]+).*#\1#p')
+  WWN_UDEV=$(udevadm info --query=property --name="$REAL" 2>/dev/null | sed -n -E 's/^ID_WWN(_WITH_EXTENSION)?=//p' | head -1)
+  for w in "$WWN" "$WWN_BYID" "$WWN_UDEV"; do
+    n=$(_norm "$w"); [ -n "$n" ] || continue
+    case "$n" in *"$DENY_BOOT"*) _fail "WWN '$w' matches DENYLIST boot SSD. ABSOLUTE NO."; return 1 ;;
+                 *"$DENY_OSD"*)  _fail "WWN '$w' matches DENYLIST NVMe OSD. ABSOLUTE NO."; return 1 ;; esac
+  done
+  _ok "WWN not in denylist"
+
+  # Check 4: rotational == 1 (the ONLY spinning device in node4):
+  [ "$(cat "/sys/block/$SDX/queue/rotational" 2>/dev/null)" = "1" ] || { _fail "$SDX rotational != 1 (boot SSD + NVMe OSD are 0). REFUSING."; return 1; }
+  _ok "rotational = 1"
+
+  # Check 5: size ~4 TB:
+  local SIZE_BYTES; SIZE_BYTES=$(blockdev --getsize64 "$REAL" 2>/dev/null)
+  case "$SIZE_BYTES" in ''|*[!0-9]*) _fail "blockdev returned non-numeric '$SIZE_BYTES'. REFUSING."; return 1 ;; esac
+  { [ "$SIZE_BYTES" -ge "$MIN_BYTES" ] && [ "$SIZE_BYTES" -le "$MAX_BYTES" ]; } || { _fail "size $SIZE_BYTES outside ~4TB window. REFUSING."; return 1; }
+  _ok "size ~4TB: $(numfmt --to=iec --suffix=B "$SIZE_BYTES" 2>/dev/null || echo "$SIZE_BYTES B")"
+
+  # Check 6: not mounted / swap / claimed (authority = /proc/mounts + /proc/swaps + sysfs holders;
+  # lsblk MOUNTPOINTS is advisory — false-negative-prone on old util-linux):
+  grep -qE "^/dev/$SDX([0-9]+)?[[:space:]]" /proc/mounts && { _fail "/dev/$SDX is mounted. REFUSING."; return 1; }
+  grep -qE "^/dev/$SDX([0-9]+)?[[:space:]]" /proc/swaps  && { _fail "/dev/$SDX is swap. REFUSING."; return 1; }
+  [ -n "$(ls "/sys/block/$SDX/holders" 2>/dev/null)" ] && { _fail "/dev/$SDX has holders (dm/md/LVM). REFUSING."; return 1; }
+  local FSTYPE; FSTYPE=$(lsblk -nro FSTYPE "$REAL" 2>/dev/null | sed '/^$/d' | sort -u | paste -sd, -)
+  printf '%s' "$FSTYPE" | grep -qiE 'ceph_bluestore|LVM2_member' && { _fail "carries '$FSTYPE' (Ceph/LVM) — in-use device. REFUSING."; return 1; }
+  [ -z "$FSTYPE" ] && _ok "blank (no fs/raid signature)" || printf '%s[note]%s existing signature(s): %s — badblocks will destroy them.\n' "$YEL" "$NC" "$FSTYPE"
+
+  # ---- resolved identity ----
+  printf '\n%s========= RESOLVED BURN-IN TARGET =========%s\n' "$GRN" "$NC"
+  printf '  by-id : %s\n  dev   : %s (/dev/%s)\n  model : %s\n  serial: %s\n  WWN   : %s\n  size  : %s\n%s===========================================%s\n\n' \
+    "$ARG" "$REAL" "$SDX" "$MODEL" "$SERIAL" "${WWN:-$WWN_BYID}" \
+    "$(numfmt --to=iec --suffix=B "$SIZE_BYTES" 2>/dev/null || echo "$SIZE_BYTES B")" "$GRN" "$NC"
+
+  # Final human gate — type the serial exactly (last gate before DESTRUCTIVE badblocks -w):
+  printf '%sType the drive SERIAL exactly to confirm (serial> )%s ' "$YEL" "$NC"
+  local TYPED; IFS= read -r TYPED
+  [ "$TYPED" = "$SERIAL" ] || { _fail "typed '$TYPED' != resolved '$SERIAL'. REFUSING."; return 1; }
+
+  # Stamp resolved identity for the caller to use BY VALUE (no re-resolution):
+  GATE_REAL="$REAL"; GATE_BYID="$ARG"; GATE_SERIAL="$SERIAL"; GATE_WWN="${WWN:-$WWN_BYID}"
+  printf '%s[GATE PASSED]%s %s  serial=%s\n' "$GRN" "$NC" "$REAL" "$SERIAL"
+  return 0
+}
+```
+
+Why default-deny holds: `/dev/sda` fails on the name family **and** the WWN denylist (now normalized to match smartctl's no-`0x` form) **and** ROTA=0 **and** the 372 GB size **and** the mount check — five independent gates. `/dev/nvme0n1` fails on the name family, denylist, ROTA, and size. A bare `/dev/sdb` argument fails Check 1. RBD/NBD/dm/loop fail the name family. The right HDD passes all, then requires the operator to read the serial off the printout (which came from the drive via `smartctl`, not from a stale variable). Anything unreadable — `smartctl` won't talk, `blockdev` non-numeric, `/sys/block/$SDX` missing, `/dev`↔`/sys` mismatch — is a **refusal**. On a no-drain cluster, "I'm not sure" means "no."
+
+Before relying on this gate, unit-test it once: run `assert_burnin_target` against `/dev/disk/by-id/wwn-<boot-ssd>`, against the NVMe's by-id, and against a bare `/dev/sdb` — all three must return exit 1.
+
+### 3. Per-drive full-depth sequence
+
+Run the gate, then chain into the depth steps using **`$DRIVE` bound to the gate's by-id path** and **`$REAL` to the gate's resolved device** — never reassign `DRIVE=/dev/sdX` (that would undo the gate; the generic Step 1 in this draft opens with such a line — **do not paste it**, use the bound values below).
+
+```bash
+# Gate is the SOLE path to setting DRIVE. Nothing runs if it fails.
+if assert_burnin_target "$BYID"; then
+  DRIVE="$GATE_BYID"; REAL="$GATE_REAL"; SERIAL="$GATE_SERIAL"
+  echo "Gate passed. DRIVE=$DRIVE REAL=$REAL serial=$SERIAL — proceeding full depth."
+else
+  echo "GATE DENIED — do not run any destructive command. Re-check the drive." >&2
+  return 1 2>/dev/null || exit 1
+fi
+OUT=/var/tmp   # host-visible; pulled into data/hdd-burnin-2026-06-10/ in Step 5
+```
+
+**Step 3a — baseline SMART (~1 min).** Diff anchor for the post-pass. Fail-fast: return-to-seller (skip the 8 h + 30 h tests) if any trip.
+
+```bash
+smartctl -x "$DRIVE" > "$OUT/smart-baseline-${SERIAL}.txt"
+smartctl -H "$DRIVE"
+smartctl -A "$DRIVE" | grep -E 'Reallocated_Sector_Ct|Current_Pending_Sector|Offline_Uncorrectable|UDMA_CRC_Error_Count|Power_On_Hours'
+```
+
+| Check | Reject threshold |
+|---|---|
+| SMART overall-health | anything other than `PASSED` |
+| `Reallocated_Sector_Ct` | `> 50` |
+| `Current_Pending_Sector` | `> 0` |
+| `Offline_Uncorrectable` | `> 0` |
+| `UDMA_CRC_Error_Count` | `> 0` |
+| `Power_On_Hours` | `> 70000` |
+
+These are used datacenter pulls — a small **stable** non-zero `Reallocated_Sector_Ct` is acceptable; the bar is "stable across long+badblocks," not "zero." Baseline records the start; Steps 3d/3e check for new increments.
+
+**Step 3b — short self-test (~2 min).** Cheapest filter; if it fails, the long test will too — return the drive, don't waste 8 h.
+
+```bash
+smartctl -t short "$DRIVE"; sleep 130
+smartctl -l selftest "$DRIVE" | head -10    # latest line must read "Completed without error"
+```
+
+**Step 3c — long self-test (~8 h).** Internal surface scan; runs **inside the drive firmware**, near-zero host load, so this step does **not** stress node4's HBA — no etcd concern here. Poll, don't block. Disconnect-safe on its own.
+
+```bash
+smartctl -t long "$DRIVE"
+# poll every ~30 min:
+smartctl -A "$DRIVE" | grep -i remaining
+smartctl -l selftest "$DRIVE" | head -5      # PASS = latest line "Completed without error"
+```
+
+**Step 3d — destructive badblocks under ionice, with etcd watch (~24-30 h).** This is the **write**-path test and the only step that loads node4's SATA HBA — the same HBA `/dev/sda` (etcd) hangs off. Run it as the keep-alive-protected command (tmux / systemd-run / nohup per Step 1).
+
+Re-confirm the serial **immediately before the write** — closes the TOCTOU / re-enumeration window between gate and `open()`:
+
+```bash
+NOW_SERIAL=$(smartctl -i "$REAL" | sed -n -E 's/^Serial Number:[[:space:]]+//p' | head -1)
+[ "$NOW_SERIAL" = "$SERIAL" ] || { echo "DEVICE UNDER $REAL CHANGED SERIAL ($NOW_SERIAL != $SERIAL) — ABORT, re-run Step 2/3." >&2; return 1 2>/dev/null || exit 1; }
+
+# ionice -c3 = idle I/O class. NOTE: effectiveness is scheduler-dependent — verify first:
+cat /sys/block/$(basename "$REAL")/queue/scheduler   # if [none]/[mq-deadline], ionice is ~no-op;
+                                                      # then the etcd-fsync watch below is the REAL net.
+ionice -c3 badblocks -wsv -b 4096 "$REAL" 2>&1 | tee "$OUT/badblocks-${SERIAL}.log"
+```
+
+`-w` destructive (fine, blank target), `-s` progress, `-v` per-pattern bad-block count, `-b 4096` matches the 4K sector.
+
+**Watch node4's etcd member specifically the whole time** (not the aggregate — it hides node4's excursion behind two healthy members). Automate the abort rather than eyeballing for 30 h:
+
+```bash
+# workstation, KUBECONFIG=~/.kube/config-readonly (exec needs operator kubeconfig);
+# verify the etcd metrics port for THIS pod before relying on it:
+oc -n openshift-etcd get pod etcd-node4.okd.sudops.pl -o jsonpath='{.spec.containers[?(@.name=="etcd-metrics")].ports[*].containerPort}'; echo
+# sample p99 WAL fsync for node4's member:
+oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- \
+  wget -qO- 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.99,rate(etcd_disk_wal_fsync_duration_seconds_bucket{pod=~"etcd-node4.*"}[5m]))' \
+  | jq -r '.data.result[].value[1]'   # seconds
+```
+
+Healthy p99 on this etcd-on-SATA-SSD is single-digit ms (~8-15 ms). The slow-fsync danger zone is a **sustained p99 > ~25 ms** during the badblocks pass — that means `ionice` isn't holding the HBA (likely `none`/`mq-deadline` scheduler). When it climbs and stays there: pause/kill badblocks (`kill -STOP` the PID, or `Ctrl-C` in the tmux pane), let etcd settle, and **finish that drive on the USB3 dock off-node instead** (no shared HBA, no etcd risk). etcd health on node4 outranks burn-in throughput every time. The long self-test (3c) is exempt — it doesn't touch the HBA.
+
+**Step 3e — post-badblocks SMART + diff (~1 min).**
+
+```bash
+smartctl -x "$DRIVE" > "$OUT/smart-postbadblocks-${SERIAL}.txt"
+for f in Reallocated_Sector_Ct Current_Pending_Sector Offline_Uncorrectable UDMA_CRC_Error_Count; do
+  printf '%-26s baseline=%s  post=%s\n' "$f" \
+    "$(grep "$f" "$OUT/smart-baseline-${SERIAL}.txt"     | awk '{print $10}')" \
+    "$(grep "$f" "$OUT/smart-postbadblocks-${SERIAL}.txt" | awk '{print $10}')"
+done
+```
+
+**Per-drive PASS verdict** — all must hold: baseline clean (or only small *stable* reallocated); short = `Completed without error`; long = `Completed without error`; badblocks final log line = `0/0/0 errors`; post-diff = **zero new** reallocated / pending / offline / CRC vs baseline. Any new reallocated/pending/offline sector = reject even if badblocks reported 0 bad blocks (the drive silently remapped a marginal sector — imminent decline on a 9-year-old drive). PASS -> eligible for install or shelf-spare; FAIL -> return-to-seller.
+
+Then power down the bay, pull the drive, insert the next, and **start again at Step 2** — re-run the empty/full diff and `assert_burnin_target` for **every** drive. Never assume the by-id symlink or `/dev/sdX` is the same across swaps.
+
+### 4. Capture & bookkeeping
+
+All artifacts for the whole campaign (10 drives) go in **one** directory keyed by serial, so an OSD's burn-in history is unambiguous 18 months later:
+
+```
+data/hdd-burnin-2026-06-10/
+  HUS726040ALE610-<serial>-baseline.txt        # smartctl -x, pre-test
+  HUS726040ALE610-<serial>-postbadblocks.txt   # smartctl -x, post-destructive
+  HUS726040ALE610-<serial>-badblocks.log       # full badblocks -wsv output
+  ... (PASS drives × 3 files)
+  SUMMARY.md
+```
+
+Use the **exact** serial string `smartctl -i` prints — it matches the Prometheus `smartctl_device{serial_number=...}` labels and the physical drive label. Pull the captures off node4 into the repo:
+
+```bash
+# instantaneous SMART dumps — pipe straight into the keyed file (no host temp):
+cd ~/Projects/homelab/data/hdd-burnin-2026-06-10
+scp core@node4.okd.sudops.pl:/var/tmp/smart-baseline-${SERIAL}.txt     "HUS726040ALE610-${SERIAL}-baseline.txt"
+scp core@node4.okd.sudops.pl:/var/tmp/smart-postbadblocks-${SERIAL}.txt "HUS726040ALE610-${SERIAL}-postbadblocks.txt"
+# multi-hour badblocks log — was tee'd to /var/tmp so it survived SSH drop; pull then tidy:
+scp core@node4.okd.sudops.pl:/var/tmp/badblocks-${SERIAL}.log "HUS726040ALE610-${SERIAL}-badblocks.log"
+ssh core@node4.okd.sudops.pl "rm -f /var/tmp/*-${SERIAL}.txt /var/tmp/badblocks-${SERIAL}.log"
+```
+
+`SUMMARY.md` — one row per drive. Record the `wwn-` symlink **alongside** the serial at burn-in time so Phase 1's device path is chosen from the burn-in record, not re-discovered after a physical move. `OSD ID` / `Slot` stay `spare` until install assigns them.
+
+```markdown
+| Drive serial | wwn- (as burned-in) | Slot node:bay | OSD ID | Pre POH | Realloc | Pending | Verdict |
+|---|---|---|---|---|---|---|---|
+| <serial-1> | wwn-0x5000cca... | node4:bay1 | osd.3 | 45,231 | 0  | 0 | in service |
+| <serial-2> | wwn-0x5000cca... | node5:bay1 | osd.4 | 51,892 | 12 | 0 | in service (stable long+bb) |
+| <serial-3> | wwn-0x5000cca... | node6:bay1 | osd.5 | 38,100 | 0  | 0 | in service |
+| <serial-4> | wwn-0x5000cca... | spare      | -      | 40,775 | 4  | 0 | shelf spare |
+| <serial-5> | wwn-0x5000cca... | rejected   | -      | 67,400 | 184| 7 | returned to seller |
+```
+
+Commit the directory — these captures are the live source of truth alongside `smartctl-exporter`. **Copy off-node before deleting the host temp files or the burn-in pod** (`oc -n default cp hdd-burnin:/host-logs/badblocks-${SERIAL}.log ...` in the pod path), and only then `oc -n default delete pod hdd-burnin`.
+
+### 5. Sequencing
+
+Full-depth serial on a single bay is **~32-38 h/drive**; all 10 serially is **~13-16 days** of bay occupancy on node4. The HDD tier does **not** wait two weeks — only 3 drives go live (1 per node).
+
+1. **Burn 3 drives fully** (the in-service trio) — ~4-5 days.
+2. **Run the install** (Phase 1-5 in this draft, unchanged) with those 3 — HDD tier **live in ~4-5 days**, not ~16.
+3. **Burn the remaining 7 shelf spares in the background**, single-bay serial on node4, while the tier is already serving. They never block anything.
+4. **Parallelize on USB3-dock arrival.** A dock makes the spare campaign N-way: each drive runs its **own internal** long self-test concurrently (near-zero host cost), and `badblocks` becomes USB3-bandwidth-bound rather than serial. Run the dock **off node4** — once the 3 live drives are installed, the spare burn-in never touches node4's HBA, removing the etcd-contention concern entirely. Every dock invocation uses **`smartctl -d sat`** (USB-SATA bridge). The dock is also the **fallback** whenever Step 3d's etcd-fsync watch shows the on-node HBA can't be kept quiet under `ionice`.
+
+**Relocate-verification (the sharp edge):** two of the three live drives are burned in on node4's bay then **physically carried to node5/node6**. The captures and `SUMMARY.md` are keyed by serial; if serials get transposed during the move (3 near-identical 50-EUR HGST pulls), node5's `values.yaml` stanza could name a drive physically in node6 — or a *rejected* drive could be swapped in by mistake. Before committing each node's `wwn-` into `components/storage/rook-ceph-cluster/values.yaml`:
+
+```bash
+# on the destination node, confirm the seated serial matches a PASS row for THIS node:bay:
+oc debug node/node5.okd.sudops.pl --quiet -- chroot /host \
+  lsblk -dno SERIAL,MODEL,WWN | grep -i hus726040
+# only then write that verified wwn- into the node5 stanza.
+```
+
+Label each PASS drive physically with its serial before it leaves the bench, and record `node:bay -> serial -> wwn` in `SUMMARY.md` **as installed** (post-move, verified present in that chassis), not as planned. Every live OSD must trace back to a specific burned-in, verdict-`in service` serial.
