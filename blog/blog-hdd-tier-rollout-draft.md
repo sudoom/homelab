@@ -937,3 +937,25 @@ Bringing the 3 in-service drives through burn-in. Several runbook assumptions we
 All short self-tests "Completed without error"; long self-tests running (drive-internal, zero etcd-HBA load). Delivered model is **HUS726040ALA610** (512n), not the **ALE610** the listing named — caught at SMART baseline; CMR either way, fine for Ceph. Serial caution: drive 1 `K4KTAEDL` vs drive 2 `K4KTD40L` are near-identical — everything keyed by WWN.
 
 **Pending:** long-test completions (21:30–23:30Z) → per-drive post-long SMART diff → badblocks go/no-go (gated). These 3 *are* the in-service trio, so once they pass: install per Phases 1–5; the 7 shelf spares burn in after (parallelized when the USB3 dock lands + a badblocks-capable image is sorted).
+
+### 2026-06-10 — DDF firmware-RAID metadata on used drives hangs cAdvisor (false alerts)
+
+Mid-spare-campaign, ~31 Prometheus alerts fired — including **critical** `etcdMembersDown`, `etcdInsufficientMembers`, `ClusterVersionOperatorDown`, plus 16× `TargetDown`. The cluster was **healthy**: `etcdctl endpoint health --cluster` showed all 3 members up (~24 ms), all nodes Ready, ArgoCD clean. The alerts were **false** — Prometheus couldn't *scrape* node4/node5 host-metrics (kubelet `:10250`, etc.) with `context deadline exceeded`, and the etcd/CVO "down" criticals are *inferred* from those failed scrapes.
+
+**Root cause: DDF (firmware-RAID) metadata on the used HGST pulls.** These datacenter drives carry leftover DDF superblocks. On insertion the host auto-assembles a raid0 from them (`md124`/`md126` …); when a drive is later pulled (hot-swap) its array goes `broken raid0`, and the kernel's per-block-device disk-stats read — which kubelet's cAdvisor + node-exporter consume — **blocks for the full 30 s scrape timeout** on the broken array. Every used drive hot-swapped re-creates this.
+
+**Diagnosis trail (for next time):**
+- `etcd*Down`/`CVO down` *critical* but `etcdctl endpoint health --cluster` = all healthy → scrape-inferred, not real. Confirm etcd directly before panicking.
+- `/api/v1/targets` → `lastError: context deadline exceeded`, `lastScrapeDuration: 30.000s` (the endpoint *hangs*, isn't unreachable); down instances all on the hot-swapped nodes' host IPs.
+- `cat /proc/mdstat` on the node → `md126 : broken raid0 sdX[0]` + DDF containers (`super external:ddf`).
+
+**Fix (per node, guarded to the HUS726040 rotational drive only — never the OS SSD/NVMe):**
+```bash
+for md in /dev/md[0-9] /dev/md[0-9][0-9] /dev/md[0-9][0-9][0-9]; do [ -b "$md" ] && mdadm --stop "$md"; done   # host-side, no write
+wipefs -a /dev/<HUS726040-rotational-disk>                                                                    # erase DDF + part sigs
+```
+`mdadm --stop` first (releases the device), then `wipefs` (erased `ddf_raid_member` near end-of-disk + `gpt`/`PMBR`; tiny write, safe during a running self-test). **Caveat:** a node whose cAdvisor has been wedged for *hours* may need `systemctl restart kubelet` to clear the stuck collector even after the md is gone — node6 (briefly affected) self-recovered; node4/node5 needed the kubelet kick.
+
+**Procedure change — wipe DDF FIRST on every spare.** Per-spare flow is now: seat drive → **`mdadm --stop` + `wipefs -a` the DDF (FIRST)** → gate → baseline → short → long. Stops the cAdvisor hang before it starts.
+
+**Shelf-spare storage policy (decided 2026-06-10): store burned-in spares RAW** — no partition, no RAID/DDF metadata (the wipe above already leaves them that way). Why: (a) a raw drive won't auto-assemble a stale md array on re-insertion → this whole class of false alerts can't recur; (b) Rook/Ceph BlueStore wants raw block devices → clean OSD provisioning, no zap step; (c) no stale filesystem to confuse anything. The drive's validated-ness lives in the SMART serial + a physical label (serial + "burn-in PASS <date>") + the `SUMMARY.md` record keyed by serial — not in any on-disk metadata.
