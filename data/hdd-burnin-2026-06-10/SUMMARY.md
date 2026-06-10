@@ -24,7 +24,7 @@ SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 |---|---|---|---|---|---|---|---|---|
 | 1 | K4KTAEDL | wwn-0x5000cca25df55694 | **pulled** (was node4) | - | 43,725 (~5.0 yr) | 0 | 0 | **PASS** — long self-test "Completed without error", 0 new bad sectors. Live-pulled from node4 for spare cycling; labeled + set aside as a validated in-service drive (goes back as an OSD at install). |
 | 2 | K4KTD40L | wwn-0x5000cca25df55cf3 | node5:bay1 (in bay) | - | 43,707 (~5.0 yr) | 0 | 0 | **PASS** — long self-test "Completed without error", 0 new bad sectors. Validated; awaiting install. |
-| 3 | K7GEKUBR | wwn-0x5000cca269c62bb6 | node6:bay1 (in bay) | - | 43,348 (~4.95 yr) | 0 | 0 | **in progress** — gate ✓, baseline clean, short ✓, long self-test running (ETA 23:29Z 2026-06-10) |
+| 3 | K7GEKUBR | wwn-0x5000cca269c62bb6 | node6:bay1 (in bay) | - | 43,348 (~4.95 yr) | 0 | 0 | **PASS** — long self-test "Completed without error", 0 new bad sectors. Validated; in node6 bay (awaiting install or pull-for-spare). |
 | 4 (spare) | K7GE897L | wwn-0x5000cca269c607f9 | node4:bay (spare burn-in) | - | 43,351 (~4.95 yr) | 0 | 0 | **in progress** — gate ✓, baseline clean, short ✓, long self-test running (ETA 06:18Z 2026-06-11) |
 | 5 (spare) | K7GE89HL | wwn-0x5000cca269c60801 | node5:bay (spare burn-in) | - | 43,351 (~4.95 yr) | 0 | 0 | **in progress** — gate ✓, baseline clean, short→long chained (live hot-swap, no reboot) |
 
