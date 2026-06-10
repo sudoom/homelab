@@ -524,11 +524,19 @@ CLAUDE.md).
 
 This is the concrete, copy-pasteable execution of the generic burn-in procedure (Steps 1-5 above) on the actual hardware we have: **node4's single internal 3.5" bay, on a live cluster node**. We run one drive at a time, full depth (SMART baseline -> short -> long -> destructive `badblocks` -> post-diff), per the decision to burn all 10 drives to full depth rather than sampling. The burn-in HDD is a transient SATA device in the bay; it is **not** an OSD, Ceph stays untouched, node4 is **not** cordoned. The only costs are extra CPU/IO load on node4 and the device-targeting risk — and that risk is lethal, which is the whole reason the gate below exists.
 
-### CRITICAL: node4's boot/etcd disk is SATA too
+### CRITICAL: node4's boot/etcd disk is SATA too — and the names ALREADY swapped
 
-node4 is the maximum-blast-radius node in the cluster: control-plane master **and** worker, the NVMe Ceph OSD host, an etcd member, and it usually holds the API VIP. Its OS/boot/etcd disk — `/dev/sda`, **INTEL SSDSC2BX40, SATA SSD**, WWN `0x55cd2e404c20c200`, serial `BTHC615501ED400VGN` — is in the **same `/dev/sd*` family** the burn-in HDD enumerates into. `/dev/sda` carries `/boot`, `/sysroot`, and etcd's data dir (`/var/lib/etcd` under `/sysroot`).
+node4 is the maximum-blast-radius node in the cluster: control-plane master **and** worker, the NVMe Ceph OSD host, an etcd member, and it usually holds the API VIP. Its OS/boot/etcd disk is an **INTEL SSDSC2BX40 SATA SSD**, WWN `0x55cd2e404c20c200`, serial `BTHC615501ED400VGN`, carrying `/boot`, `/sysroot`, and etcd's data dir (`/var/lib/etcd` under `/sysroot`). It is in the **same `/dev/sd*` family** the burn-in HDD enumerates into.
 
-**A `badblocks -w` pointed at `/dev/sda` bricks node4 and destroys an etcd member.** On a 3-of-3 etcd cluster with size=3 Ceph across 3 hosts and zero drain headroom, that is a simultaneously-degraded etcd and Ceph in one keystroke. `/dev/sd*` enumeration is **not stable** across reboots, controller resets, or hotplug — `sdb` today can be `sda` tomorrow. Therefore: **never type a literal `/dev/sdX` into any command in this runbook.** The target is resolved by `/dev/disk/by-id/wwn-*` only, validated by the gate, and re-verified by serial immediately before every write. Default-deny: anything the gate cannot positively prove safe is refused.
+**This is not hypothetical — it happened on the first drive (2026-06-10).** The internal 3.5" bay is **not hot-swap**, so installing drive #1 required powering node4 down. On the reboot, the HDD enumerated *first*:
+
+| Device | At session start | After drive-1 install + reboot |
+|---|---|---|
+| `/dev/sda` | Intel boot/etcd SSD (ROTA=0) | **HUS726040ALA610 HDD** (ROTA=1, wwn-0x5000cca25df55694) |
+| `/dev/sdb` | — | **Intel boot/etcd SSD** (moved here!) |
+| `/dev/nvme0n1` | Samsung NVMe OSD | Samsung NVMe OSD (unchanged) |
+
+A hardcoded "the HDD is `/dev/sdb`" would now `badblocks` the **boot/etcd disk** — simultaneously-degraded etcd and Ceph on a zero-drain-headroom cluster, in one keystroke. **Never type a literal `/dev/sdX` in this runbook.** The target is resolved by `/dev/disk/by-id/wwn-*` only, validated by the gate, and re-verified by serial immediately before every write. Because names are proven unstable, the gate must NOT trust `/dev/sdX` names for *either* allow or deny — it leans on **WWN denylist + `ROTA=1` + ~4 TB size + by-id resolution**, all name-independent. Default-deny: anything the gate cannot positively prove safe is refused.
 
 ### 1. Execution environment
 
@@ -641,10 +649,14 @@ assert_burnin_target() {
   _ok()   { printf '%s[ok]%s %s\n' "$GRN" "$NC" "$*"; }
 
   # ---- node4 invariants (this gate is node4-specific) ----
-  local BOOT_DEV="sda" OSD_DEV="nvme0n1"
+  # NO boot-disk NAME constant: /dev/sd* names are PROVEN unstable here (2026-06-10 the
+  # HDD took /dev/sda and the boot SSD moved to /dev/sdb after a reboot). The boot SSD is
+  # rejected by WWN denylist + ROTA=0 + 372 GB size — all name-independent. Names are
+  # NEVER trusted for allow or deny; only the nvme* pattern is name-stable enough to use.
   local DENY_BOOT=55cd2e404c20c200          # Intel boot/etcd SSD WWN, bare hex (no 0x)
   local DENY_OSD=002538ba11b25345           # Samsung NVMe OSD EUI, bare hex (defense-in-depth)
-  local MODEL_RE='HUS726040ALE610'          # exact model; ROTA=1 is the SSD discriminator
+  local MODEL_RE='HUS726040'                # FAMILY match: real drives are ALA610 (512n), the
+                                            # order said ALE610 — match the family, not the suffix.
   local MIN_BYTES=3900000000000 MAX_BYTES=4100000000000
   local ARG="$1"
   _norm() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d ' :' | sed -E 's/^0x//; s/^eui\.//'; }
@@ -670,10 +682,11 @@ assert_burnin_target() {
   [ -n "$DEVT" ] && [ -n "$SYST" ] || { _fail "cannot cross-check /dev vs /sys for $SDX (container ns mismatch?)."; return 1; }
   printf '%s[ok]%s /dev maj:min(hex)=%s  /sys=%s — operator: confirm these reference the same disk\n' "$GRN" "$NC" "$DEVT" "$SYST"
 
-  # Check: never-target name family (boot/OSD/RBD/NBD/dm/loop) — fail closed by name:
+  # Reject name-stable device families only (NVMe naming never collides with sdX; rbd/nbd/dm/
+  # loop/sr are virtual). The boot SSD is NOT rejected by name here (it can be any sdX) — it
+  # is caught by the WWN denylist (Check 3), ROTA=1 requirement (Check 4) and size (Check 5).
   case "$SDX" in
-    "$BOOT_DEV") _fail "resolved /dev/$BOOT_DEV = node4 boot/etcd SSD. ABSOLUTE NO."; return 1 ;;
-    "$OSD_DEV"|nvme*) _fail "resolved '$SDX' is the NVMe OSD / an NVMe device. ABSOLUTE NO."; return 1 ;;
+    nvme*) _fail "resolved '$SDX' is an NVMe device (the OSD). ABSOLUTE NO."; return 1 ;;
     rbd*|nbd*|dm-*|loop*|sr*) _fail "resolved '$SDX' is a live/virtual device (RBD/NBD/dm/loop). REFUSING."; return 1 ;;
   esac
 
@@ -738,7 +751,7 @@ assert_burnin_target() {
 }
 ```
 
-Why default-deny holds: `/dev/sda` fails on the name family **and** the WWN denylist (now normalized to match smartctl's no-`0x` form) **and** ROTA=0 **and** the 372 GB size **and** the mount check — five independent gates. `/dev/nvme0n1` fails on the name family, denylist, ROTA, and size. A bare `/dev/sdb` argument fails Check 1. RBD/NBD/dm/loop fail the name family. The right HDD passes all, then requires the operator to read the serial off the printout (which came from the drive via `smartctl`, not from a stale variable). Anything unreadable — `smartctl` won't talk, `blockdev` non-numeric, `/sys/block/$SDX` missing, `/dev`↔`/sys` mismatch — is a **refusal**. On a no-drain cluster, "I'm not sure" means "no."
+Why default-deny holds (name-independent — because names swap): the **Intel boot/etcd SSD** fails the WWN denylist (`0x55cd2e404c20c200`, normalized to match smartctl's no-`0x` form) **and** `ROTA=0` (Check 4) **and** the 372 GB size (Check 5) **and** the mount/holders check — four independent gates, *none* of which depend on it being `/dev/sda` vs `/dev/sdb`. The **NVMe OSD** fails the `nvme*` pattern, the denylist, `ROTA=0`, and size. A bare `/dev/sdX` argument fails Check 1. RBD/NBD/dm/loop fail the family check. The real HDD (`HUS726040`, ROTA=1, ~4 TB, WWN not in denylist) passes all, then requires the operator to read the serial off the printout (which came from the drive via `smartctl`, not from a stale variable). Anything unreadable — `smartctl` won't talk, `blockdev` non-numeric, `/sys/block/$SDX` missing, `/dev`↔`/sys` mismatch — is a **refusal**. On a no-drain cluster, "I'm not sure" means "no."
 
 Before relying on this gate, unit-test it once: run `assert_burnin_target` against `/dev/disk/by-id/wwn-<boot-ssd>`, against the NVMe's by-id, and against a bare `/dev/sdb` — all three must return exit 1.
 
