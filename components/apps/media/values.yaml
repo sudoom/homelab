@@ -57,7 +57,7 @@ apps:
 
   radarr:
     enabled: true
-    image: lscr.io/linuxserver/radarr:6.1.1
+    image: lscr.io/linuxserver/radarr:6.2.1
     port: 7878
     configSize: 1Gi
     readinessPath: /login
