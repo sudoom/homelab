@@ -1,0 +1,46 @@
+{{- if .Values.smartAlerts.enabled }}
+# SMART degradation alerts for the used-drive fleet (HDD tier + NVMe OSDs + boot SSDs).
+# Evaluated by user-workload-monitoring (this namespace is cluster-monitoring=false,
+# so its ServiceMonitor + PrometheusRule are owned by the UWM Prometheus, not platform).
+#
+# These replace pre-install badblocks as the safety net for the used HGST HDDs: the
+# long self-test + clean baseline gate them in; this catches in-service degradation
+# live, and a burned-in shelf spare is swapped in. Reallocated/pending attributes are
+# SATA-only (attribute_id 5/197) so the reallocated rule naturally targets HDD+SSD,
+# not NVMe; smart_status covers every device. Full rationale: blog/blog-hdd-tier-rollout-draft.md.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: smartctl-device-health
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: smartctl-exporter
+spec:
+  groups:
+    - name: smartctl-device-health
+      rules:
+        - alert: SmartReallocatedSectorsGrowing
+          expr: increase(smartctl_device_attribute{attribute_name="Reallocated_Sector_Ct",attribute_value_type="raw"}[24h]) > 5
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disk {{`{{ $labels.device }}`}} on {{`{{ $labels.node }}`}} is shedding sectors"
+            description: "Reallocated_Sector_Ct on {{`{{ $labels.device }}`}} ({{`{{ $labels.node }}`}}) grew by more than 5 in 24h. Used-drive degradation signal — inspect via smartctl and plan a burned-in shelf-spare swap."
+        - alert: SmartCurrentPendingSectors
+          expr: smartctl_device_attribute{attribute_name="Current_Pending_Sector",attribute_value_type="raw"} > 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disk {{`{{ $labels.device }}`}} on {{`{{ $labels.node }}`}} has pending sectors"
+            description: "Current_Pending_Sector is nonzero on {{`{{ $labels.device }}`}} ({{`{{ $labels.node }}`}}). Sectors waiting to be reallocated usually fail soon — watch reallocated growth and prep a spare."
+        - alert: SmartDeviceHealthFailed
+          expr: smartctl_device_smart_status == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SMART overall-health FAILED on {{`{{ $labels.device }}`}} ({{`{{ $labels.node }}`}})"
+            description: "smartctl overall-health self-assessment reports FAILED on {{`{{ $labels.device }}`}} ({{`{{ $labels.node }}`}}). Imminent drive failure — swap to a burned-in shelf spare; if it's a Ceph OSD device, plan the degraded-window roll."
+{{- end }}
