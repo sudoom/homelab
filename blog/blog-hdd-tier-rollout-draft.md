@@ -653,8 +653,13 @@ assert_burnin_target() {
   # HDD took /dev/sda and the boot SSD moved to /dev/sdb after a reboot). The boot SSD is
   # rejected by WWN denylist + ROTA=0 + 372 GB size — all name-independent. Names are
   # NEVER trusted for allow or deny; only the nvme* pattern is name-stable enough to use.
-  local DENY_BOOT=55cd2e404c20c200          # Intel boot/etcd SSD WWN, bare hex (no 0x)
-  local DENY_OSD=002538ba11b25345           # Samsung NVMe OSD EUI, bare hex (defense-in-depth)
+  # System-disk WWNs across ALL nodes (boot SSDs + NVMe OSDs), normalized bare hex (no 0x/eui.).
+  # Defense-in-depth backstop only — the PRIMARY guards are ROTA=1 + model + ~4TB size + unmounted,
+  # all node-agnostic. Confirmed by probe each time a node's bay is opened (names + WWNs differ per node):
+  #   node4: Intel boot 55cd2e404c20c200, Samsung OSD 002538ba11b25345
+  #   node5: Toshiba boot 500080d910e743a6, Samsung OSD 36483330529183340025384600000001
+  #   node6: TODO — probe lsblk + add its boot SSD + NVMe WWNs before burning in on node6.
+  local DENY_WWNS="55cd2e404c20c200 002538ba11b25345 500080d910e743a6 36483330529183340025384600000001"
   local MODEL_RE='HUS726040'                # FAMILY match: real drives are ALA610 (512n), the
                                             # order said ALE610 — match the family, not the suffix.
   local MIN_BYTES=3900000000000 MAX_BYTES=4100000000000
@@ -709,8 +714,9 @@ assert_burnin_target() {
   WWN_UDEV=$(udevadm info --query=property --name="$REAL" 2>/dev/null | sed -n -E 's/^ID_WWN(_WITH_EXTENSION)?=//p' | head -1)
   for w in "$WWN" "$WWN_BYID" "$WWN_UDEV"; do
     n=$(_norm "$w"); [ -n "$n" ] || continue
-    case "$n" in *"$DENY_BOOT"*) _fail "WWN '$w' matches DENYLIST boot SSD. ABSOLUTE NO."; return 1 ;;
-                 *"$DENY_OSD"*)  _fail "WWN '$w' matches DENYLIST NVMe OSD. ABSOLUTE NO."; return 1 ;; esac
+    for d in $DENY_WWNS; do
+      case "$n" in *"$d"*) _fail "WWN '$w' matches a system-disk DENYLIST entry ($d). ABSOLUTE NO."; return 1 ;; esac
+    done
   done
   _ok "WWN not in denylist"
 
