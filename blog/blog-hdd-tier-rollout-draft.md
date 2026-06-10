@@ -658,8 +658,8 @@ assert_burnin_target() {
   # all node-agnostic. Confirmed by probe each time a node's bay is opened (names + WWNs differ per node):
   #   node4: Intel boot 55cd2e404c20c200, Samsung OSD 002538ba11b25345
   #   node5: Toshiba boot 500080d910e743a6, Samsung OSD 36483330529183340025384600000001
-  #   node6: TODO — probe lsblk + add its boot SSD + NVMe WWNs before burning in on node6.
-  local DENY_WWNS="55cd2e404c20c200 002538ba11b25345 500080d910e743a6 36483330529183340025384600000001"
+  #   node6: Toshiba boot 500080d910e71bba, Samsung OSD 36483330547252560025385800000001
+  local DENY_WWNS="55cd2e404c20c200 002538ba11b25345 500080d910e743a6 36483330529183340025384600000001 500080d910e71bba 36483330547252560025385800000001"
   local MODEL_RE='HUS726040'                # FAMILY match: real drives are ALA610 (512n), the
                                             # order said ALE610 — match the family, not the suffix.
   local MIN_BYTES=3900000000000 MAX_BYTES=4100000000000

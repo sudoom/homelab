@@ -18,5 +18,6 @@ SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 |---|---|---|---|---|---|---|---|---|
 | 1 | K4KTAEDL | wwn-0x5000cca25df55694 | node4:bay1 (in bay) | - | 43,725 (~5.0 yr) | 0 | 0 | **in progress** — gate ✓, baseline clean, short ✓, long self-test running (ETA 21:29Z 2026-06-10) |
 | 2 | K4KTD40L | wwn-0x5000cca25df55cf3 | node5:bay1 (in bay) | - | 43,707 (~5.0 yr) | 0 | 0 | **in progress** — gate ✓, baseline clean, short ✓, long self-test running (ETA 21:57Z 2026-06-10) |
+| 3 | K7GEKUBR | wwn-0x5000cca269c62bb6 | node6:bay1 (in bay) | - | 43,348 (~4.95 yr) | 0 | 0 | **in progress** — gate ✓, baseline clean, short running, long next |
 
 Verdict legend: `in progress` → `in service` / `shelf spare` / `returned` once long + badblocks complete and the post-diff is clean.
