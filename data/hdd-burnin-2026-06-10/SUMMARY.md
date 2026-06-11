@@ -33,3 +33,15 @@ SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 | 9 (spare) | K4KTDL9L | wwn-0x5000cca25df55eae | node6:bay (spare burn-in) | - | 43,703 (~4.99 yr) | 0 | 0 | **in progress** (batch 2) — DDF wiped first ✓, gate ✓, baseline clean, long self-test starting |
 
 Verdict legend: `in progress` → `in service` / `shelf spare` / `returned` once the long self-test completes clean (badblocks dropped; SMART alert is the in-service safety net).
+
+## Batch 3 — mixed: last HDD + 2 Intel DC SATA SSDs (2026-06-11)
+
+After batch 2 is pulled, batch 3 runs the **10th/last HDD spare** plus **two used Intel DC SATA SSDs**, across the 3 bays in parallel. Two procedures at once:
+
+| Drive | Model | Purpose | Procedure |
+|---|---|---|---|
+| Last HDD (10th) | HUS726040ALA610 4TB | Ceph HDD-tier shelf spare | **HDD flow** — DDF-wipe → `assert_burnin_target` → baseline → short → long → diff |
+| Intel DC **S3510 480GB** | `INTEL SSDSC2BB480G6` (0.3 DWPD MLC, ~275 TBW, PLP, ~2015) | **boot/etcd spare** | SSD flow + **secure-erase** (gated by `assert_ssd_burnin_target`) |
+| Intel D3-**S4610 960GB** | `INTEL SSDSC2KG960G8` (3 DWPD TLC, ~5.5 PBW, PLP, ~2018) | **backup target** (USB box on Synology, Hyper Backup) | SSD flow + **wipe** (gated), Synology formats after |
+
+**SSD-erase hazard — read before seating:** the HDD gate's `ROTA=1` discriminator does NOT protect an SSD op (the boot/etcd disk is also a SATA SSD). Batch-3 SSDs are *written* (secure-erase), so a wrong by-id = boot/etcd disk wiped on a no-drain cluster. Use the **allowlist-driven `assert_ssd_burnin_target`** gate (fail-closed on empty allowlist; paste the seated SSD's WWN in first), NOT the HDD gate. SSD flow = SMART `-x` wear baseline → short → `dd`→/dev/null read pass → `mdadm --stop`+`wipefs` (RAID metadata) → secure-erase (`hdparm`, direct SATA only; unfreeze via hot-replug if `SEC_FROZEN`) → post-erase SMART confirm. Full gate template + flow in `blog/blog-hdd-tier-rollout-draft.md` (2026-06-11 Batch 3 section). Capture SSD SMART as `…-SERIAL-ssd-{baseline,posterase}.txt`.

@@ -991,3 +991,124 @@ urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='172.30.0.1', port=44
 ```
 
 `172.30.0.1` is the kube-API ClusterIP — so the Rook orchestrator mgr module crashed because it couldn't reach the API during the egress-broken window (same pod→service path as the descheduler's `dial 172.30.0.1:443 i/o timeout`). So the 2026-06-10 OVN-egress break had **three** distinct symptoms: false `TargetDown`/etcd-criticals (Prometheus scrape), `KubeJobFailed` (descheduler), and `CephMgrModuleCrash` (rook mgr module). **No crashes since 20:43Z**; `mgr.b` active 18h with standby `mgr.a`; module healthy now. The crashes are stale-and-unacknowledged — `RECENT_MGR_MODULE_CRASH` self-clears after `mgr/crash/warn_recent_interval` (~2 weeks) or immediately with `ceph crash archive-all` (a Ceph mutation — operator-confirmed, not auto-run). The remaining `HEALTH_WARN` is the long-known `BLUESTORE_SLOW_OP_ALERT` + this stale-crash warning.
+
+## 2026-06-11 — Batch 3: mixed (1 HDD + 2 Intel DC SATA SSDs) + the SSD-erase gate hazard
+
+Batch 3 is the **last HDD spare (10th)** plus **two used Intel datacenter SATA SSDs**, run
+across the three bays in parallel once batch 2 is pulled. It is a **mixed batch — two
+different procedures at once**:
+
+| Drive | Model | Class | Destination | Procedure |
+|---|---|---|---|---|
+| Last HDD (10th) | HUS726040ALA610 4TB | 7K6000 | shelf spare (Ceph HDD tier) | **unchanged HDD flow** — DDF-wipe → `assert_burnin_target` → baseline → short → long self-test → postlong diff |
+| Intel **DC S3510 480GB** | `INTEL SSDSC2BB480G6` | read-intensive 0.3 DWPD, MLC, ~275 TBW, PLP, ~2015 | **spare for boot/etcd drives** | SSD flow + **secure-erase** (gated) |
+| Intel **D3-S4610 960GB** | `INTEL SSDSC2KG960G8` | mixed-use 3 DWPD, 3D TLC, ~5.5 PBW, PLP, ~2018 | **backup target** — USB box on Synology, Hyper Backup ("kinda offsite") | SSD flow + **wipe** (gated), then Synology formats it |
+
+The S4610-as-Ceph-WAL/DB idea is **dropped** — its role is now the Synology backup box, not the
+cluster. The S3510 becomes a cold spare for the boot/etcd SSDs.
+
+### The hazard: for SATA SSDs the `ROTA=1` discriminator that protects the boot disk is GONE
+
+The HDD gate (`assert_burnin_target`) leans on **`ROTA=1`** as a primary, name-independent guard:
+the boot/etcd disk is a SATA SSD (`ROTA=0`), so it can *never* match an HDD gate. That safety
+property **vanishes the moment the burn-in target is itself a SATA SSD** — the target and the
+boot/etcd disk are now the same device class (`ROTA=0`, SATA, similar models). And batch 3
+**writes** to the SSDs (secure-erase, per the boot-spare/backup purposes), so a wrong by-id on an
+erase = **boot/etcd disk wiped on a zero-drain-headroom cluster**, in one keystroke. The drive
+being erased is also *destined to become a boot disk*, which makes the confusion class very real.
+
+**Therefore the SSD gate must be ALLOWLIST-driven, not denylist+attribute.** For HDDs, "it's the
+rotational ~4 TB non-system disk" is a sufficient positive identity. For SSDs there is no such
+negative-space identity — the only safe affirmative guard is **the exact WWN of the specific SSD
+being tested**. `assert_ssd_burnin_target` below fails closed on an empty allowlist and refuses
+any device whose WWN is not explicitly listed. The boot-SSD + NVMe-OSD denylist is kept as a
+defense-in-depth backstop (it already covers all three nodes' system disks).
+
+### Flow per SSD (validate first, THEN erase)
+
+Capture prior wear/errors *before* destroying anything, then erase to deliver clean:
+
+1. **Capture identity (read-only)** — `smartctl -i` → paste the SSD's bare-hex WWN into `ALLOW_WWNS`.
+2. **`assert_ssd_burnin_target /dev/disk/by-id/wwn-…`** — positive WWN allowlist + model (`SSDSC2(BB|KG)`) + size window + `ROTA=0` + by-id-only + not-in-denylist + typed-serial confirm.
+3. **SMART `-x` wear baseline** (read-only) → `Media_Wearout_Indicator`/`Percentage_Used`, `Total_LBAs_Written` → host TBW vs rated endurance (the make-or-break for the decade-old S3510), `Reallocated_Sector_Ct`, `Available_Reserved_Space`, `Unsafe_Shutdown_Count`, `End-to-End_Error`, overall health. Capture to `…-SERIAL-ssd-baseline.txt`.
+4. **Short self-test** (2 min, drive-internal).
+5. **Full-drive read pass** `dd if=/dev/disk/by-id/wwn-… of=/dev/null bs=1M status=progress` (~16 min 480GB / ~32 min 960GB) — non-destructive, surfaces any pending/uncorrectable LBA across the whole device.
+6. **Clear stale RAID/DDF metadata** (used DC pulls carry it — same lesson as the HDDs): `mdadm --stop` any assembled array on the device, then `wipefs -a` — gated.
+7. **Secure-erase** — `hdparm --user-master u --security-set-pass p <dev> && hdparm --user-master u --security-erase p <dev>` (proper SSD wipe: resets all cells, restores performance, clears bootloader/partition/RAID). Requires direct SATA + the drive **not `SEC_FROZEN`**; if frozen, hot-replug the bay drive (or S3/suspend) to clear the freeze, then re-run the gate (WWN re-confirm) before erase. Alternative if secure-erase is unavailable (e.g. behind a USB bridge): `blkdiscard /dev/disk/by-id/wwn-…` (TRIM whole device) — gated identically.
+8. **Post-erase SMART confirm** → health PASS, no new defects, partition table gone. Capture `…-SERIAL-ssd-posterase.txt`.
+
+### Connection caveat (bay vs USB dock)
+
+- **Direct SATA (3.5" bay + 2.5"→3.5" caddy):** hot-plug works, secure-erase works, the gate's `ROTA`/size/serial probes are accurate. **Required for `hdparm` secure-erase.** This is the path for batch 3.
+- **USB3 dock:** fine for read-only triage but needs `smartctl -d sat`; `hdparm` secure-erase usually **won't pass through** (drive reports frozen / SAT can't issue SECURITY ERASE). `blkdiscard` *may* work depending on the bridge. Since both SSDs need a real wipe, prefer the bay.
+
+### `assert_ssd_burnin_target` — allowlist-driven SSD gate (template; FILL `ALLOW_WWNS` at seat time)
+
+```bash
+# Parallel to assert_burnin_target, but the affirmative guard is a POSITIVE WWN ALLOWLIST
+# (ROTA can no longer separate target from boot). Fails closed on empty allowlist.
+assert_ssd_burnin_target() {
+  local RED=$'\e[1;31m' GRN=$'\e[1;32m' NC=$'\e[0m'
+  _fail() { printf '%s[SSD-GATE DENIED]%s %s\n' "$RED" "$NC" "$*" >&2; return 1; }
+  _ok()   { printf '%s[ok]%s %s\n' "$GRN" "$NC" "$*"; }
+
+  # *** FILL at seat time: bare-hex (no 0x) LU WWN of the EXACT SSD being tested. ***
+  # *** EMPTY = deny-all. Add ONLY the drive currently in the bay, remove when pulled. ***
+  local ALLOW_WWNS=""          # e.g. "55cd2e41________  55cd2e41________"  (S3510 / S4610)
+  # System disks across ALL nodes — boot SSDs + NVMe OSDs (same as the HDD gate). Backstop only.
+  local DENY_WWNS="55cd2e404c20c200 002538ba11b25345 500080d910e743a6 36483330529183340025384600000001 500080d910e71bba 36483330547252560025385800000001"
+  local MODEL_RE='SSDSC2(BB|KG)'              # S3510=SSDSC2BB, S4610=SSDSC2KG (Intel DC SATA)
+  local MIN_BYTES=440000000000 MAX_BYTES=1000000000000   # 480GB..960GB; well below the 4TB HDD
+  local ARG="$1"
+  _norm() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d ' :' | sed -E 's/^0x//; s/^eui\.//'; }
+
+  [ -n "$ALLOW_WWNS" ] || { _fail "ALLOW_WWNS is EMPTY — fail-closed. Paste the seated SSD's WWN first."; return 1; }
+  [ -n "$ARG" ] || { _fail "no device path. Usage: assert_ssd_burnin_target /dev/disk/by-id/wwn-..."; return 1; }
+  case "$ARG" in /dev/disk/by-id/wwn-*|/dev/disk/by-id/ata-*) : ;;
+    *) _fail "'$ARG' not a by-id wwn/ata path. Bare /dev/sdX REFUSED."; return 1 ;; esac
+  [ -L "$ARG" ] || { _fail "'$ARG' not a symlink."; return 1; }
+  local REAL SDX; REAL=$(readlink -f "$ARG") || { _fail "cannot readlink."; return 1; }
+  [ -b "$REAL" ] || { _fail "'$REAL' not a block device."; return 1; }
+  SDX=$(basename "$REAL")
+  [ -e "/sys/class/block/$SDX/partition" ] && { _fail "'$SDX' is a partition."; return 1; }
+  case "$SDX" in nvme*) _fail "'$SDX' is NVMe (OSD). ABSOLUTE NO."; return 1 ;;
+    rbd*|nbd*|dm-*|loop*|sr*) _fail "'$SDX' is virtual/live. REFUSING."; return 1 ;; esac
+
+  # SSD requires ROTA=0 — but this is NECESSARY, NOT SUFFICIENT (boot disk is also 0).
+  [ "$(cat /sys/block/$SDX/queue/rotational 2>/dev/null)" = "0" ] || { _fail "$SDX ROTA!=0 — not an SSD."; return 1; }
+
+  local SMART MODEL SERIAL WWN
+  SMART=$(smartctl -i "$REAL" 2>/dev/null) || { _fail "smartctl -i failed. REFUSING."; return 1; }
+  MODEL=$(printf '%s\n' "$SMART"  | sed -n -E 's/^(Device Model|Model Number):[[:space:]]+//p' | head -1)
+  SERIAL=$(printf '%s\n' "$SMART" | sed -n -E 's/^Serial Number:[[:space:]]+//p' | head -1)
+  WWN=$(printf '%s\n' "$SMART"    | sed -n -E 's/^LU WWN Device Id:[[:space:]]+//p' | head -1)
+  [ -n "$MODEL" ] && [ -n "$SERIAL" ] || { _fail "no Model/Serial. REFUSING."; return 1; }
+  printf '%s' "$MODEL" | grep -qiE "$MODEL_RE" || { _fail "model '$MODEL' != $MODEL_RE."; return 1; }
+  _ok "model: $MODEL"
+
+  # DENY backstop (boot/OSD), THEN positive ALLOW (the real guard):
+  local WWN_BYID; WWN_BYID=$(printf '%s' "$ARG" | sed -n -E 's#.*/wwn-(0x[0-9a-fA-F]+).*#\1#p')
+  local n hit=""
+  for w in "$WWN" "$WWN_BYID"; do n=$(_norm "$w"); [ -n "$n" ] || continue
+    for d in $DENY_WWNS; do case "$n" in *"$d"*) _fail "WWN '$w' in system-disk DENYLIST ($d). ABSOLUTE NO."; return 1 ;; esac; done
+    for a in $ALLOW_WWNS; do case "$n" in *"$(_norm "$a")"*) hit="$w" ;; esac; done
+  done
+  [ -n "$hit" ] || { _fail "WWN not in ALLOWLIST — refusing (this is the SSD safety guard)."; return 1; }
+  _ok "WWN in allowlist: $hit"
+
+  local BYTES; BYTES=$(blockdev --getsize64 "$REAL" 2>/dev/null)
+  [ "$BYTES" -ge "$MIN_BYTES" ] && [ "$BYTES" -le "$MAX_BYTES" ] || { _fail "size $BYTES outside 480-960GB window."; return 1; }
+  _ok "size: $BYTES"
+
+  # Typed-serial confirmation (TOCTOU-closing): operator must type the serial shown by the drive.
+  printf 'Type the serial to confirm ERASE target [%s]: ' "$SERIAL" >&2; local TYPED; read -r TYPED
+  [ "$TYPED" = "$SERIAL" ] || { _fail "typed serial != $SERIAL."; return 1; }
+  GATE_REAL="$REAL"; GATE_SERIAL="$SERIAL"; GATE_WWN="$WWN"; GATE_MODEL="$MODEL"
+  _ok "GATE PASS — $MODEL / $SERIAL / $REAL"; return 0
+}
+```
+
+**Procedure rule going forward:** any future SATA-SSD wipe/erase on these nodes (boot-spare prep,
+backup-drive prep, OSD-journal SSDs) uses `assert_ssd_burnin_target` with the target's WWN
+allowlisted — never the HDD gate, never a bare `/dev/sdX`. The HDD gate's `ROTA=1` does not
+protect an SSD operation.
