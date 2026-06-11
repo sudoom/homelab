@@ -981,3 +981,13 @@ oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- \
 **Fix:** restart node6's `ovnkube-node` (`--field-selector spec.nodeName=node6.okd.sudops.pl`). k8s-0 → .7/.8 dropped from a 5-minute hang to **11 ms**; **0 down targets**; alerts **31 → 11** (baseline: Watchdog/AlertmanagerReceiversNotConfigured/KubeCPUOvercommit/PDB/UpdateAvailable/transient KubeJobFailed). etcd was 3/3 healthy throughout — `etcdctl endpoint health --cluster` is the disconfirmation for the critical etcd alerts, always check it first.
 
 **Lesson (committed to CLAUDE.md):** after any node event, restart **ALL 3** `ovnkube-node`, not a targeted subset — an un-restarted node stays silently broken until a pod lands on it. Two distinct root causes (DDF-cAdvisor and ovnkube-node-egress) throw the *identical* false-etcd-critical symptom; rule out both, and confirm etcd is real first.
+
+**Follow-up (next-morning monitor tick, ~07:20Z) — a third symptom of the same egress break: `CephMgrModuleCrash`.** The firing-alert count was up to 16 (from the 12 baseline). Three were known noise (`PrometheusRuleFailures` ×2 = the Rook-shipped `…;pools` rule group; `PrometheusOperatorRejectedResources` = the NMState `controller-manager-metrics-monitor` ServiceMonitor's bearer-token-file quirk — *our* `smartctl-device-health` rule is loaded and accepted; `KubeJobFailed` ×4 = marketplace catalog-extract + OLM `collect-profiles`, collateral of the 3 Degraded OLM operators). The one worth chasing was **`CephMgrModuleCrash`**: `ceph crash ls` showed the **`rook` mgr module** crashed 5× on `mgr.b` (node4) between **14:27–20:43Z on 06-10** — and the backtrace is the same egress fingerprint:
+
+```
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='172.30.0.1', port=443):
+  Max retries exceeded with url: /api/v1/namespaces/rook-ceph/pods
+  (Caused by NewConnectionError(...))
+```
+
+`172.30.0.1` is the kube-API ClusterIP — so the Rook orchestrator mgr module crashed because it couldn't reach the API during the egress-broken window (same pod→service path as the descheduler's `dial 172.30.0.1:443 i/o timeout`). So the 2026-06-10 OVN-egress break had **three** distinct symptoms: false `TargetDown`/etcd-criticals (Prometheus scrape), `KubeJobFailed` (descheduler), and `CephMgrModuleCrash` (rook mgr module). **No crashes since 20:43Z**; `mgr.b` active 18h with standby `mgr.a`; module healthy now. The crashes are stale-and-unacknowledged — `RECENT_MGR_MODULE_CRASH` self-clears after `mgr/crash/warn_recent_interval` (~2 weeks) or immediately with `ceph crash archive-all` (a Ceph mutation — operator-confirmed, not auto-run). The remaining `HEALTH_WARN` is the long-known `BLUESTORE_SLOW_OP_ALERT` + this stale-crash warning.
