@@ -10,7 +10,7 @@ Execution vehicle: `oc exec` into the on-node `smartctl-exporter` pod (has `smar
 Self-tests are drive-internal (no etcd-HBA load); only `badblocks` loads the shared
 SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 
-3 drives go into service (1 per node bay); 7 shelf spares total (3 burning in now across the 3 bays in parallel via live hot-swap; 4 still to cycle through in later sessions).
+3 drives go into service (1 per node bay); 7 shelf spares total. Progress: **batch 1 (3 spares) PASSED** + pulled/stored raw (drives 4-6); **batch 2 (3 spares) burning in** now across the 3 bays (drives 7-9, DDF-wiped-first per the new procedure); **1 spare left** to cycle after.
 
 **Serial caution:** the drives ship with near-identical serials — drive 1 `K4KTAEDL` vs drive 2 `K4KTD40L`. Everything is keyed by WWN to avoid transposition; verify serial+WWN at the destination node before writing it into the OSD device list.
 
@@ -28,5 +28,8 @@ SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 | 4 (spare) | K7GE897L | wwn-0x5000cca269c607f9 | shelf spare (burned in node4) | - | 43,351 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — long self-test "Completed without error", 0 new bad sectors. DDF wiped ✓ (cleared in incident sweep). Store raw + labeled. |
 | 5 (spare) | K7GE89HL | wwn-0x5000cca269c60801 | shelf spare (burned in node5) | - | 43,351 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — long self-test "Completed without error", 0 new bad sectors. DDF wiped ✓ (cleared in incident sweep). Store raw + labeled. |
 | 6 (spare) | K4KZYB3B | wwn-0x5000cca25df857da | shelf spare (burned in node6) | - | 43,351 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — DDF wiped first ✓ (per the new procedure), long self-test "Completed without error", 0 new bad sectors. Store raw + labeled. |
+| 7 (spare) | K7GEX0MR | wwn-0x5000cca269c65202 | node4:bay (spare burn-in) | - | 43,350 (~4.95 yr) | 0 | 0 | **in progress** (batch 2) — DDF wiped first ✓, gate ✓, baseline clean, long self-test starting |
+| 8 (spare) | K7GEWZLR | wwn-0x5000cca269c651e2 | node5:bay (spare burn-in) | - | 43,350 (~4.95 yr) | 0 | 0 | **in progress** (batch 2) — DDF wiped first ✓, gate ✓, baseline clean, long self-test starting |
+| 9 (spare) | K4KTDL9L | wwn-0x5000cca25df55eae | node6:bay (spare burn-in) | - | 43,703 (~4.99 yr) | 0 | 0 | **in progress** (batch 2) — DDF wiped first ✓, gate ✓, baseline clean, long self-test starting |
 
 Verdict legend: `in progress` → `in service` / `shelf spare` / `returned` once the long self-test completes clean (badblocks dropped; SMART alert is the in-service safety net).
