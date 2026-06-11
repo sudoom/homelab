@@ -959,3 +959,25 @@ wipefs -a /dev/<HUS726040-rotational-disk>                                      
 **Procedure change — wipe DDF FIRST on every spare.** Per-spare flow is now: seat drive → **`mdadm --stop` + `wipefs -a` the DDF (FIRST)** → gate → baseline → short → long. Stops the cAdvisor hang before it starts.
 
 **Shelf-spare storage policy (decided 2026-06-10): store burned-in spares RAW** — no partition, no RAID/DDF metadata (the wipe above already leaves them that way). Why: (a) a raw drive won't auto-assemble a stale md array on re-insertion → this whole class of false alerts can't recur; (b) Rook/Ceph BlueStore wants raw block devices → clean OSD provisioning, no zap step; (c) no stale filesystem to confuse anything. The drive's validated-ness lives in the SMART serial + a physical label (serial + "burn-in PASS <date>") + the `SUMMARY.md` record keyed by serial — not in any on-disk metadata.
+
+### 2026-06-11 — same etcd-critical symptom, second cause: node6 ovnkube-node broken egress (two-cause storm)
+
+Attempted the deferred `systemctl restart kubelet` (node4+node5) to clear the DDF-residue cAdvisor hang — but ~31 alerts **persisted**, including critical `etcdMembersDown`/`etcdInsufficientMembers`/`ClusterVersionOperatorDown` + 16× `TargetDown`. It turned out to be **two stacked causes** sharing one symptom, only one of which a kubelet restart addresses:
+
+- **(a) DDF residue** (yesterday's cause) — broken md arrays hanging cAdvisor; already cleared with `mdadm --stop` + `wipefs`.
+- **(b) node6's `ovnkube-node` had broken pod→*remote*-host-IP egress** lingering since its morning HDD-install reboot. The morning OVN-cascade fix only restarted **node5's** ovnkube-node (where repo-server lived); node6's stayed broken. A node like that still reaches its OWN host IP, so it looks healthy — it was **silent until `prometheus-k8s-0` rescheduled onto node6** and couldn't scrape node4/node5 host-metrics (`:10250`/`:9100`/`:9979`/… all hung the full 30 s scrape timeout) → ~20 false `TargetDown` + the etcd/CVO criticals (inferred from the failed scrapes).
+
+Two kubelet restarts + a full Prometheus restart were **red herrings** — all aimed at cause (a)'s residue, none touching node6's egress. The same broken egress also explains the `KubeJobFailed` on `kube-descheduler` (its pod on node6 couldn't `dial 172.30.0.1:443` — pod→service-IP, same path).
+
+**Diagnosis that nailed it — per-source-node reachability test.** Host services were fast locally (node-exporter 0.15 s) and reachable from a pod *on node5* (kubelet `:10250` → 401 in 40 ms), but Prometheus hung. The discriminator was running the test *from the suspect node's pod*:
+
+```bash
+# from prometheus-k8s-0 (on node6):
+oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- \
+  sh -c 'for ip in 192.168.1.7 192.168.1.8 192.168.1.9; do time wget -qO- -T8 http://$ip:9100/metrics >/dev/null 2>&1; done'
+# -> .9 (own host) = 0.011s ; .7/.8 (remote hosts) = 5min hang  ==>  node6 ovnkube-node egress broken
+```
+
+**Fix:** restart node6's `ovnkube-node` (`--field-selector spec.nodeName=node6.okd.sudops.pl`). k8s-0 → .7/.8 dropped from a 5-minute hang to **11 ms**; **0 down targets**; alerts **31 → 11** (baseline: Watchdog/AlertmanagerReceiversNotConfigured/KubeCPUOvercommit/PDB/UpdateAvailable/transient KubeJobFailed). etcd was 3/3 healthy throughout — `etcdctl endpoint health --cluster` is the disconfirmation for the critical etcd alerts, always check it first.
+
+**Lesson (committed to CLAUDE.md):** after any node event, restart **ALL 3** `ovnkube-node`, not a targeted subset — an un-restarted node stays silently broken until a pod lands on it. Two distinct root causes (DDF-cAdvisor and ovnkube-node-egress) throw the *identical* false-etcd-critical symptom; rule out both, and confirm etcd is real first.
