@@ -28,7 +28,7 @@ SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 | 4 (spare) | K7GE897L | wwn-0x5000cca269c607f9 | shelf spare (burned in node4) | - | 43,351 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — long self-test "Completed without error", 0 new bad sectors. DDF wiped ✓ (cleared in incident sweep). Store raw + labeled. |
 | 5 (spare) | K7GE89HL | wwn-0x5000cca269c60801 | shelf spare (burned in node5) | - | 43,351 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — long self-test "Completed without error", 0 new bad sectors. DDF wiped ✓ (cleared in incident sweep). Store raw + labeled. |
 | 6 (spare) | K4KZYB3B | wwn-0x5000cca25df857da | shelf spare (burned in node6) | - | 43,351 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — DDF wiped first ✓ (per the new procedure), long self-test "Completed without error", 0 new bad sectors. Store raw + labeled. |
-| 7 (spare) | K7GEX0MR | wwn-0x5000cca269c65202 | node4:bay (spare burn-in) | - | 43,350 (~4.95 yr) | 0 | 0 | **in progress** (batch 2) — DDF wiped first ✓, gate ✓, baseline clean, long self-test starting |
+| 7 (spare) | K7GEX0MR | wwn-0x5000cca269c65202 | shelf spare (burned in node4) | - | 43,350 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — DDF wiped first ✓, long self-test "Completed without error" (POH 43,358), 0 new reallocated/pending/offline/CRC, health PASSED. Store raw + labeled. |
 | 8 (spare) | K7GEWZLR | wwn-0x5000cca269c651e2 | node5:bay (spare burn-in) | - | 43,350 (~4.95 yr) | 0 | 0 | **in progress** (batch 2) — DDF wiped first ✓, gate ✓, baseline clean, long self-test starting |
 | 9 (spare) | K4KTDL9L | wwn-0x5000cca25df55eae | node6:bay (spare burn-in) | - | 43,703 (~4.99 yr) | 0 | 0 | **in progress** (batch 2) — DDF wiped first ✓, gate ✓, baseline clean, long self-test starting |
 
