@@ -19,7 +19,7 @@ Pin these when generating manifests or commands — mismatched versions are the 
 
 | Tool            | Version        | Notes                                                                 |
 |---|---|---|
-| OKD             | 4.20           | Kube API ≈ upstream 1.31                                              |
+| OKD             | 4.20.0-okd-scos.17 | Kube API ≈ upstream **1.33** (mapping: OKD `4.N` → Kube `1.(N+13)`, so 4.21→1.34, 4.22→1.35). SCOS 10 / kernel 6.12.0-142.el10 |
 | Helm            | v3             | Helm v2 syntax is invalid; no Tiller                                  |
 | ArgoCD          | v3.1.11+cc053b2     | Server-side apply + sync-wave annotations used throughout             |
 | OLM             | OKD-bundled    | `okderators` + `community-operators` CatalogSources                   |
