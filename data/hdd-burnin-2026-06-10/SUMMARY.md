@@ -46,3 +46,12 @@ After batch 2 is pulled, batch 3 runs the **10th/last HDD spare** plus **two use
 | Intel D3-**S4610 960GB** | `INTEL SSDSC2KG960G8` (3 DWPD TLC, ~5.5 PBW, PLP, ~2018) | **backup target** (USB box on Synology, Hyper Backup) | SSD flow + **wipe** (gated), Synology formats after |
 
 **SSD-erase hazard — read before seating:** the HDD gate's `ROTA=1` discriminator does NOT protect an SSD op (the boot/etcd disk is also a SATA SSD). Batch-3 SSDs are *written* (secure-erase), so a wrong by-id = boot/etcd disk wiped on a no-drain cluster. Use the **allowlist-driven `assert_ssd_burnin_target`** gate (fail-closed on empty allowlist; paste the seated SSD's WWN in first), NOT the HDD gate. SSD flow = SMART `-x` wear baseline → short → `dd`→/dev/null read pass → `mdadm --stop`+`wipefs` (RAID metadata) → secure-erase (`hdparm`, direct SATA only; unfreeze via hot-replug if `SEC_FROZEN`) → post-erase SMART confirm. Full gate template + flow in `blog/blog-hdd-tier-rollout-draft.md` (2026-06-11 Batch 3 section). Capture SSD SMART as `…-SERIAL-ssd-{baseline,posterase}.txt`.
+
+**Batch-3 SSDs seated 2026-06-11 — wear triage (read-only, both PASSED):**
+
+| SSD | Node:dev | by-id WWN | Serial | POH | Wear | Defects | Verdict |
+|---|---|---|---|---|---|---|---|
+| S3510 480GB (boot-spare) | node5:sdb | wwn-0x55cd2e414d882542 | BTWA64640719480FGN | 48,796 (~5.6yr) | **Media_Wearout=100, ~6.7 TiB / 275 TBW ≈ 2.4% used** | 0 realloc/pending/CRC/E2E/reserved | **healthy** — near-zero wear despite age; 221 unsafe-shutdowns cosmetic (PLP). Read pass running → then operator secure-erase. |
+| S4610 960GB (Synology backup) | node6:sdb | wwn-0x55cd2e415293e3b7 | BTYG01830APB960CGN | 36,783 (~4.2yr) | **Percent_Life_Remaining=100** (20 power-cycles, 15 unsafe-shutdowns) | 0 realloc/pending/CRC/E2E | **healthy** — essentially unworn. Read pass running → then wipe (operator), Synology formats. |
+
+Boot disks confirmed untouched: node5 `/dev/sda` Toshiba THNSF8 (wwn 500080d910e743a6), node6 `/dev/sda` Toshiba (wwn 500080d910e71bba) — both in the gate denylist; neither SSD WWN collides. No DDF/md auto-assembled on either SSD. Secure-erase is **operator-run** (gated, typed-serial confirm) — not auto-executed.
