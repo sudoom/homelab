@@ -543,11 +543,26 @@ corrections + a Rook gotcha + a CSI incident reshaped it:
 
 **End state:** `cephfs` active, EC 2+1 `cephfs-bulk-hdd` (min_size 2, pg_num 32, ec_overwrites),
 metadata replicated on NVMe, MDS active+standby on different hosts, SC `cephfs-hdd`→`cephfs-bulk-hdd`,
-ArgoCD Synced+Healthy, 253 pgs active+clean. **Known cosmetic quirk:** the CephFilesystem CR
-`status.phase` is stuck at `Failure` (the controller's `ceph-file-controller-detect-version`
-CmdReporter job timed out during the churn and the phase field never reset) — the FS is healthy
-and ArgoCD's health check passes regardless; an operator restart (safe at the same version) would
-reset it. *Follow-up: investigate why the detect-version CmdReporter timed out.*
+ArgoCD Synced+Healthy, 253 pgs active+clean.
+
+**The CR `phase: Failure` was NOT cosmetic — it blocked Phase 5.** Rook's CephFilesystem reconcile
+had wedged on a `ceph-file-controller-detect-version` CmdReporter timeout (during the CSI churn),
+so it never created the **`csi` CephFilesystemSubVolumeGroup** — and the CephFS CSI provisioner
+puts every subvolume in that group. So the first Phase-5 PVC sat `Pending` with
+`ProvisioningFailed: rados ret=-2 … "subvolume group 'csi' does not exist"`, and both the
+CephFilesystem and `cephfs-csi` SubVolumeGroup CRs were in `Failure`. **Fix: restart the rook-ceph
+operator** (safe at the same version v1.19.5 — only a version *change* rolls OSDs; verified 6 OSDs
+stayed up). The fresh reconcile's detect-version job **succeeded** (it was flaky, not persistently
+broken) → Rook created the `csi` subvolumegroup, and the FS + SVG CRs went `Ready`. Lesson: a
+CephFilesystem stuck in `Failure` can block CSI provisioning even when `ceph fs status` shows the
+FS active — don't dismiss it as cosmetic.
+
+**Phase 5 — validated 2026-06-12.** Test RWX PVC on `cephfs-hdd`: **Bound** in ~5s
+(`ReadWriteMany`). IO from a pod: write 200 MiB @ **22.1 MB/s** + read @ **76.6 MB/s** (both
+`direct`; write is EC-2+1-on-HDD-amplified, fine for a bulk/cold tier). Clean teardown — PVC
+delete → CSI removed the subvolume + PV, **no orphan PV/Released, `ceph fs subvolume ls = []`**.
+End-to-end path proven: SC → EC pool → provision → mount → IO → reclaim. **HDD-tier rollout
+COMPLETE (Phases 1-5).**
 
 ### Phase 5 — Validate
 
