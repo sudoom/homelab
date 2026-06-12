@@ -27,7 +27,7 @@ Binding constraint per component: clear **both** Kube 1.34 (4.21 intermediate) *
 
 | Component | Deployed | 1.34 | 1.35 | Verdict |
 |---|---|---|---|---|
-| Rook-Ceph operator + Ceph | v1.19.6 / Squid 19.2.3 | ✅ | ✅ | Ready. Rook 1.19 supports v1.30–1.35. **Zero headroom at 1.35** → v1.20.x bump after 4.22. Upstream-Helm delivery → not catalog-gated. |
+| Rook-Ceph operator + Ceph | **v1.20.0 / Squid 19.2.4** (Renovate-bumped 2026-06-12) | ✅ | ✅ | Ready **with headroom**. Rook 1.20 supports Kube v1.31–v1.36 → covers both 1.34 and 1.35 with margin (the prior "zero headroom at 1.35" concern on v1.19.6 is **RESOLVED** — v1.20.0 landed via Renovate #134 + Ceph 19.2.4 via #133, rolled all daemons cleanly). Upstream-Helm delivery → not catalog-gated. |
 | cert-manager-operator | v1.18.0 (okderators, alpha) | ⛔ | ⛔ | **BLOCKER both hops.** 1.18 EOL 2026-03-10, caps at Kube 1.33. → bump 1.20.2. |
 | OpenShift GitOps (Argo CD) | v1.19.0 (Argo CD 3.1.x) | ✅ | ⛔ | 4.22-blocker (no GitOps release documents OCP 4.22 yet). Engine is fine; it's support-matrix/catalog paperwork. Bump to the 4.22-listing release (likely 1.21.x) on 4.21 first. |
 | loki-operator + cluster-logging | v6.5.0 (okderators) | ✅ | needs-upgrade | **Currently DEGRADED on 4.20** — clear first. 6.5 in-matrix for 4.21; 4.22 needs Logging 6.6 (unreleased). okderators #44 OPEN. |
@@ -76,7 +76,7 @@ downstream operator out of matrix.** One minor at a time, no skipping.
 2. Resolve the okderators gap for cert-manager: **migrate cert-manager off okderators** (upstream OLM bundle or Helm chart) — recommended, removes the dependency — *or* wait for `:4.21` to publish with a 1.34-usable channel.
 3. Bump cert-manager to **1.20.2** (NOT 1.19.0 — re-issuance bug; NOT 1.20.0 — OpenShift issuer-finalizer RBAC blocker; 1.20 covers Kube 1.32→1.35 so one bump clears both hops). Alternatively wait for cert-manager **1.21** (GA ~2026-06-24, maps Kube 1.33→1.36). Verify `oc get certificate -A` all Ready=True. Cloudflare DNS-01 solver config unchanged.
 4. Recommended: bump OpenShift GitOps to **1.20.4** (Argo CD 3.3, also matrixed to 4.21).
-5. Audit for `groupsnapshot.storage.k8s.io/v1beta1` VGS objects (**none expected** here) and confirm Rook v1.19.6 serves the VGS CRD at **v1beta2** (4.21 removes v1beta1 outright — distribution-specific; upstream only deprecates). Blast radius limited: CNPG backs up via the GA `snapshot.storage.k8s.io/v1` `ceph-rbd-snapshot` class, unaffected.
+5. Audit for `groupsnapshot.storage.k8s.io/v1beta1` VGS objects (**none expected** here) and confirm Rook v1.20.0 serves the VGS CRD at **v1beta2** (4.21 removes v1beta1 outright — distribution-specific; upstream only deprecates). Blast radius limited: CNPG backs up via the GA `snapshot.storage.k8s.io/v1` `ceph-rbd-snapshot` class, unaffected.
 6. Run `kubent`/`pluto` over rendered manifests + `kubectl get --raw /metrics | grep apiserver_requested_deprecated_apis` (expect zero hits).
 7. Confirm all 3 nodes **cgroup v2**; capture the `ethtool -i` NIC baseline.
 
@@ -101,7 +101,7 @@ Re-confirm cgroup v2 (**a cgroup-v1 node hard-fails kubelet on 1.35 = a lost OSD
 no-drain topology**). Same degraded-window discipline + per-node network pre-flight as Hop 1.
 **DEFER** — see freshness below.
 
-**AFTER 4.22 settles (non-blocking):** bump Rook to v1.20.x to regain headroom past 1.35.
+**AFTER 4.22 settles (non-blocking):** ~~bump Rook to v1.20.x to regain headroom past 1.35~~ — **DONE 2026-06-12** (Renovate bumped Rook → v1.20.0 / Ceph → 19.2.4; Rook 1.20 covers Kube 1.31–1.36, so headroom for both hops is already in place).
 
 ### 4.22 freshness verdict: DEFER
 
@@ -132,7 +132,7 @@ plane is on the new minor (IF staying on okderators rather than migrating cert-m
 - Logging 6.6 + the GitOps OCP-4.22 release are UNRELEASED — the 4.22 hop is gated on releases that don't yet exist; minimums can't be pinned authoritatively.
 - loki/cluster-logging is DEGRADED on 4.20 with root cause not yet diagnosed — clear + understand before any hop.
 - OADP 1.6 GA tracks 4.22 — confirm the 1.6 bundle is actually PRESENT in the 4.22 community-operators index at upgrade time.
-- Rook v1.19.6 at the exact top of its window (1.35) with zero slack — v1.20.x bump effectively mandatory before any future Kube bump.
+- ~~Rook v1.19.6 at the exact top of its window (1.35) with zero slack~~ — **RESOLVED 2026-06-12**: now on Rook v1.20.0 (Kube 1.31–1.36) + Ceph 19.2.4, both via Renovate auto-merge. NB: that Ceph patch bump rolled all 3 OSDs (a degraded-window event) unsupervised — decide whether Renovate should auto-merge storage/Ceph image bumps or gate them behind a scheduled window.
 - VGS v1beta1 removal at 4.21 — low blast radius (none used) but confirm Rook's bundled sidecar emits only v1beta2.
 - CNPG upstream doesn't officially test OpenShift — runs fine but technically unvalidated on 4.21/4.22.
 - Each per-node reboot (6 across the two hops) re-trips the OVN-egress + RBD-VA cascade and can re-expose the DDF false-etcd-alert symptom — operational, compounding on a no-drain cluster.

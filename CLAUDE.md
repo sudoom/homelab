@@ -102,7 +102,7 @@ For operators bringing CRDs, use **intra-chart** sync-wave annotations: `Subscri
 
 ## Storage (Rook-Ceph)
 
-The cluster's storage is **Rook-managed Ceph Squid (19.2.3)**. The operator is shipped via the upstream `rook-ceph` Helm chart; the `CephCluster` CR + pools + StorageClasses are vendored as raw manifests under `components/storage/` (not the `rook-ceph-cluster` subchart yet — see TODO). Suggestions and changes around storage need to respect the constraints below.
+The cluster's storage is **Rook-managed Ceph Squid (19.2.4, Rook v1.20.0)** — bumped from 19.2.3 / Rook 1.19.6 via Renovate auto-merge 2026-06-12 (#133 Ceph, #134 Rook); the Ceph patch rolled all 3 OSDs cleanly (degraded-window event, completed unsupervised — see note in `blog/blog-okd-4.22-upgrade-draft.md` on whether storage/Ceph Renovate bumps should be gated). The operator is shipped via the upstream `rook-ceph` Helm chart; the `CephCluster` CR + pools + StorageClasses are vendored as raw manifests under `components/storage/` (not the `rook-ceph-cluster` subchart yet — see TODO). Suggestions and changes around storage need to respect the constraints below.
 
 ### Topology
 
