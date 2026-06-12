@@ -2,7 +2,7 @@ namespace: rook-ceph
 
 # CephObjectStore — RGW deployment + the two pools it backs onto.
 # metadataPool stays on NVMe permanently (small, IO-hot).
-# dataPool starts on NVMe; flip to hdd once the chassis has bulk drives.
+# dataPool flipped to hdd 2026-06-12 (Phase 3) now the HDD tier is live.
 objectStore:
   name: ceph-objectstore
 
@@ -14,7 +14,7 @@ objectStore:
 
   dataPool:
     failureDomain: host
-    deviceClass: nvme
+    deviceClass: hdd          # flipped nvme->hdd 2026-06-12 (Phase 3; HDD tier live). Migrates RGW data NVMe->HDD via backfill.
     replicated:
       size: 3
     # Floor PGs at 32. The pg_autoscaler returns [] on this cluster (Squid
