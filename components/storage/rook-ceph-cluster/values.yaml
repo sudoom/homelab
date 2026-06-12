@@ -195,9 +195,71 @@ rook-ceph-cluster:
           csi.storage.k8s.io/node-stage-secret-namespace: "{{ .Release.Namespace }}"
           csi.storage.k8s.io/fstype: ext4
 
-  # No filesystems yet — CephFS is queued on bulk HDDs landing in the
-  # chassis (see README TODO). When it ships, add cephFileSystems here.
-  cephFileSystems: []
+  # CephFS two-tier filesystem (Phase 4, 2026-06-12). One CephFilesystem,
+  # metadata on NVMe, two data pools (NVMe low-latency RWX + HDD bulk RWX).
+  # Rendered RADOS pools: cephfs-metadata, cephfs-replicated-nvme,
+  # cephfs-replicated-hdd (Rook prefixes data-pool names with the fs name).
+  # Both StorageClasses ship from the local templates/cephfs-storageclasses.yaml
+  # (the upstream subchart renders only ONE SC per fs entry, and we need two
+  # against the SAME fs) — so storageClass.enabled is false here.
+  cephFileSystems:
+    - name: cephfs
+      spec:
+        metadataPool:
+          failureDomain: host
+          deviceClass: nvme
+          replicated:
+            size: 3
+            requireSafeReplicaSize: true
+        dataPools:
+          - name: replicated-nvme      # -> cephfs-replicated-nvme (low-latency RWX)
+            failureDomain: host
+            deviceClass: nvme
+            replicated:
+              size: 3
+              requireSafeReplicaSize: true
+            parameters:
+              pg_num_min: "32"
+          - name: replicated-hdd       # -> cephfs-replicated-hdd (bulk RWX)
+            failureDomain: host
+            deviceClass: hdd
+            replicated:
+              size: 3
+              requireSafeReplicaSize: true
+            parameters:
+              pg_num_min: "32"
+        preservePoolsOnDelete: true
+        preserveFilesystemOnDelete: true
+        metadataServer:
+          activeCount: 1
+          activeStandby: true          # 1 active + 1 hot-standby MDS
+          # Low request (scheduler reserves only 1Gi x2) but a 4Gi LIMIT:
+          # Rook sizes mds_cache_memory_limit from limits.memory (~0.8x), so a
+          # 2Gi limit risks active-MDS OOMKill under metadata load. 4Gi limit
+          # matches the default cache target; the cluster has the headroom.
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              memory: "4Gi"
+          priorityClassName: system-cluster-critical
+          placement:
+            # required (not preferred): on this no-drain 3-node cluster keep the
+            # active + standby MDS on different hosts so one node loss can't take
+            # both. 2 daemons / 3 nodes always schedules.
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: app
+                        operator: In
+                        values:
+                          - rook-ceph-mds
+                  topologyKey: kubernetes.io/hostname
+      # SCs ship from templates/cephfs-storageclasses.yaml (need two per fs).
+      storageClass:
+        enabled: false
 
   # No object stores rendered by this chart — components/storage/ceph-object-store/
   # owns the CephObjectStore CR + RGW deployment + bucket SC separately.
@@ -207,6 +269,22 @@ rook-ceph-cluster:
 # ---------------------------------------------------------------------------
 # Local templates (rendered alongside the subchart) — OpenShift-specific
 # extras the upstream chart doesn't provide.
+
+# Two StorageClasses for the CephFS two-tier filesystem, rendered by the local
+# templates/cephfs-storageclasses.yaml. The upstream subchart renders only ONE
+# SC per cephFileSystems[] entry, but the two-tier plan needs two SCs against
+# the SAME filesystem (differing only in target data pool). `pool` MUST be the
+# full rendered RADOS pool name (<fsName>-<dataPool>), not the bare data-pool
+# name — the CSI driver takes it verbatim. Neither is the cluster default
+# (ceph-nvme-block RBD stays default); RWX is requested explicitly.
+cephfsStorageClasses:
+  enabled: true
+  fsName: cephfs
+  classes:
+    - name: cephfs-nvme
+      pool: cephfs-replicated-nvme   # low-latency RWX tier
+    - name: cephfs-hdd
+      pool: cephfs-replicated-hdd    # bulk RWX tier
 
 # OpenShift Route fronting the Ceph dashboard with edge TLS at
 # ceph.apps.okd.sudops.pl. Upstream chart only ships Ingress + Gateway-API
@@ -300,6 +378,12 @@ pgNumFloor:
     - name: nvme-replicated
       floor: 128
     - name: ceph-objectstore.rgw.buckets.data
+      floor: 32
+    # CephFS data pools (Phase 4) — same pg_num chicken-and-egg: created at
+    # pg_num=1, pg_num_min:32 can't enforce until bumped once. Job is idempotent.
+    - name: cephfs-replicated-nvme
+      floor: 32
+    - name: cephfs-replicated-hdd
       floor: 32
 
 # VolumeSnapshotClass for CSI snapshots against the RBD pool. CNPG uses

@@ -1,0 +1,43 @@
+{{- /*
+  Two CephFS StorageClasses for the two-tier `cephfs` filesystem (Phase 4).
+  The upstream rook-ceph-cluster subchart renders only ONE StorageClass per
+  cephFileSystems[] entry, but the plan is ONE filesystem with TWO data pools
+  (NVMe low-latency + HDD bulk) and TWO StorageClasses differing only in the
+  target data pool. So both SCs ship here, values-driven (.Values.cephfsStorageClasses).
+
+  CRITICAL: `pool` is the FULL rendered RADOS pool name `<fsName>-<dataPool>`
+  (e.g. cephfs-replicated-nvme), NOT the bare data-pool name — the CSI driver
+  uses it verbatim; a bare name points at a non-existent pool and every
+  CreateVolume on that tier fails. clusterID == the rook-ceph namespace.
+  CSI secrets match the cephfs provisioner/node secrets Rook creates.
+*/ -}}
+{{- if .Values.cephfsStorageClasses.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $fsName := .Values.cephfsStorageClasses.fsName }}
+{{- range .Values.cephfsStorageClasses.classes }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .name }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: rook-ceph.cephfs.csi.ceph.com
+parameters:
+  clusterID: {{ $ns }}
+  fsName: {{ $fsName }}
+  pool: {{ .pool }}
+  csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
+  csi.storage.k8s.io/provisioner-secret-namespace: {{ $ns }}
+  csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
+  csi.storage.k8s.io/controller-expand-secret-namespace: {{ $ns }}
+  csi.storage.k8s.io/controller-publish-secret-name: rook-csi-cephfs-provisioner
+  csi.storage.k8s.io/controller-publish-secret-namespace: {{ $ns }}
+  csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
+  csi.storage.k8s.io/node-stage-secret-namespace: {{ $ns }}
+  csi.storage.k8s.io/fstype: ext4
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+{{- end }}
+{{- end }}
