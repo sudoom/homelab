@@ -22,6 +22,10 @@ metadata:
   name: {{ .name }}
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
+    # StorageClass parameters are immutable — if `pool`/`fsName` ever change,
+    # a plain apply fails ("updates to parameters are forbidden") and stalls
+    # ArgoCD. Replace=true makes ArgoCD recreate (delete+create) instead.
+    argocd.argoproj.io/sync-options: Replace=true
 provisioner: rook-ceph.cephfs.csi.ceph.com
 parameters:
   clusterID: {{ $ns }}
