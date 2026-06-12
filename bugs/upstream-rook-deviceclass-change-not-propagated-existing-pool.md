@@ -1,7 +1,7 @@
 # Rook does not propagate a `deviceClass` change to an existing pool's CRUSH rule
 
 **Target:** github.com/rook/rook — Bug report
-**Rook version:** operator v1.20.0 (cluster subchart render v1.19.5), Ceph Squid v19.2.4
+**Rook version:** v1.19.5 (operator + cluster), Ceph Squid v19.2.4. (Originally observed while the operator was transiently on v1.20.0 mid-rollout, but the behavior is version-independent and reproduces on v1.19.5 — Phase 3 ran before the v1.20→v1.19.5 revert.)
 **Discovered:** 2026-06-12 (HDD-tier rollout, RGW dataPool NVMe→HDD flip)
 
 ## Summary

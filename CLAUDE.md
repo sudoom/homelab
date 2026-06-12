@@ -124,7 +124,7 @@ The 2026-06-12 CSI outage was a **version-coherence** failure. The mechanics tha
 
 ### Topology
 
-- **3 OSDs total**, one per node, each on a single NVMe device. Failure domain is `host` (the failure-domain labels are `fd-a/fd-b/fd-c`, one per node).
+- **6 OSDs total: 1 NVMe + 1 HDD per node** (`osd.0-2` NVMe, `osd.3-5` HDD — HDD tier added 2026-06-12 via `/dev/disk/by-path/pci-…-ata-N` SATA-bay refs in `cephClusterSpec.storage.nodes[].devices`). Failure domain is `host` (labels `fd-a/fd-b/fd-c`, one per node) — still one node per failure domain for *both* device classes, so the no-drain constraint below applies to NVMe and HDD OSDs alike.
 - **No drain headroom.** Any rolling change to OSDs (rebuild, encrypt-at-rest, redeploy) goes through a degraded window — there is no fourth node to absorb the missing OSD. Plan accordingly: schedule during quiet IO, never run two OSD-impacting changes at once, never propose `oc cordon node{4,5,6}` without an explicit ask.
 - **Mons:** 3-of-3, one per node. Same topology constraint applies.
 - **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication. Multus migration in flight (2026-05-11): NADs + per-node macvlan host-shim (`ceph-shim`, IPs `.16/.17/.18`) shipped, pod range shifted to `192.168.10.128/25` with an explicit `/25 dev ceph-shim` route for the kernel-RBD-client hairpin fix. **CephCluster spec flip + mon/OSD roll still pending** (degraded-window event). Full design + ops history in `blog/blog-multus-ceph-migration-draft.md`. **Don't touch `enp1s0f0np0`, `ceph-shim`, or `192.168.10.0/24` routing without checking that draft first** — the routing setup is load-bearing: `/24 master metric 100`, `/24 shim metric 410`, `/25 dev shim static`. Reordering or simplifying breaks pod↔host reachability.
@@ -141,26 +141,26 @@ The 2026-06-12 CSI outage was a **version-coherence** failure. The mechanics tha
 ### Pools and pg_num
 
 - Primary pool: `nvme-replicated` (`size=3`, `min_size=2`, CRUSH rule on `device_class=nvme`, `bulk: true`). Backs the only block StorageClass today (`ceph-nvme-block`, RBD provisioner).
-- **Target `pg_num` is 128** for `nvme-replicated`: 100 PGs/OSD × 3 OSDs / replication 3 = 100 → next pow2 = 128. Use `pg_num_min: 128` in the BlockPool to enforce — the autoscaler is **not** applying the `bulk` hint correctly (`ceph osd pool autoscale-status` returns `[]`; root cause likely a Squid 19.2.3 quirk, tracked as an open TODO). Same quirk hit the RGW data pool on 2026-05-10; same fix shape.
+- **Target `pg_num` is 128** for `nvme-replicated`: 100 PGs/OSD × 3 OSDs / replication 3 = 100 → next pow2 = 128. Use `pg_num_min: 128` in the BlockPool to enforce — the autoscaler is **not** applying the `bulk` hint correctly (`ceph osd pool autoscale-status` returns `[]`; root cause likely a Squid 19.2.x quirk, tracked as an open TODO). Same quirk hit the RGW data pool on 2026-05-10; same fix shape.
 - When proposing pool changes: floor with `pg_num_min`, don't disable autoscale. Don't suggest manual `pg_num` bumps unless paired with the autoscaler diagnosis.
 - **`pg_num_min` chicken-and-egg:** Ceph rejects `pg_num_min > current pg_num` with `EINVAL`. Pure-GitOps `pg_num_min` enforcement requires a **one-time toolbox bump** of `pg_num` to bootstrap each new pool past 1 (`ceph osd pool set <pool> pg_num <floor>; ceph osd pool set <pool> pgp_num <floor>`); the chart's `pg_num_min` then enforces the floor going forward. Confirmed twice (`nvme-replicated` originally, RGW data pool 2026-05-10). Capture the exact toolbox commands in the topical blog draft.
 
 ### Object storage (RGW)
 
 - **`CephObjectStore` `ceph-objectstore` shipped 2026-05-01** — chart at `components/storage/ceph-object-store/`, single RGW gateway (`gateway.instances: 1`), HTTP-only on port 80; TLS terminated at the OpenShift Route `s3.apps.okd.sudops.pl`. **In-cluster S3 clients should use the in-cluster Service `rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80`** — bypasses Route + edge TLS, faster + more reliable.
-- **Pool tiers:** `metadataPool.deviceClass: nvme` permanently; `dataPool.deviceClass: nvme` interim, flips to `hdd` when bulk drives land (single-line CRUSH-rule change in `values.yaml`; rebalance is automatic, RGW endpoint + bucket names + client config unchanged).
+- **Pool tiers:** `metadataPool.deviceClass: nvme` permanently; `dataPool.deviceClass` **FLIPPED `nvme`→`hdd` 2026-06-12 (Phase 3, HDD tier live)**. The chart change alone **no-ops at the Ceph layer** — Rook does NOT propagate a `deviceClass` change to an *existing* pool (`bugs/upstream-rook-deviceclass-change-not-propagated-existing-pool.md`); it needed a **manual CRUSH-rule change** (`ceph osd crush rule create-replicated rgw-buckets-data-hdd default host hdd` + `ceph osd pool set …buckets.data crush_rule …`). Rebalance was then automatic; RGW endpoint + bucket names + client config unchanged.
 - **`pg_num_min: "32"` floored on the data pool** (commit `32b2e64`); metadata pool stays at the chart-default 8 PGs (it's tiny and not on the hot path).
 - **Active consumers:** Loki (33+ GiB / 53k+ chunks in `ceph-objectstore.rgw.buckets.data` as of 2026-05-10). OADP queued; CNPG `barmanObjectStore` will land on the same RGW with a separate `CephObjectStoreUser` per cluster.
 - **Bucket-creds plumbing precedent:** Loki's `logging-stack` chart uses an `ObjectBucketClaim` + secret-translator pattern to land RGW credentials in a SealedSecret-shaped Secret. Reuse that pattern for OADP / CNPG / future S3 consumers — don't ship `CephObjectStoreUser` + manual SealedSecret.
 - **Toolbox gotcha:** `radosgw-admin user list` / `bucket list` from the toolbox default to the orphan `default` zone (a leftover from RGW first-bring-up; cosmetic-cleanup TODO). Real data lives in the `ceph-objectstore` zone — pass `--rgw-realm=ceph-objectstore --rgw-zonegroup=ceph-objectstore --rgw-zone=ceph-objectstore` to inspect it, or just look at `ceph-objectstore.rgw.*` pools in `ceph df`.
 
-### CephFS plan (not yet shipped)
+### CephFS — shipped (HDD bulk RWX tier, Phase 4 2026-06-12)
 
-- **Two storage classes** against a **single `CephFilesystem` CR** — not two filesystems.
-- One filesystem with metadata pool on NVMe and **two `dataPools` entries**: `deviceClass: nvme` (low-latency RWX) + `deviceClass: hdd` (bulk RWX).
-- Two `StorageClass` objects against the same filesystem, differing only in the `pool` parameter.
-- **Sequencing:** the NVMe SC can ship before HDDs land — no HDD dependency for the NVMe tier. The HDD SC waits on bulk HDDs being added to the chassis.
-- Don't propose pure-NVMe CephFS as the long-term answer; the two-tier shape is the chosen plan.
+- **Single `CephFilesystem` `cephfs`**: metadata pool replicated on NVMe + **one bulk data pool `cephfs-bulk-hdd` = erasure-coded 2+1** (`dataChunks: 2, codingChunks: 1`, deviceClass hdd, `pg_num_min 32`, `min_size 2`, `ec_overwrites`). **ONE StorageClass `cephfs-hdd`** → the EC pool. Shipped *inside* the `rook-ceph-cluster` wrapper chart (`cephFileSystems` + `cephfsStorageClasses` in `values.yaml` + `templates/cephfs-storageclasses.yaml`), not a separate chart.
+- **The NVMe low-latency RWX tier was intentionally dropped** (operator's call). Add it back later *only* if a hot/small-IO RWX need appears — and as a **replicated** pool (EC is wrong for hot/small-IO). The old "two-tier nvme+hdd, two StorageClasses" plan is **not** what was built.
+- **EC-as-default-data-pool needs `ceph fs new … --force`, which Rook won't pass** — so the FS was created by a one-time manual `ceph fs new cephfs cephfs-metadata cephfs-bulk-hdd --force` (Rook then adopts + manages the MDS: 1 active + 1 standby on different hosts). **Any future CephFS teardown/recreate needs that manual `--force` step.** Rook also can't transition a live FS's default pool / replicated→EC in place (teardown+recreate required).
+- The `cephfs-hdd` SC carries `Replace=true` (SC params are immutable; a `pool` change otherwise stalls ArgoCD). The `csi` CephFilesystemSubVolumeGroup must exist or provisioning fails (`subvolume group 'csi' does not exist`) — a CephFilesystem stuck in CR `phase: Failure` (e.g. a wedged detect-version reconcile) blocks that even when `ceph fs status` shows the FS active; an operator restart (safe at the same version) clears it.
+- Full Phase 1-5 saga + every gotcha: `blog/blog-hdd-tier-rollout-draft.md`.
 
 ### RBD CSI quirks
 

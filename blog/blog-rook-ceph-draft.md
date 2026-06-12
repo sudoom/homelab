@@ -2462,3 +2462,67 @@ untrustworthy because of the BlueStore latency noise floor (8-17 ms
 spread observed across the day). Two or three samples spaced by a few
 minutes would have caught the inflated number. Adding that to my
 mental model for future "did this change help?" measurements.
+
+## 2026-06-12 — CSI outage: Renovate's Rook v1.20.0 bump broke CSI; reverted to coherent v1.19.5
+
+The single worst self-inflicted storage incident so far, and it came from an
+*unsupervised* dependency bump, not a hand change.
+
+**Symptom.** Mid-way through the HDD-tier CephFS work, cluster events showed a
+cascade of CSI failures: `serviceaccount "rbd-nodeplugin-sa" not found` (DaemonSet
+can't create pods), `serviceaccounts "ceph-csi-rbd-nodeplugin-sa" not found`
+(existing pods can't fetch tokens — 919× over 19h), and `FailedCreate` on both
+the rbd and cephfs node/ctrlplugins. Existing CSI pods stayed `Running` (cached
+state) so already-mounted RBD volumes survived — but **no CSI pod could be
+recreated and no new PVC could provision.** A latent landmine: one node reboot
+or pod restart and CSI breaks for that node.
+
+**Root cause — three-way version incoherence.** The operator binary was
+`rook/ceph:v1.20.0`, but the *charts* were stale: operator chart vendored
+`rook-ceph-v1.19.3.tgz`, cluster chart `rook-ceph-cluster-v1.19.5.tgz`, while
+both `Chart.yaml` deps claimed `v1.20.0`. Renovate #134 bumped only the
+`Chart.yaml` version strings, never re-vendored. The mechanism that made this
+deploy for real:
+
+- **`charts/` + `Chart.lock` are gitignored** in both Rook charts → ArgoCD runs
+  `helm dependency update` and pulls **whatever `Chart.yaml` names, fresh, at
+  sync time** (the local vendored tgz is only for local `helm template`).
+- Renovate had earlier bumped to `v1.19.6`, which **has no published Helm chart**
+  on charts.rook.io → `helm dependency update` failed → ArgoCD kept the prior
+  render (so the cluster quietly ran v1.19.x for two weeks). Then `v1.20.0`
+  (which *does* have a published chart) resolved → ArgoCD deployed it for real.
+- The **v1.20 operator renamed the CSI ServiceAccounts** (`ceph-csi-*-sa`
+  scheme) — the v1.20 CSI Driver setup didn't create the SAs the running config
+  expected, so they went missing → CSI broke.
+
+The timeline nailed it: #134 merged 2026-06-11 18:20, ~17h before the CSI errors
+began; #132 (v1.19.6) was two weeks old and ran clean.
+
+**Fix — revert to a coherent v1.19.5** (`49406f5`). Pinned **both** `Chart.yaml`
+deps to `v1.19.5` (a real, published version that matches the cluster chart's
+vendored tgz), `helm dependency update` both. The v1.19.5 operator render shows
+exactly the `ceph-csi-{rbd,cephfs}-{node,ctrl}plugin-sa` SAs that were missing.
+ArgoCD pulled v1.19.5 → operator downgraded 1.20.0→1.19.5 → the SAs reappeared →
+full CSI stack healthy. **Ceph stayed 19.2.4** (the Ceph patch bump #133 was kept
+— a Ceph *down*grade would be its own risk).
+
+**Gotcha I under-flagged:** the operator *version change* re-renders the OSD pod
+spec, so v1.19.5 **rolled all 6 OSDs** one-at-a-time (Rook-managed, `ok-to-stop`
++ PDB, survivable at size=3/min_size=2 — prometheus stayed up). I'd wrongly said
+"operator downgrade doesn't roll OSDs since Ceph stays 19.2.4." It does. A
+same-version operator *pod restart* does NOT roll OSDs (spec unchanged) — only a
+version change does.
+
+**Residual cleanup:** two 28-day-old CSI nodeplugin pods referenced a deleted
+`…dockercfg-fpk2d` secret (the per-SA dockercfg OpenShift no longer auto-creates)
+→ deleted them, DaemonSet recreated clean. And the `cephfs-hdd` StorageClass had
+been left pointing at a since-deleted pool with an immutable `pool` param →
+ArgoCD stuck `OutOfSync/Missing` → fixed with `Replace=true` on the SC template
+(`d85f7fd`) + a delete so ArgoCD recreated it.
+
+**Durable fixes (queued):** disable Renovate for `rook-ceph` (both charts) +
+`quay.io/ceph/ceph` (manual, supervised, compatibility-checked, re-vendored-
+together bumps per CLAUDE.md "Upgrading Rook/Ceph"); commit `Chart.lock` (stop
+gitignoring) so the deployed subchart version is pinned + reviewable. Open PR to
+HOLD: #117 (`quay.io/ceph/ceph v19.2.4→v20.2.1`, major Squid→Tentacle — Rook
+1.19.5 can't run Ceph 20 with `allowUnsupported: false`).

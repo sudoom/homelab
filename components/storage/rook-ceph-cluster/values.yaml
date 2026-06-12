@@ -200,8 +200,9 @@ rook-ceph-cluster:
 
   # CephFS two-tier filesystem (Phase 4, 2026-06-12). One CephFilesystem,
   # metadata on NVMe, two data pools (NVMe low-latency RWX + HDD bulk RWX).
-  # Rendered RADOS pools: cephfs-metadata, cephfs-replicated-nvme,
-  # cephfs-replicated-hdd (Rook prefixes data-pool names with the fs name).
+  # Rendered RADOS pools: cephfs-metadata (replicated NVMe) + cephfs-bulk-hdd
+  # (EC 2+1 on HDD). Single bulk data pool — the NVMe RWX tier is intentionally
+  # omitted. (Rook prefixes data-pool names with the fs name.)
   # Both StorageClasses ship from the local templates/cephfs-storageclasses.yaml
   # (the upstream subchart renders only ONE SC per fs entry, and we need two
   # against the SAME fs) — so storageClass.enabled is false here.

@@ -6,7 +6,7 @@
   target data pool. So both SCs ship here, values-driven (.Values.cephfsStorageClasses).
 
   CRITICAL: `pool` is the FULL rendered RADOS pool name `<fsName>-<dataPool>`
-  (e.g. cephfs-replicated-nvme), NOT the bare data-pool name — the CSI driver
+  (e.g. cephfs-bulk-hdd), NOT the bare data-pool name — the CSI driver
   uses it verbatim; a bare name points at a non-existent pool and every
   CreateVolume on that tier fails. clusterID == the rook-ceph namespace.
   CSI secrets match the cephfs provisioner/node secrets Rook creates.
