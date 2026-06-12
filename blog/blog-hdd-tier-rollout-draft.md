@@ -305,6 +305,22 @@ oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd tree
 # CRUSH should auto-detect device_class=hdd for the new ones.
 ```
 
+**Executed 2026-06-12 — Phase 1 + 2 done, clean and additive.** Devices added by-id (burn-in-validated, seated raw + DDF-wiped): node4 `wwn-0x5000cca25df55694` (K4KTAEDL), node5 `wwn-0x5000cca25df55cf3` (K4KTD40L), node6 `wwn-0x5000cca269c62bb6` (K7GEKUBR). Source is the wrapper chart `components/storage/rook-ceph-cluster/values.yaml` `cephClusterSpec.storage.nodes[].devices` (NOT a raw manifest — the migration to the upstream-subchart wrapper has landed). Commit `dfb706b`; `helm template … | oc diff -n rook-ceph` showed exactly `+3 devices` (generation 5→6), nothing else; kubeconform 38/38.
+
+After ArgoCD synced (one ~3-min poll cycle later), Rook spawned 3 fresh `osd-prepare` jobs (all Complete in ~40 s) and brought the OSDs up:
+
+```
+ID  CLASS  WEIGHT    STATUS   host
+ 3   hdd   3.63869    up      node4   (osd.3)
+ 4   hdd   3.63869    up      node5   (osd.4)
+ 5   hdd   3.63869    up      node6   (osd.5)
+ 0/1/2 nvme 0.46579   up      (existing)
+ceph osd crush class ls  ->  ["nvme","hdd"]
+ceph -s  ->  6 osds: 6 up, 6 in; 220 pgs active+clean; HEALTH_WARN (known slow-op + stale mgr crash)
+```
+
+**Phase 2 needed no manual reclassify** — Ceph auto-detected `device_class=hdd` on osd.3/4/5 from the rotational flag (the `crush rm/set-device-class` fallback below was not needed). The load-bearing observation: **`220 pgs active+clean` the entire time** — the additive prediction held exactly. The `device_class=nvme` CRUSH rule on `nvme-replicated` kept all existing data on NVMe, so **no rebalance, no degraded window** despite the no-drain 3-OSD topology. New raw HDD capacity: 3× 3.64 TiB ≈ **10.9 TiB raw (~3.6 TiB usable at size=3)**, in the `hdd` device class, **idle until a pool targets it** (Phase 3 RGW flip / Phase 4 CephFS).
+
 ### Phase 2 — Verify CRUSH device classes
 
 Rook/Ceph auto-detects device class via SMART (HDD vs SSD) at OSD
