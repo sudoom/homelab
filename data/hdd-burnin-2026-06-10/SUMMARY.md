@@ -10,7 +10,7 @@ Execution vehicle: `oc exec` into the on-node `smartctl-exporter` pod (has `smar
 Self-tests are drive-internal (no etcd-HBA load); only `badblocks` loads the shared
 SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 
-3 drives go into service (1 per node bay); 7 shelf spares total. Progress: **batch 1 (3 spares) PASSED** + pulled/stored raw (drives 4-6); **batch 2 (3 spares) burning in** now across the 3 bays (drives 7-9, DDF-wiped-first per the new procedure); **1 spare left** to cycle after.
+3 drives go into service (1 per node bay); 7 shelf spares total. **HDD CAMPAIGN COMPLETE 2026-06-12 — all 10/10 PASSED** (long self-test "Completed without error", 0 reallocated/pending/offline/CRC, health PASSED on every drive): 3 in-service (K4KTAEDL/K4KTD40L/K7GEKUBR) + 7 shelf spares (K7GE897L/K7GE89HL/K4KZYB3B/K7GEX0MR/K7GEWZLR/K4KTDL9L/K4KSH3VL). Plus 2 Intel DC SSDs validated+wiped (S3510 480GB boot-spare, S4610 960GB Synology backup — see batch-3 SSD section). In-service HDDs re-seated raw on node5/node6 (K4KTD40L/K7GEKUBR); K4KSH3VL in node4 bay (pull→store raw, then K4KTAEDL re-seats). Next: deferred Ceph HDD-tier OSD install (degraded-window event, Phases 1-5 in blog/blog-hdd-tier-rollout-draft.md).
 
 **Serial caution:** the drives ship with near-identical serials — drive 1 `K4KTAEDL` vs drive 2 `K4KTD40L`. Everything is keyed by WWN to avoid transposition; verify serial+WWN at the destination node before writing it into the OSD device list.
 
@@ -31,7 +31,7 @@ SATA HBA and runs under `ionice -c3` with the node4 etcd-fsync watch.
 | 7 (spare) | K7GEX0MR | wwn-0x5000cca269c65202 | shelf spare (burned in node4) | - | 43,350 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — DDF wiped first ✓, long self-test "Completed without error" (POH 43,358), 0 new reallocated/pending/offline/CRC, health PASSED. Store raw + labeled. |
 | 8 (spare) | K7GEWZLR | wwn-0x5000cca269c651e2 | shelf spare (burned in node5) | - | 43,350 (~4.95 yr) | 0 | 0 | **shelf spare PASS** — DDF wiped first ✓, long self-test "Completed without error" (POH 43,358), 0 new reallocated/pending/offline/CRC, health PASSED. Store raw + labeled. |
 | 9 (spare) | K4KTDL9L | wwn-0x5000cca25df55eae | shelf spare (burned in node6) | - | 43,703 (~4.99 yr) | 0 | 0 | **shelf spare PASS** — DDF wiped first ✓, long self-test "Completed without error" (POH 43,711), 0 new reallocated/pending/offline/CRC, health PASSED. Store raw + labeled. |
-| 10 (spare) | K4KSH3VL | wwn-0x5000cca25df4f3d2 | node4:bay (batch-3 burn-in) | - | 43,726 (~5.0 yr) | 0 | 0 | **in progress** (batch 3 — last HDD) — DDF wiped first ✓ (ddf_raid_member+gpt+pmbr erased), gate ✓ (HUS726040/rota=1/wwn), baseline clean, health PASSED, short→long self-test |
+| 10 (spare) | K4KSH3VL | wwn-0x5000cca25df4f3d2 | shelf spare (burned in node4) | - | 43,726 (~5.0 yr) | 0 | 0 | **shelf spare PASS** — DDF wiped first ✓, long self-test "Completed without error" (POH 43,733), 0 new reallocated/pending/offline/CRC, health PASSED. Store raw + labeled. |
 
 Verdict legend: `in progress` → `in service` / `shelf spare` / `returned` once the long self-test completes clean (badblocks dropped; SMART alert is the in-service safety net).
 
