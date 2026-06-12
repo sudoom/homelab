@@ -381,6 +381,47 @@ oc -n rook-ceph exec deploy/rook-ceph-tools -- watch -n 5 'ceph -s'
 The RGW endpoint, bucket names, and client config don't change.
 Loki keeps writing while the data migrates underneath. No downtime.
 
+**Executed 2026-06-12 — surfaced a Rook gotcha: a `deviceClass` change on an
+EXISTING pool is a no-op at the Ceph layer.** The single-line `deviceClass:
+nvme → hdd` committed (`a119cc1`) + synced fine — the CephObjectStore CR showed
+`dataPool.deviceClass: hdd`, and the operator even logged `reconciling
+replicated pool ceph-objectstore.rgw.buckets.data succeeded` with the diff
+`DeviceClass: "nvme" → "hdd"`. **But the pool's CRUSH rule was never touched** —
+`ceph osd crush rule dump ceph-objectstore.rgw.buckets.data` still did `step
+take default class nvme`, no data moved (all 220 pgs `active+clean`, hdd tier
+empty). **Rook sets a pool's device class at CREATION and does not reconcile a
+`deviceClass` change on an existing pool**; an operator restart just re-runs the
+same no-op. (Same family as the documented "Rook doesn't clear `public_network`
+on provider change" gotcha.)
+
+Manual completion (toolbox, one-time, operator-confirmed Ceph mutation):
+
+```bash
+ceph osd crush rule create-replicated rgw-buckets-data-hdd default host hdd
+ceph osd pool set ceph-objectstore.rgw.buckets.data crush_rule rgw-buckets-data-hdd
+```
+
+Created an hdd-targeting rule + repointed the pool → backfill kicked off
+immediately. ~16 GiB stored / 47 GiB raw / ~21.7k objects migrated NVMe→HDD over
+~30 min (HDD-write-bound, ~16–20 MiB/s, one backfilling PG at a time on the
+no-drain topology). Loki kept writing + the RGW endpoint/buckets were unchanged
+throughout (RGW pod `Running` every tick). `ceph df` before → after:
+
+```
+CLASS   before               after                 delta
+nvme    81.8% (260 GiB avail) 78.6% (306 GiB avail) ~47 GiB raw freed
+hdd     0.13% (214 MiB used)  0.43% (48 GiB used)   data now on hdd tier (3.4 TiB avail)
+```
+
+Bonus: freed ~47 GiB raw on the 81.8%-full NVMe class (nvme-replicated was at
+85.6% used) — the tiering doubles as NVMe-pressure relief. **Leftover:** the old
+Rook-created rule `ceph-objectstore.rgw.buckets.data` (`default~nvme`) is now
+orphaned (cosmetic; Rook won't reconcile it). Bug drafted at
+`bugs/upstream-rook-deviceclass-change-not-propagated-existing-pool.md`.
+**Implication for Phase 4:** brand-new pools get their device class correctly at
+creation — this only bites deviceClass *changes* on *existing* pools, so CephFS
+(fresh pools) is unaffected.
+
 ### Phase 4 — Ship CephFS chart
 
 New chart at `components/storage/cephfs/`. One `CephFilesystem` CR
