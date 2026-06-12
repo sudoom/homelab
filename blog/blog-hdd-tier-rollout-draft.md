@@ -503,6 +503,52 @@ allowVolumeExpansion: true
 Enable in root-app at wave 4 (storage), after `rook-ceph-cluster`
 which is at wave 3.
 
+**Executed 2026-06-12 — and the plan above changed a lot in flight.** Three operator
+corrections + a Rook gotcha + a CSI incident reshaped it:
+
+- **Packaging:** NOT a new `components/storage/cephfs/` chart — shipped **inside the
+  `rook-ceph-cluster` wrapper** (`cephFileSystems` + a local `templates/cephfs-storageclasses.yaml`
+  + `pgNumFloor` entry). No new root-app entry. The wrapper already owns the CephCluster + pools.
+- **Bulk tier is erasure-coded, not size=3** (operator's call, mid-rollout): one data pool
+  `bulk-hdd` = **EC 2+1** (`k=2,m=1` — the only profile that fits 3 hosts at failureDomain=host;
+  66% usable vs 33%). **`min_size 2`** (Ceph EC defaults k+1=3, which would make the tier
+  read-only on any host-down incl. upgrade reboots; 2 keeps it writable at the redundancy floor).
+  The NVMe RWX tier was **dropped**. `ec_overwrites` is auto-set by Rook on the EC data pool.
+- **OSD devices → `/dev/disk/by-path/pci-…-ata-N`** (the SATA bay port) instead of by-id WWN:
+  slot-stable so a drive swap reuses the OSD (NVMe is already `/dev/nvme0n1`). The switch was
+  transparent — `osd.3/4/5` survived it (Rook matches OSDs by on-disk metadata, not path).
+- **Rook can't transition a live FS's default data pool / replicated→EC in place** — the first
+  (replicated, NVMe+HDD) FS had to be **torn down** (`ceph fs fail`/`rm` + delete the 3 pools,
+  operator-confirmed) and recreated as EC. Same gotcha family as deviceClass-on-existing-pool.
+- **`ceph fs new` with an EC pool as the *default* data pool needs `--force`** (Ceph discourages
+  it), and **Rook does NOT pass `--force`** → Rook's reconcile created the pools + logged
+  "ReconcileSucceeded" but the FS never got created. Resolution: **one-time manual**
+  `ceph fs new cephfs cephfs-metadata cephfs-bulk-hdd --force`; Rook then **adopts** the FS and
+  manages the MDS (1 active `cephfs-a` + 1 standby on different hosts via the required
+  podAntiAffinity). This is a discouraged-but-supported config (EC default data pool + ec_overwrites).
+  **Caveat for any future CephFS teardown/recreate: the FS must be re-created manually with
+  `--force` — Rook won't.**
+- **pg_num floor:** the bootstrap Job didn't catch the fresh pool; bumped manually
+  `ceph osd pool set cephfs-bulk-hdd pg_num 32` (+ pgp_num) — the documented bootstrap shape.
+- **StorageClass immutability bit us:** the `cephfs-hdd` SC's `pool` changed
+  `cephfs-replicated-hdd`→`cephfs-bulk-hdd`, but SC params are immutable → ArgoCD stalled
+  `OutOfSync/Missing` ("updates to parameters are forbidden") + the SC pointed at a dead pool.
+  Fix: `Replace=true` sync-option on the SC template (`d85f7fd`) + delete the stale SC → ArgoCD
+  recreated it with the right pool.
+- **Mid-rollout CSI incident** (separate, see `blog/blog-rook-ceph-draft.md`): Renovate had
+  auto-bumped Rook 1.19.6→**1.20.0**, whose CSI ServiceAccount renaming left `ceph-csi-*-sa`
+  missing → CSI broken for new pods. Reverted to coherent **v1.19.5** (`49406f5`); the operator
+  version change rolled all 6 OSDs one-at-a-time (clean). Also cleared 28-day-old stale CSI
+  nodeplugin pods referencing a deleted dockercfg secret.
+
+**End state:** `cephfs` active, EC 2+1 `cephfs-bulk-hdd` (min_size 2, pg_num 32, ec_overwrites),
+metadata replicated on NVMe, MDS active+standby on different hosts, SC `cephfs-hdd`→`cephfs-bulk-hdd`,
+ArgoCD Synced+Healthy, 253 pgs active+clean. **Known cosmetic quirk:** the CephFilesystem CR
+`status.phase` is stuck at `Failure` (the controller's `ceph-file-controller-detect-version`
+CmdReporter job timed out during the churn and the phase field never reset) — the FS is healthy
+and ArgoCD's health check passes regardless; an operator restart (safe at the same version) would
+reset it. *Follow-up: investigate why the detect-version CmdReporter timed out.*
+
 ### Phase 5 — Validate
 
 Test PVC against each StorageClass:
