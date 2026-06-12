@@ -143,21 +143,24 @@ rook-ceph-cluster:
       useAllNodes: false
       useAllDevices: false
       nodes:
+        # OSD devices use SLOT-STABLE paths (not drive-specific by-id WWN) so a
+        # drive replacement in the same slot REUSES the OSD instead of spawning a
+        # new one: NVMe = /dev/nvme0n1 (one NVMe/node, deterministic); HDD =
+        # /dev/disk/by-path/pci-...-ata-N (the SATA bay PORT, stable across the
+        # sda/sdb reshuffle AND drive swaps — NOT /dev/sdX). by-id WWN stays the
+        # ref for drive-SPECIFIC ops (wipe/SMART/gate), where you mean one disk.
         - name: "node4.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            # HDD tier (Phase 1, 2026-06-12): K4KTAEDL, burned-in shelf-validated, seated raw + DDF-wiped.
-            - name: "/dev/disk/by-id/wwn-0x5000cca25df55694"
+            - name: "/dev/disk/by-path/pci-0000:00:17.0-ata-1"   # 3.5" bay (HDD tier)
         - name: "node5.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            # HDD tier (Phase 1, 2026-06-12): K4KTD40L.
-            - name: "/dev/disk/by-id/wwn-0x5000cca25df55cf3"
+            - name: "/dev/disk/by-path/pci-0000:00:17.0-ata-4"   # 3.5" bay (HDD tier)
         - name: "node6.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            # HDD tier (Phase 1, 2026-06-12): K7GEKUBR.
-            - name: "/dev/disk/by-id/wwn-0x5000cca269c62bb6"
+            - name: "/dev/disk/by-path/pci-0000:00:17.0-ata-1"   # 3.5" bay (HDD tier)
 
     disruptionManagement:
       managePodBudgets: true
@@ -212,20 +215,20 @@ rook-ceph-cluster:
             size: 3
             requireSafeReplicaSize: true
         dataPools:
-          - name: replicated-nvme      # -> cephfs-replicated-nvme (low-latency RWX)
-            failureDomain: host
-            deviceClass: nvme
-            replicated:
-              size: 3
-              requireSafeReplicaSize: true
-            parameters:
-              pg_num_min: "32"
-          - name: replicated-hdd       # -> cephfs-replicated-hdd (bulk RWX)
+          # Single BULK tier on HDD, erasure-coded 2+1 (k=2,m=1) — the only EC
+          # profile that fits 3 hosts at failureDomain=host. 66% usable vs 33%
+          # for size=3 (≈2.4 TiB vs 1.2 TiB on the 3.6 TiB HDD raw). min_size is
+          # forced to 2 post-create (Ceph EC defaults to k+1=3, which would make
+          # the tier read-only on ANY host-down incl. upgrade reboots; min_size=2
+          # keeps it writable during a host reboot, at the redundancy floor).
+          # The NVMe low-latency RWX tier is intentionally OMITTED — add later if
+          # a low-latency RWX need appears (EC is wrong for hot/small-IO anyway).
+          - name: bulk-hdd             # -> cephfs-bulk-hdd
             failureDomain: host
             deviceClass: hdd
-            replicated:
-              size: 3
-              requireSafeReplicaSize: true
+            erasureCoded:
+              dataChunks: 2
+              codingChunks: 1
             parameters:
               pg_num_min: "32"
         preservePoolsOnDelete: true
@@ -281,10 +284,8 @@ cephfsStorageClasses:
   enabled: true
   fsName: cephfs
   classes:
-    - name: cephfs-nvme
-      pool: cephfs-replicated-nvme   # low-latency RWX tier
     - name: cephfs-hdd
-      pool: cephfs-replicated-hdd    # bulk RWX tier
+      pool: cephfs-bulk-hdd          # bulk RWX tier (EC 2+1 on HDD)
 
 # OpenShift Route fronting the Ceph dashboard with edge TLS at
 # ceph.apps.okd.sudops.pl. Upstream chart only ships Ingress + Gateway-API
@@ -379,11 +380,9 @@ pgNumFloor:
       floor: 128
     - name: ceph-objectstore.rgw.buckets.data
       floor: 32
-    # CephFS data pools (Phase 4) — same pg_num chicken-and-egg: created at
-    # pg_num=1, pg_num_min:32 can't enforce until bumped once. Job is idempotent.
-    - name: cephfs-replicated-nvme
-      floor: 32
-    - name: cephfs-replicated-hdd
+    # CephFS bulk-HDD data pool (Phase 4, EC 2+1) — same pg_num chicken-and-egg:
+    # created at pg_num=1, pg_num_min:32 can't enforce until bumped once.
+    - name: cephfs-bulk-hdd
       floor: 32
 
 # VolumeSnapshotClass for CSI snapshots against the RBD pool. CNPG uses
