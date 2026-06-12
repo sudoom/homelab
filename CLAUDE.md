@@ -102,7 +102,25 @@ For operators bringing CRDs, use **intra-chart** sync-wave annotations: `Subscri
 
 ## Storage (Rook-Ceph)
 
-The cluster's storage is **Rook-managed Ceph Squid (19.2.4, Rook v1.20.0)** — bumped from 19.2.3 / Rook 1.19.6 via Renovate auto-merge 2026-06-12 (#133 Ceph, #134 Rook); the Ceph patch rolled all 3 OSDs cleanly (degraded-window event, completed unsupervised — see note in `blog/blog-okd-4.22-upgrade-draft.md` on whether storage/Ceph Renovate bumps should be gated). The operator is shipped via the upstream `rook-ceph` Helm chart; the `CephCluster` CR + block pools + StorageClasses are now owned by the **wrapper chart `components/storage/rook-ceph-cluster/`** (dependency on upstream `rook-ceph-cluster` v1.20.0), rendered from `cephClusterSpec` in its `values.yaml` — the migration off the old raw `components/storage/ceph-cluster/` manifests has landed. **To change OSD devices, pools, or CRUSH, edit that chart's `values.yaml`** (e.g. `cephClusterSpec.storage.nodes[].devices` is the OSD device list — HDD tier added there 2026-06-12, Phase 1). Suggestions and changes around storage need to respect the constraints below.
+The cluster's storage is **Rook v1.19.5 managing Ceph Squid 19.2.4**. (Ceph was bumped 19.2.3→19.2.4 via Renovate 2026-06-12 and rolled the 3 OSDs cleanly — kept. Rook was bumped 1.19.6→**1.20.0** by Renovate the same day and it **broke CSI** — the v1.20 operator changed CSI ServiceAccount naming, leaving `ceph-csi-*-sa` missing so RBD+CephFS CSI couldn't create new pods; reverted to a coherent **v1.19.5** in `49406f5`. See "Upgrading Rook/Ceph" below + `blog/blog-rook-ceph-draft.md`.) Two Rook charts: **operator** = `components/operators/rook-ceph/` (deploys the Rook operator), **cluster** = the wrapper `components/storage/rook-ceph-cluster/` (owns the `CephCluster` CR + block pools + StorageClasses + CephFS, rendered from `cephClusterSpec`/`cephFileSystems`/`cephBlockPools` in its `values.yaml`). **To change OSD devices, pools, or CRUSH, edit `components/storage/rook-ceph-cluster/values.yaml`.** OSD device list = `cephClusterSpec.storage.nodes[].devices` — uses **`/dev/disk/by-path/pci-…-ata-N`** (the SATA bay PORT, slot-stable so a drive swap reuses the OSD; NVMe = `/dev/nvme0n1`); by-id WWN stays the ref for drive-SPECIFIC ops (wipe/SMART/gate). HDD tier is **CephFS EC 2+1 (`cephfs-bulk-hdd`, min_size 2)** + the RGW data pool on HDD.
+
+### Upgrading Rook / Ceph — version coherence (READ before approving any Rook/Ceph bump)
+
+The 2026-06-12 CSI outage was a **version-coherence** failure. The mechanics that make this fragile, and the rules:
+
+- **`charts/` + `Chart.lock` are gitignored** in both Rook charts → ArgoCD does NOT use a vendored/pinned subchart; it runs `helm dependency update` and **pulls whatever version `Chart.yaml` names, fresh, at sync time.** So a one-line `Chart.yaml` version bump = an immediate live chart change, no review of the rendered delta. (Local `helm template` uses the local `charts/` tgz, which can be a DIFFERENT stale version → local render ≠ what ArgoCD deploys. Don't trust local render alone for version changes.)
+- **Not every version string has a published Helm chart.** Renovate bumped `Chart.yaml` to `v1.19.6`, which has NO chart on `charts.rook.io` → `helm dependency update` fails → ArgoCD kept the prior render. Then `v1.20.0` (which DOES have a chart) deployed for real. **Always `helm dependency update` locally first to confirm the target version's chart actually exists.**
+- **Operator and cluster charts must be the SAME Rook version, bumped together.** They're separate charts (operator lifecycle vs cluster lifecycle — can't merge) but a split version = collision. Pin both `components/operators/rook-ceph/Chart.yaml` and `components/storage/rook-ceph-cluster/Chart.yaml` to the same `vX.Y.Z`.
+- **Rook ↔ Ceph compatibility is a hard gate.** A given Rook minor supports a bounded Ceph range (Rook 1.19 → Ceph Squid 19.2.x; Ceph 20/Tentacle needs a newer Rook). `allowUnsupported: false` makes the CephCluster REFUSE an unsupported Ceph → never bump Ceph major ahead of a Rook that supports it.
+- **Order:** bump Rook (operator first, then cluster) to a version that supports the target Ceph → verify CSI + health → then bump Ceph (a degraded-window OSD roll on the no-drain topology).
+
+**Procedure for an intentional Rook/Ceph upgrade:**
+1. Confirm the target Rook version supports the target Ceph version (Rook release notes' Ceph support matrix). Confirm both have published Helm charts (`helm dependency update` succeeds for the new version).
+2. Bump BOTH `Chart.yaml` deps to the same Rook version; `helm dependency update` both; commit `Chart.lock` too (stop gitignoring it — pins the version for review).
+3. `helm template … | oc diff -n rook-ceph` the operator chart — **review the CSI SA / RBAC / DaemonSet delta** (this is exactly where the v1.20 break hid).
+4. Sync the OPERATOR app first; verify operator image + `oc -n rook-ceph get sa | grep ceph-csi` (the 4 `ceph-csi-{rbd,cephfs}-{node,ctrl}plugin-sa` present) + CSI pods Running, before touching the cluster app or Ceph.
+5. Only then bump the Ceph image (`cephClusterSpec`/`cephImage.tag`) — gate on Ceph HEALTH_OK, quiet IO, 2h+ headroom (rolls all 3 OSDs in series, degraded-window each).
+6. **Renovate must NOT auto-bump Rook or Ceph.** These are manual, supervised, version-coherent, compatibility-checked bumps. Disable/ignore the `rook-ceph` + `quay.io/ceph/ceph` Renovate updates (renovate config `packageRules` → `enabled: false` or a manual-approval group). This is the third storage-version Renovate incident in one day.
 
 ### Topology
 
@@ -433,6 +451,19 @@ Claude should refuse these actions and explain why briefly:
 - **`github`** (`@modelcontextprotocol/server-github`) — read-only access to the `sudoom/homelab` repo and any other GitHub repo (good for cross-referencing upstream Rook / cert-manager / loki-operator issues). Requires `GITHUB_PERSONAL_ACCESS_TOKEN` exported in the shell before `claude` launches; minimum scope `public_repo` + `read:org`. Allowlisted: `mcp__github__get_*`, `mcp__github__list_*`, `mcp__github__search_*`. Mutations (`create_*`, `update_*`, `delete_*`, `merge_*`, `push_*`) are NOT allowlisted — they'll prompt; never approve them without an explicit user request.
 
 For mutations against the cluster (apply/delete/patch/scale, etc.), still go through the user — `kubectl_apply` and friends from the kubernetes MCP are denied by the same guardrails as `oc apply` in plain Bash.
+
+## Reviewing open PRs (`sudoom/homelab`) — suggest approve / not-approve
+
+When asked to look at the repo, when starting a session, or whenever a Renovate/dependency PR is relevant, **check the open PRs and give an explicit approve / not-approve recommendation per PR** (read-only via the `github` MCP: `mcp__github__list_pull_requests` state=open, then `get_pull_request` + `get_pull_request_files` for the diff). I can review + recommend; I never merge (merge is a mutation, user-only).
+
+For each PR, recommend **APPROVE / HOLD / NOT-APPROVE** with a one-line reason, judged against the guardrails + the relevant procedure:
+
+- **Storage version bumps (Rook, Ceph, `rook-ceph-cluster`/`rook-ceph` charts, `quay.io/ceph/ceph`)** → **default NOT-APPROVE**. These must follow "Upgrading Rook/Ceph" above (version coherence + Rook↔Ceph compatibility + manual supervised window). A **major** bump (e.g. Ceph 19→20) is always NOT-APPROVE via Renovate. (Live example 2026-06-12: PR #117 `quay.io/ceph/ceph v19.2.4→v20.2.1` — NOT-APPROVE: major Squid→Tentacle, and Rook 1.19.5 doesn't support Ceph 20 with `allowUnsupported: false`.) Renovate should be configured to stop proposing these.
+- **Other operator/CRD-bearing bumps** (cert-manager, loki/logging, cnpg, OADP, nmstate, gitops) → check the OKD/Kube compatibility (see `blog/blog-okd-4.22-upgrade-draft.md` matrix) + whether the okderators/community catalog has the build; HOLD if it crosses a support matrix or needs a catalog that doesn't exist yet.
+- **App image tag bumps** (media stack, exporters, etc.) → usually APPROVE if it's a patch/minor with no CRD/schema change and the app is non-load-bearing; skim the changelog for breaking changes.
+- **Anything touching `components/storage/`, `cert-manager`, networking, or a degraded-window path** → at least HOLD pending the relevant pre-flight.
+
+Lead with the verdict, cite the file/diff, name the guardrail or procedure it trips. The user merges; I advise.
 
 ## Session hygiene
 
