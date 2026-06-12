@@ -146,12 +146,18 @@ rook-ceph-cluster:
         - name: "node4.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
+            # HDD tier (Phase 1, 2026-06-12): K4KTAEDL, burned-in shelf-validated, seated raw + DDF-wiped.
+            - name: "/dev/disk/by-id/wwn-0x5000cca25df55694"
         - name: "node5.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
+            # HDD tier (Phase 1, 2026-06-12): K4KTD40L.
+            - name: "/dev/disk/by-id/wwn-0x5000cca25df55cf3"
         - name: "node6.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
+            # HDD tier (Phase 1, 2026-06-12): K7GEKUBR.
+            - name: "/dev/disk/by-id/wwn-0x5000cca269c62bb6"
 
     disruptionManagement:
       managePodBudgets: true
