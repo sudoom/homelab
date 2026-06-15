@@ -176,7 +176,7 @@ spec:
             type: Directory
         - name: transcode
           emptyDir:
-            sizeLimit: 20Gi
+            sizeLimit: {{ $app.transcodeSize | default "20Gi" }}
         {{- end }}
 ---
 apiVersion: v1

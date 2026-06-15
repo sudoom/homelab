@@ -149,6 +149,11 @@ apps:
     # pressure on the 30Gi config PVC). Set Jellyfin Transcode path=/transcode.
     # All 3 nodes have the same iGPU, so no nodeSelector is needed.
     hwAccel: true
+    # Size cap for the ephemeral /transcode emptyDir (node root disk, ~233Gi
+    # free per node). 100Gi headroom for large 4K remux transcodes / the
+    # segment-deletion-off case; with Delete-segments on the real working set
+    # is far smaller. If exceeded, the pod is evicted (sizeLimit semantics).
+    transcodeSize: 100Gi
 
   transmission:
     enabled: true
