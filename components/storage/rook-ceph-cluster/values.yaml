@@ -231,7 +231,13 @@ rook-ceph-cluster:
               dataChunks: 2
               codingChunks: 1
             parameters:
-              pg_num_min: "32"
+              # 64 (was 32) — brings the 3 HDD OSDs to ~96 PGs/OSD (Ceph's
+              # ~100/OSD guideline) once combined with the RGW data pool's 32.
+              # Bumped 2026-06-15 while the pool was near-empty (~26 GiB) so the
+              # split was nearly free; doing it after TiB of media would be a
+              # degraded-window rebalance. Autoscaler is broken on this Squid
+              # (returns []), so PGs are pinned manually.
+              pg_num_min: "64"
         preservePoolsOnDelete: true
         preserveFilesystemOnDelete: true
         metadataServer:
@@ -382,9 +388,10 @@ pgNumFloor:
     - name: ceph-objectstore.rgw.buckets.data
       floor: 32
     # CephFS bulk-HDD data pool (Phase 4, EC 2+1) — same pg_num chicken-and-egg:
-    # created at pg_num=1, pg_num_min:32 can't enforce until bumped once.
+    # created at pg_num=1, pg_num_min can't enforce until bumped once.
+    # Raised 32→64 on 2026-06-15 (near-empty, cheap split) → ~96 PGs/OSD on HDD.
     - name: cephfs-bulk-hdd
-      floor: 32
+      floor: 64
 
 # VolumeSnapshotClass for CSI snapshots against the RBD pool. CNPG uses
 # this for its volumeSnapshot backup method (shipped 2026-05-20 in lieu
