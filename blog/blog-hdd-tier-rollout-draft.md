@@ -1351,3 +1351,57 @@ data is the whole point.
 - Hot-subset migration NAS→CephFS is the operator's deferred task; raise the 2 Ti quota only
   after checking `ceph df` HDD headroom (CephFS EC ×1.5 raw + RGW replicated ×3 raw must stay
   under ~10.9 TiB with nearfull headroom).
+
+### HDD pool PG bump 32→64 (while near-empty)
+
+`ceph osd df tree` showed ~68 PGs/OSD on the 3 HDD OSDs — below Ceph's ~100/OSD guideline. With
+only 3 OSDs the benefit is marginal (EC 2+1 already places one shard per host), but doing it
+**while the pool was ~26 GiB** made the split nearly free vs a degraded-window rebalance after
+TiB of media. Toolbox `ceph osd pool set cephfs-bulk-hdd pg_num 64; pgp_num 64` first (past the
+`pg_num_min` EINVAL guard), then chart `pg_num_min`/`pgNumFloor` 32→64. Split completed to
+`active+clean` in ~2 min, no degraded window. Kept RGW data pool at 32. → ~96 PGs/OSD on HDD.
+
+### Jellyfin QSV HW transcoding — and the 10.11 migration crash saga
+
+**The plan:** the 3 nodes are i7-11700 / Intel UHD 750. `vainfo` (iHD 25.4.6) in-pod confirmed
+QSV decode for H264/HEVC/HEVC10/VP9(0-3)/VC1/AV1(Profile0) + `EncSliceLP` (Low-Power encode ⇒
+HuC loaded). Wired it GitOps-side: `hwAccel: true` on jellyfin only → hostPath `/dev/dri`
+(privileged + root + renderD128 0666, no device-plugin) + a 20Gi `/transcode` emptyDir
+(node-local scratch, off the EC HDD pool + the 30Gi config PVC). All nodes have the iGPU so no
+nodeSelector; works with the `stack: media` topologySpread.
+
+**The crash:** the moment the chart rolled jellyfin, it crash-looped — `JellyfinMigrationService:
+Old migration style migration.xml detected. Migrate now.` → `[FTL] Failed to apply migrations:
+Sequence contains no elements at ... CheckFirstTimeRunOrMigration`. The s6 init showed the GPU
+mounts were fine (`permissions for /dev/dri/renderD128 are good`) — the crash is purely in
+jellyfin's `/config` migration, before any transcoding. Git blame: the image was bumped to
+10.11.8 in #108 (`1666132`), *before* this session — so **not caused by the HW-accel change**;
+the restart just surfaced it.
+
+**Root cause (4-agent web research, high confidence):** an **unguarded `.Last()`** in the
+legacy-`migrations.xml`→EF-Core bridge — it filters the ~23 applied GUIDs down to ones still
+mapping to a not-yet-applied code migration, then `.Last()` on the (empty) result throws.
+**Unfixed through 10.11.11/master** (jellyfin/jellyfin#15388 under #15686) — so a forward image
+bump is NOT a fix.
+
+**Rollback to 10.10.7 turned out BLOCKED:** 10.11.8 had already forward-migrated `jellyfin.db`'s
+EF schema (the users/config DB) before the *other* migration crashed, and **no pre-10.11 backup
+existed** (`SQLiteBackups/` empty; off-host copy declined). So 10.10.7 errored `no such column:
+u.MaxParentalAgeRating` — the data is only in 10.11 format now. The situation flipped: **forward
+became the data-preserving path.**
+
+**Forward-fix (the recovery that worked):**
+1. In-PVC backup → `/config/_jf-db-backup-2026-06-15` (jellyfin.db, library.db.old, migrations.xml).
+2. Image back to 10.11.8 (revert the brief 10.10.7 pin); removed the Renovate `<10.11` pin
+   (10.11.x is safe once the legacy migrations.xml is gone).
+3. **`mv /config/migrations.xml /config/migrations.xml.broken`** (one-time, in-PVC) so 10.11.x
+   skips the crashing legacy-conversion branch.
+4. Restart → `Startup complete 0:00:29` (tiny library = fast EF migration), `ready=true`, 0
+   migration crashes, migrations.xml NOT recreated. Users/config preserved.
+
+Also moved jellyfin's `CachePath` `/data/jellyfin-cache` → `/config/cache` (NVMe) — the cutover
+had emptied the CephFS `/data` cache dir; cache belongs on NVMe anyway (system.xml backed up to
+`system.xml.bak-2026-06-15`). Lesson: a Renovate image bump (#108) silently armed a crash-on-next-
+restart that only detonated when an unrelated change (the QSV chart roll) restarted the pod —
+and a "safe rollback" can be blocked by a one-way forward DB migration with no backup. Take the
+cold DB backup BEFORE the first restart on any major Jellyfin bump.
