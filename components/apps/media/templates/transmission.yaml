@@ -54,11 +54,13 @@ spec:
       labels:
         app: transmission-{{ $inst.name }}
         # Shared label for the media-stack topologySpreadConstraints (see
-        # apps.yaml) — keeps both transmission instances from co-locating
-        # with the servarr/jellyfin pods on one node.
+        # apps.yaml) — keeps the media pods spread across nodes by count.
         stack: media
+        # transmission-specific label so the two instances (master/slave)
+        # repel each other via the podAntiAffinity below.
+        component: transmission
     spec:
-      # Soft spread across hostnames (see apps.yaml rationale).
+      # Soft count-spread across hostnames for the whole media stack (see apps.yaml).
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -66,6 +68,21 @@ spec:
           labelSelector:
             matchLabels:
               stack: media
+      # Keep the two transmission instances on SEPARATE nodes. Both download via
+      # the shared NORDVPN egress, so co-locating them piles both torrent flows +
+      # both VPN tunnels onto one node's 1G frontnet (observed 2026-06-15: both
+      # landed on node6 → all torrent ingress on a single node). `required` is
+      # safe here — 2 instances vs 3 nodes (needs only 2 distinct), and it
+      # survives a single-node maintenance reboot (2 remaining nodes fit both);
+      # the only Pending case is 2+ nodes down, where a torrent client waiting
+      # is moot. The stack-wide count-spread above stays soft (ScheduleAnyway).
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  component: transmission
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: transmission
           image: {{ $app.image }}
