@@ -1321,6 +1321,22 @@ no-drain 3-node cluster if a node is cordoned. **General lesson: moving any
 multi-pod app from RWO/NFS to RWX CephFS removes the implicit volume-locality
 spread — add an explicit spread constraint at the same time.**
 
+**Follow-up — count-spread isn't app-aware (transmission podAntiAffinity).** The
+`maxSkew:1` spread balances *total* media-pod count, not by app, so the 2-2-3
+landed **both transmission torrent instances on node6** (it drew sonarr +
+master + slave). The MikroTik per-host meter then showed node6 dominating
+inbound (~58 Mb/s mean / 292 Mb/s max) — all torrent ingress + both NORDVPN
+tunnels on one node's 1G frontnet, while jellyfin's CephFS read rides the 10G
+backnet (invisible to the frontnet meter) and its TV stream was a light ~13 Mb/s.
+Fix: a `component: transmission` label + **required `podAntiAffinity`**
+(topologyKey hostname) so the two instances can't co-locate. They re-spread to
+node4 (master) + node6 (slave); a later check showed each pulling **~290 Mb/s
+independently** (torrents busy) — balanced across two nodes instead of ~580 on
+one. `required` is safe on 3 nodes (2 instances need only 2 distinct; survives a
+single-node maintenance reboot). Lesson: for *peer* workloads that must not
+share a node (downloaders sharing a VPN egress, replicas of an HA pair), a
+count-based topologySpread is not enough — add a per-app antiAffinity.
+
 ### Reclaim-policy: `Delete` → `Retain` (don't lose bulk data to a stray PVC delete)
 
 The old NFS backing was `reclaimPolicy: Retain` — deleting the PVC left the data
