@@ -1230,3 +1230,82 @@ assert_ssd_burnin_target() {
 backup-drive prep, OSD-journal SSDs) uses `assert_ssd_burnin_target` with the target's WWN
 allowlisted — never the HDD gate, never a bare `/dev/sdX`. The HDD gate's `ROTA=1` does not
 protect an SSD operation.
+
+## 2026-06-15 — first consumer of the CephFS bulk RWX tier: media stack `/data`
+
+The media stack (`components/apps/media/`, servarr + jellyfin + transmission) shared its
+`/data` RWX volume over **Synology NFS** (`media-data-pvc`, `nfs-csi`, `192.168.1.2:/volume1/kubenfs`).
+Moved it onto the in-cluster **CephFS EC-2+1 HDD tier** (`cephfs-hdd`) — the first real
+consumer of the bulk RWX tier built in Phases 1–5.
+
+### Capacity scare → false alarm (read the right number)
+
+`df -h /data` inside a media pod reported **7.0 TiB used / 11 TiB**, which looked fatal: the
+`cephfs-bulk-hdd` EC pool has only **6.9 TiB usable** (and shares the 3 HDD OSDs with the
+replicated RGW object pool — Loki chunks + future OADP/CNPG backups). 7 TiB of EC media =
+~10.5 TiB raw ≈ the entire HDD class → would blow `full_ratio` on a no-drain cluster.
+
+But NFS `df` reports the **whole Synology volume**, not the PVC's subdir. `du -h --max-depth=1 /data`
+(after fixing the `du -s --max-depth=1` conflict that silently errored to `/dev/null`) showed the
+truth: **~90 GiB total, all in `/data/downloads`; `/data/media` empty.** The 7 TiB bulk library
+lives elsewhere on the NAS, not in this PVC. So the shared working volume fits CephFS trivially.
+Decision (operator): move this PVC to CephFS with a **2 Ti quota** (a real quota now — NFS ignored
+the old `500Gi` nominal), keep the bulk library on NAS, migrate a hot subset later.
+
+### The immutable-StorageClass cutover (and the ArgoCD race that bit)
+
+A PVC's `storageClassName` is **immutable** — you can't flip `nfs-csi → cephfs-hdd` in place.
+Two options: rename the PVC (clean, single-commit, ArgoCD create+prune) or keep the name + a
+one-time manual delete. Operator chose **keep the name** (`media-data-pvc`). Deliberately **no
+`Replace=true`** on the PVC — on a `reclaimPolicy=Delete` data volume that sync-option is a
+footgun (any future diff → delete+recreate → data wiped).
+
+Chart change: `storage.dataClass: nfs-csi → cephfs-hdd`, `dataSize: 500Gi → 2Ti`, PUID=0
+comments rewritten (now "root-on-CephFS subvolume root 0755", previously the Synology NFSv4
+root-squash workaround). Pushed (`5682c59`).
+
+Cutover (break-glass, OAuth token expired):
+```bash
+# NFS PV reclaim=Retain confirmed first (safety gate) — data survives PVC delete
+oc -n media delete pvc media-data-pvc --wait=false
+oc -n media patch pvc media-data-pvc -p '{"metadata":{"finalizers":[]}}' --type=merge   # force-clear, pods held it
+# -> old NFS PV pvc-565f80ed Released (Retain) — 90 GiB preserved on NAS
+```
+**The race:** I deleted the PVC while ArgoCD was still rendering the *old* (nfs) revision, so its
+selfHeal recreated `media-data-pvc` as **nfs-csi 500Gi** before auto-syncing `5682c59`. ArgoCD
+then got stuck: live `nfs-csi` vs desired `cephfs-hdd`, `spec is immutable` on every retry, and
+it exhausted its 5 retries (`phase=Failed`). Lesson: deleting a managed resource mid-refresh
+lets selfHeal restore the *previous* desired state.
+
+**Fix** — once ArgoCD was confirmed on `5682c59` (desired = cephfs), delete the nfs PVC again
+(force-clear finalizer) and trigger an explicit sync (refresh alone wasn't enough — retries were
+exhausted; needed an `operation`):
+```bash
+oc -n openshift-gitops patch application media --type merge \
+  -p '{"operation":{"sync":{"syncStrategy":{"apply":{}},"revision":"5682c59..."}}}'
+# -> media-data-pvc recreated as cephfs-hdd 2Ti, Bound within ~15s
+for a in bazarr sonarr radarr jellyfin transmission-master transmission-slave; do
+  oc -n media delete pod -l app=$a --wait=false   # bounce to remount cephfs
+done
+```
+
+### Verification
+
+```
+mount | grep /data
+  ...cephfs=/volumes/csi/csi-vol-271e7ed8.../... on /data type ceph (rw,...,mon_addr=192.168.1.9:6789/...)
+df -hT /data → ceph 2.0T 0 2.0T 0% /data
+# write as root (PUID=0): touch + mkdir /data/{media,downloads} → WRITE-OK, owned root:root
+```
+media ArgoCD app **Synced + Healthy**; all 6 data-consumer pods Running+Ready on CephFS. The mon
+endpoints advertise frontnet IPs (`192.168.1.x`) — the known Rook `addressRanges`-mon quirk
+(OSD data still rides the backnet); cosmetic for CephFS clients.
+
+### Loose ends
+
+- **Two Released `nfs-csi` PVs** (both Retain): `pvc-565f80ed` = the original **~90 GiB, keep**
+  for the operator's later hot-subset migration; `pvc-9c423498` = the transient empty one from
+  the race, **safe to delete**.
+- Hot-subset migration NAS→CephFS is the operator's deferred task; raise the 2 Ti quota only
+  after checking `ceph df` HDD headroom (CephFS EC ×1.5 raw + RGW replicated ×3 raw must stay
+  under ~10.9 TiB with nearfull headroom).
