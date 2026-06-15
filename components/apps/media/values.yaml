@@ -126,7 +126,7 @@ apps:
     # 10.11.x skips the crashing legacy-conversion. Future 10.11.x bumps are safe
     # (no legacy migrations.xml left to convert). Full saga:
     # blog/blog-hdd-tier-rollout-draft.md 2026-06-15 section.
-    image: lscr.io/linuxserver/jellyfin:10.11.8
+    image: lscr.io/linuxserver/jellyfin:10.11.11
     port: 8096
     configSize: 30Gi
     readinessPath: /web/index.html
