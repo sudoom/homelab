@@ -1,3 +1,13 @@
+# Shared RWX /data volume for the whole media stack (servarr + jellyfin +
+# transmission). Backend moved from Synology NFS (nfs-csi) to CephFS
+# (cephfs-hdd) on 2026-06-15. A PVC's storageClassName is IMMUTABLE, so the
+# in-place SC change cannot be applied — this required a ONE-TIME manual
+# cutover: delete the old nfs-csi PVC (its NFS PV is reclaimPolicy=Retain, so
+# the ~90 GiB on the NAS survives as a Released PV for later migration), then
+# ArgoCD recreates this PVC on cephfs-hdd via normal apply, and the data
+# consumers are bounced to mount it. Deliberately NO `Replace=true` here — on a
+# data PVC that sync-option is a footgun (any future diff would delete+recreate
+# and wipe the CephFS data, which is reclaimPolicy=Delete).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

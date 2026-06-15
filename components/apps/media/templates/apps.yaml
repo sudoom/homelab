@@ -71,12 +71,12 @@ spec:
             {{- if $app.puid }}
             # Per-app PUID/PGID override (linuxserver s6 init reads these
             # on container start). Only set when an app needs to deviate
-            # from the image's default abc user — most don't. Sonarr is
-            # the canonical case: Synology NFSv4 export uses idmap, so
-            # the `abc` username on the client doesn't match any user on
-            # the server and gets denied. Setting PUID=0/PGID=0 keeps
-            # Sonarr running as root post-s6-init; NFS root_squash maps
-            # root → admin on the Synology side, which has access.
+            # from the image's default abc user — most don't. The servarr
+            # apps + jellyfin set PUID=0/PGID=0 so they stay root after
+            # s6-init: the CephFS shared volume's subvolume root is owned
+            # root:root 0755, so the default `abc` user can't create the
+            # /data tree. (Before 2026-06-15 this was a Synology NFSv4
+            # root-squash/idmap workaround; same value, different reason.)
             - name: PUID
               value: {{ $app.puid | quote }}
             - name: PGID

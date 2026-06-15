@@ -3,8 +3,17 @@ domain: apps.okd.sudops.pl
 
 storage:
   configClass: ceph-nvme-block
-  dataClass: nfs-csi
-  dataSize: 500Gi
+  # Shared RWX media /data volume. Moved off Synology NFS (nfs-csi) onto the
+  # in-cluster CephFS EC-2+1 HDD bulk tier (cephfs-hdd) 2026-06-15 — CephFS is
+  # natively RWX so every media app shares one PVC. dataSize is now a REAL
+  # quota (NFS ignored it; the old 500Gi nominal held ~90 GiB of downloads).
+  # The cephfs-bulk-hdd EC pool shares the 3 HDD OSDs with the RGW object pool
+  # (Loki chunks + future OADP/CNPG backups), so keep this modest: CephFS-used
+  # (×1.5 EC raw) + RGW-used (×3 repl raw) must stay well under the ~10.9 TiB
+  # HDD raw with Ceph nearfull (85%) headroom. 2Ti = hot-subset ceiling; raise
+  # only after checking `ceph df` HDD headroom. The bulk library stays on NAS.
+  dataClass: cephfs-hdd
+  dataSize: 2Ti
 
 apps:
   bazarr:
@@ -35,11 +44,12 @@ apps:
       limits:
         memory: 1000Mi
     mountData: true
-    # PUID=0/PGID=0 → linuxserver s6 skips the privilege drop, Sonarr
-    # runs as root. Synology NFSv4 export squashes root → admin (the only
-    # path that works since NFSv4 idmap doesn't recognize the abc user).
-    # Without this, Sonarr's `Directory.Exists` on /data/media/anime
-    # returns false even though the dir exists at 0777 mode.
+    # PUID=0/PGID=0 → linuxserver s6 skips the privilege drop, Sonarr runs as
+    # root. On the CephFS shared volume (since 2026-06-15) the subvolume root
+    # is owned root:root 0755, so the default `abc` user can't create the
+    # /data tree — running as root sidesteps it. (Previously this was a
+    # Synology NFSv4 root-squash/idmap workaround.) Future cleanup: set a
+    # securityContext.fsGroup + non-root PUID instead of running as root.
     puid: "0"
     pgid: "0"
     # Sonarr v4 native Postgres backend. Shared Cluster CR shipped from
@@ -69,7 +79,7 @@ apps:
       limits:
         memory: 512Mi
     mountData: true
-    # Same NFS-access workaround as Sonarr — see sonarr.puid above.
+    # Same root-on-CephFS access as Sonarr — see sonarr.puid above.
     puid: "0"
     pgid: "0"
     postgres:
@@ -117,7 +127,7 @@ apps:
       limits:
         memory: 12000Mi
     mountData: true
-    # Same NFS-access workaround as Sonarr — see sonarr.puid above.
+    # Same root-on-CephFS access as Sonarr — see sonarr.puid above.
     puid: "0"
     pgid: "0"
 
