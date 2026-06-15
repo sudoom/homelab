@@ -53,7 +53,19 @@ spec:
     metadata:
       labels:
         app: transmission-{{ $inst.name }}
+        # Shared label for the media-stack topologySpreadConstraints (see
+        # apps.yaml) — keeps both transmission instances from co-locating
+        # with the servarr/jellyfin pods on one node.
+        stack: media
     spec:
+      # Soft spread across hostnames (see apps.yaml rationale).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              stack: media
       containers:
         - name: transmission
           image: {{ $app.image }}

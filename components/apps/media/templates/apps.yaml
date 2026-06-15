@@ -31,7 +31,24 @@ spec:
     metadata:
       labels:
         app: {{ $name }}
+        # Shared label so topologySpreadConstraints can spread the whole media
+        # stack across nodes — RWX CephFS /data means any node can run any app,
+        # so without this the scheduler packs them onto the emptiest node (all
+        # landed on node6 after the 2026-06-15 CephFS cutover bounce). The
+        # cluster descheduler skips PVC pods, so it won't rebalance them.
+        stack: media
     spec:
+      # Soft spread (ScheduleAnyway) across hostnames so a single node
+      # reboot/failure can't take the entire media stack down at once. Soft
+      # (not DoNotSchedule) so pods still schedule if a node is cordoned on
+      # this no-drain 3-node cluster.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              stack: media
       {{- with $app.postgres }}
       {{- if .enabled }}
       initContainers:
