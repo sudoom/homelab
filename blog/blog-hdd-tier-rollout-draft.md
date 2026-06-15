@@ -1301,6 +1301,26 @@ media ArgoCD app **Synced + Healthy**; all 6 data-consumer pods Running+Ready on
 endpoints advertise frontnet IPs (`192.168.1.x`) — the known Rook `addressRanges`-mon quirk
 (OSD data still rides the backnet); cosmetic for CephFS clients.
 
+### Side effect: RWX removed volume pinning → all media pods packed onto one node
+
+After the cutover I bounced all 6 data-consumers at once — and they **all landed
+on node6**. Two causes compounded: (1) RWX CephFS `/data` means any node can mount
+it, so there's no RWO-RBD volume-locality pinning to anchor a pod to a node; (2)
+the media deployments had **no `topologySpreadConstraints`/anti-affinity**, so the
+scheduler packed all 6 onto the emptiest node — node6, which had just rebooted at
+07:52 (63 running pods vs node4 97, node5 132). The cluster descheduler skips
+PVC pods, so it would never rebalance them. A node6 failure would have taken the
+whole media stack down at once.
+
+Fix (`7f256b0`): a shared `stack: media` pod label + soft
+`topologySpreadConstraints` (`maxSkew: 1`, `topologyKey: kubernetes.io/hostname`,
+`whenUnsatisfiable: ScheduleAnyway`) on all 7 media deployments. The
+template change rolled them (Recreate) and they rescheduled **2-2-3** across
+node4/node5/node6. Soft (not `DoNotSchedule`) so pods still schedule on this
+no-drain 3-node cluster if a node is cordoned. **General lesson: moving any
+multi-pod app from RWO/NFS to RWX CephFS removes the implicit volume-locality
+spread — add an explicit spread constraint at the same time.**
+
 ### Loose ends
 
 - **Two Released `nfs-csi` PVs** (both Retain): `pvc-565f80ed` = the original **~90 GiB, keep**
