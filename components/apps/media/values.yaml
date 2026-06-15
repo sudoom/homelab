@@ -115,18 +115,25 @@ apps:
 
   jellyfin:
     enabled: true
-    # 10.11.8. Jellyfin 10.11.x crashes converting the legacy /config/migrations.xml
-    # to the EF-Core migration system — unguarded `.Last()` in
-    # JellyfinMigrationService.CheckFirstTimeRunOrMigration() throws "Sequence
-    # contains no elements" (unfixed through 10.11.11/master; jellyfin/jellyfin#15388
-    # under #15686). Rollback to 10.10.7 is NOT possible: 10.11.8 already
-    # forward-migrated jellyfin.db's EF schema and there's no pre-10.11 backup, so
-    # 10.10.7 errors ("no such column MaxParentalAgeRating"). Fix applied 2026-06-15:
-    # the legacy /config/migrations.xml was renamed to .broken (one-time, in-PVC) so
-    # 10.11.x skips the crashing legacy-conversion. Future 10.11.x bumps are safe
-    # (no legacy migrations.xml left to convert). Full saga:
+    # OFFICIAL jellyfin image (migrated off lscr.io/linuxserver 2026-06-15). The
+    # official image has NO s6/PUID and a DIFFERENT default dir layout, so the
+    # JELLYFIN_*_DIR env below is MANDATORY to reuse the existing linuxserver-laid-out
+    # /config (CONFIG=/config, DATA=/config/data → jellyfin adds its own data/ subdir
+    # so DBs resolve at /config/data/data/jellyfin.db). Without these env the official
+    # image launches the first-run setup wizard on an empty library. Runs as root
+    # (official:true → runAsUser:0) so it reads the existing 911:911/root files with
+    # no chown. The 10.11.x migration-crash note still applies: /config/migrations.xml
+    # is renamed to .broken (carried over in /config). Same 10.11.8 on both images so
+    # no DB schema migration on cutover. Full saga + image rationale:
     # blog/blog-hdd-tier-rollout-draft.md 2026-06-15 section.
-    image: lscr.io/linuxserver/jellyfin:10.11.8
+    image: jellyfin/jellyfin:10.11.8
+    official: true
+    env:
+      JELLYFIN_CONFIG_DIR: /config
+      JELLYFIN_DATA_DIR: /config/data
+      JELLYFIN_CACHE_DIR: /config/cache
+      JELLYFIN_LOG_DIR: /config/log
+      JELLYFIN_FFmpeg: /usr/lib/jellyfin-ffmpeg/ffmpeg
     port: 8096
     configSize: 30Gi
     readinessPath: /web/index.html
@@ -138,9 +145,9 @@ apps:
       limits:
         memory: 12000Mi
     mountData: true
-    # Same root-on-CephFS access as Sonarr — see sonarr.puid above.
-    puid: "0"
-    pgid: "0"
+    # No PUID/PGID — the official image has no s6 user-remap (the linuxserver-only
+    # vars are ignored). Runs as root via securityContext (official:true →
+    # runAsUser:0); root writes the CephFS /data subvolume root + existing /config.
     # Intel QuickSync (QSV) HW transcoding on the i7-11700 / UHD 750 iGPU.
     # hwAccel=true gives this pod (only) a hostPath mount of the host's
     # /dev/dri (renderD128 is 0666, pod is privileged + root, so QSV works
