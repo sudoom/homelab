@@ -2526,3 +2526,108 @@ together bumps per CLAUDE.md "Upgrading Rook/Ceph"); commit `Chart.lock` (stop
 gitignoring) so the deployed subchart version is pinned + reviewable. Open PR to
 HOLD: #117 (`quay.io/ceph/ceph v19.2.4→v20.2.1`, major Squid→Tentacle — Rook
 1.19.5 can't run Ceph 20 with `allowUnsupported: false`).
+
+## 2026-06-15 — two Ceph HEALTH_WARN / alert false-positives, both benign
+
+Start-of-session triage of the cluster's two persistent Ceph warnings plus a
+related Prometheus alert. Both turned out benign; capturing them because the
+first one *contradicted* what CLAUDE.md claimed, and because future-me will see
+these warnings again and need to know they're expected.
+
+### `BLUESTORE_SLOW_OP_ALERT` — it's the NVMe OSDs, not the HDDs (and it's benign)
+
+`ceph health detail`:
+
+```
+[WRN] BLUESTORE_SLOW_OP_ALERT: 2 OSD(s) experiencing slow operations in BlueStore
+     osd.0 observed slow operation indications in BlueStore
+     osd.1 observed slow operation indications in BlueStore
+```
+
+My first guess (in the session-open status) was "probably the new HDDs" — wrong.
+`ceph osd tree` says osd.0/osd.1/osd.2 are **nvme** (osd.3-5 are the hdd tier).
+So the alert is on two of the three PM9A1 NVMe OSDs — which CLAUDE.md said had
+"cleared and stays clear" after the PNY→PM9A1 swap. That claim was stale.
+
+But it is *not* the old worn-drive regression. The per-OSD perf dump:
+
+| OSD | node | avg `kv_commit_lat` | `kv_commit_lat` avgcount | `slow_committed_kv_count` | `osd-slow-ops` |
+|---|---|---|---|---|---|
+| osd.0 | node4 | 3.685 ms | 1,723,490 | 355 | 516 |
+| osd.1 | node5 | 3.943 ms | 1,719,933 | 874 | 709 |
+| osd.2 | node6 | 3.826 ms | **15,720** | 0 | — |
+
+Three things fall out:
+- **Average latency is healthy** — 3.7–3.9 ms on all three NVMe OSDs, right at the
+  documented post-PM9A1 ~3 ms reference, nowhere near the ~95 ms worn-PNY
+  pathology. (Also a positive update vs the 2026-05-15 "8–17 ms elevated"
+  concern — the cluster has settled back to baseline.)
+- **The slow ops are rare outliers** — 355/1.72M = 0.02 % (osd.0), 874/1.72M =
+  0.05 % (osd.1) of all KV commits.
+- **osd.2 escapes only because node6 rebooted today** (07:52) — its perf counters
+  reset (avgcount 15.7 k vs 1.72 M), so `slow_committed_kv_count` hasn't
+  re-accumulated past threshold yet. Not inherently healthier.
+
+The alert is **hair-trigger**: `ceph config get osd` →
+`bluestore_slow_ops_warn_threshold=1`, `bluestore_slow_ops_warn_lifetime=86400`,
+`bluestore_log_op_age=5`. So a *single* op exceeding 5 s within the last 24 h
+latches it. On no-PLP consumer NVMe (PM9A1), an occasional fsync/FUA stall during
+SLC-cache flush or background GC is expected hardware-class behaviour — exactly
+the "bottleneck is replication-amplification at size=3, not per-drive fsync
+latency; full-PLP enterprise not justified" note in the hardware section. So this
+is the alert doing its job on a sensitive default, not a drive problem.
+
+**Decision:** leave the alert (it's a real, if benign, signal — suppressing it
+hides genuine fsync stalls); correct the stale CLAUDE.md "stays clear" claim to
+"expected occasional hair-trigger on no-PLP NVMe; watch the *average*
+`kv_commit_lat`, not the latch." If it becomes pure noise, the lever is
+`bluestore_slow_ops_warn_threshold` (raise via `ceph config set osd …`, or in the
+chart's cephConfig for GitOps), not suppression.
+
+### `CephPGImbalance` (all 6 OSDs) — false positive of the 2-tier topology
+
+Firing for all 6 OSDs in Alertmanager (since 2026-06-13 after the HDD-tier
+rebalance settled; osd.2/osd.5 re-fired 07:58 today post-node6-reboot). The rule
+(Rook's `prometheus-ceph-rules`):
+
+```promql
+abs( ((ceph_osd_numpg > 0) - on(job) group_left avg(ceph_osd_numpg > 0) by(job))
+     / on(job) group_left avg(ceph_osd_numpg > 0) by(job)
+) * on(ceph_daemon) group_left(hostname) ceph_osd_metadata > 0.30      # for: 5m
+```
+
+It averages `ceph_osd_numpg` across **all OSDs grouped only by `job`** — no device
+class. `ceph osd df tree`:
+
+```
+ID CLASS WEIGHT   %USE  VAR  PGS  NAME
+ 3 hdd   3.63869  0.46  0.18  68  osd.3 (node4)
+ 0 nvme  0.46579 18.82  7.43 185  osd.0 (node4)
+ 4 hdd   3.63869  0.46  0.18  67  osd.4 (node5)
+ 1 nvme  0.46579 18.81  7.43 186  osd.1 (node5)
+ 5 hdd   3.63869  0.45  0.18  68  osd.5 (node6)
+ 2 nvme  0.46579 18.67  7.37 185  osd.2 (node6)
+```
+
+avg PG count = (185+186+185+68+67+68)/6 = 126.5. NVMe deviate +46 %, HDD deviate
+−46 % → all six trip the 30 % threshold. But **within each class the distribution
+is perfect** — 185/186/185 (nvme), 68/67/68 (hdd) — and the balancer agrees:
+
+```
+ceph balancer status → mode upmap, active, no_optimization_needed: true,
+   "distribution is already perfect"
+```
+
+Pool→class split confirms the intent: NVMe holds `nvme-replicated` (pg 128) + all
+the RGW metadata pools + `cephfs-metadata` + `.mgr`; HDD holds
+`ceph-objectstore.rgw.buckets.data` (pg 32) + `cephfs-bulk-hdd` EC 2+1 (pg 32).
+The PG counts per tier are correct; the alert just can't see device classes — a
+known ceph-mixin limitation on heterogeneous clusters.
+
+**Decision:** benign, document as a known false-positive. The proper fix is a
+device-class-aware expr (`avg(...) by (job, device_class)`), but Rook reconciles
+`prometheus-ceph-rules` (we set `monitoring.createPrometheusRules: true`), so a
+hand-edit/ArgoCD-override would flap. The clean GitOps path is
+`createPrometheusRules: false` + vendoring the full corrected ceph rule set — real
+maintenance burden (≈50 rules to diff on every Ceph bump) for cosmetic noise.
+Deferred to a README TODO; not worth shipping now.

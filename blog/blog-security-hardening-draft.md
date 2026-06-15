@@ -613,3 +613,80 @@ Once MCO event #2 fired, we re-tripped the familiar chain:
 
 (3) remains the blocker. Best path: stand up a single-node test of just the libreswan service + `wait-for-ipsec-connect.sh` without OVN-K daemonset involvement; capture what `ip xfrm policy` looks like immediately after libreswan starts; verify host-network traffic to 2379/etc. isn't affected. Without understanding (3), the next IPsec attempt risks the same `openshift-apiserver` Degraded state as 2026-05-20.
 
+## 2026-06-15 — node6 reboot re-tripped the OVN-egress cascade (38 false alerts)
+
+Textbook recurrence of the documented "any full node power-cycle re-trips the
+OVN-egress cascade per reboot" rule — captured here as a clean, fully-diagnosed
+instance because it's the first time the per-source-node reachability test was
+run end-to-end as the primary diagnostic.
+
+**Trigger:** the operator rebooted node6 (~07:52). node4/node5 did *not* reboot
+(their `ovnkube-node` pods kept 0 restarts since 2026-06-10; MCP `master` was
+`Updated=True, 3/3 Done` — not a cluster-wide MC roll, just node6). The MCO
+events on node6 (`Rebooted, boot id 6cf25185…` → `NodeNotReady` → `NodeReady` →
+`Uncordon` for `rendered-master-056bb4f5…`) are the normal post-boot reconcile,
+not a new config.
+
+**Symptom:** 38 firing alerts (30 visible from prometheus-k8s-0's local API):
+16× `TargetDown` + criticals `etcdMembersDown`×2, `etcdInsufficientMembers`,
+`ClusterVersionOperatorDown`, `NoOvnClusterManagerLeader`, plus 3× `KubeJobFailed`
+(collect-profiles, loki-pdb-override ×2 — cronjobs that failed in the reboot
+window). The start-of-session health sweep was otherwise *clean* (3/3 nodes Ready,
+all 42 ArgoCD apps Synced+Healthy, all CSVs Succeeded, all certs Ready) — the
+cascade is invisible to those checks because it's scrape-inferred.
+
+**Diagnosis (the right order):**
+1. etcd is *actually* healthy — `etcdctl endpoint health --cluster` → all 3
+   members committing (23–32 ms). So every etcd/CVO critical is false. (Always
+   confirm this before touching etcd.)
+2. `up==0` from prometheus-k8s-0: **31 targets down — 16 @ 192.168.1.7 (node4) +
+   15 @ 192.168.1.8 (node5)**, but node6's own targets fine. prometheus-k8s-0
+   runs on node6.
+3. `up==0` from prometheus-k8s-1 (on node5): only 3 pod-network targets down,
+   **zero host targets** → node4/node5 egress is fine; the breakage is
+   node6-specific.
+4. Explicit per-source-node reachability from prometheus-k8s-0 (node6):
+   `wget http://192.168.1.9:9100/metrics` (own host) = **0.010 s**;
+   `wget http://192.168.1.7:9100/metrics` (node4 host) = **black-holed** (>30 s,
+   past the 8 s `-T`). Fast to own host + hang to remote host = that node's
+   `ovnkube-node` has broken pod→remote-host egress.
+
+So: node6 reboot → node6's `ovnkube-node` lost pod→remote-host egress →
+prometheus-k8s-0 (resident on node6) can scrape node6 but black-holes node4/node5
+host metrics → 31 false `TargetDown` → derived false etcd/CVO/OVN criticals.
+repo-server is on node5 (healthy) so ArgoCD never went `sync=Unknown` this time —
+which is why the sweep looked clean. cert-manager controller also on node5 → no
+long-fuse egress-retrier to sweep.
+
+**Fix (per the runbook):** restart all 3 `ovnkube-node` one at a time (operator
+authorized; OAuth token was expired so via break-glass). Started with node6 (the
+confirmed-broken one):
+
+```bash
+# per node, one at a time, wait Ready between:
+oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node \
+   --field-selector spec.nodeName=node6.okd.sudops.pl
+oc -n openshift-ovn-kubernetes wait pod -l app=ovnkube-node \
+   --field-selector spec.nodeName=node6.okd.sudops.pl --for=condition=Ready --timeout=150s
+# re-test egress immediately after node6: wget .7:9100 from prometheus-k8s-0 → 0.011 s (was >30 s)
+# then node5, then node4
+```
+
+**Result:** node6 egress restored the instant its `ovnkube-node` came back
+(0.011 s to node4). After all 3: `up==0` → **0 targets**, firing alerts **30 → 10**
+(remaining 10 = baseline: Watchdog, KubeCPUOvercommit, PodDisruptionBudgetAtLimit,
+AlertmanagerReceiversNotConfigured, Insights/UpdateAvailable info, + the 3 spent
+KubeJobFailed which self-clear next schedule).
+
+**Why restart all 3 and not just node6:** the 2026-06-11 lesson — a node whose
+`ovnkube-node` isn't restarted keeps *silent* broken pod→remote-host egress until
+a pod lands on it. Here node4/node5 were proven-healthy (k8s-1 scraped everything),
+so node6-only would have sufficed this time, but the runbook's all-3 is the safe
+default. The whole episode (alert → root cause → cleared) took ~10 min once the
+reachability test pointed at node6.
+
+**Standing takeaway:** every node reboot on this cluster needs the
+`ovnkube-node` restart as a deliberate post-reboot step. The false etcd-critical
+shape is identical to the DDF-cAdvisor wedge (storage section) — `etcdctl endpoint
+health --cluster` is the one query that tells them apart from a real etcd problem.
+
