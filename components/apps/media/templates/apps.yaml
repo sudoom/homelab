@@ -153,6 +153,13 @@ spec:
             - name: data
               mountPath: /data
             {{- end }}
+            {{- if $app.hwAccel }}
+            # Intel iGPU render node for QSV + ephemeral transcode scratch.
+            - name: dri
+              mountPath: /dev/dri
+            - name: transcode
+              mountPath: /transcode
+            {{- end }}
       volumes:
         - name: config
           persistentVolumeClaim:
@@ -161,6 +168,15 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: media-data-pvc
+        {{- end }}
+        {{- if $app.hwAccel }}
+        - name: dri
+          hostPath:
+            path: /dev/dri
+            type: Directory
+        - name: transcode
+          emptyDir:
+            sizeLimit: 20Gi
         {{- end }}
 ---
 apiVersion: v1

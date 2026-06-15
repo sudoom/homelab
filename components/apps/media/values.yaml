@@ -130,6 +130,14 @@ apps:
     # Same root-on-CephFS access as Sonarr — see sonarr.puid above.
     puid: "0"
     pgid: "0"
+    # Intel QuickSync (QSV) HW transcoding on the i7-11700 / UHD 750 iGPU.
+    # hwAccel=true gives this pod (only) a hostPath mount of the host's
+    # /dev/dri (renderD128 is 0666, pod is privileged + root, so QSV works
+    # with no device-plugin) + an ephemeral /transcode emptyDir for transcode
+    # scratch (fast node-local, avoids EC write-churn on cephfs-bulk-hdd and
+    # pressure on the 30Gi config PVC). Set Jellyfin Transcode path=/transcode.
+    # All 3 nodes have the same iGPU, so no nodeSelector is needed.
+    hwAccel: true
 
   transmission:
     enabled: true
