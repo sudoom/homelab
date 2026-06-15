@@ -13,6 +13,12 @@ kind: PersistentVolumeClaim
 metadata:
   name: media-data-pvc
   namespace: {{ .Values.namespace }}
+  annotations:
+    # Defense-in-depth with the cephfs-hdd Retain reclaimPolicy: don't let
+    # ArgoCD prune this PVC if it's ever accidentally removed from the chart.
+    # Losing the PVC unmounts every media app; Retain saves the data but the
+    # PVC object itself should not vanish on a stray manifest change.
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   storageClassName: {{ .Values.storage.dataClass }}
   accessModes:

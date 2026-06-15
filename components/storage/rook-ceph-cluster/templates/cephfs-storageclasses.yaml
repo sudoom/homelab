@@ -40,7 +40,15 @@ parameters:
   csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
   csi.storage.k8s.io/node-stage-secret-namespace: {{ $ns }}
   csi.storage.k8s.io/fstype: ext4
-reclaimPolicy: Delete
+# Retain (not Delete) on the bulk tier: deleting a cephfs-hdd PVC must NOT
+# destroy the CephFS subvolume data (e.g. the media library, 2026-06-15). A
+# deleted PVC leaves a Released PV + orphan subvolume to purge manually — an
+# accepted tradeoff so bulk data survives an accidental/erroneous PVC delete,
+# matching the Retain behaviour the media data had on NFS. NOTE: changing
+# reclaimPolicy needs the SC recreated (immutable field) — the Replace=true
+# sync-option above handles that. Existing PVs keep the policy they were
+# provisioned with; patch them to Retain separately (`oc patch pv … Retain`).
+reclaimPolicy: Retain
 allowVolumeExpansion: true
 volumeBindingMode: Immediate
 {{- end }}

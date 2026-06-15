@@ -1321,6 +1321,28 @@ no-drain 3-node cluster if a node is cordoned. **General lesson: moving any
 multi-pod app from RWO/NFS to RWX CephFS removes the implicit volume-locality
 spread — add an explicit spread constraint at the same time.**
 
+### Reclaim-policy: `Delete` → `Retain` (don't lose bulk data to a stray PVC delete)
+
+The old NFS backing was `reclaimPolicy: Retain` — deleting the PVC left the data
+as a Released PV (that's how the 90 GiB survived this very cutover). But the
+`cephfs-hdd` SC defaulted to **`Delete`**, so post-cutover a `media-data-pvc`
+deletion would **destroy the CephFS subvolume + all data immediately** — no
+safety net. That's a regression in data-safety from the migration, easy to miss.
+
+Hardened it (`<next commit>`):
+- **SC `cephfs-hdd` → `reclaimPolicy: Retain`** (template; `reclaimPolicy` is an
+  immutable SC field, so the SC's existing `Replace=true` sync-option recreates
+  it). Only `ceph-nvme-block` (RWO block, transient app configs) stays `Delete`.
+- **Patched the live media PV → Retain** (`oc patch pv … persistentVolumeReclaimPolicy=Retain`)
+  — the SC change only affects *newly* provisioned PVs, so the already-bound one
+  needed a direct patch.
+- **`Prune=false` on the PVC** — defense in depth so ArgoCD can't prune the PVC
+  object out from under the running apps on a stray manifest change.
+
+Cost of Retain: an intentional PVC delete now leaves a Released PV + orphan
+CephFS subvolume to purge by hand. Acceptable for a bulk-data tier where the
+data is the whole point.
+
 ### Loose ends
 
 - **Two Released `nfs-csi` PVs** (both Retain): `pvc-565f80ed` = the original **~90 GiB, keep**
