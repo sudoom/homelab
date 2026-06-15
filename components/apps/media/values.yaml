@@ -115,7 +115,16 @@ apps:
 
   jellyfin:
     enabled: true
-    image: lscr.io/linuxserver/jellyfin:10.11.8
+    # PINNED to 10.10.7 (was 10.11.8, #108). Jellyfin 10.11.x has an UNFIXED
+    # crash converting the legacy migrations.xml to the EF-Core migration system
+    # — unguarded `.Last()` in JellyfinMigrationService.CheckFirstTimeRunOrMigration()
+    # throws "Sequence contains no elements" before the DB is touched (present
+    # through 10.11.11/master; jellyfin/jellyfin#15388 under #15686, still open).
+    # 10.10.7 boots cleanly on the existing DB. Renovate is pinned <10.11 (see
+    # renovate.json). Unpin + retry 10.11 ONLY once upstream ships the guard fix
+    # (then use the migrations.xml-rename procedure, expect a long EF migration).
+    # Full diagnosis: blog/blog-hdd-tier-rollout-draft.md 2026-06-15 section.
+    image: lscr.io/linuxserver/jellyfin:10.10.7
     port: 8096
     configSize: 30Gi
     readinessPath: /web/index.html
