@@ -126,7 +126,7 @@ apps:
     # is renamed to .broken (carried over in /config). Same 10.11.8 on both images so
     # no DB schema migration on cutover. Full saga + image rationale:
     # blog/blog-hdd-tier-rollout-draft.md 2026-06-15 section.
-    image: jellyfin/jellyfin:10.11.8
+    image: jellyfin/jellyfin:10.11.11
     official: true
     env:
       JELLYFIN_CONFIG_DIR: /config
