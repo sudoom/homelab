@@ -1405,3 +1405,33 @@ had emptied the CephFS `/data` cache dir; cache belongs on NVMe anyway (system.x
 restart that only detonated when an unrelated change (the QSV chart roll) restarted the pod —
 and a "safe rollback" can be blocked by a one-way forward DB migration with no backup. Take the
 cold DB backup BEFORE the first restart on any major Jellyfin bump.
+
+### Migrated linuxserver → official image (jellyfin/jellyfin:10.11.8)
+
+Once stable, moved jellyfin off `lscr.io/linuxserver/jellyfin` to the **official**
+`jellyfin/jellyfin:10.11.8` (closer to upstream, no s6/PUID layer; makes in-cluster the
+canonical Jellyfin). A 3-agent research workflow (high confidence) nailed the one risky part —
+the official image's DEFAULT dir layout differs from linuxserver's, so a naive swap on the same
+PVC triggers the **first-run setup wizard on an empty library** (data ignored, not lost). The fix
+is mandatory env overrides so it adopts the existing `/config`:
+```
+JELLYFIN_CONFIG_DIR=/config
+JELLYFIN_DATA_DIR=/config/data        # jellyfin adds its own data/ subdir → /config/data/data/jellyfin.db
+JELLYFIN_CACHE_DIR=/config/cache
+JELLYFIN_LOG_DIR=/config/log
+JELLYFIN_FFmpeg=/usr/lib/jellyfin-ffmpeg/ffmpeg
+```
+plus `securityContext.runAsUser:0/runAsGroup:0` (official has no s6/PUID remap and does no chown,
+so root reads the existing 911:911/root files as-is — no `chown -R /config` footgun), drop
+`PUID/PGID` (ignored by the official image), keep `/dev/dri` + `/transcode`, and **media at the
+identical `/data` path** (absolute library paths are baked into the DB). Same 10.11.8 both sides →
+no schema migration. Generalized the chart: `apps.yaml` gained a per-app `.env` map + an
+`official` flag → `runAsUser`; the servarr apps are unchanged (still linuxserver + PUID).
+
+Fresh in-PVC backup first (`/config/_jf-preofficial-backup-2026-06-15`). Cutover (one ArgoCD
+sync, ~4 min for the first image pull): startup resolved dirs to `/config`, `/config/data`,
+`/config/cache`, `/config/log` (NOT the official `/config/config` + `/cache` defaults),
+`jellyfin.db` adopted at `/config/data/data/`, `IsStartupWizardCompleted>true` (login page, not
+the wizard), `/dev/dri/renderD128` present (QSV intact). `migrations.xml.broken` carried over in
+`/config`. Rollback if ever needed is trivial — just the image tag + the env block (the
+linuxserver `/config` is byte-compatible since both ran the same jellyfin 10.11.8).
