@@ -33,11 +33,6 @@
       "description": "Group rook-ceph updates",
       "matchPackagePatterns": ["rook-ceph"],
       "groupName": "rook-ceph"
-    },
-    {
-      "description": "Pin Jellyfin <10.11 — 10.11.x has an unfixed migrations.xml->EF-Core crash (CheckFirstTimeRunOrMigration unguarded .Last(); jellyfin/jellyfin#15388 under #15686, present through 10.11.11/master). Allows 10.10.x patches; blocks 10.11.x. Remove this rule once upstream guards the migration.",
-      "matchPackageNames": ["lscr.io/linuxserver/jellyfin", "jellyfin/jellyfin"],
-      "allowedVersions": "<10.11"
     }
   ],
   "ignorePaths": [
