@@ -1435,3 +1435,45 @@ sync, ~4 min for the first image pull): startup resolved dirs to `/config`, `/co
 the wizard), `/dev/dri/renderD128` present (QSV intact). `migrations.xml.broken` carried over in
 `/config`. Rollback if ever needed is trivial — just the image tag + the env block (the
 linuxserver `/config` is byte-compatible since both ran the same jellyfin 10.11.8).
+
+### Playback diagnosis: a 4K Dolby Vision file froze (browser) — and why the LG TV doesn't
+
+A 4K HEVC **Dolby Vision P8.1** remux (88 GiB, DTS-HD MA) froze mid-playback in a **web browser**.
+Jellyfin's Playback Info: `Play method: Transcoding`, `Transcoding framerate 24 fps (1.00x)`. The
+ffmpeg command confirmed QSV **was** engaged (`-hwaccel vaapi -hwaccel_output_format vaapi`,
+`-codec:v:0 hevc_qsv -low_power 1`) — so not a misconfig. The problem: the browser's HTML5 player
+can't do HEVC/DV/DTS, so the server force-**re-encodes the whole 4K stream at the source's
+74.5 Mbps**, and the UHD 750 maxes at exactly **1.00× realtime** at that bitrate → zero buffer
+headroom → any hiccup → freeze. Also "stop doesn't leave a buffer": transcoding is ephemeral
+(stop kills ffmpeg + Delete-segments wipes `/transcode`) and at 1.00× it never gets ahead.
+
+**The fix is the client, not the server — and the "it's HTML5 under the hood" objection is a
+false equivalence.** Transcode-vs-direct-play is decided by the client **DeviceProfile**, not the
+renderer. jellyfin-web builds the profile by probing `canPlayType()`: desktop Chrome answers
+"no" for HEVC/DV (HW-gated, DV layer never exposed) → they're dropped from DirectPlayProfiles →
+server transcodes. On **webOS**, jellyfin-web **short-circuits the probe** —
+`if (browser.web0s || browser.tizen ...) return true` for HEVC, and asserts DV P8 via
+`web0sVersion >= 4` with no probe — because the LG TV SoC hardware-decodes HEVC Main10 + DV behind
+the webOS Chromium `<video>` element (the probe just under-reports it). **Same HTML5 client,
+opposite declared profile → opposite outcome.** (Verified against jellyfin-web source +
+jellyfin-webos README via a research workflow.)
+
+**Validated live on the operator's LG OLED** (Playback Info photographed off the TV):
+- An **HDR10 + EAC3** file → `Play method: Direct playing` — full end-to-end direct play (HEVC
+  Main10 + HDR10 + EAC3 all TV-native, zero transcode).
+- The **DV P8.1 + DTS-HD MA** file → `Play method: Direct streaming`, `Video codec: HEVC (direct)`,
+  `Audio codec: AAC`. Confirmed in the container's `FFmpeg.DirectStream-*.log`: **`-codec:v:0 copy`**
+  (4K HEVC+DV bitstream copied, NO re-encode) + `-codec:a:0 libfdk_aac` (DTS-HD MA→AAC) + `-f hls`,
+  running at **`speed=6.12x`** (vs 1.00× in the browser). The GPU isn't even doing video work — it's
+  a stream-copy + a trivial audio re-encode. Freeze + no-buffer both gone.
+
+**Why audio still transcodes on the TV:** LG webOS apps can't pass through **lossless HD audio**
+(DTS-HD MA / TrueHD), so DTS always converts to AAC/AC3 — cheap, video untouched. For 100%
+direct-play, give the file an **EAC3/AC3/AAC** track (as the HDR10 file above had).
+
+**Caveats (research-verified):** Jellyfin 10.11.0–10.11.3 and 10.11.6 had webOS DV regressions;
+**10.11.8 is good**. DV-in-MKV *remuxes* on webOS < 25 but direct-plays on webOS 25+ (jellyfin-web
+PR #7328). DV **P8.1/P5** direct-play; **P7** (dual-layer) does not. The webOS doc note "*enable
+Force remux MKV→MP4*" addresses the MKV-on-webOS quirk. **Takeaway: the server-side QSV setup is
+correct and stays for unavoidable transcodes (browsers/weak clients); for 4K HEVC/DV the answer is
+a native client that direct-plays — the browser is the worst case.**
