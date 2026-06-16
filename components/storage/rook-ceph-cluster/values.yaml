@@ -31,7 +31,7 @@ rook-ceph-cluster:
 
   cephImage:
     repository: quay.io/ceph/ceph
-    tag: v19.2.4
+    tag: v20.2.2
     allowUnsupported: false
 
   # Everything that goes verbatim into CephCluster.spec (the chart inserts
@@ -349,7 +349,7 @@ rbdTrashPurgeSchedule:
   pools:
     - nvme-replicated
   # Pinned to the same image we use for the cluster.
-  image: quay.io/ceph/ceph:v19.2.4
+  image: quay.io/ceph/ceph:v20.2.2
 
 # Bootstrap Job that applies the canonical caps to the CSI RBD provisioner
 # user, working around an upstream Rook 1.19.5 bug where the user is
@@ -364,7 +364,7 @@ rbdTrashPurgeSchedule:
 # creates `.2`, add it here.
 csiRbdProvisionerCapsFix:
   enabled: true
-  image: quay.io/ceph/ceph:v19.2.4
+  image: quay.io/ceph/ceph:v20.2.2
   users:
     - client.csi-rbd-provisioner.1
 
@@ -381,7 +381,7 @@ csiRbdProvisionerCapsFix:
 #   32 PGs is comfortable; metadata pool stays at chart default 8.
 pgNumFloor:
   enabled: true
-  image: quay.io/ceph/ceph:v19.2.4
+  image: quay.io/ceph/ceph:v20.2.2
   pools:
     - name: nvme-replicated
       floor: 128
