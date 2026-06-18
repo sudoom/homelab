@@ -2787,3 +2787,13 @@ TODO next session — confirm the reclaim: pod logs should show the trimmed byte
 `rbd du nvme-replicated/<wal-images>` should drop from 106/140 GiB toward the ~0.3 GiB
 FS-used; `ceph df` `nvme-replicated` %RAW should fall 82% → ~27% (MAX AVAIL 81 GiB →
 ~280 GiB). If logs still show no trim output, investigate a hung fstrim / nsenter.
+
+### 2026-06-19 — node-fstrim reclaim VERIFIED
+
+First pass landed. `node-fstrim` logs (per node) show the WAL volumes trimmed:
+`…deab95d6… 146.4 GiB trimmed on /dev/rbd4` (node6), `…88dc5225… 146.2 GiB trimmed
+on /dev/rbd5` (node4); plus Prometheus (19–29 GiB) + assorted config PVCs. `rbd du`
+on the two WAL images: **106/140 GiB → 5.5/5.4 GiB**. `ceph df` `nvme-replicated`:
+**%RAW 82% → 16.57%**, MAX AVAIL 81 GiB → 374 GiB, RAW USED 1.1 TiB → 237 GiB.
+ubi9/ubi + `nsenter -t1 -m -- fstrim -av` confirmed working on all 3 nodes; weekly
+cadence now prevents recurrence. RBD-no-trim drift: solved.
