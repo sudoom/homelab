@@ -24,7 +24,7 @@ metadata:
   name: transmission-config-pvc
   namespace: {{ .Values.namespace }}
 spec:
-  storageClassName: {{ .Values.sharedData.storageClassName }}
+  storageClassName: {{ .Values.storage.configClass }}
   accessModes:
     - ReadWriteOnce
   resources:

@@ -6,7 +6,9 @@ metadata:
 spec:
   storageClassName: {{ .Values.sharedData.storageClassName }}
   accessModes:
-    - ReadWriteOnce
+    # RWX: the shared download volume is NFS (nfs-csi), and transmission/webtlo
+    # schedule onto different nodes — RWO could never be co-mounted across them.
+    - ReadWriteMany
   resources:
     requests:
       storage: {{ .Values.sharedData.size }}

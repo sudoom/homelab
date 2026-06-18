@@ -1,11 +1,22 @@
 namespace: keepers
 domain: apps.okd.sudops.pl
 
-# Shared data volume for keepers (transmission downloads → webtlo reads
-# torrent state). RWO since both mounters land on the same node via
-# default scheduling; flip to RWX (cephfs / nfs) if you spread them.
+# Per-app config/state PVCs (transmission settings + resume files, webtlo DB).
+# Fast NVMe Ceph, RWO, small — deliberately kept OFF NFS so the app SQLite/state
+# DBs aren't on a network filesystem (locking + latency). Only the bulk download
+# volume below goes to NFS.
+storage:
+  configClass: ceph-nvme-block
+
+# Shared download volume for keepers. On the NAS via NFS (nfs-csi) so large
+# downloads don't sit on the NVMe Ceph tier, and RWX so it survives the two
+# apps landing on different nodes (transmission + webtlo schedule independently).
+# transmission writes downloads here; webtlo otherwise talks to transmission
+# over RPC (:9091) — mount keepers-data-pvc into webtlo too only if you want it
+# to read the files directly. nfs-csi reclaimPolicy is Retain: deleting the PVC
+# leaves the NAS export + data, clean it on the NAS if you really want it gone.
 sharedData:
-  storageClassName: ceph-nvme-block
+  storageClassName: nfs-csi
   size: 50Gi
 
 apps:
@@ -13,7 +24,9 @@ apps:
     enabled: true
     image: haugene/transmission-openvpn:5.4.1
     port: 9091
-    configSize: 5Gi
+    # config PVC (transmission settings + resume files). 1Gi is plenty — the
+    # downloads live on the shared NFS data volume, not here.
+    configSize: 1Gi
     host: keepers-trans
     resources:
       requests:

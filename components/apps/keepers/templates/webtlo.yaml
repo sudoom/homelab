@@ -16,7 +16,7 @@ metadata:
   name: webtlo-data-pvc
   namespace: {{ .Values.namespace }}
 spec:
-  storageClassName: {{ .Values.sharedData.storageClassName }}
+  storageClassName: {{ .Values.storage.configClass }}
   accessModes:
     - ReadWriteOnce
   resources:
