@@ -1493,3 +1493,15 @@ PR #7328). DV **P8.1/P5** direct-play; **P7** (dual-layer) does not. The webOS d
 Force remux MKV→MP4*" addresses the MKV-on-webOS quirk. **Takeaway: the server-side QSV setup is
 correct and stays for unavoidable transcodes (browsers/weak clients); for 4K HEVC/DV the answer is
 a native client that direct-plays — the browser is the worst case.**
+
+## 2026-06-18 — media CephFS quota 2Ti → 3Ti (online grow)
+
+Raised `media-data-pvc` quota 2Ti→3Ti. Gated on a `ceph df` HDD-headroom check
+(per the values.yaml rule): HDD tier 19.93 %RAW used (8.7 TiB avail),
+`cephfs-bulk-hdd` 1.4 TiB STORED / 5.5 TiB MAX AVAIL, RGW data pool only 16 GiB —
+ample slack. `cephfs-hdd` SC is `allowVolumeExpansion: true`, so this was a pure
+chart edit (`dataSize: 2Ti -> 3Ti`, commit `0571ca2`) → ArgoCD applied the PVC
+size bump → CephFS CSI grew the subvolume quota **online** (no recreate, no pod
+restart): `capacity` went 2Ti → 3Ti within ~2.5 min of the push, no resize
+conditions/errors, media app stayed Synced/Healthy. The bulk library still lives
+on the NAS; raise further only after re-checking `ceph df`.
