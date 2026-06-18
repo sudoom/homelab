@@ -10,14 +10,17 @@ storage:
   # The cephfs-bulk-hdd EC pool shares the 3 HDD OSDs with the RGW object pool
   # (Loki chunks + future OADP/CNPG backups), so keep this modest: CephFS-used
   # (×1.5 EC raw) + RGW-used (×3 repl raw) must stay well under the ~10.9 TiB
-  # HDD raw with Ceph nearfull (85%) headroom. Raised 2Ti->3Ti 2026-06-18 after
-  # a `ceph df` check: HDD 20% raw used (8.7 TiB avail), cephfs-bulk-hdd 1.4 TiB
-  # STORED with 5.5 TiB MAX AVAIL, RGW data pool only 16 GiB — ample slack.
+  # HDD raw with Ceph nearfull (85%) headroom. Raised 3Ti->4Ti 2026-06-19 after a
+  # `ceph df` re-check: HDD 20% raw used (8.7 TiB avail), cephfs-bulk-hdd 1.5 TiB
+  # STORED with 5.4 TiB MAX AVAIL — fits (quota is a ceiling, consumes nothing).
   # cephfs-hdd is allowVolumeExpansion=true so this grows the subvolume quota
-  # online (no recreate). Raise further only after re-checking `ceph df`. The
-  # bulk library stays on NAS.
+  # online (no recreate). NOTE: at 4Ti this /data is effectively the bulk library,
+  # not a hot subset — the original design put bulk on NAS. Moving media to NFS
+  # (like Immich) is the considered next step, deferred (likely bundled with a
+  # future Synology->TrueNAS migration). Until then, raise only after re-checking
+  # `ceph df`.
   dataClass: cephfs-hdd
-  dataSize: 3Ti
+  dataSize: 4Ti
 
 apps:
   bazarr:
