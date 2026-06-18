@@ -9,7 +9,7 @@ postgres:
   # so this is a separate cluster, NOT the shared media-postgres. Single instance
   # (homelab; DB is recoverable from the daily snapshot — bump to 2 for HA later).
   instances: 1
-  image: ghcr.io/tensorchord/cloudnative-vectorchord:17-1.1.1
+  image: ghcr.io/tensorchord/cloudnative-vectorchord:18-1.1.1
   storage:
     size: 8Gi
     # DB on fast RBD block, NEVER CephFS/NFS (corruption risk).
