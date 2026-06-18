@@ -30,9 +30,15 @@
       "automerge": true
     },
     {
-      "description": "Group rook-ceph updates",
-      "matchPackagePatterns": ["rook-ceph"],
-      "groupName": "rook-ceph"
+      "description": "Rook is a manual, supervised, version-coherent bump (CLAUDE.md 'Upgrading Rook/Ceph'). Renovate must NOT auto-propose it: the 2026-06-12 v1.19.5->v1.20.0 auto-bump (#134) broke CSI (operator changed the CSI ServiceAccount naming, ceph-csi-*-sa went missing). Both charts bump together, by hand, after a helm-dependency-update chart-exists check + an oc-diff of the CSI SA/RBAC delta.",
+      "matchPackageNames": ["rook-ceph", "rook-ceph-cluster"],
+      "enabled": false
+    },
+    {
+      "description": "Ceph image bumps are gated on Rook<->Ceph compatibility (a Rook minor supports a bounded Ceph range; allowUnsupported:false refuses an unsupported Ceph) AND a planned degraded window (no drain headroom on the 3-OSD no-drain topology). Renovate must NOT auto-propose it; bump the Ceph image by hand only after the running Rook is confirmed to support the target. (Live example: #117 v19.2.4->v20.2.2 major Squid->Tentacle, unsupported by Rook 1.19.5.)",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["quay.io/ceph/ceph"],
+      "enabled": false
     }
   ],
   "ignorePaths": [

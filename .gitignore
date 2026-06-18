@@ -3,6 +3,13 @@ charts/
 Chart.lock
 *.tgz
 
+# EXCEPT the Rook chart locks — committed on purpose so the deployed subchart
+# version is pinned + reviewable in git (the 2026-06-12 CSI outage came from an
+# unreviewed Chart.yaml bump; see CLAUDE.md "Upgrading Rook/Ceph"). A supervised
+# Rook bump updates both of these in the same commit as the Chart.yaml change.
+!components/operators/rook-ceph/Chart.lock
+!components/storage/rook-ceph-cluster/Chart.lock
+
 # IDE
 .idea/
 .vscode/
