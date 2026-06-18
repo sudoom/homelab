@@ -10,6 +10,14 @@ Chart.lock
 !components/operators/rook-ceph/Chart.lock
 !components/storage/rook-ceph-cluster/Chart.lock
 
+# AND the sealed-secrets chart is VENDORED (tgz + lock committed) so a fresh
+# bootstrap never depends on a remote Helm repo — it's bootstrap-critical (it
+# decrypts the Cloudflare token) and the old chart repo URL 404'd after the
+# Bitnami overhaul. Re-include the dir first, then the tgz + lock.
+!components/operators/sealed-secrets/charts/
+!components/operators/sealed-secrets/charts/sealed-secrets-*.tgz
+!components/operators/sealed-secrets/Chart.lock
+
 # IDE
 .idea/
 .vscode/
