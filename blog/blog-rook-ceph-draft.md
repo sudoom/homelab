@@ -2708,3 +2708,63 @@ forensics, just acknowledged. Takeaway: after any OVN-egress-cascade event, expe
 `rook`-module crashes to latch a `RECENT_MGR_MODULE_CRASH` warn for up to 14 days —
 it's a lagging indicator of the cascade, not a new fault; `archive-all` clears it
 once the egress fix is confirmed (zero new crashes since the fix).
+
+## 2026-06-18 — NVMe pool at 82%: it's RBD-never-trimmed Loki WAL, not real data
+
+`nvme-replicated` was at **82.14 %RAW used, 81 GiB MAX AVAIL** — tight enough to gate
+new block PVCs (e.g. an Immich Postgres). Investigated where it went.
+
+`ceph df`: NVMe RAW 1.4 TiB, USED 1.1 TiB (×3 of STORED 372 GiB). `rbd du -p
+nvme-replicated` TOTAL ≈ 377 GiB. Top images by *allocated* USED:
+
+```
+wal-…-loki-ingester-0  (csi-vol-deab95d6…)  150 GiB prov  106 GiB used
+wal-…-loki-ingester-1  (csi-vol-88dc5225…)  150 GiB prov  140 GiB used
+prometheus-k8s-db-0    (csi-vol-eca02bfb…)   50 GiB prov   46 GiB used   <- legit TSDB
+prometheus-k8s-db-1    (csi-vol-c1f06ad4…)   50 GiB prov   47 GiB used   <- legit TSDB
+data-zot-0             (csi-vol-a664f46a…)   50 GiB prov   18 GiB used   <- regenerable cache
+```
+
+But the WAL **filesystems** are nearly empty:
+
+```
+$ oc -n openshift-logging exec logging-loki-ingester-0 -c loki-ingester -- df -h /tmp/wal
+/dev/rbd4  147G  269M  147G  1%  /tmp/wal      # ingester-1 ~243M
+```
+
+So ~245 GiB of pool STORED (106+140) is **freed-but-never-TRIMMed RBD blocks**. The
+WAL ballooned during the 2026-06-08 incident (then it really was 117/116 GiB of live
+WAL); Loki has since flushed + the *filesystem* freed it, but ext4 freeing a block
+doesn't tell the block device — and `ceph-nvme-block` has no `discard` mountOption, so
+kRBD never issued discard and Ceph kept the objects allocated. This corrects the old
+"WAL doesn't truncate at flush time" TODO: it truncates fine at the FS layer; the gap
+is discard→Ceph reclaim. No `rbd trash` (the deferred-delete purge wasn't the cause).
+
+Reclaim = issue discard. **`rbd sparsify` won't work** — freed ext4 blocks aren't
+zeroed, and sparsify only reclaims zero-runs. `fstrim` is the tool (metadata-driven,
+deallocates free extents regardless of content). The Loki container has no `fstrim`
+binary (`command -v fstrim` → none), and in-cluster `oc debug node … fstrim` is denied
+by guardrail (host node-shell on prod). So the one-off reclaim is operator-run,
+host-side, per node (online + non-disruptive — fstrim only touches free blocks; Loki
+keeps writing):
+
+```
+# node6 (ingester-0), node4 (ingester-1) — target the WAL pod-mount by PV name:
+oc debug node/node6.okd.sudops.pl -- chroot /host sh -c \
+  'fstrim -v $(findmnt -nro TARGET | grep pvc-cf6d934a-f547-4630-bbd5-f078a5dadf5a | head -1)'
+oc debug node/node4.okd.sudops.pl -- chroot /host sh -c \
+  'fstrim -v $(findmnt -nro TARGET | grep pvc-582873ba-ae3c-4801-a3f1-148908a7a662 | head -1)'
+```
+
+Expected: ~245 GiB STORED reclaimed (×3 raw), pool 82 % → ~27 %.
+
+**Durable fix (the RBD-no-trim drift is pool-wide, WAL just hit it hardest):**
+- (a) `mountOptions: [discard]` on the `ceph-nvme-block` SC — one-line, inline auto-trim,
+  but a small write-path latency cost on no-PLP consumer NVMe (already slow-op-sensitive)
+  and only applies to volumes remounted after the change.
+- (b) a privileged periodic-`fstrim` DaemonSet (`nsenter -t1 -m -- fstrim -av`) — batch
+  trim, no inline write cost, but a privileged host component to own.
+
+Lever for the future: also watch that the 2×150 GiB WAL PVCs are over-provisioned for a
+homelab — but they're LokiStack-size-class-managed, so right-sizing means the operator's
+storage template, not a PVC edit.
