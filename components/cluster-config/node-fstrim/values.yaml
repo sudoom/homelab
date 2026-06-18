@@ -1,0 +1,20 @@
+namespace: node-fstrim
+
+# Image only needs `nsenter` — after `nsenter -t 1 -m` the process runs in the
+# HOST mount namespace, so the `fstrim` binary used is the host's (SCOS ships it).
+# ⚠️ VERIFY the image pulls on the nodes AND contains nsenter before enabling
+# (CLAUDE.md: some RH images don't pull on these nodes). ubi9/ubi (full) has
+# util-linux; ubi-minimal may NOT. busybox (docker.io, via the zot cache) also
+# has an nsenter applet and is far smaller — swap if the full UBI is too heavy.
+image: registry.access.redhat.com/ubi9/ubi:latest
+
+# How often each node runs fstrim. Weekly matches the usual host fstrim.timer
+# cadence; the very first run happens at pod start (does the one-off reclaim).
+intervalSeconds: 604800
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 64Mi

@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-fstrim
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    matchLabels:
+      app: node-fstrim
+  template:
+    metadata:
+      labels:
+        app: node-fstrim
+    spec:
+      serviceAccountName: node-fstrim
+      # hostPID so PID 1 (host init) is visible; nsenter -t 1 -m then enters the
+      # host mount namespace where the Ceph kRBD mounts live.
+      hostPID: true
+      # Run on every node, including any tainted control-plane (these are
+      # control-plane+worker — fstrim is wanted everywhere there are RBD mounts).
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: fstrim
+          image: {{ .Values.image }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -u
+              echo "node-fstrim: first pass at start, then every {{ .Values.intervalSeconds }}s"
+              while true; do
+                echo "$(date -u) fstrim -av (host mount namespace)"
+                # nsenter into PID 1's namespaces -> fstrim resolves to the host
+                # binary and sees the host's mounts (incl. kRBD). Non-fatal if a
+                # mount doesn't support discard.
+                nsenter -t 1 -m -u -i -n -p -- fstrim -av || \
+                  echo "fstrim returned non-zero (some mounts lack discard support) - continuing"
+                sleep {{ .Values.intervalSeconds }}
+              done
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

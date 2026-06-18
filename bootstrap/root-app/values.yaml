@@ -48,6 +48,16 @@ applications:
     namespace: openshift-cluster-node-tuning-operator
     syncWave: "0"
 
+  # Periodic node `fstrim` to reclaim freed-but-not-TRIMMed RBD blocks (thin
+  # provisioning never returns space to Ceph without discard). Privileged
+  # hostPID DaemonSet — enabled:false until the privileged manifest is reviewed.
+  # First pass also does the one-off reclaim (e.g. stale Loki-WAL blocks).
+  node-fstrim:
+    enabled: false
+    path: components/cluster-config/node-fstrim
+    namespace: node-fstrim
+    syncWave: "0"
+
   # Wave 1 — Operators (subscriptions + instances)
   nmstate-operator:
     enabled: true

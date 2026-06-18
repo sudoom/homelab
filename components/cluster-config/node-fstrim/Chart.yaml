@@ -1,0 +1,15 @@
+apiVersion: v2
+name: node-fstrim
+description: |
+  Periodic node-level `fstrim` DaemonSet. Reclaims freed-but-not-TRIMMed blocks
+  on thin-provisioned volumes — chiefly the Rook-Ceph RBD pool (ceph-nvme-block),
+  where deleting filesystem data does NOT return space to Ceph unless discard is
+  issued. One pod per node runs `fstrim -av` in the HOST mount namespace
+  (nsenter -t 1 -m) on a schedule. The first pass also performs the one-off
+  reclaim (e.g. the 2026-06-18 stale Loki-WAL blocks). See
+  blog/blog-rook-ceph-draft.md 2026-06-18.
+
+  Privileged + hostPID (required to enter PID 1's mount namespace). Ships
+  enabled:false — review the privileged manifest before enabling.
+version: 1.0.0
+type: application
