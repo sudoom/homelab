@@ -6,8 +6,8 @@ metadata:
   annotations:
     # Library + DB must exist before the immich server pod starts.
     argocd.argoproj.io/sync-wave: "1"
-    # cephfs-hdd is reclaimPolicy: Retain — guard the PVC object from a stray
-    # prune the same way the media data PVC is guarded.
+    # nfs-csi is reclaimPolicy: Retain — guard the PVC object from a stray prune
+    # the same way the media data PVC is guarded (irreplaceable photos).
     argocd.argoproj.io/sync-options: Prune=false
 spec:
   storageClassName: {{ .Values.library.storageClass }}

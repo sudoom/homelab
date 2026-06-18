@@ -27,10 +27,15 @@ postgres:
     schedule: "0 30 4 * * *"   # 04:30 UTC daily (offset from media-postgres 04:00)
 
 library:
-  # RWX bulk photo/video library on the CephFS HDD EC tier. Shares the 3 HDD OSDs
-  # with media (/data, 3Ti) + the RGW data pool — check `ceph df` HDD headroom
-  # before raising. reclaimPolicy comes from the SC (cephfs-hdd = Retain).
-  storageClass: cephfs-hdd
+  # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi). Decided
+  # 2026-06-18: photos are irreplaceable, so they live where the existing 3-2-1
+  # pipeline already is (Synology -> cloud + offsite) — NOT on the shared
+  # cephfs-hdd EC tier (which would need a brand-new Ceph->NAS backup path and
+  # competes with media/RGW for ~6.9 TiB). NFS local-RAID also serves the
+  # thumbnail-heavy phone workload (small random reads) at least as well as
+  # EC-2+1-on-HDD, whose worst profile IS small random reads. The Postgres DB
+  # stays on ceph-nvme-block (fast RBD, never NFS). nfs-csi reclaimPolicy=Retain.
+  storageClass: nfs-csi
   size: 500Gi
 
 # ─────────────────────────────────────────────────────────────────────────────

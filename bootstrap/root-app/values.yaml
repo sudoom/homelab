@@ -53,7 +53,7 @@ applications:
   # hostPID DaemonSet — enabled:false until the privileged manifest is reviewed.
   # First pass also does the one-off reclaim (e.g. stale Loki-WAL blocks).
   node-fstrim:
-    enabled: false
+    enabled: true
     path: components/cluster-config/node-fstrim
     namespace: node-fstrim
     syncWave: "0"
