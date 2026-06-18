@@ -2768,3 +2768,22 @@ Expected: ~245 GiB STORED reclaimed (×3 raw), pool 82 % → ~27 %.
 Lever for the future: also watch that the 2×150 GiB WAL PVCs are over-provisioned for a
 homelab — but they're LokiStack-size-class-managed, so right-sizing means the operator's
 storage template, not a PVC edit.
+
+### 2026-06-18 (cont.) — node-fstrim DaemonSet shipped + enabled
+
+Chose option (b). Shipped `components/cluster-config/node-fstrim/` — privileged
+hostPID DaemonSet, `nsenter -t 1 -m -u -i -n -p -- fstrim -av` at start then weekly,
+image `registry.access.redhat.com/ubi9/ubi` (only needs nsenter; fstrim resolves to
+the host binary after entering PID 1's mount ns). Enabled in root-app the same day.
+
+Go-live confirmed: ArgoCD 2-level sync (root-app → node-fstrim app → DS) came up
+`Synced/Healthy`, 3/3 pods Running (node4/5/6), logs show the loop reaching
+`fstrim -av (host mount namespace)` with no nsenter/image error — so the image pulls
+and the host-namespace fstrim path works. `fstrim -v` output is block-buffered until
+it exits, so per-mount "trimmed" lines weren't visible immediately while the big
+node4/node6 WAL discard (~245 GiB combined) was in flight.
+
+TODO next session — confirm the reclaim: pod logs should show the trimmed bytes;
+`rbd du nvme-replicated/<wal-images>` should drop from 106/140 GiB toward the ~0.3 GiB
+FS-used; `ceph df` `nvme-replicated` %RAW should fall 82% → ~27% (MAX AVAIL 81 GiB →
+~280 GiB). If logs still show no trim output, investigate a hung fstrim / nsenter.
