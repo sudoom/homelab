@@ -2631,3 +2631,80 @@ hand-edit/ArgoCD-override would flap. The clean GitOps path is
 `createPrometheusRules: false` + vendoring the full corrected ceph rule set — real
 maintenance burden (≈50 rules to diff on every Ceph bump) for cosmetic noise.
 Deferred to a README TODO; not worth shipping now.
+
+## 2026-06-18 — session-start sweep: `RECENT_MGR_MODULE_CRASH` + slow-op now 3 NVMe
+
+Start-of-session health sweep returned `HEALTH_WARN` with **two** warnings, one of
+them new since 2026-06-15:
+
+```
+[WRN] BLUESTORE_SLOW_OP_ALERT: 3 OSD(s) experiencing slow operations in BlueStore
+     osd.0 / osd.1 / osd.2 observed slow operation indications in BlueStore
+[WRN] RECENT_MGR_MODULE_CRASH: 5 mgr modules have recently crashed
+    mgr module rook crashed in daemon mgr.b on host node4 at 2026-06-10T14:27 … 20:43Z (×5)
+```
+
+**Slow-op — still NVMe-only, just widened 2→3.** `osd.0/1/2` are the three NVMe
+OSDs (osd.0-2 nvme, osd.3-5 hdd — `ceph osd tree` device class). So this is the
+*same* known-benign no-PLP consumer-NVMe fsync/FUA stall, now latched on all three
+NVMe instead of the osd.0/1 pair seen on 2026-06-15. Not the HDDs; not a new class
+of problem. The hair-trigger threshold (`bluestore_slow_ops_warn_threshold=1` /
+`lifetime=86400` / `log_op_age=5s`) means a single >5 s op per OSD in 24 h latches
+it. Lever if it ever becomes pure noise stays the same: raise the threshold, don't
+suppress.
+
+**`RECENT_MGR_MODULE_CRASH` — stale, fully explained, benign.** `ceph crash ls`:
+
+```
+2026-05-21T11:48 / 11:59          mgr.b          (already aged out of NEW)
+2026-06-10T14:27 / 16:18 / 16:27 / 18:37 / 20:43   mgr.b   *  (the 5 NEW)
+```
+
+All 5 NEW crashes are the **`rook` mgr module**, all on **2026-06-10**, all on
+**ceph 19.2.3** (i.e. *before* the 2026-06-12 19.2.3→19.2.4 bump — they predate the
+current Ceph version entirely). `ceph crash info` gives the exact shape:
+
+```
+File "/usr/share/ceph/mgr/rook/module.py", line 102, in available
+    self.k8s.list_namespaced_pod(self._rook_env.namespace)
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='172.30.0.1', port=443):
+    Max retries exceeded with url: /api/v1/namespaces/rook-ceph/pods
+    (Caused by NewConnectionError: [Errno 110] Connection timed out)
+mgr_module: rook, caller: ActivePyModule::dispatch_remote available
+```
+
+The rook mgr module polls the K8s API (`172.30.0.1:443`, the in-cluster
+`kubernetes` Service ClusterIP) to enumerate pods; on 2026-06-10 those calls timed
+out and the module threw. 2026-06-10 is the **HDD-bay-install day**: used-drive
+DDF/md chaos + node power-cycles + the **ovnkube-node pod→service/host egress
+cascade** (documented in `blog/blog-security-hardening-draft.md`). mgr.b on node4
+simply couldn't reach the API through the broken OVN egress for the duration. This
+is a *downstream artifact* of that already-diagnosed cascade, not an independent
+fault — and there have been **zero** `rook`-module crashes since 2026-06-10
+(8 days clean), confirming it died with the egress fix.
+
+Why the warn is still up 8 days later: Ceph keeps crashes in the "new" set (and the
+`RECENT_MGR_MODULE_CRASH` health check firing) until they're either `archive`'d or
+age past `mgr/crash/warn_recent_interval` (default 1209600 s = 14 days). At 8 days
+they're inside that window → warn persists; left alone it self-clears ~2026-06-24.
+
+**Remediation:** `ceph crash archive-all` clears the warn immediately — it marks
+the crashes acknowledged (they stay in the crash log for forensics, just stop
+tripping the health check). Ceph-internal mutation, very low stakes (acknowledge,
+not delete). Ran via break-glass (operator OAuth token was expired at sweep time;
+the rook-tools exec needs pods/exec which the read-only SA lacks).
+
+```
+$ ceph crash archive-all          # (no output = success)
+$ ceph crash ls                    # all 7 rows now blank in the NEW column
+$ ceph health
+HEALTH_WARN 3 OSD(s) experiencing slow operations in BlueStore
+```
+
+Post-state: `RECENT_MGR_MODULE_CRASH` gone; the only remaining warn is the known
+slow-op (won't clear — hair-trigger, re-latches). Cluster back to its baseline
+known-warn state. The 7 crashes (2× 05-21, 5× 06-10) stay in `ceph crash ls` for
+forensics, just acknowledged. Takeaway: after any OVN-egress-cascade event, expect
+`rook`-module crashes to latch a `RECENT_MGR_MODULE_CRASH` warn for up to 14 days —
+it's a lagging indicator of the cascade, not a new fault; `archive-all` clears it
+once the egress fix is confirmed (zero new crashes since the fix).
