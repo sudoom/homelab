@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-library
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Library + DB must exist before the immich server pod starts.
+    argocd.argoproj.io/sync-wave: "1"
+    # cephfs-hdd is reclaimPolicy: Retain — guard the PVC object from a stray
+    # prune the same way the media data PVC is guarded.
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: {{ .Values.library.storageClass }}
+  accessModes:
+    # RWX: the chart mounts the library into both the server and ML pods, which
+    # schedule independently across nodes.
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: {{ .Values.library.size }}

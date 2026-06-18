@@ -1,0 +1,63 @@
+{{- $pg := .Values.postgres }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: immich-postgres
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # DB up before the immich server (which retries until the DB answers).
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  instances: {{ $pg.instances }}
+  imageName: {{ $pg.image }}
+  # vchord must be preloaded for the extension to load.
+  postgresql:
+    shared_preload_libraries:
+      - vchord.so
+  storage:
+    size: {{ $pg.storage.size }}
+    storageClass: {{ $pg.storage.storageClass }}
+  monitoring:
+    enablePodMonitor: true
+  bootstrap:
+    initdb:
+      database: immich
+      owner: immich
+      postInitApplicationSQL:
+        # ⚠️ VERIFY ON FIRST DEPLOY (see values.yaml postgres note): vchord/vector
+        # are superuser-only extensions; if these fail as the app owner, grant the
+        # immich role superuser (spec.managed.roles) or move to postInitSQL /
+        # postInitTemplateSQL per Immich CNPG discussion #9060. Don't CREATE
+        # EXTENSION vector manually — Immich's migrations do that as the app user.
+        - CREATE EXTENSION IF NOT EXISTS "vchord" CASCADE;
+        - CREATE EXTENSION IF NOT EXISTS "cube";
+        - CREATE EXTENSION IF NOT EXISTS "earthdistance";
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  {{- if and $pg.backup $pg.backup.enabled }}
+  backup:
+    volumeSnapshot:
+      className: {{ $pg.backup.volumeSnapshotClassName }}
+      snapshotOwnerReference: cluster
+    retentionPolicy: {{ $pg.backup.retentionPolicy | quote }}
+  {{- end }}
+{{- if and $pg.backup $pg.backup.enabled $pg.backup.schedule }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: immich-postgres-daily
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  schedule: {{ $pg.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: immich-postgres
+  method: volumeSnapshot
+{{- end }}

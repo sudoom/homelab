@@ -297,3 +297,14 @@ applications:
     path: components/apps/zot
     namespace: zot
     syncWave: "6"
+
+  # Self-hosted photo/video library. Wraps the official immich OCI chart +
+  # a DEDICATED vchord CNPG Postgres (Immich needs the VectorChord extension;
+  # stock CNPG can't run it) + RWX library on cephfs-hdd + bundled Valkey.
+  # enabled:false — scaffold only; flip on after the values.yaml first-deploy
+  # verify items (vchord extension creation, chart values schema, SCC).
+  immich:
+    enabled: false
+    path: components/apps/immich
+    namespace: immich
+    syncWave: "7"

@@ -1,0 +1,88 @@
+namespace: immich
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Values for THIS chart's own templates (CNPG cluster + library PVC).
+# ─────────────────────────────────────────────────────────────────────────────
+postgres:
+  # Dedicated CNPG cluster on the VectorChord operand image. Immich requires the
+  # vchord extension (>=0.3,<2.0) + pgvector — a stock CNPG image CANNOT run it,
+  # so this is a separate cluster, NOT the shared media-postgres. Single instance
+  # (homelab; DB is recoverable from the daily snapshot — bump to 2 for HA later).
+  instances: 1
+  image: ghcr.io/tensorchord/cloudnative-vectorchord:17-1.1.1
+  storage:
+    size: 8Gi
+    # DB on fast RBD block, NEVER CephFS/NFS (corruption risk).
+    storageClass: ceph-nvme-block
+  # ⚠️ FIRST-DEPLOY VERIFY (the #1 thing to test): vchord/vector are superuser-only
+  # (not "trusted") extensions, so CREATE EXTENSION as the non-superuser app owner
+  # via postInitApplicationSQL MAY fail. If it does, per Immich CNPG discussion
+  # #9060 either (a) grant the immich role superuser via spec.managed.roles, or
+  # (b) move the CREATE EXTENSION lines to postInitSQL/postInitTemplateSQL. Left in
+  # postInitApplicationSQL here as the documented starting point.
+  backup:
+    enabled: true
+    volumeSnapshotClassName: ceph-rbd-snapshot
+    retentionPolicy: "7d"
+    schedule: "0 30 4 * * *"   # 04:30 UTC daily (offset from media-postgres 04:00)
+
+library:
+  # RWX bulk photo/video library on the CephFS HDD EC tier. Shares the 3 HDD OSDs
+  # with media (/data, 3Ti) + the RGW data pool — check `ceph df` HDD headroom
+  # before raising. reclaimPolicy comes from the SC (cephfs-hdd = Retain).
+  storageClass: cephfs-hdd
+  size: 500Gi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Values passed THROUGH to the official immich subchart (bjw-s common-lib based).
+# Schema confirmed against immich-charts 0.12.0 (helm show values, 2026-06-18).
+# ─────────────────────────────────────────────────────────────────────────────
+immich:
+  # The server container (bjw-s controllers.main). Pinned to the chart's tested
+  # default app version — bump deliberately after a cold DB backup (Immich has no
+  # LTS; 10.11-style migration crashes are a real risk on major jumps).
+  controllers:
+    main:
+      containers:
+        main:
+          image:
+            tag: v2.6.3
+          env:
+            # Point Immich at the dedicated CNPG cluster (merges with the chart's
+            # default REDIS_HOSTNAME / IMMICH_MACHINE_LEARNING_URL env).
+            DB_HOSTNAME: immich-postgres-rw
+            DB_DATABASE_NAME: immich
+            DB_USERNAME: immich
+            DB_PASSWORD:
+              valueFrom:
+                secretKeyRef:
+                  name: immich-postgres-app
+                  key: password
+  immich:
+    persistence:
+      library:
+        # The RWX library PVC this chart templates (see templates/library-pvc.yaml).
+        existingClaim: immich-library
+  # Bundled single Valkey (BullMQ queue). enabled per the 2026-06-18 decision
+  # (no Redis operator). emptyDir is fine — the queue is reconstructable.
+  valkey:
+    enabled: true
+  server:
+    enabled: true
+  # CPU-only ML for v1 (the RAM sink — give it headroom, it OOMKills if starved).
+  # cache stays the chart-default emptyDir for now; switch to a PVC later so the
+  # HuggingFace model download survives a reschedule.
+  machine-learning:
+    enabled: true
+    controllers:
+      main:
+        containers:
+          main:
+            image:
+              tag: v2.6.3
+            resources:
+              requests:
+                cpu: 200m
+                memory: 1500Mi
+              limits:
+                memory: 4000Mi
