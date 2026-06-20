@@ -96,6 +96,19 @@ immich:
                   name: immich-postgres-app
                   key: password
   immich:
+    # Storage template pinned declaratively — renders the {release}-immich-config
+    # ConfigMap, auto-mounted as IMMICH_CONFIG_FILE. ENABLED BEFORE the bulk import
+    # so managed uploads land organized from the first asset (avoids the heavy
+    # retroactive Storage Template Migration job over NFS). Applies to MANAGED
+    # (uploaded) assets only. NOTE: keys present here are READ-ONLY in the admin UI
+    # (per-key lock) — change the template via this value (git -> ArgoCD -> server
+    # restart), not the UI. Scoped to storageTemplate only; rest stays UI-tunable.
+    configurationKind: ConfigMap
+    configuration:
+      storageTemplate:
+        enabled: true
+        hashVerificationEnabled: true
+        template: "{{y}}/{{y}}-{{MM}}-{{dd}}/{{filename}}"
     persistence:
       library:
         # The RWX library PVC this chart templates (see templates/library-pvc.yaml).
@@ -104,8 +117,41 @@ immich:
   # (no Redis operator). emptyDir is fine — the queue is reconstructable.
   valkey:
     enabled: true
+  # immich-server: dedicated NVMe thumbnails volume + Recreate strategy. Immich
+  # v2.x has a first-class THUMB_LOCATION env (no fragile nested mount) — point it
+  # at /thumbs and side-mount an RWO ceph-nvme-block PVC there (server ONLY: ML
+  # works over HTTP and never reads thumbs from disk; valkey needs nothing). RWO +
+  # the chart's default RollingUpdate deadlocks (Multi-Attach), so force Recreate
+  # (brief downtime on every server change — fine for a homelab). Set BEFORE the
+  # import so thumbs generate straight onto NVMe (no retroactive regenerate job).
+  # Controller/container ids are main/main (NOT "server"). Library stays at /data.
   server:
     enabled: true
+    controllers:
+      main:
+        strategy: Recreate
+        containers:
+          main:
+            env:
+              THUMB_LOCATION: /thumbs
+            resources:
+              requests:
+                cpu: 250m
+                memory: 1Gi
+              limits:
+                memory: 8Gi   # thumbnail + ffmpeg transcode jobs spike during import
+    persistence:
+      thumbs:
+        enabled: true
+        type: persistentVolumeClaim
+        accessMode: ReadWriteOnce
+        size: 40Gi            # thumbs ~2-5% of library; covers ~1-1.5 TiB. Expandable.
+        storageClass: ceph-nvme-block
+        retain: true          # don't prune the PVC on values churn (regenerable, but cheap to keep)
+        advancedMounts:
+          main:
+            main:
+              - path: /thumbs
   # CPU-only ML for v1 (the RAM sink — give it headroom, it OOMKills if starved).
   # cache stays the chart-default emptyDir for now; switch to a PVC later so the
   # HuggingFace model download survives a reschedule.
@@ -119,7 +165,10 @@ immich:
               tag: v2.6.3
             resources:
               requests:
-                cpu: 200m
-                memory: 1500Mi
+                cpu: 500m
+                memory: 3000Mi
+              # Bumped for the bulk import (CLIP + face detection on every asset).
+              # Plenty of host RAM, so a generous ceiling avoids OOMKills mid-import;
+              # no CPU limit so inference can burst. Dial back after the import if wanted.
               limits:
-                memory: 4000Mi
+                memory: 10000Mi
