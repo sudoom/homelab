@@ -314,7 +314,7 @@ applications:
   # enabled:false — scaffold only; flip on after the values.yaml first-deploy
   # verify items (vchord extension creation, chart values schema, SCC).
   immich:
-    enabled: false
+    enabled: true
     path: components/apps/immich
     namespace: immich
     syncWave: "7"

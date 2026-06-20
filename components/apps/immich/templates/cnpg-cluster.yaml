@@ -23,15 +23,21 @@ spec:
     initdb:
       database: immich
       owner: immich
+      # CNPG runs postInitApplicationSQL as the postgres SUPERUSER against the
+      # immich app DB (all postInit* hooks are superuser; they differ only by
+      # target DB — application/template1/postgres). So these not-trusted
+      # (superuser-only) extensions succeed here even though the immich owner role
+      # is NON-superuser, and Immich's own startup migrations re-run CREATE
+      # EXTENSION IF NOT EXISTS as a no-op. shared_preload_libraries: vchord.so
+      # (above) must be loaded before CREATE EXTENSION vchord — CNPG applies it at
+      # initdb. Order: vector before vchord, cube before earthdistance.
+      # NOTE: a future vchord operand-tag bump needs a one-off SUPERUSER
+      # `ALTER EXTENSION vchord UPDATE` + `REINDEX INDEX face_index; clip_index`.
       postInitApplicationSQL:
-        # ⚠️ VERIFY ON FIRST DEPLOY (see values.yaml postgres note): vchord/vector
-        # are superuser-only extensions; if these fail as the app owner, grant the
-        # immich role superuser (spec.managed.roles) or move to postInitSQL /
-        # postInitTemplateSQL per Immich CNPG discussion #9060. Don't CREATE
-        # EXTENSION vector manually — Immich's migrations do that as the app user.
-        - CREATE EXTENSION IF NOT EXISTS "vchord" CASCADE;
-        - CREATE EXTENSION IF NOT EXISTS "cube";
-        - CREATE EXTENSION IF NOT EXISTS "earthdistance";
+        - CREATE EXTENSION IF NOT EXISTS vector;
+        - CREATE EXTENSION IF NOT EXISTS vchord CASCADE;
+        - CREATE EXTENSION IF NOT EXISTS cube;
+        - CREATE EXTENSION IF NOT EXISTS earthdistance CASCADE;
   resources:
     requests:
       cpu: 100m

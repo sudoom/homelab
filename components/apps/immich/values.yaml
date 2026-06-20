@@ -11,15 +11,13 @@ postgres:
   instances: 1
   image: ghcr.io/tensorchord/cloudnative-vectorchord:18-1.1.1
   storage:
-    size: 8Gi
+    size: 10Gi
     # DB on fast RBD block, NEVER CephFS/NFS (corruption risk).
     storageClass: ceph-nvme-block
-  # ⚠️ FIRST-DEPLOY VERIFY (the #1 thing to test): vchord/vector are superuser-only
-  # (not "trusted") extensions, so CREATE EXTENSION as the non-superuser app owner
-  # via postInitApplicationSQL MAY fail. If it does, per Immich CNPG discussion
-  # #9060 either (a) grant the immich role superuser via spec.managed.roles, or
-  # (b) move the CREATE EXTENSION lines to postInitSQL/postInitTemplateSQL. Left in
-  # postInitApplicationSQL here as the documented starting point.
+  # Extensions are created in templates/cnpg-cluster.yaml postInitApplicationSQL,
+  # which CNPG runs as the postgres SUPERUSER against the immich app DB — so the
+  # not-trusted vchord/cube extensions succeed with NO superuser app role needed
+  # (verified 2026-06-20). shared_preload_libraries: vchord.so is set there too.
   backup:
     enabled: true
     volumeSnapshotClassName: ceph-rbd-snapshot
@@ -43,6 +41,25 @@ library:
 # Schema confirmed against immich-charts 0.12.0 (helm show values, 2026-06-18).
 # ─────────────────────────────────────────────────────────────────────────────
 immich:
+  # restricted-v2 / PSA-restricted hardening applied to ALL components (server,
+  # machine-learning, valkey) — the chart merges top-level defaultPodOptions +
+  # controllers.main into each component. NO custom SCC / anyuid binding needed.
+  # runAsUser is deliberately UNSET so OpenShift assigns the namespace UID range.
+  defaultPodOptions:
+    securityContext:
+      runAsNonRoot: true
+      runAsGroup: 0
+      fsGroup: 0
+      fsGroupChangePolicy: OnRootMismatch
+      seccompProfile:
+        type: RuntimeDefault
+    # Immich images are Alpine/musl — OpenShift's ndots:5 + search-domains trips a
+    # musl resolver bug on short Service names (REDIS_HOSTNAME, ML URL, DB host).
+    # Cap ndots to 2 to avoid intermittent in-cluster DNS failures.
+    dnsConfig:
+      options:
+        - name: ndots
+          value: "2"
   # The server container (bjw-s controllers.main). Pinned to the chart's tested
   # default app version — bump deliberately after a cold DB backup (Immich has no
   # LTS; 10.11-style migration crashes are a real risk on major jumps).
@@ -52,6 +69,15 @@ immich:
         main:
           image:
             tag: v2.6.3
+          securityContext:
+            runAsNonRoot: true
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # Immich/ML write cache dirs on rootfs
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
           env:
             # Point Immich at the dedicated CNPG cluster (merges with the chart's
             # default REDIS_HOSTNAME / IMMICH_MACHINE_LEARNING_URL env).

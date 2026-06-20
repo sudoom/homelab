@@ -5,10 +5,10 @@ description: |
   (oci://ghcr.io/immich-app/immich-charts/immich) and adds a DEDICATED
   CloudNativePG Postgres on the VectorChord image (Immich needs the vchord
   extension; the stock CNPG image can't run it — so this is NOT reusing the
-  shared media-postgres) plus the RWX library PVC on the CephFS HDD tier.
+  shared media-postgres) plus the RWX library PVC on the Synology NAS (nfs-csi).
   Redis is the chart-bundled single Valkey (decided 2026-06-18: not an
-  operator — it's a disposable BullMQ queue). Ships enabled:false until the
-  first-deploy verify items in values.yaml are checked.
+  operator — it's a disposable BullMQ queue). restricted-v2 securityContext
+  overlay in values; vchord extensions created via CNPG postInitApplicationSQL.
 version: 1.0.0
 type: application
 dependencies:
