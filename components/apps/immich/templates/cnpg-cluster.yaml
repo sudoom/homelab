@@ -5,8 +5,10 @@ metadata:
   name: immich-postgres
   namespace: {{ .Values.namespace }}
   annotations:
-    # DB up before the immich server (which retries until the DB answers).
-    argocd.argoproj.io/sync-wave: "1"
+    # Wave -1: the Cluster (and its auto-generated immich-postgres-app secret) must
+    # exist + be Healthy BEFORE the subchart Deployments at wave 0 — they reference
+    # that secret for DB_PASSWORD. ArgoCD waits for the Cluster health gate.
+    argocd.argoproj.io/sync-wave: "-1"
 spec:
   instances: {{ $pg.instances }}
   imageName: {{ $pg.image }}
@@ -59,7 +61,8 @@ metadata:
   name: immich-postgres-daily
   namespace: {{ .Values.namespace }}
   annotations:
-    argocd.argoproj.io/sync-wave: "2"
+    # After the Cluster is up; not on the Deployments' critical path.
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   schedule: {{ $pg.backup.schedule | quote }}
   backupOwnerReference: self

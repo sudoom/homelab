@@ -4,8 +4,8 @@ metadata:
   name: immich-library
   namespace: {{ .Values.namespace }}
   annotations:
-    # Library + DB must exist before the immich server pod starts.
-    argocd.argoproj.io/sync-wave: "1"
+    # Before the subchart Deployments (wave 0) that mount it.
+    argocd.argoproj.io/sync-wave: "-2"
     # nfs-csi is reclaimPolicy: Retain — guard the PVC object from a stray prune
     # the same way the media data PVC is guarded (irreplaceable photos).
     argocd.argoproj.io/sync-options: Prune=false

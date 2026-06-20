@@ -2,10 +2,14 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Values.namespace }}
+  annotations:
+    # Namespace first — ahead of the library PVC (-2), the CNPG Cluster (-1), and
+    # the subchart Deployments (default wave 0, which depend on the Cluster's
+    # auto-generated immich-postgres-app secret + the immich-library PVC).
+    argocd.argoproj.io/sync-wave: "-3"
   # Immich's official image takes no PUID/PGID and the no-accel path fits
-  # restricted-v2 (no privileged needed — unlike the media/keepers stacks).
-  # The real requirement is that the CephFS library volume is GID-0 writable;
-  # handled via the pod securityContext + fsGroup, not a privileged namespace.
+  # restricted-v2 (no privileged needed). The NFS library volume is written as the
+  # restricted-v2-injected UID/fsGroup — no GID-0 pin (restricted-v2 rejects it).
   labels:
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/audit: baseline
