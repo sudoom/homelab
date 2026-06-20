@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-thumbs
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Before the server Deployment (wave 0) that mounts it at /thumbs.
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  # Fast NVMe RBD (RWO) — thumbnails are the small-random-read phone workload.
+  # Regenerable (Admin -> Jobs -> Generate Thumbnails), so reclaim=Delete is fine.
+  storageClassName: {{ .Values.thumbs.storageClass }}
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.thumbs.size }}

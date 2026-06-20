@@ -41,6 +41,13 @@ library:
   storageClass: nfs-csi
   size: 500Gi
 
+# Dedicated NVMe thumbnails volume (templated as our own PVC, mounted via
+# existingClaim — the chart's auto-create produced a no-storageClass PVC). RWO
+# ceph-nvme-block, server-only. thumbs ~2-5% of library; 40Gi covers ~1-1.5 TiB.
+thumbs:
+  storageClass: ceph-nvme-block
+  size: 40Gi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Values passed THROUGH to the official immich subchart (bjw-s common-lib based).
 # Schema confirmed against immich-charts 0.12.0 (helm show values, 2026-06-18).
@@ -144,10 +151,7 @@ immich:
       thumbs:
         enabled: true
         type: persistentVolumeClaim
-        accessMode: ReadWriteOnce
-        size: 40Gi            # thumbs ~2-5% of library; covers ~1-1.5 TiB. Expandable.
-        storageClass: ceph-nvme-block
-        retain: true          # don't prune the PVC on values churn (regenerable, but cheap to keep)
+        existingClaim: immich-thumbs   # our own PVC (templates/thumbs-pvc.yaml)
         advancedMounts:
           main:
             main:
