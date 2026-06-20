@@ -76,3 +76,46 @@ were the truth that it had recovered.)
   `ALTER EXTENSION vchord UPDATE` + `REINDEX INDEX face_index; clip_index;`.
 - **No LTS**: pin the image; read release notes (DB-migration / VectorChord-floor) before
   any bump; keep server + ML on the same tag.
+
+## 2026-06-20 (cont.) — pre-import prep: storage template, NVMe thumbnails, more gotchas
+
+Before bulk-importing the existing library, three changes (all set BEFORE import so
+assets land right the first time): pin the storage template, move thumbnails to NVMe,
+bump ML/server memory. Two more chart gotchas surfaced.
+
+**Storage template — declarative.** `immich.configuration.storageTemplate` renders a
+`{release}-immich-config` ConfigMap, auto-mounted as `IMMICH_CONFIG_FILE`. Placement
+matters: in chart 0.12.0 `configuration`/`configurationKind` live under the subchart's
+`immich.immich` block (sibling of `persistence`), NOT the subchart top level — my first
+try put it one level too high and it silently rendered nothing. The `{{y}}` template
+braces render LITERALLY (the chart doesn't `tpl` the config block, so no Helm escaping).
+Config-file = those keys are READ-ONLY in the admin UI (per-key), which is the
+GitOps-correct trade. Set enabled BEFORE import to avoid the heavy Storage Template
+Migration job over NFS.
+
+**Thumbnails on NVMe.** Immich v2.x has a first-class `THUMB_LOCATION` env — no fragile
+nested mount needed. Set `THUMB_LOCATION=/thumbs` (server only; ML works over HTTP and
+never reads thumbs, valkey needs nothing) and side-mount an RWO `ceph-nvme-block` PVC at
+`/thumbs`. The library mounts at `/data` (NOT `/usr/src/app/upload`), controller/container
+ids are `main`/`main` (not `server`).
+
+**Gotcha A — RollingUpdate→Recreate SSA conflict.** RWO + the chart's default
+RollingUpdate deadlocks (Multi-Attach), so the server needs `strategy: Recreate`. But
+server-side apply REFUSED the change: `spec.strategy.rollingUpdate: Forbidden: may not be
+specified when strategy type is 'Recreate'` — the live Deployment (born RollingUpdate)
+carried a defaulted `rollingUpdate` block that SSA wouldn't clear on the type flip, so
+the sync failed 5×. Fix: delete the live `immich-server` Deployment once; ArgoCD recreates
+it Recreate-native (no stale field). (Future-proofing: a fresh object born Recreate never
+hits this.)
+
+**Gotcha B — bjw-s auto-create thumbs PVC was wrong.** `persistence.thumbs` with
+`type: persistentVolumeClaim` + `storageClass` rendered a PVC named `immich-server` with
+NO storageClass (would never bind). Fix: template my own `templates/thumbs-pvc.yaml`
+(`immich-thumbs`, ceph-nvme-block RWO 40Gi, sync-wave -2) and mount via
+`persistence.thumbs.existingClaim: immich-thumbs` — same pattern as the library PVC.
+The stray auto-created `immich-server` PVC was then pruned by ArgoCD.
+
+**Result:** server `1/1` on the Recreate spec, mounts `/config /data /thumbs`,
+`immich-thumbs` Bound on NVMe, storage template config-managed, app Synced/Healthy.
+ML limit 4Gi→10Gi + server 8Gi for the import. Import itself: immich-go (managed upload,
+storage template applies) from a workstation against the Route — operator-run.
