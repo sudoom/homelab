@@ -1,5 +1,10 @@
 namespace: immich
 
+# OpenShift Route to the immich-server (the chart's own ingress stays disabled).
+# Edge TLS on the *.apps.okd.sudops.pl wildcard cert.
+route:
+  host: immich.apps.okd.sudops.pl
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Values for THIS chart's own templates (CNPG cluster + library PVC).
 # ─────────────────────────────────────────────────────────────────────────────

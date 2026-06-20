@@ -1,0 +1,17 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: immich
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.route.host }}
+  port:
+    targetPort: {{ .Values.route.targetPort | default 2283 }}
+  tls:
+    # edge termination on the *.apps.okd.sudops.pl wildcard cert (IngressController
+    # default), same pattern as the media/keepers Routes.
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: immich-server
