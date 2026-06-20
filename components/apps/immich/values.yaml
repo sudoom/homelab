@@ -48,8 +48,10 @@ immich:
   defaultPodOptions:
     securityContext:
       runAsNonRoot: true
-      runAsGroup: 0
-      fsGroup: 0
+      # Do NOT pin runAsUser/runAsGroup/fsGroup — restricted-v2 REJECTS fsGroup:0
+      # ("0 is not an allowed group") and injects UID + fsGroup from the namespace's
+      # allocated high range. fsGroupChangePolicy avoids a recursive chgrp over the
+      # large NFS library on every pod start.
       fsGroupChangePolicy: OnRootMismatch
       seccompProfile:
         type: RuntimeDefault
@@ -71,7 +73,6 @@ immich:
             tag: v2.6.3
           securityContext:
             runAsNonRoot: true
-            runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false   # Immich/ML write cache dirs on rootfs
             capabilities:
