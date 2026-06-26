@@ -1571,7 +1571,8 @@ wipe can run from the pod, no `oc debug node` host-shell needed.
 Drive carried a leftover ~894 GiB `sdc1` from prior use. TRIM passes the bridge
 (`discard_max_bytes ≈ 4 GB`). Since `wipefs` is absent from the exporter pod, the wipe ran
 `blkdiscard -f` (whole-device TRIM) → `dd`-zero first 10 MiB (MBR + GPT primary) + last 1 MiB
-(GPT backup) → `blockdev --rereadpt`/`partprobe` → verify. The script (`scratchpad/wipe-s4610.sh`)
+(GPT backup) → `blockdev --rereadpt`/`partprobe` → verify. The session wipe script (built on the
+`assert_ssd_burnin_target` template above; piped to the pod via `oc exec -i … sh -s`)
 **re-asserts identity at execution time** — re-resolves the by-id symlink, re-reads
 `smartctl -i`, and hard-fails unless model=`SSDSC2KG960G8R` + serial=`BTYG01820FMF960CGN` +
 WWN=`55cd2e41529380f1` and the WWN is NOT in the boot/OSD denylist. That replaces the gate's
@@ -1588,11 +1589,11 @@ for future SSD/HDD whole-device wipes: run `blkdiscard` in the background, not a
 
 Post-erase SMART (`data/2026-06-26-S4610-BTYG01820FMF960CGN-ssd-posterase.txt`): overall-health
 PASSED, Reallocated/Pending/Offline-Uncorrectable/Uncorrectable/End-to-End/CRC all **0**,
-Percentage-Used-Endurance still **0** — no new defects from the wipe. Device delivered clean;
-next step is the operator seating it in the Synology USB box (Synology formats on add).
+Percentage-Used-Endurance still **0** — no new defects from the wipe. Device delivered clean and
+**seated in the Synology USB box 2026-06-26** (Synology formats on add → Hyper Backup target).
 
-Finally, a **gated clean SCSI detach** before the physical unplug (`scratchpad/detach-s4610.sh`,
-same re-assert-identity discipline + a "must have a `usb-` by-id alias" guard so it can only ever
+Finally, a **gated clean SCSI detach** before the physical unplug (same re-assert-identity
+discipline as the wipe + a "must have a `usb-` by-id alias" guard so it can only ever
 target the USB device, never the internal boot/HDD): `echo 1 > /sys/block/sdc/device/delete` →
 `/sys/block/sdc` + the by-id symlink both GONE → safe to pull. (Detaching the wrong `sdX` here
 is non-destructive but would degrade Ceph/etcd, hence the same gate.)
