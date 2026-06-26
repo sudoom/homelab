@@ -164,5 +164,14 @@ operand images (`cloudnative-vectorchord` + `cloudnative-pg/postgresql`) — sup
 bump is a DB migration (+ vchord needs an in-DB `ALTER EXTENSION`). Same gate shape as the ceph rule.
 
 **Ordering note:** v2.6.3→v2.7.5 is same-major, low-risk, but still runs forward DB migrations on
-first start. If the library isn't imported yet the DB is disposable (bump is free); once imported,
-the CNPG DB has no offsite backup yet (open TODO) → back it up before relying on it.
+first start. Library wasn't imported yet (operator-confirmed) so the DB was disposable — bump was
+free. Roll confirmed clean: ArgoCD OutOfSync→Synced, server Progressing→Ready on v2.7.5 (migration
+succeeded, not crashlooping), ML also v2.7.5.
+
+**DB offsite backup — already covered (operator clarification):** Immich ships an automatic
+database backup (`pg_dumpall`, default daily, keeps 14) that writes a `.sql.gz` to
+`<library>/backups/`. Our library PVC is on **Synology NFS**, which rides the existing
+NAS→cloud/offsite 3-2-1 — so the Immich DB lands offsite alongside the photo files, no separate
+`pg_dump`/barman CronJob. (Restore caveat: needs the `cloudnative-vectorchord` operand image for the
+vchord extension.) This downgrades the README "CNPG no offsite backup" item — only `media-postgres`
+(servarr config, largely re-creatable) remains, now low-priority.
