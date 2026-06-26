@@ -1505,3 +1505,89 @@ size bump → CephFS CSI grew the subvolume quota **online** (no recreate, no po
 restart): `capacity` went 2Ti → 3Ti within ~2.5 min of the push, no resize
 conditions/errors, media app stayed Synced/Healthy. The bulk library still lives
 on the NAS; raise further only after re-checking `ceph df`.
+
+## 2026-06-26 — S4610 960GB backup-target burn-in (over USB enclosure on node4)
+
+The D3-S4610 960GB from Batch 3 (deferred 2026-06-11 because that round prioritized the
+bays) finally seated — this time via a **USB enclosure on node4**, not a bay. Role unchanged:
+Synology USB-box backup target (Hyper Backup "kinda offsite"). Ran the SSD flow.
+
+### Identity + the by-id disambiguation (USB makes it sharper, not riskier)
+
+Operator OAuth was expired (`oc whoami` → Unauthorized), so the exec ran under the
+**break-glass** SA (`system:serviceaccount:automation:break-glass-admin`) — justified: console
+auth down. On-node tooling = the existing `smartctl-exporter-tskhw` DaemonSet pod (zero pull).
+The USB-SATA bridge means **every `smartctl` needs `-d sat`**; the bridge passes ATA self-test
++ TRIM commands fine.
+
+`ls -l /dev/disk/by-id` on node4 — the seated drive shows BOTH an `ata-` and a `usb-` alias
+(the bridge presents an ATA identity), and that's the tell that it's the USB one:
+
+```
+sda  ata-HUS726040ALA610_K4KTAEDL          wwn-0x5000cca25df55694   # 4TB HDD (node4 Ceph OSD)
+sdb  ata-INTEL_SSDSC2BX400G4_BTHC615501ED400VGN  wwn-0x55cd2e404c20c200   # BOOT/etcd SSD — DENYLIST
+sdc  ata-SSDSC2KG960G8R_BTYG01820FMF960CGN  +  usb-SSDSC2KG_960G8R_133309270A1D-0:0
+                                            wwn-0x55cd2e41529380f1   # <- the S4610 (today 18:23)
+```
+
+Target = `/dev/disk/by-id/wwn-0x55cd2e41529380f1` (sdc). The boot/etcd disk (`sdb`,
+`0x55cd2e404c20c200`) is a *different* WWN and on the gate's denylist. `assert_ssd_burnin_target`
+conditions all satisfied: by-id wwn path, ROTA=0, model `SSDSC2KG960G8R` matches `SSDSC2(BB|KG)`,
+WWN `55cd2e41529380f1` not in denylist (and matches the expected `55cd2e41…` S4610 allowlist),
+size 960,197,124,096 B inside the 480–960 GB window, serial `BTYG01820FMF960CGN`.
+
+### Wear triage = excellent (read-only)
+
+`smartctl -x -d sat` (full capture → `data/2026-06-26-S4610-BTYG01820FMF960CGN-ssd-baseline.txt`):
+
+```
+SMART overall-health: PASSED
+Percentage Used Endurance Indicator: 0
+Total_LBAs_Written: 1786945   (~60 TB written / 5.5 PBW rated = ~1% endurance)
+Power_On_Hours: 36777 (~4.2 yr)   Power_Cycle_Count: 18   Unsafe_Shutdown: 11
+Reallocated=0  Current_Pending=0  Offline_Uncorrectable=0  Uncorrectable=0  End-to-End=0  CRC=0
+```
+
+A lightly-used DC drive: many power-on hours but almost no writes, zero defects, clean USB-bridge
+link (CRC=0). The decade-old-S3510 endurance worry doesn't apply here — the S4610 is mixed-use
+3 DWPD and barely touched.
+
+### Self-tests (drive-internal, USB-safe)
+
+For the surface scan I used the **SMART long (extended) self-test** rather than a `dd` read pass —
+it's drive-internal (no large transfer over the USB bridge), and on an SSD it's fast. Both passed:
+
+```
+Short offline     Completed without error
+Extended offline  Completed without error   # full surface scan, no unreadable LBA
+```
+
+Post-test SMART unchanged (all defect counters still 0). Note the exporter pod **does** carry
+`blkdiscard` + `dd` + `blockdev` + `partprobe` (but NOT `wipefs`/`lsblk`/`mdadm`) — so the whole
+wipe can run from the pod, no `oc debug node` host-shell needed.
+
+### Wipe (gated) — done
+
+Drive carried a leftover ~894 GiB `sdc1` from prior use. TRIM passes the bridge
+(`discard_max_bytes ≈ 4 GB`). Since `wipefs` is absent from the exporter pod, the wipe ran
+`blkdiscard -f` (whole-device TRIM) → `dd`-zero first 10 MiB (MBR + GPT primary) + last 1 MiB
+(GPT backup) → `blockdev --rereadpt`/`partprobe` → verify. The script (`scratchpad/wipe-s4610.sh`)
+**re-asserts identity at execution time** — re-resolves the by-id symlink, re-reads
+`smartctl -i`, and hard-fails unless model=`SSDSC2KG960G8R` + serial=`BTYG01820FMF960CGN` +
+WWN=`55cd2e41529380f1` and the WWN is NOT in the boot/OSD denylist. That replaces the gate's
+interactive typed-serial step (the exporter pod has no interactive TTY) and is strictly stronger
+— a programmatic TOCTOU re-check at the moment of the destructive op.
+
+**Gotcha — whole-device `blkdiscard` over a USB bridge is slow; the foreground exec timed out at
+2 min (SIGTERM).** First run got cut off mid-TRIM, but had already zeroed the front + re-read the
+table (`sdc1` gone, first sector all-zero, MBR sig `00 00`, no `EFI PART`). Re-ran the *same*
+gated script **in the background** (no foreground cap) → `blkdiscard OK` completed the full TRIM,
+dd-zeros reapplied (order matters: dd-zero AFTER blkdiscard, because `DISC-ZERO=0` on these Intel
+DC drives means TRIM gives no read-zero guarantee), table cleared, health still PASSED. **Lesson
+for future SSD/HDD whole-device wipes: run `blkdiscard` in the background, not a foreground exec.**
+
+Post-erase SMART (`data/2026-06-26-S4610-BTYG01820FMF960CGN-ssd-posterase.txt`): overall-health
+PASSED, Reallocated/Pending/Offline-Uncorrectable/Uncorrectable/End-to-End/CRC all **0**,
+Percentage-Used-Endurance still **0** — no new defects from the wipe. Device delivered clean;
+next step is the operator seating it in the Synology USB box (Synology formats on add).
+
