@@ -6,10 +6,7 @@
   "labels": ["dependencies"],
   "kubernetes": {
     "fileMatch": [
-      "components/.+\\.yaml$",
-      "media/.+\\.yaml$",
-      "keepers/.+\\.yaml$",
-      "ai/.+\\.yaml$"
+      "components/.+\\.yaml$"
     ]
   },
   "helm-values": {
@@ -24,8 +21,8 @@
   },
   "packageRules": [
     {
-      "description": "Automerge patch updates for media stack",
-      "matchPaths": ["media/**", "keepers/**"],
+      "description": "Automerge patch updates for the media + keepers stacks (non-load-bearing apps). Uses matchFileNames with the REAL paths components/apps/{media,keepers}/** — the old matchPaths:[media/**,keepers/**] matched ZERO files (there is no root media/ or keepers/ dir), so this rule never fired and patch bumps were merged by hand. matchPaths is also deprecated.",
+      "matchFileNames": ["components/apps/media/**", "components/apps/keepers/**"],
       "matchUpdateTypes": ["patch"],
       "automerge": true
     },

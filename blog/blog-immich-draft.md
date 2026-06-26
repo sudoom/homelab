@@ -152,7 +152,9 @@ an adversarial Opus verifier cross-checked against the open-PR ground truth). Fi
   `matchPaths: ["media/**","keepers/**"]`, but the real paths are `components/apps/media/**`
   → it matches **zero files**, so media patch PRs have never actually auto-merged (they sit
   open — e.g. #146 sonarr, #139 jellyfin). `matchPaths` is also deprecated (→ `matchFileNames`).
-  Flagged for an operator decision (enable auto-merge vs keep manual review); not silently changed.
+  Operator chose to **enable it**: repointed to `matchFileNames: [components/apps/{media,keepers}/**]`
+  and removed the 3 dead `kubernetes` fileMatch globs (`media/.+`, `keepers/.+`, `ai/.+` — no such
+  root dirs). Media/keepers **patch** bumps now self-merge; everything else stays a reviewed PR.
 
 ### renovate.json changes
 
