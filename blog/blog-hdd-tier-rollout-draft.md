@@ -1591,3 +1591,9 @@ PASSED, Reallocated/Pending/Offline-Uncorrectable/Uncorrectable/End-to-End/CRC a
 Percentage-Used-Endurance still **0** — no new defects from the wipe. Device delivered clean;
 next step is the operator seating it in the Synology USB box (Synology formats on add).
 
+Finally, a **gated clean SCSI detach** before the physical unplug (`scratchpad/detach-s4610.sh`,
+same re-assert-identity discipline + a "must have a `usb-` by-id alias" guard so it can only ever
+target the USB device, never the internal boot/HDD): `echo 1 > /sys/block/sdc/device/delete` →
+`/sys/block/sdc` + the by-id symlink both GONE → safe to pull. (Detaching the wrong `sdX` here
+is non-destructive but would degrade Ceph/etcd, hence the same gate.)
+
