@@ -563,3 +563,40 @@ Whenever you change something that a `README.md` describes, update that README i
 - **If a README is wrong but unrelated to your change:** flag it, don't silently fix it in an unrelated commit. Open a separate `docs(readme): …` commit.
 
 Treat outdated READMEs the same as undocumented sessions — a regression to flag.
+
+## Companion knowledge base — Obsidian vault
+
+This codebase pairs with a personal+work Obsidian vault that holds long-form context this repo's CLAUDE.md / READMEs intentionally don't.
+
+- **Vault path:** `/Users/vadzimdziadziulia-laptop/Library/Mobile Documents/iCloud~md~obsidian/Documents/Notatki/`
+- The vault is its own git repo with auto-commit on save; iCloud handles cross-device sync.
+
+### What lives there (not here)
+
+- **Decisions journal** for homelab work — `_memory/chats/homelab/YYYY-MM-DD-<topic>.md`. Use for non-trivial decisions whose "why" is worth preserving past a commit message (drive choice, NAS migration plan, capacity sizing).
+- **Synthesized knowledge** — `wiki/{sources,entities,concepts,domains}/` — built up over time from `/wiki-ingest` of READMEs, ADRs, conversations.
+- **Operating-state notes** — `Infrastructure/Homelab.md` (IP plan, VLAN plan, rack layout, port plan). Excalidraw diagram lives in `Excalidraw/`.
+- **Navigation back to this repo** — `Infrastructure/Homelab repo.md` (where in the codebase to look for what).
+
+### When to read from the vault from here
+
+- Looking for the **rationale** behind a hardware/architecture decision that isn't obvious from the manifests (e.g., "why these NVMe drives", "why this VLAN plan"). The commit message usually points; the decision lives in vault `_memory/chats/homelab/`.
+- Looking for **operating state** the repo doesn't track — what's racked vs on the shelf, last burn-in date, drive serials.
+- Looking for **cross-domain context** the repo doesn't own (interactions with personal finance buckets, broader IP plan beyond the cluster, etc.).
+
+### When to write to the vault from here
+
+- After a non-trivial homelab decision: file a `_memory/chats/homelab/YYYY-MM-DD-<topic>.md` chat-memory note (preferred via vault `/save`; or write directly with the frontmatter required by the vault's `CLAUDE.md`).
+- After a meaningful architectural change: trigger `/wiki-ingest` against the changed README or component from within the vault.
+
+### Read permissions
+
+This repo's `.claude/settings.json` whitelists Read/Glob/Grep on the vault path; the vault's `.claude/settings.json` whitelists the same on this repo. Native Read works on absolute paths in both directions — no MCP needed for cross-repo reads.
+
+### Downstream: the published blog (sudops.pl)
+
+The `blog/*-draft.md` files in this repo are the **upstream raw material** for the public homelab blog at **[sudops.pl](https://sudops.pl)** — repo `/Users/vadzimdziadziulia-laptop/Projects/sudops.pl` ([sudoom/sudops.pl](https://github.com/sudoom/sudops.pl), Astro).
+
+- Pipeline: this repo's `blog/*-draft.md` (raw session chronology) → `sudops.pl/posts/*.md` (gitignored raw draft) → `sudops.pl/src/content/blog/*.mdx` (published).
+- The blog repo reads THIS repo for ground truth (manifests, versions, commands) and the vault for the "why". You don't push to the blog from here — keep the drafts current per the "Blog notes" rule above; the blog repo pulls from them.
+- Same secret-hygiene rule applies: drafts feed a public site, so never put real tokens/keys/kubeconfigs in `blog/*-draft.md`.
