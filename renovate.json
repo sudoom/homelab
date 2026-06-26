@@ -30,6 +30,18 @@
       "automerge": true
     },
     {
+      "description": "Immich server + machine-learning MUST bump together (identical app version, or Immich breaks) and are reviewed, never automerged. repository: is set explicitly in components/apps/immich/values.yaml so the helm-values manager can resolve a datasource and track the app tag. A MAJOR bump (v3.x) is breaking (OAuth/API/env changes + forward-only DB migrations) and also wants a matching newer immich-charts chart -> do it by hand after a verified DB backup, not via a Renovate merge.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/immich-app/immich-server", "ghcr.io/immich-app/immich-machine-learning"],
+      "groupName": "immich"
+    },
+    {
+      "description": "CNPG Postgres operand images are SUPERVISED, never Renovate-bumped. The tag encodes a Postgres major (cloudnative-pg/postgresql:18) or pg-major+extension (cloudnative-vectorchord:18-1.1.1); the only update Renovate could offer is a major, which is a DB migration event (and vchord additionally needs an in-DB ALTER EXTENSION). Same gate class as ceph/rook. Covers immich's vchord operand (helm-values DOES see it) and the cnpg-clusters postgres image (untracked anyway since it uses imageName:).",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/tensorchord/cloudnative-vectorchord", "ghcr.io/cloudnative-pg/postgresql"],
+      "enabled": false
+    },
+    {
       "description": "Rook is a manual, supervised, version-coherent bump (CLAUDE.md 'Upgrading Rook/Ceph'). Renovate must NOT auto-propose it: the 2026-06-12 v1.19.5->v1.20.0 auto-bump (#134) broke CSI (operator changed the CSI ServiceAccount naming, ceph-csi-*-sa went missing). Both charts bump together, by hand, after a helm-dependency-update chart-exists check + an oc-diff of the CSI SA/RBAC delta.",
       "matchPackageNames": ["rook-ceph", "rook-ceph-cluster"],
       "enabled": false

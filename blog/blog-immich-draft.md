@@ -119,3 +119,48 @@ The stray auto-created `immich-server` PVC was then pruned by ArgoCD.
 `immich-thumbs` Bound on NVMe, storage template config-managed, app Synced/Healthy.
 ML limit 4Gi→10Gi + server 8Gi for the import. Import itself: immich-go (managed upload,
 storage template applies) from a workstation against the Route — operator-run.
+
+## 2026-06-26 — bump to v2.7.5 + make Immich Renovate-trackable
+
+Bumped the app `v2.6.3 → v2.7.5` (latest **stable**; `v3.0.0` is RC-only with major
+breaking changes — OAuth/API/env + forward-only DB migrations — and wants a newer chart,
+so it's a deliberate manual event after a verified DB backup, not a Renovate merge). The
+chart stays `immich-charts 0.12.0` (still the latest chart; its `appVersion` is `v2.6.3`,
+but app version is decoupled from chart version — you override `image.tag`, the chart
+doesn't enforce it). `helm template` confirms `ghcr.io/immich-app/immich-{server,machine-learning}:v2.7.5`.
+
+### The Renovate-tracking gap (and a repo-wide audit)
+
+Immich's app tag was **invisible to Renovate**: we pinned a bare `tag: v2.6.3` with no
+co-located `repository:`, and the `helm-values` manager needs BOTH to resolve a datasource.
+Fix: set `image.repository` explicitly (`ghcr.io/immich-app/immich-server` /
+`…/immich-machine-learning`, == the chart defaults, zero behaviour change) next to the tag.
+Now Renovate tracks them.
+
+Ran a verified repo-wide audit (4 parallel auditors classifying all 51 version pins +
+an adversarial Opus verifier cross-checked against the open-PR ground truth). Findings:
+
+- Every other component image is already tracked (full `repo:tag` strings, or co-located
+  `repository`+`tag`). Intentionally-ignored sets stay ignored: rook/ceph (`enabled:false`
+  packageRules), OLM `channel:` subscriptions (not a Renovate mechanism), `bootstrap/**`.
+- **A second untracked CNPG image** — `components/apps/cnpg-clusters/values.yaml`
+  `imageName: ghcr.io/cloudnative-pg/postgresql:18` (key is `imageName`, not `image`, so
+  `helm-values` skips it). But `:18` is a rolling major tag → the only thing Renovate could
+  offer is Postgres **19** (a migration event). So *not tracking it is correct* — it's a
+  supervised image, same class as ceph.
+- **A dead config rule:** the media/keepers patch-automerge rule uses
+  `matchPaths: ["media/**","keepers/**"]`, but the real paths are `components/apps/media/**`
+  → it matches **zero files**, so media patch PRs have never actually auto-merged (they sit
+  open — e.g. #146 sonarr, #139 jellyfin). `matchPaths` is also deprecated (→ `matchFileNames`).
+  Flagged for an operator decision (enable auto-merge vs keep manual review); not silently changed.
+
+### renovate.json changes
+
+Two packageRules added: (1) **group** `immich-server` + `immich-machine-learning` (`groupName: immich`)
+— they MUST bump together or the app breaks; reviewed, not automerged. (2) **disable** both CNPG
+operand images (`cloudnative-vectorchord` + `cloudnative-pg/postgresql`) — supervised, a major tag
+bump is a DB migration (+ vchord needs an in-DB `ALTER EXTENSION`). Same gate shape as the ceph rule.
+
+**Ordering note:** v2.6.3→v2.7.5 is same-major, low-risk, but still runs forward DB migrations on
+first start. If the library isn't imported yet the DB is disposable (bump is free); once imported,
+the CNPG DB has no offsite backup yet (open TODO) → back it up before relying on it.
