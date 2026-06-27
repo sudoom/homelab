@@ -599,3 +599,97 @@ Then fill `bucket` + `endpointURL` in each chart's values, flip
 `objectStore.enabled: true`, commit. Restore drill (recover into a scratch
 cluster from R2; immich's restore needs the vchord operand image) tracked as the
 proof step.
+
+## 2026-06-27 (cont.) — flipping R2 backups live: CRD-validation gotchas + a false-positive verification
+
+Picking up from the scaffolding above: the operator filled the R2 endpoints, sealed the
+creds, and we flipped `backup.objectStore.enabled: true` on **both** `media-postgres`
+and `immich-postgres`. What looked like a one-line flip turned into a chain of
+ObjectStore-CRD validation rejections (each surfaced as an ArgoCD `SyncFailed`), and
+then a verification lesson worth recording honestly because I got it wrong first.
+
+### Sealed-secrets cert-expiry detour (blocked kubeseal mid-rollout)
+
+Before I could even seal the R2 creds, `kubeseal` failed with **`expired certificate`**.
+Root cause: the sealed-secrets controller was running with `--key-renew-period=0`, i.e.
+**auto-rotation disabled**. The single sealing key's cert was minted ~30d earlier and
+**expired 2026-05-28** with no replacement queued — so all *new* sealing was blocked
+cluster-wide. Important nuance: **expiry only breaks sealing, not decrypting** — every
+existing SealedSecret kept decrypting fine, so nothing was visibly broken until I tried
+to seal something new.
+
+Fix: set the renew period to `720h`. The controller then minted a **fresh sealing key
+with a 10-year cert** (and retained the old key for decryption of everything already
+sealed). Committed the new public cert to
+`components/operators/sealed-secrets/sealed-secrets-pub.pem` so offline sealing works
+via `kubeseal --cert` without reaching the controller.
+
+### The ObjectStore CRD-validation chain (fixed in order, all pre-commit)
+
+Each of these is an `ObjectStore` (`barmancloud.cnpg.io/v1`) schema constraint that the
+vendored CRD enforces; ArgoCD reported them as `SyncFailed`:
+
+1. **`compression: zstd` is REJECTED.** The ObjectStore CRD's compression enum is only
+   `bzip2 | gzip | lz4 | snappy` — no zstd. Changed both `wal` and `data` compression
+   to **gzip**.
+2. **`spec.configuration.serverName` is FORBIDDEN on the ObjectStore.** The CRD rejects
+   it with the hint to *"use the serverName plugin parameter in the Cluster resource"* —
+   the design intent being that one ObjectStore can be shared by multiple clusters.
+   Moved `serverName` to **`Cluster.spec.plugins[].parameters.serverName`**, and set the
+   ObjectStore **`destinationPath` to the bucket ROOT** (`s3://psql-backup/`). The plugin
+   appends the serverName, so the final per-cluster path resolves to
+   **`s3://psql-backup/<cluster>/`** (`…/media-postgres/`, `…/immich-postgres/`).
+3. **Caught both of the above BEFORE committing** by validating the rendered manifests
+   with `oc apply --dry-run=server` against the live CRD — server-side dry-run is
+   non-mutating but runs the full CRD schema validation, which is exactly what the
+   offline `kubeconform` pass missed (it validates structure, not the CRD's enum/forbidden
+   rules as installed).
+4. **6-vs-8-space YAML indent bug** in the operator's values edit for the
+   bucket/endpoint block: the under-indented keys would have rendered
+   `destinationPath: s3:///` (empty bucket segment). Fixed the indent before commit.
+
+### Verification — a false positive, and what actually proves it
+
+This is the part to be honest about. I first reported **"both ContinuousArchivingSuccess"**
+by trusting a CNPG status **condition** on the Cluster. That was a **false positive**: the
+condition read healthy while the ObjectStores were still invalid/Missing. The CNPG
+`firstRecoverabilityPoint` / `lastSuccessfulBackup` status fields are **stale / snapshot-era**
+state — they do **not** reflect live plugin WAL archiving. Do not trust them.
+
+Two things made this hard to verify the obvious way:
+
+- The barman sidecar is a **native sidecar** — an `initContainer` with
+  `restartPolicy: Always`, named **`plugin-barman-cloud`**, image
+  `plugin-barman-cloud-sidecar:v0.13.0`. Because native sidecars live in
+  `.spec.initContainers`, **not** `.spec.containers`, the sidecar is **invisible** to
+  `oc get pod`'s container list — easy to assume it isn't there.
+- A **manual `barman-cloud-*` exec into the pod fails** and looks like a real breakage:
+  `barman-cloud-wal-list` isn't even shipped in the image, and the commands that are
+  present fail with **`Unable to locate credentials`**. That's expected, not a bug: the
+  plugin injects the S3/R2 credentials **per-command** at invocation, it does **not** bake
+  them into the sidecar's base environment. So a hand-run barman command has no creds.
+
+The **real proof** of live archiving is twofold:
+
+- **(a) the plugin-sidecar logs** — `Executing barman-cloud-wal-archive` followed by
+  `Archived WAL file <name>` per segment; and
+- **(b) the R2 bucket itself** — gzip WAL objects landing under
+  `psql-backup/media-postgres/wals/` and `psql-backup/immich-postgres/wals/`, arriving
+  continuously (roughly every ~5 min), confirmed directly in the Cloudflare console.
+
+Lesson for next time: for plugin-driven barman, **check the bucket and the sidecar logs**,
+not the Cluster condition or the `*RecoverabilityPoint` fields.
+
+### State + outstanding
+
+- **WAL archiving is LIVE and verified** to R2 for both clusters (bucket-confirmed).
+- **First BASE backup has NOT run yet.** The `ScheduledBackup`s fire at **03:00 UTC
+  (immich)** and **03:30 UTC (media)**. WAL alone is **not restorable** — PITR needs a
+  base backup **plus** the WAL stream. So we are archiving but not yet recoverable from R2.
+- **Restore drill = next session** (recover into a scratch cluster from R2; immich's
+  restore needs the vchord operand image). That's the proof step before this counts as a
+  real offsite backup.
+- **Both CNPG Cluster CRs now show perpetual ArgoCD `OutOfSync` (Healthy)** — the
+  operator normalizes/owns spec fields after the plugin block was added (classic
+  ArgoCD↔CNPG drift; last sync `Succeeded`, Clusters healthy, archiving works). Fix is an
+  `ignoreDifferences` for the operator-managed Cluster fields — deferred to next session.

@@ -175,3 +175,94 @@ NAS→cloud/offsite 3-2-1 — so the Immich DB lands offsite alongside the photo
 `pg_dump`/barman CronJob. (Restore caveat: needs the `cloudnative-vectorchord` operand image for the
 vchord extension.) This downgrades the README "CNPG no offsite backup" item — only `media-postgres`
 (servarr config, largely re-creatable) remains, now low-priority.
+
+## 2026-06-27 — the NVMe-thumbnails dead end (it can't be done) + a CPU HPA for the server
+
+Two asks today: finish the NVMe-thumbnails move from 2026-06-20, and add autoscaling to
+`immich-server`. The first one turned into a clean retraction — the whole premise was wrong.
+(Context: earlier today I also bumped the app to **v2.7.5** and made it Renovate-trackable —
+see the 2026-06-26 section above.)
+
+### `THUMB_LOCATION` is not a real Immich env var
+
+The 2026-06-20 plan leaned on `THUMB_LOCATION=/thumbs` as a "first-class" env to relocate
+thumbnails onto an NVMe RBD PVC. **It isn't one.** Checked against
+`docs.immich.app/install/environment-variables` — there is no `THUMB_LOCATION` (nor any
+per-folder location override). Immich writes thumbnails to `<media-location>/thumbs`
+**unconditionally**; `media-location` is `/data` on v2.x by default with no override knob.
+
+So the dedicated `immich-thumbs` `ceph-nvme-block` PVC, side-mounted at `/thumbs`, **sat
+empty** — the operator noticed it had zero usage. The thumbs had been landing in
+`/data/thumbs` on the NFS library the entire time. The env var did nothing; the mount just
+shadowed an unused path.
+
+### The nested-mount fix, and why it crashlooped
+
+If Immich insists on `/data/thumbs`, the next idea was to **nest-mount** the RWO RBD PVC at
+exactly `/data/thumbs` — overlay just that subdirectory of the NFS `/data` mount. This is a
+legitimate kernel trick: `/data` (NFS) and `/data/thumbs` (RBD) are independent mounts, and
+the kernel routes path lookups by **longest-prefix-match** — NFS owns `/data/*` except
+`/data/thumbs`, which RBD owns. On paper it works.
+
+In practice it **crashlooped the server**. Immich's startup runs "system mount folder
+checks" (`StorageService.verifyReadAccess`): it reads a `.immich` marker in each media
+folder, including `/data/thumbs/.immich`. On the **empty** freshly-provisioned RBD mount
+that file doesn't exist → `ENOENT` → the microservices worker exits `1` →
+`CrashLoopBackOff`. The integrity guard that protects against a half-mounted library is
+exactly what an empty overlay trips.
+
+### Removing thumbs didn't recover it — an SSA list-merge footgun
+
+Reverting (drop the thumbs mount entirely, back to NFS-only) **did not** immediately fix it,
+which was the nasty part. Server-side apply had **accumulated** two thumbs `volumeMounts`
+across the iterations — `/thumbs` from the original 06-20 deploy plus `/data/thumbs` from the
+nested-mount change — rather than replacing one with the other (SSA merges lists by key, it
+doesn't treat my manifest as the full set). Removing the thumbs *volume* then left a
+**dangling volumeMount** referencing a volume that no longer existed:
+
+```
+Deployment.apps "immich-server" is invalid:
+spec.template.spec.containers[0].volumeMounts[2].name: Not found: thumbs
+```
+
+ArgoCD's apply got stuck retrying that invalid object, so the **crashing pod never got
+replaced** — the corrected manifest was committed but couldn't land. Resolution: **delete
+the `immich-server` Deployment** so ArgoCD recreated it **clean** from the rendered manifest
+(ConfigMap + NFS library only, no thumbs cruft). The `immich-thumbs` PVC was pruned.
+
+### Lesson: don't chase NVMe-for-thumbs on Immich
+
+It can't relocate thumbnails — there's no env, the media-location default is fixed, and the
+nested-mount workaround collides head-on with the folder-integrity check **and** the SSA
+list-merge accumulation. That's a triple footgun for a marginal win (NFS thumb-grid latency
+was never actually a felt problem). **Thumbs stay on the NFS library default.** Removed the
+"NVMe thumbnails" follow-up from the open list.
+
+### The actual win today: a CPU HPA on `immich-server`
+
+With the server now carrying **no RWO volume** — only the RWX NFS library + a ConfigMap — it
+can finally run multi-replica. Changes:
+
+- **`HorizontalPodAutoscaler`** (`autoscaling/v2`) for `immich-server`: `minReplicas: 1`,
+  `maxReplicas: 2`, target **75% average CPU**.
+- **Strategy `Recreate` → `RollingUpdate`** — the Recreate constraint only existed because
+  of the RWO thumbs PVC (Multi-Attach). No RWO volume → rolling is safe again, and the HPA
+  needs it to add a replica without tearing the old one down first.
+- **root-app `ignoreDifferences`** now includes the Deployment's `.spec.replicas`, so
+  ArgoCD `selfHeal` doesn't fight the HPA over the replica count (the classic
+  HPA-vs-GitOps drift).
+
+Verified the HPA actually reads CPU — it reported **2918%**, which looks absurd until you
+remember it's **request-relative**: the server's CPU request is only **250m**, so any real
+work blows past 75% and scaling is effectively **binary** (1 → max almost immediately under
+load). It does scale.
+
+**Anti-affinity gap.** The HPA initially stacked both server replicas onto **one node**. The
+existing `immich-server ↔ immich-machine-learning` anti-affinity keeps server *away from ML*
+but says nothing about **server-from-server**, so two servers happily co-located. Added a
+**soft (`ScheduleAnyway`) hostname `topologySpreadConstraint`** to prefer spreading replicas
+across nodes.
+
+**maxReplicas 3 → 2.** Capped at 2 because the cluster is memory-tight and each
+`immich-server` runs **~5 GiB during import**. Three concurrent servers risked memory
+pressure for no real throughput gain on this workload. min1/max2 is the right envelope here.
