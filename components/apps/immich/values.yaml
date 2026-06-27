@@ -51,13 +51,6 @@ library:
   storageClass: nfs-csi
   size: 500Gi
 
-# Dedicated NVMe thumbnails volume (templated as our own PVC, mounted via
-# existingClaim — the chart's auto-create produced a no-storageClass PVC). RWO
-# ceph-nvme-block, server-only. thumbs ~2-5% of library; 40Gi covers ~1-1.5 TiB.
-thumbs:
-  storageClass: ceph-nvme-block
-  size: 40Gi
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Values passed THROUGH to the official immich subchart (bjw-s common-lib based).
 # Schema confirmed against immich-charts 0.12.0 (helm show values, 2026-06-18).
@@ -140,15 +133,10 @@ immich:
   # (no Redis operator). emptyDir is fine — the queue is reconstructable.
   valkey:
     enabled: true
-  # immich-server: dedicated NVMe thumbnails volume + Recreate strategy. Immich has
-  # NO env to relocate thumbs (THUMB_LOCATION is NOT a real Immich var — it always
-  # writes them under <media-location>/thumbs; media-location = /data here). So
-  # nested-mount the RWO ceph-nvme-block PVC at /data/thumbs: it overlays that subdir
-  # of the NFS library, putting ONLY thumbs on NVMe (server only — ML works over
-  # HTTP, valkey needs nothing). RWO + the chart's default RollingUpdate deadlocks
-  # (Multi-Attach), so force Recreate (brief downtime per change — fine for homelab).
-  # After this lands, run Admin → Jobs → Generate Thumbnails to (re)populate NVMe —
-  # any thumbs previously written to NFS /data/thumbs are shadowed by the mount.
+  # immich-server. Thumbs live on the NFS library at /data/thumbs (Immich default —
+  # no env relocates them). The dedicated NVMe-RBD thumbs PVC was removed 2026-06-27:
+  # nested-mounting RBD over /data/thumbs crashlooped startup, and the NVMe win over
+  # NFS for the thumb workload is marginal. Recreate strategy retained.
   server:
     enabled: true
     # Keep the server off whatever node runs machine-learning — spreads the two
@@ -175,15 +163,6 @@ immich:
                 memory: 1Gi
               limits:
                 memory: 8Gi   # thumbnail + ffmpeg transcode jobs spike during import
-    persistence:
-      thumbs:
-        enabled: true
-        type: persistentVolumeClaim
-        existingClaim: immich-thumbs   # our own PVC (templates/thumbs-pvc.yaml)
-        advancedMounts:
-          main:
-            main:
-              - path: /data/thumbs
   # CPU-only ML for v1 (the RAM sink — give it headroom, it OOMKills if starved).
   # cache stays the chart-default emptyDir for now; switch to a PVC later so the
   # HuggingFace model download survives a reschedule.
