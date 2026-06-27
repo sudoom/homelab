@@ -69,6 +69,7 @@ spec:
       isWALArchiver: true
       parameters:
         barmanObjectName: {{ $pg.backup.objectStore.name }}
+        serverName: immich-postgres
   {{- end }}
 {{- if and $pg.backup $pg.backup.enabled $pg.backup.schedule }}
 ---
@@ -100,9 +101,8 @@ metadata:
     argocd.argoproj.io/sync-wave: "-2"
 spec:
   configuration:
-    destinationPath: s3://{{ $os.bucket }}/immich-postgres/
+    destinationPath: s3://{{ $os.bucket }}/
     endpointURL: {{ $os.endpointURL }}
-    serverName: immich-postgres
     s3Credentials:
       accessKeyId:
         name: {{ $os.credentialsSecret }}

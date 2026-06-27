@@ -62,6 +62,7 @@ spec:
       isWALArchiver: true
       parameters:
         barmanObjectName: {{ $cluster.backup.objectStore.name }}
+        serverName: {{ $name }}
   {{- end }}
 {{- end }}
 {{- end }}
@@ -79,9 +80,8 @@ metadata:
     argocd.argoproj.io/sync-wave: "-1"
 spec:
   configuration:
-    destinationPath: s3://{{ $os.bucket }}/{{ $name }}/
+    destinationPath: s3://{{ $os.bucket }}/
     endpointURL: {{ $os.endpointURL }}
-    serverName: {{ $name }}
     s3Credentials:
       accessKeyId:
         name: {{ $os.credentialsSecret }}
