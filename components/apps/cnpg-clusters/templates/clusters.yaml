@@ -46,9 +46,8 @@ spec:
       # CR is deleted. Avoids orphan snapshots after a teardown.
       snapshotOwnerReference: cluster
       {{- if and $cluster.backup.objectStore $cluster.backup.objectStore.enabled }}
-      # With the barman-cloud plugin as WAL archiver (→ R2), DON'T let the local
-      # snapshot block on WAL archive: an R2 outage must not stall the local copy
-      # too, or both backups fail together. Local snapshot stays R2-independent.
+      # Don't let the local snapshot block on WAL archive (now → R2) — an R2
+      # outage must not stall the local copy too.
       online: true
       onlineConfiguration:
         waitForArchive: false
@@ -56,10 +55,8 @@ spec:
     retentionPolicy: {{ $cluster.backup.retentionPolicy | quote }}
   {{- end }}
   {{- if and $cluster.backup $cluster.backup.objectStore $cluster.backup.objectStore.enabled }}
-  # Object-store backups via the barman-cloud plugin → Cloudflare R2 (offsite).
-  # isWALArchiver: continuous WAL → R2 = the PITR engine. Coexists with the
-  # volumeSnapshot above (fast local restore). The R2 endpoint / creds /
-  # checksum-env live in the ObjectStore CR (rendered below).
+  # WAL archiver → Cloudflare R2 (offsite PITR); the ObjectStore CR below holds
+  # the endpoint/creds/checksum-env. Coexists with the local snapshot above.
   plugins:
     - name: barman-cloud.cloudnative-pg.io
       isWALArchiver: true
@@ -96,19 +93,15 @@ spec:
       compression: zstd
     data:
       compression: zstd
-    # NO `encryption:` — R2 encrypts at rest automatically (AES-256-GCM,
-    # Cloudflare-managed); the per-object SSE header barman would send is
-    # rejected/ignored by R2. NO custom chunk sizing (R2's equal-non-trailing-
-    # part rule is stricter than S3 → InvalidPart). Barman defaults are fine.
+    # No `encryption:` — R2 encrypts at rest already and rejects barman's SSE
+    # header. Don't hand-tune chunk sizes either (R2 InvalidPart).
   retentionPolicy: {{ $os.retentionPolicy | quote }}
   instanceSidecarConfiguration:
     env:
       - name: AWS_REGION
         value: "auto"
-      # ===== THE #1 R2 FAILURE MODE — boto3 ≥1.36 default integrity checksums
-      # that R2 rejects (XAmzContentSHA256Mismatch on PutObject + on retention
-      # deletes). Restores SDK→non-AWS-S3 compatibility. Re-verify after every
-      # plugin-barman-cloud bump (boto3 rides the sidecar image). =====
+      # R2's #1 gotcha: it rejects boto3 ≥1.36 default checksums
+      # (XAmzContentSHA256Mismatch). Required — don't remove; re-check on plugin bumps.
       - name: AWS_REQUEST_CHECKSUM_CALCULATION
         value: "when_required"
       - name: AWS_RESPONSE_CHECKSUM_VALIDATION

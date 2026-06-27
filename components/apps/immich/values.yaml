@@ -150,6 +150,19 @@ immich:
   # Controller/container ids are main/main (NOT "server"). Library stays at /data.
   server:
     enabled: true
+    # Keep the server off whatever node runs machine-learning — spreads the two
+    # RAM-heavy Immich pods across nodes. Hard anti-affinity (trivially satisfiable
+    # on 3 nodes); scoped to the server component, NOT top-level defaultPodOptions
+    # (which would also push ML/valkey around).
+    defaultPodOptions:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: machine-learning
+                  app.kubernetes.io/instance: immich
     controllers:
       main:
         strategy: Recreate

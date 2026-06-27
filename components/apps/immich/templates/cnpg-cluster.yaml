@@ -61,12 +61,9 @@ spec:
     retentionPolicy: {{ $pg.backup.retentionPolicy | quote }}
   {{- end }}
   {{- if and $pg.backup $pg.backup.objectStore $pg.backup.objectStore.enabled }}
-  # Offsite object-store backup via the barman-cloud plugin → Cloudflare R2: a
-  # SECOND independent offsite copy of the irreplaceable Immich metadata, on top
-  # of Immich's built-in pg_dumpall → NFS → NAS. isWALArchiver = continuous WAL →
-  # R2 (PITR). Does NOT gate app startup — the wave -1 health gate keys on
-  # Postgres being up, not on WAL-archive success. R2 endpoint/creds/checksum-env
-  # live in the ObjectStore CR (rendered below).
+  # WAL archiver → Cloudflare R2: a SECOND offsite copy (on top of Immich's built-in
+  # pg_dumpall → NFS). Doesn't gate startup — the wave -1 gate keys on Postgres
+  # being up, not WAL-archive success. ObjectStore CR below holds the R2 config.
   plugins:
     - name: barman-cloud.cloudnative-pg.io
       isWALArchiver: true
@@ -117,17 +114,14 @@ spec:
       compression: zstd
     data:
       compression: zstd
-    # NO `encryption:` — R2 encrypts at rest automatically (AES-256-GCM,
-    # Cloudflare-managed); the per-object SSE header barman would send is
-    # rejected/ignored by R2.
+    # No `encryption:` — R2 encrypts at rest already and rejects barman's SSE header.
   retentionPolicy: {{ $os.retentionPolicy | quote }}
   instanceSidecarConfiguration:
     env:
       - name: AWS_REGION
         value: "auto"
-      # ===== THE #1 R2 FAILURE MODE — boto3 ≥1.36 default integrity checksums
-      # that R2 rejects (XAmzContentSHA256Mismatch on PutObject + retention
-      # deletes). Re-verify after every plugin-barman-cloud bump. =====
+      # R2's #1 gotcha: it rejects boto3 ≥1.36 default checksums
+      # (XAmzContentSHA256Mismatch). Required — don't remove; re-check on plugin bumps.
       - name: AWS_REQUEST_CHECKSUM_CALCULATION
         value: "when_required"
       - name: AWS_RESPONSE_CHECKSUM_VALIDATION
