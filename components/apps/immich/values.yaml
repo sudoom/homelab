@@ -140,14 +140,15 @@ immich:
   # (no Redis operator). emptyDir is fine — the queue is reconstructable.
   valkey:
     enabled: true
-  # immich-server: dedicated NVMe thumbnails volume + Recreate strategy. Immich
-  # v2.x has a first-class THUMB_LOCATION env (no fragile nested mount) — point it
-  # at /thumbs and side-mount an RWO ceph-nvme-block PVC there (server ONLY: ML
-  # works over HTTP and never reads thumbs from disk; valkey needs nothing). RWO +
-  # the chart's default RollingUpdate deadlocks (Multi-Attach), so force Recreate
-  # (brief downtime on every server change — fine for a homelab). Set BEFORE the
-  # import so thumbs generate straight onto NVMe (no retroactive regenerate job).
-  # Controller/container ids are main/main (NOT "server"). Library stays at /data.
+  # immich-server: dedicated NVMe thumbnails volume + Recreate strategy. Immich has
+  # NO env to relocate thumbs (THUMB_LOCATION is NOT a real Immich var — it always
+  # writes them under <media-location>/thumbs; media-location = /data here). So
+  # nested-mount the RWO ceph-nvme-block PVC at /data/thumbs: it overlays that subdir
+  # of the NFS library, putting ONLY thumbs on NVMe (server only — ML works over
+  # HTTP, valkey needs nothing). RWO + the chart's default RollingUpdate deadlocks
+  # (Multi-Attach), so force Recreate (brief downtime per change — fine for homelab).
+  # After this lands, run Admin → Jobs → Generate Thumbnails to (re)populate NVMe —
+  # any thumbs previously written to NFS /data/thumbs are shadowed by the mount.
   server:
     enabled: true
     # Keep the server off whatever node runs machine-learning — spreads the two
@@ -168,8 +169,6 @@ immich:
         strategy: Recreate
         containers:
           main:
-            env:
-              THUMB_LOCATION: /thumbs
             resources:
               requests:
                 cpu: 250m
@@ -184,7 +183,7 @@ immich:
         advancedMounts:
           main:
             main:
-              - path: /thumbs
+              - path: /data/thumbs
   # CPU-only ML for v1 (the RAM sink — give it headroom, it OOMKills if starved).
   # cache stays the chart-default emptyDir for now; switch to a PVC later so the
   # HuggingFace model download survives a reschedule.
