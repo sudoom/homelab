@@ -1,4 +1,11 @@
 sealed-secrets:
   fullnameOverride: sealed-secrets-controller
   args:
-    - --key-renew-period=0
+    # Key AUTO-ROTATION. Was =0 (DISABLED) — which is what bit us: the single
+    # sealing key's cert expired 2026-05-28 (~30d after creation) with nothing
+    # replacing it, so kubeseal failed with "expired certificate" and ALL new
+    # sealing was blocked (existing SealedSecrets kept decrypting fine — expiry
+    # only breaks sealing). With renewal on, the controller mints a fresh key +
+    # long-lived cert on the next cycle and RETAINS old keys for decryption, so
+    # no re-seal is needed and it never silently expires again. DO NOT set to 0.
+    - --key-renew-period=720h
