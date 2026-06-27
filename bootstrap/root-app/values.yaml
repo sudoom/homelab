@@ -50,7 +50,7 @@ applications:
 
   # Periodic node `fstrim` to reclaim freed-but-not-TRIMMed RBD blocks (thin
   # provisioning never returns space to Ceph without discard). Privileged
-  # hostPID DaemonSet — enabled:false until the privileged manifest is reviewed.
+  # hostPID DaemonSet (privileged).
   # First pass also does the one-off reclaim (e.g. stale Loki-WAL blocks).
   node-fstrim:
     enabled: true
@@ -320,9 +320,7 @@ applications:
 
   # Self-hosted photo/video library. Wraps the official immich OCI chart +
   # a DEDICATED vchord CNPG Postgres (Immich needs the VectorChord extension;
-  # stock CNPG can't run it) + RWX library on cephfs-hdd + bundled Valkey.
-  # enabled:false — scaffold only; flip on after the values.yaml first-deploy
-  # verify items (vchord extension creation, chart values schema, SCC).
+  # stock CNPG can't run it) + RWX library on NFS + bundled Valkey.
   immich:
     enabled: true
     path: components/apps/immich
