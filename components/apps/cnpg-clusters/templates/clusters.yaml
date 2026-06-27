@@ -45,8 +45,96 @@ spec:
       # cluster ownership → snapshots cascade-delete when the Cluster
       # CR is deleted. Avoids orphan snapshots after a teardown.
       snapshotOwnerReference: cluster
+      {{- if and $cluster.backup.objectStore $cluster.backup.objectStore.enabled }}
+      # With the barman-cloud plugin as WAL archiver (→ R2), DON'T let the local
+      # snapshot block on WAL archive: an R2 outage must not stall the local copy
+      # too, or both backups fail together. Local snapshot stays R2-independent.
+      online: true
+      onlineConfiguration:
+        waitForArchive: false
+      {{- end }}
     retentionPolicy: {{ $cluster.backup.retentionPolicy | quote }}
   {{- end }}
+  {{- if and $cluster.backup $cluster.backup.objectStore $cluster.backup.objectStore.enabled }}
+  # Object-store backups via the barman-cloud plugin → Cloudflare R2 (offsite).
+  # isWALArchiver: continuous WAL → R2 = the PITR engine. Coexists with the
+  # volumeSnapshot above (fast local restore). The R2 endpoint / creds /
+  # checksum-env live in the ObjectStore CR (rendered below).
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ $cluster.backup.objectStore.name }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- range $name, $cluster := .Values.clusters }}
+{{- if and $cluster.enabled $cluster.backup $cluster.backup.objectStore $cluster.backup.objectStore.enabled }}
+{{- $os := $cluster.backup.objectStore }}
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ $os.name }}
+  namespace: {{ $cluster.namespace }}
+  annotations:
+    # Before the Cluster (default wave 0) reconciles its plugins reference.
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  configuration:
+    destinationPath: s3://{{ $os.bucket }}/{{ $name }}/
+    endpointURL: {{ $os.endpointURL }}
+    serverName: {{ $name }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $os.credentialsSecret }}
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: {{ $os.credentialsSecret }}
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: zstd
+    data:
+      compression: zstd
+    # NO `encryption:` — R2 encrypts at rest automatically (AES-256-GCM,
+    # Cloudflare-managed); the per-object SSE header barman would send is
+    # rejected/ignored by R2. NO custom chunk sizing (R2's equal-non-trailing-
+    # part rule is stricter than S3 → InvalidPart). Barman defaults are fine.
+  retentionPolicy: {{ $os.retentionPolicy | quote }}
+  instanceSidecarConfiguration:
+    env:
+      - name: AWS_REGION
+        value: "auto"
+      # ===== THE #1 R2 FAILURE MODE — boto3 ≥1.36 default integrity checksums
+      # that R2 rejects (XAmzContentSHA256Mismatch on PutObject + on retention
+      # deletes). Restores SDK→non-AWS-S3 compatibility. Re-verify after every
+      # plugin-barman-cloud bump (boto3 rides the sidecar image). =====
+      - name: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: "when_required"
+      - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+        value: "when_required"
+{{- end }}
+{{- end }}
+{{- range $name, $cluster := .Values.clusters }}
+{{- if and $cluster.enabled $cluster.backup $cluster.backup.objectStore $cluster.backup.objectStore.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $name }}-r2-daily
+  namespace: {{ $cluster.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  # 6-field cron (sec min hour dom mon dow). Offset from the volumeSnapshot
+  # -daily (04:00) so the base backup + snapshot don't co-schedule I/O.
+  schedule: {{ $cluster.backup.objectStore.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ $name }}
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
 {{- end }}
 {{- end }}
 {{- range $name, $cluster := .Values.clusters }}

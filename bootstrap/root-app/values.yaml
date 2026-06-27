@@ -95,6 +95,16 @@ applications:
     namespace: cnpg-system
     syncWave: "1"
 
+  # CNPG Barman Cloud Plugin (CNPG-I) — object-store backups (Cloudflare R2) for
+  # the CNPG clusters; forward path off in-tree barmanObjectStore (removed @1.30).
+  # Wave 3: after cert-manager + CNPG operator (wave 1, it needs both), before the
+  # consumer clusters that declare ObjectStore CRs (cnpg-clusters @5, immich @7).
+  cnpg-barman-plugin:
+    enabled: true
+    path: components/operators/cnpg-barman-plugin
+    namespace: cnpg-system
+    syncWave: "3"
+
   oadp-operator:
     enabled: true
     path: components/operators/oadp

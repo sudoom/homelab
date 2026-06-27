@@ -33,9 +33,9 @@
       "groupName": "immich"
     },
     {
-      "description": "CNPG Postgres operand images are SUPERVISED, never Renovate-bumped. The tag encodes a Postgres major (cloudnative-pg/postgresql:18) or pg-major+extension (cloudnative-vectorchord:18-1.1.1); the only update Renovate could offer is a major, which is a DB migration event (and vchord additionally needs an in-DB ALTER EXTENSION). Same gate class as ceph/rook. Covers immich's vchord operand (helm-values DOES see it) and the cnpg-clusters postgres image (untracked anyway since it uses imageName:).",
+      "description": "CNPG Postgres operand + backup images are SUPERVISED, never Renovate-bumped. The operand tag encodes a Postgres major (cloudnative-pg/postgresql:18) or pg-major+extension (cloudnative-vectorchord:18-1.1.1) -> a major bump is a DB migration event (vchord also needs an in-DB ALTER EXTENSION). The barman-cloud plugin image (plugin-barman-cloud) is pinned to a vendored install manifest in components/operators/cnpg-barman-plugin/templates/plugin.yaml -> a tag bump alone would desync the manifest (same trap as sealed-secrets/rook), and the new plugin version must be re-checked against the running CNPG minor. Same gate class as ceph/rook.",
       "matchDatasources": ["docker"],
-      "matchPackageNames": ["ghcr.io/tensorchord/cloudnative-vectorchord", "ghcr.io/cloudnative-pg/postgresql"],
+      "matchPackageNames": ["ghcr.io/tensorchord/cloudnative-vectorchord", "ghcr.io/cloudnative-pg/postgresql", "ghcr.io/cloudnative-pg/plugin-barman-cloud"],
       "enabled": false
     },
     {

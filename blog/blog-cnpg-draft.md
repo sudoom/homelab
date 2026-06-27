@@ -497,3 +497,105 @@ CR is deleted), switch to `snapshotOwnerReference: backup`.
 - No need to install the plugin yet. Re-evaluate when upstream publishes
   a stable `:vX.Y.Z` tag from a non-`-testing` repo, OR when a future
   workload actually needs PITR.
+
+## 2026-06-27 — barman-cloud plugin + offsite backups to Cloudflare R2
+
+The "re-evaluate when upstream ships a stable tag" condition came true, and the
+operator wanted a true-offsite DB copy. Stood up the **barman-cloud plugin** and
+wired **both** `media-postgres` and `immich-postgres` → **Cloudflare R2**.
+Design was grounded by a verified workflow (CNPG/secret/R2 inventory + a 3-lens
+design panel + adversarial synthesis); the load-bearing facts and decisions:
+
+### Why the plugin, not in-tree barmanObjectStore
+
+- Running operator is **CNPG 1.29.1**. In-tree `spec.backup.barmanObjectStore`
+  still works on 1.29 but is **deprecated @1.26, removed @1.30**.
+- The CNPG OLM subscription is **`installPlanApproval: Automatic`** on
+  `stable-v1` (already auto-advanced 1.29.0→1.29.1). So a 1.30 auto-upgrade would
+  **silently delete in-tree barman** and break backups with no warning. In-tree
+  is a dead end here. (Spotted follow-up: CNPG on Automatic approval is itself a
+  latent migration risk — worth switching to Manual, like the Rook/Ceph gate.)
+- The plugin (`barmancloud.cnpg.io/v1` `ObjectStore` CRD + `Cluster.spec.plugins`)
+  is the forward CNPG-I contract and the **only shape with a clean home for the
+  R2 checksum env** (`ObjectStore.spec.instanceSidecarConfiguration.env`).
+- The 2026-05-20 blocker (plugin only shipped `:testing:main` images) is gone:
+  **plugin v0.13.0 (2026-06-10) is a stable GA tag**, built against CNPG 1.29.1.
+
+Vendored the upstream `manifest.yaml` verbatim into
+`components/operators/cnpg-barman-plugin/templates/plugin.yaml` (1110 lines: the
+ObjectStore CRD + controller Deployment + RBAC + a self-signed cert-manager
+Issuer/Certificates for its gRPC mTLS; no `{{ }}` literals, so Helm renders it
+unchanged). Targets the existing OLM `cnpg-system` ns. Root-app wave **3** (after
+cert-manager + CNPG operator @1, before the consumer clusters @5/@7). Renovate
+**disabled** for `ghcr.io/cloudnative-pg/plugin-barman-cloud` — a tag bump alone
+would desync the vendored manifest (same trap as sealed-secrets/rook).
+
+### The #1 R2 failure mode — boto3 checksums (baked into the ObjectStore)
+
+R2 rejects the default integrity checksums that **boto3 ≥1.36** (Dec 2024) sends
+on every `PutObject` → `XAmzContentSHA256Mismatch` (and the same on retention
+deletes). Documented real break: `postgresql:17.4`→`17.5` rode boto3
+`1.35.99`→`1.38.27`. The fix is two SDK env vars (lowercase `when_required`),
+placed in `ObjectStore.spec.instanceSidecarConfiguration.env` (verified the field
+path against the vendored CRD schema, line 414):
+
+```
+AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+```
+
+Plus `AWS_REGION=auto`. **Re-verify after every plugin-barman-cloud bump** (boto3
+rides the sidecar image, not the operand image, under the plugin shape).
+
+### Encryption — at-rest only (corrected an earlier wrong claim)
+
+barman-cloud is **server-side-only**; it has **no client-side/zero-knowledge**
+path (the `barman backup` daemon got GPG client-side in 3.14, but `barman-cloud-*`
+— what CNPG drives — did not). R2 **always encrypts at rest** (AES-256-GCM,
+Cloudflare-managed keys), automatically. So: **omit the `encryption:` field** —
+R2 has no SSE-KMS and rejects/ignores the per-object SSE header barman would send.
+This **corrected the README's earlier "encrypt client-side before upload"
+constraint, which was unsatisfiable via barman.** media-postgres is servarr
+config (the README's own "lower-stakes, largely re-creatable"); at-rest +
+bucket-scoped token is proportionate. True zero-knowledge stays for where it
+matters (the sealed-secrets master key — a future OADP+kopia phase 2).
+
+### Wiring (both clusters, coexisting with the local snapshot)
+
+Per cluster: an `ObjectStore` CR (R2 endpoint/bucket/creds/checksum-env, 30d
+retention), a `plugins: [barman-cloud, isWALArchiver:true]` entry on the Cluster
+(continuous WAL→R2 = the PITR engine), and a second `ScheduledBackup`
+(`method: plugin`, offset from the 04:00 volumeSnapshot). The existing 7d RBD
+`volumeSnapshot` stays as the fast local-restore copy. **Decoupling:** when the
+plugin is the WAL archiver, the local snapshot is set `online.waitForArchive:
+false` — an R2 outage must not stall the *local* snapshot too (else both backups
+fail together). The immich Cluster's wave -1 health gate keys on Postgres being
+up, **not** on WAL-archive success, so adding R2 does NOT couple Immich's app
+startup to R2. Different path prefixes share one bucket
+(`s3://<bucket>/media-postgres/`, `…/immich-postgres/`).
+
+All R2 rendering is gated behind `backup.objectStore.enabled` (default **false**)
++ placeholder `bucket`/`endpointURL`, so the commit is inert until the operator
+fills the endpoint and seals the creds. Validated: `helm lint`, render
+disabled→0 R2 resources / enabled→correct ObjectStore+plugin+ScheduledBackup,
+`kubeconform` clean, root-app shows the operator App @ wave 3.
+
+### Enablement (operator, per namespace — creds never in repo plaintext)
+
+Two strict SealedSecrets (namespace-bound), same R2 creds sealed twice:
+
+```bash
+# media-postgres (namespace media):
+oc -n media create secret generic media-postgres-r2-creds \
+  --from-literal=ACCESS_KEY_ID='<R2_ACCESS_KEY_ID>' \
+  --from-literal=ACCESS_SECRET_KEY='<R2_SECRET_ACCESS_KEY>' \
+  --dry-run=client -o yaml | kubeseal --controller-namespace sealed-secrets --format yaml \
+  > components/apps/cnpg-clusters/templates/sealed-media-postgres-r2-creds.yaml
+# immich-postgres (namespace immich): same, -n immich, name immich-postgres-r2-creds,
+#   output -> components/apps/immich/templates/sealed-immich-postgres-r2-creds.yaml
+```
+
+Then fill `bucket` + `endpointURL` in each chart's values, flip
+`objectStore.enabled: true`, commit. Restore drill (recover into a scratch
+cluster from R2; immich's restore needs the vchord operand image) tracked as the
+proof step.

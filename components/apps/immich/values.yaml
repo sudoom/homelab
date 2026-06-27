@@ -28,6 +28,19 @@ postgres:
     volumeSnapshotClassName: ceph-rbd-snapshot
     retentionPolicy: "7d"
     schedule: "0 30 4 * * *"   # 04:30 UTC daily (offset from media-postgres 04:00)
+    # Offsite object-store backup via the barman-cloud plugin → Cloudflare R2 — a
+    # SECOND independent offsite copy on top of Immich's built-in pg_dumpall →
+    # NFS → NAS. DISABLED until the operator fills bucket + endpointURL and seals
+    # the R2 creds into the immich-postgres-r2-creds SealedSecret (see the kubeseal
+    # command in the deploy notes). Flip enabled: true in the SAME commit.
+    objectStore:
+      enabled: false
+      name: immich-postgres-r2
+      bucket: ""                          # FILL: R2 bucket name (can share media's bucket)
+      endpointURL: ""                     # FILL: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      credentialsSecret: immich-postgres-r2-creds
+      retentionPolicy: "30d"
+      schedule: "0 0 3 * * *"             # 03:00 UTC daily base backup (offset from the 04:30 snapshot)
 
 library:
   # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi). Decided

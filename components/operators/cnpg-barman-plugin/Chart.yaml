@@ -1,0 +1,11 @@
+apiVersion: v2
+name: cnpg-barman-plugin
+description: >-
+  CloudNativePG Barman Cloud Plugin (CNPG-I sidecar) — vendored upstream install
+  manifest, pinned to v0.13.0. Provides the barmancloud.cnpg.io/v1 ObjectStore CRD
+  + the plugin controller in cnpg-system, enabling WAL/base backups to an S3 target
+  (Cloudflare R2) for the CNPG clusters. Forward path off the deprecated in-tree
+  spec.backup.barmanObjectStore (removed in CNPG 1.30). Requires cert-manager.
+type: application
+version: 0.1.0
+appVersion: "0.13.0"

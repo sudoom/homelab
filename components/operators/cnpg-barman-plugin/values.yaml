@@ -1,0 +1,10 @@
+# No values — templates/plugin.yaml is the upstream install manifest for the
+# CloudNativePG Barman Cloud Plugin, vendored verbatim at v0.13.0 (no Go-template
+# literals, so Helm renders it unchanged). To bump: re-download the release
+# manifest into templates/plugin.yaml and update Chart.yaml appVersion + the
+# image-pin note, then confirm the new plugin version supports the running CNPG
+# minor (compatibility band in the plugin release notes). This is a SUPERVISED
+# bump (Renovate-disabled for ghcr.io/cloudnative-pg/plugin-barman-cloud).
+#
+#   curl -fsSL https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/vX.Y.Z/manifest.yaml \
+#     -o components/operators/cnpg-barman-plugin/templates/plugin.yaml

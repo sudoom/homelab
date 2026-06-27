@@ -81,3 +81,17 @@ clusters:
         # 04:00 UTC daily = 05:00 / 06:00 local (CET/CEST). Quiet hour
         # for the media stack; ahead of any morning use.
         schedule: "0 0 4 * * *"
+      # Offsite object-store backup via the barman-cloud plugin → Cloudflare R2.
+      # DISABLED until the operator has (1) filled bucket + endpointURL below and
+      # (2) sealed the R2 creds into the media-postgres-r2-creds SealedSecret (see
+      # the kubeseal command in the deploy notes). Flip enabled: true in the SAME
+      # commit as the sealed secret + filled endpoint. Coexists with the
+      # volumeSnapshot above (which stays the fast local-restore copy).
+      objectStore:
+        enabled: false
+        name: media-postgres-r2            # ObjectStore CR name
+        bucket: ""                         # FILL: R2 bucket name
+        endpointURL: ""                    # FILL: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+        credentialsSecret: media-postgres-r2-creds
+        retentionPolicy: "30d"             # offsite keeps longer than the 7d local snapshot
+        schedule: "0 30 3 * * *"           # 03:30 UTC daily base backup (offset from the 04:00 snapshot)
