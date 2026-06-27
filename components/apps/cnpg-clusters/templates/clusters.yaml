@@ -90,9 +90,9 @@ spec:
         name: {{ $os.credentialsSecret }}
         key: ACCESS_SECRET_KEY
     wal:
-      compression: zstd
+      compression: gzip
     data:
-      compression: zstd
+      compression: gzip
     # No `encryption:` — R2 encrypts at rest already and rejects barman's SSE
     # header. Don't hand-tune chunk sizes either (R2 InvalidPart).
   retentionPolicy: {{ $os.retentionPolicy | quote }}
