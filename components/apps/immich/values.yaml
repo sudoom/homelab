@@ -60,7 +60,7 @@ library:
 hpa:
   enabled: true
   minReplicas: 1
-  maxReplicas: 3
+  maxReplicas: 2
   targetCPUUtilizationPercentage: 75
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -165,6 +165,17 @@ immich:
                 matchLabels:
                   app.kubernetes.io/name: machine-learning
                   app.kubernetes.io/instance: immich
+      # Spread the HPA-scaled server replicas across nodes so they don't pile onto
+      # one — each can use ~5 GiB during import. Soft (ScheduleAnyway) so it never
+      # blocks scheduling; pairs with the server≠ML rule above.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: server
+              app.kubernetes.io/instance: immich
     controllers:
       main:
         strategy: RollingUpdate
