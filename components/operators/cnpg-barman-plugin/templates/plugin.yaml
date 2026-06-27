@@ -1041,8 +1041,12 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
-          runAsGroup: 10001
-          runAsUser: 10001
+          # OpenShift patch (NOT upstream): the manifest pins runAsUser/runAsGroup
+          # 10001, which is outside cnpg-system's restricted-v2 UID range
+          # (1000860000-1000869999) → "must be in the ranges" → pod Forbidden,
+          # Deployment stuck 0/1. Dropped both so OpenShift injects the UID/GID
+          # from the namespace range (pod-level runAsNonRoot: true still holds).
+          # *** RE-APPLY this deletion on every plugin re-vendor. ***
           seccompProfile:
             type: RuntimeDefault
         volumeMounts:

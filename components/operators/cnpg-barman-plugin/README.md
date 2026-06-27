@@ -46,5 +46,8 @@ live in each `ObjectStore` CR.
 Renovate is disabled for `ghcr.io/cloudnative-pg/plugin-barman-cloud` — bumping
 re-vendors the whole manifest and must be checked against the running CNPG
 minor. Re-download the release `manifest.yaml` into `templates/`, bump
-`Chart.yaml` `appVersion`, `helm template … | oc diff`, then sync the operator
-app before touching the clusters.
+`Chart.yaml` `appVersion`, **re-apply the OpenShift securityContext patch**
+(delete the controller container's `runAsUser: 10001` + `runAsGroup: 10001` —
+they're outside cnpg-system's restricted-v2 UID range and forbid the pod; see
+the marked comment in `plugin.yaml`), `helm template … | oc diff`, then sync the
+operator app before touching the clusters.
