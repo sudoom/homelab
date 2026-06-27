@@ -51,6 +51,18 @@ library:
   storageClass: nfs-csi
   size: 500Gi
 
+# HPA for immich-server (CPU-based). Possible now that thumbs no longer pin the
+# server to one node via an RWO PVC — its only PVC is the RWX NFS library, so >1
+# replica + RollingUpdate are fine. Scales on the server's job/transcode CPU
+# (heaviest during imports). ArgoCD ignores Deployment .spec.replicas (root-app
+# applications.yaml) so selfHeal doesn't fight the HPA. maxReplicas kept modest —
+# each replica can burst to the 8Gi mem limit, and the cluster runs memory-tight.
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 75
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Values passed THROUGH to the official immich subchart (bjw-s common-lib based).
 # Schema confirmed against immich-charts 0.12.0 (helm show values, 2026-06-18).
@@ -136,7 +148,8 @@ immich:
   # immich-server. Thumbs live on the NFS library at /data/thumbs (Immich default —
   # no env relocates them). The dedicated NVMe-RBD thumbs PVC was removed 2026-06-27:
   # nested-mounting RBD over /data/thumbs crashlooped startup, and the NVMe win over
-  # NFS for the thumb workload is marginal. Recreate strategy retained.
+  # NFS for the thumb workload is marginal. With no RWO volume left (only the RWX
+  # NFS library + a ConfigMap), the server now uses RollingUpdate + a CPU HPA (below).
   server:
     enabled: true
     # Keep the server off whatever node runs machine-learning — spreads the two
@@ -154,7 +167,7 @@ immich:
                   app.kubernetes.io/instance: immich
     controllers:
       main:
-        strategy: Recreate
+        strategy: RollingUpdate
         containers:
           main:
             resources:

@@ -51,5 +51,13 @@ spec:
         - '.spec.volumeClaimTemplates[].metadata.creationTimestamp'
         - '.spec.volumeClaimTemplates[].spec.volumeMode'
         - '.spec.volumeClaimTemplates[].status'
+    # HPA-managed Deployments (e.g. immich-server): let the HorizontalPodAutoscaler
+    # own .spec.replicas — without this, selfHeal reverts it to the chart value and
+    # fights the HPA. Apps without an HPA set replicas explicitly; nothing changes
+    # it, so this ignore is a no-op for them.
+    - group: apps
+      kind: Deployment
+      jqPathExpressions:
+        - '.spec.replicas'
 {{- end }}
 {{- end }}
