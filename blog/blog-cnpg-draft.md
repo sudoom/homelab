@@ -765,7 +765,11 @@ enlargement in this state.
 
 **Final state:** both clusters healthy + archiving; media base backup `…20260702033000` running;
 immich's 07-02 base had *failed* during the outage (retries on tonight's 03:00 schedule; WAL covers
-PITR from the 06-30 base meanwhile — an on-demand immich base is the clean-close option).
+PITR from the 06-30 base meanwhile — an on-demand immich base is the clean-close option). Post-recovery
+housekeeping: a **`RECENT_MGR_MODULE_CRASH`** HEALTH_WARN latched (mgr.a `rook` module crashed
+2026-07-01T08:22Z on node5, `dispatch_remote available`, during the failover off the dead node4) —
+confirmed benign via `ceph crash info` (mgr healthy, cluster re-peered) and cleared with `ceph crash
+archive-all`; live health back to the benign `BLUESTORE_SLOW_OP_ALERT` only.
 
 **Gaps this exposed (→ README follow-ups):**
 - A **node outage silently kills offsite WAL archiving** (via the OVN egress cascade) with no alert
