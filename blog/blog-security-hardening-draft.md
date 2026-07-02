@@ -165,11 +165,10 @@ proactively — same logic as the first enable.
   not for operational reasons but to validate the rotation flow works.
 - **Consider `aesgcm` later** — newer, authenticated. Not urgent;
   algorithm migration is reversible.
-- **Sealed-secrets master key rotation** — separate from etcd
-  encryption, but adjacent. The bitnami-labs/sealed-secrets controller
-  generates its own master key on first start and never rotates by
-  default. Should be on a quarterly rotation; coupled with re-sealing
-  the in-repo SealedSecrets. Add to the security-followups list.
+- **Sealed-secrets master key rotation** — DONE (auto-rotation, not the
+  quarterly-manual drill originally scoped here). See the dedicated
+  `2026-06-27 — sealed-secrets key auto-rotation` section at the end of this
+  file for the cert-expiry incident, the usage patterns, and the runbook.
 
 ### Proof: same etcd key, before vs after
 
@@ -689,4 +688,155 @@ reachability test pointed at node6.
 `ovnkube-node` restart as a deliberate post-reboot step. The false etcd-critical
 shape is identical to the DDF-cAdvisor wedge (storage section) — `etcdctl endpoint
 health --cluster` is the one query that tells them apart from a real etcd problem.
+
+## 2026-06-27 — sealed-secrets key auto-rotation (cert-expiry incident + runbook)
+
+Consolidated home for everything sealed-secrets. The one-liner in the 2026-05-18
+follow-ups ("should be on a quarterly rotation") was overtaken by events: the
+controller had been running with rotation *disabled*, the sealing cert silently
+expired, and the fix was to turn auto-rotation on — not to script a manual
+quarterly drill. Full chronology, the usage patterns, and the standing runbook
+below.
+
+### The incident — expired sealing cert blocked all new sealing
+
+Surfaced 2026-06-27 while sealing the CNPG R2-backup credentials (the barman-cloud
+plugin rollout, see `blog/blog-cnpg-draft.md`). Before I could seal anything,
+`kubeseal` failed hard with **`expired certificate`** — it refused to use the
+controller's sealing cert.
+
+Root cause: the controller was running with **`--key-renew-period=0`** — i.e.
+**auto-rotation disabled**. The single sealing key's cert was minted ~30 days
+earlier and **expired 2026-05-28** with nothing queued to replace it. So every
+*new* seal was blocked cluster-wide.
+
+The nuance that made this invisible for a month: **expiry only breaks *sealing*,
+not *decrypting*.** Every SealedSecret already committed kept decrypting fine — the
+controller's private key still worked for unseal, and existing Secrets stayed
+materialised. Nothing looked broken until I tried to seal a *new* value. That's
+exactly the failure mode a health sweep misses: no pod crashed, no app degraded, no
+alert fired — the door was just quietly locked against new keys.
+
+### The fix — turn rotation on; the controller heals itself
+
+Set the renew period to `720h` (30 days) in
+`components/operators/sealed-secrets/values.yaml`:
+
+```yaml
+sealed-secrets:
+  fullnameOverride: sealed-secrets-controller
+  args:
+    - --key-renew-period=720h
+```
+
+On the next reconcile the controller **minted a fresh sealing key with a 10-year
+cert** and — critically — **retained the old key for decryption** of everything
+already sealed. No re-seal fire-drill: old blobs keep unsealing under the retained
+key, new blobs seal under the new key.
+
+Then I committed the controller's **new public sealing cert** so offline sealing
+keeps working without reaching the cluster:
+
+```bash
+kubeseal --controller-namespace sealed-secrets --fetch-cert \
+  > components/operators/sealed-secrets/sealed-secrets-pub.pem
+```
+
+Current committed cert validity: **Jun 2036** (fetched 2026-06-27, post-fix).
+
+### How sealed-secrets is used on this cluster
+
+The controller (bitnami sealed-secrets, vendored chart `2.18.6` / controller
+appVersion `0.37.0`, committed `charts/*.tgz` + `Chart.lock`) decrypts
+`SealedSecret` CRs into plain `Secret`s in-cluster; the cluster-private key never
+leaves the controller. It's **bootstrap-critical** — it decrypts the Cloudflare API
+token cert-manager needs — which is why the chart is vendored (a fresh bootstrap
+never depends on the remote Bitnami repo, which itself moved `bitnami-labs.github.io`
+→ `bitnami.github.io` in 2026).
+
+Two distinct patterns for landing credentials, chosen by where the secret comes
+from:
+
+- **Human-held secrets → committed `SealedSecret` + `kubeseal`.** For any credential
+  a person holds (API tokens, OAuth client secrets, VPN creds), the value is sealed
+  and committed. Standard flow:
+  ```bash
+  kubeseal --controller-namespace sealed-secrets --format yaml \
+    < secret.yaml > components/<chart>/templates/sealed-<name>.yaml
+  ```
+  Current in-repo SealedSecrets:
+  - `cluster-config/cert-manager-config/…/sealed-cloudflare-api-token.yaml` (DNS-01 token, bootstrap-critical)
+  - `cluster-config/oauth-idp/…/sealed-github-oauth-client-secret.yaml`
+  - `cluster-config/grafana-config/…/sealed-grafana-credentials.yaml`
+  - `cluster-config/mikrotik-exporter/…/sealed-mktxp-config.yaml`
+  - `cluster-config/synology-cert-sync/…/sealed-dsm-credentials.yaml`
+  - `apps/keepers/…/sealed-vpn-creds.yaml`, `apps/media/…/sealed-vpn-creds.yaml`
+  - `apps/cnpg-clusters/…/sealed-media-postgres-r2-creds.yaml`, `apps/immich/…/sealed-immich-postgres-r2-creds.yaml`
+
+  Rotation of any of these = re-`kubeseal` the new value + commit; ArgoCD applies
+  and the controller updates the Secret. Gotcha from the OAuth rollout: **pipe the
+  pasted value through `cat | wc -c` before sealing** — a truncated / multi-line
+  clipboard paste seals cleanly but ties the blob to the wrong bytes, and you lose
+  ten minutes to "but I just sealed it."
+
+- **Cluster-generated secrets (RGW/S3 creds) → OBC + pre-sync translator Job, *not*
+  a SealedSecret.** Loki's `logging-stack` chart uses an `ObjectBucketClaim` + a
+  `loki-secret-translator` Job that reads the OBC outputs and writes the
+  LokiStack-shape Secret — idempotent, reproducible from `git clone && helm install`,
+  no manual one-time seal per rebuild. This is the precedent to reuse for OADP / any
+  future S3 consumer; don't ship `CephObjectStoreUser` + a hand-sealed SealedSecret
+  for RGW creds.
+
+### Key-rotation runbook
+
+- **Auto-rotation is the mechanism.** `--key-renew-period=720h` → the controller
+  mints a new sealing key + 10-year cert every 30 days and **retains old keys for
+  decryption**. No manual quarterly drill, no re-seal fire-drill on rotation. This
+  is the whole point of the fix: a key can never silently reach end-of-life again.
+- **Refresh the committed pub cert after a rotation (forward-secrecy hygiene, not a
+  hard requirement).** New seals should target the newest key; old blobs still
+  decrypt under retained keys either way:
+  ```bash
+  kubeseal --controller-namespace sealed-secrets --fetch-cert \
+    > components/operators/sealed-secrets/sealed-secrets-pub.pem
+  git commit -m "sealed-secrets: refresh public sealing cert post-rotation"
+  ```
+- **Offline sealing uses the committed cert** (CI / no `oc login`):
+  ```bash
+  kubeseal --cert components/operators/sealed-secrets/sealed-secrets-pub.pem \
+    --format yaml < secret.yaml > sealed.yaml
+  ```
+  The `.pem` is a **public** key — seal-only, never unseal — so it is safe to commit
+  and share. It is the *only* sealed-secrets artifact that is safe to commit.
+- **Per-controller pubkey caveat — blobs don't transplant.** A SealedSecret is
+  encrypted to *this* controller's public key. A fresh cluster / a new controller has
+  different key material, so committed blobs will NOT unseal there — every in-repo
+  SealedSecret must be re-sealed against the new controller's cert on a rebuild.
+  (This is also why the pub cert is pinned in-repo: it's specifically this
+  controller's.)
+- **Standing forward-secrecy chore (optional, low priority):** periodically re-seal
+  the in-repo SealedSecrets against the newest key and let the controller prune the
+  oldest retained keys. Not required for correctness (retained keys keep old blobs
+  decrypting), purely limits how long a compromised old key stays useful. Deferred;
+  auto-rotation already covers the operationally-important half.
+
+### Standing guardrail
+
+**Never set `--key-renew-period` to `0`.** `0` disables rotation, which is exactly
+what expired the sealing cert on 2026-05-28 and blocked all new sealing cluster-wide
+for a month before anyone noticed (because decryption kept working). Any sane period
+is fine; `720h` is what's committed. Mirrored as a hard rule in `CLAUDE.md` and the
+component `README.md`.
+
+### Renovate note — PR #141 (sealed-secrets 2.18.6 → 2.19.0): HOLD
+
+Open Renovate PR bumps the chart minor `2.18.6` → `2.19.0`, which is a controller
+image bump `0.37.0` → `0.38.1` (not just a chart-source change), so it's a supervised
+bump, not an auto-merge. The diff touches **only** `Chart.yaml` + `Chart.lock` — it
+does **not** touch `values.yaml`, so the `--key-renew-period=720h` arg pass-through is
+structurally preserved. Before merging, verify the `0.38.1` controller still honours
+`--key-renew-period` with the same flag name/semantics and hasn't changed rotation
+defaults (release notes + a `kubeseal --fetch-cert` smoke-seal against the upgraded
+controller). Given the cert-expiry history, confirming rotation survives the bump is
+the whole review.
 
