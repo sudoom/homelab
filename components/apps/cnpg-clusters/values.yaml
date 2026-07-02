@@ -34,7 +34,14 @@ clusters:
     instances: 3
     imageName: ghcr.io/cloudnative-pg/postgresql:18
     storage:
-      size: 10Gi
+      # Grown 10Gi→20Gi on 2026-07-02: during the ~2-day node4 outage the R2 WAL
+      # archiving path was broken (OVN egress cascade), so Postgres retained
+      # un-archivable WAL until the 10Gi PVC filled → CNPG "Not enough disk space"
+      # safe-mode → postgres held down → couldn't archive to free space (deadlock).
+      # Growing the PVC gives headroom to start, flush the WAL backlog to R2, and
+      # self-clean. ceph-nvme-block allowVolumeExpansion=true (online RBD resize).
+      # Kept at 20Gi permanently — 10Gi had no margin for an archiving stall.
+      size: 20Gi
       storageClass: ceph-nvme-block
     # CNPG ships a Prometheus exporter sidecar; enablePodMonitor: true
     # creates a PodMonitor CR that the user-workload Prometheus picks up
