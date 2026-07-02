@@ -186,3 +186,70 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **KEDA** (CNCF graduated) — Event-driven autoscaling. Augments HPA with scalers for Prometheus metrics, queue depth, Kafka lag, S3 object counts, etc.; supports scale-to-zero for rare-use workloads. Single-operator install via OLM, ~3 pods, low footprint. No current consumer — install speculatively so it's ready when a use case appears (e.g. scale transmission-slave on torrent queue depth, scale a future batch-transcode worker on Sonarr queue, scale-to-zero a rarely-hit service). Cheap to keep installed without using.
 - [ ] **Litmus** (CNCF incubating) — Chaos engineering operator. Inject pod kills / network latency / disk pressure / node drain to validate the cluster's known weak spots (3-OSD no-drain headroom, RGW anti-affinity collision, CSI mount-lock paths). Run as a quarterly drill, not continuous chaos. Real value: surfaces the next "21h outage discovered post-hoc" failure mode under controlled conditions. Single-operator install; park it after a one-time drill if appetite is low.
 
+## Blog / documentation coverage & publishing sequence
+
+Tracks the pipeline `blog/*-draft.md` (upstream raw chronology, this repo) → `sudops.pl/posts/*.md` (staged raw) → `sudops.pl/src/content/blog/*.mdx` (published). The **sequence** is the intended publish order — **chronological / component build-order**, mirroring the sudops.pl "why → design → day1 → day2 → …" narrative. **Placeholder rows** are components with no standalone draft yet, slotted at their build position so this is the *complete intended series*, not just what exists. Keep this current when a draft is written or a post is published (per the "documentation hygiene" rule in CLAUDE.md).
+
+**Coverage:** 46 deployable components · 20 upstream drafts · **8 gap placeholders** (components with no draft). **Publish status:** 14 published ✅ · 1 staged 📝 · 30 not started ⬜ (45 sequence entries incl. 4 runbooks). sudops.pl has reached the **Day-2 platform-bootstrap frontier** (latest live: `homelab-day2/cert-manager`, Seq 14). **Next to publish: Seq 19 `homelab-day2/storage-network`** — already written, held `draft:true`; flipping the flag closes the Day-2 arc. Seq 20+ is upstream-only.
+
+Legend: ✅ published · 📝 staged raw draft (not live) · ⬜ not started · `— placeholder —` = no draft yet (gap).
+
+| Seq | Phase | Post (topic) | Covers | Homelab draft | Pub | Build date |
+|----:|-------|--------------|--------|---------------|:---:|------------|
+| 1 | Planning | Why build a homelab | Motivation / framing | — (vault only) | ✅ | 2026-03-01 |
+| 2 | Planning | Cluster design (index) | OKD design overview | — | ✅ | 2026-03-02 |
+| 3 | Planning | Compute design | Nodes, sizing, failure domains | — | ✅ | 2026-03-02 |
+| 4 | Planning | Network architecture | VLANs, storage isolation, 10G | — | ✅ | 2026-03-06 |
+| 5 | Planning | Storage architecture | Tiered Ceph design (NVMe repl-3 + HDD EC) | `blog-rook-ceph` + `blog-hdd-tier-rollout` (design) | ✅ | 2026-03-14 |
+| 6 | Planning | Pre-validation BOM | Validation hardware BOM | — | ✅ | 2026-03-28 |
+| 7 | Planning | MikroTik Phase 0 config | RouterOS VLAN config | — | ✅ | 2026-04-04 |
+| 8 | Planning | Hardware validation | Live boot, storage, NIC, throughput | — | ✅ | 2026-04-16 |
+| 9 | Planning | OKD SNO validation | Single-node install | — | ✅ | 2026-04-23 |
+| 10 | Planning | Post-SNO BOM | Final 3-node spend | — | ✅ | 2026-04-30 |
+| 11 | Day 1 | 3-node cluster: Day 1 | Install saga (VIP/NTP/DNS/x509) | — | ✅ | 2026-05-07 |
+| 12 | Day 2 | Platform bootstrap (index) | Day-2 umbrella | — | ✅ | 2026-06-24 |
+| 13 | Day 2 | Bootstrap: GitOps first | OKDerators catalog + GitOps operator + app-of-apps | — | ✅ | 2026-06-24 |
+| 14 | Day 2 | cert-manager TLS via GitOps | `cert-manager-config`, ClusterIssuer, DNS-01 | — (CLAUDE.md example only) | ✅ | 2026-07-02 |
+| 15 | Day 2 | Cluster topology & node labels | `cluster-topology` (wave 0), node-labels | — placeholder — | ⬜ | ~2026-05 |
+| 16 | Day 2 | Operator installs via OLM | cert-manager op-install, nmstate op (catalog choice) | — placeholder — | ⬜ | ~2026-05 |
+| 17 | Day 2 | Node & kubelet config | kubelet-config, csi-driver-config, nm-search-strip | — placeholder — | ⬜ | ~2026-05 |
+| 18 | Day 2 | TLS consumers: ingress & API certs | ingress-controller + api-server serving certs | — placeholder — | ⬜ | ~2026-05 |
+| 19 | Day 2 | Storage network: 10GbE VLAN 10 (NMState) | nmstate NNCP backnet path | `blog-multus-ceph-migration` (NMState subset) | 📝 | 2026-06-24 |
+| 20 | Storage | Rook-Ceph goes live + runtime ops | rook-ceph op + cluster, OSDs/pools/CSI, `pg_num`, trash/fstrim | `blog-rook-ceph` | ⬜ | 2026-04-12→06-24 |
+| 21 | Storage | Synology NFS StorageClass | nfs-csi (`csi-driver-nfs`) | — placeholder — | ⬜ | ~2026-05 |
+| 22 | Storage | CephObjectStore / RGW S3 endpoint | ceph-object-store (in-cluster S3) | `blog-ceph-object-store` | ⬜ | 2026-05-10→05-13 |
+| 23 | Storage | HDD bulk tier + EC CephFS RWX | HDD OSDs, EC 2+1 CephFS, burn-in/wipe gates | `blog-hdd-tier-rollout` | ⬜ | 2026-05-26→06-26 |
+| 24 | Networking | Technitium DNS migration | `ansible/technitium`, pi-hole replacement | `blog-technitium-dns-migration` | ⬜ | 2026-04-30→05-13 |
+| 25 | Networking | Multus backnet migration (failed → host-net fix) | NADs + `ceph-shim`; full host↔multus saga | `blog-multus-ceph-migration` (full) | ⬜ | 2026-05-11→05-15 |
+| 26 | Networking | homelab.sudops.pl zone + auto wildcard TLS | cert-manager-config + synology-cert-sync + technitium zone | `blog-homelab-sudops-zone` | ⬜ | 2026-05-15→05-24 |
+| 27 | Observability | Monitoring foundation (Prometheus / UWM) | monitoring-config | — placeholder — | ⬜ | ~2026-05-01 |
+| 28 | Observability | Grafana instance + dashboards | grafana operator + grafana-config | — placeholder — | ⬜ | ~2026-05-01 |
+| 29 | Observability | smartctl_exporter SMART/wear metrics | smartctl-exporter DaemonSet | `blog-smartctl-exporter` | ⬜ | 2026-05-01 |
+| 30 | Observability | Gatus uptime dashboard | gatus | `blog-gatus` | ⬜ | 2026-05-01 |
+| 31 | Observability | Centralized logging: Loki + Vector | logging-stack + loki-operator + cluster-logging (+ loki-pdb-override) | `blog-loki-logging` | ⬜ | 2026-05-01→05-08 |
+| 32 | Observability | MikroTik metrics (mktxp) | mikrotik-exporter | `blog-mikrotik-exporter` | ⬜ | ~2026-05 |
+| 33 | Data operators | CloudNativePG + R2 barman backups | cnpg + barman-plugin + cnpg-clusters (incl. WAL-fill deadlock) | `blog-cnpg` | ⬜ | 2026-05-01→07-02 |
+| 34 | Data operators | OADP / Velero off-cluster backup | oadp | `blog-oadp` | ⬜ | 2026-05-18→06-08 |
+| 35 | Data operators | Zot pull-through registry cache | zot-pullthrough | `blog-zot-pullthrough` | ⬜ | 2026-05-20→05-28 |
+| 36 | Data operators | Descheduler + keepers | descheduler, keepers | — placeholder — | ⬜ | ~2026-05/06 |
+| 37 | Apps | Media stack (app side) | media app stack (storage side in Seq 23) | — placeholder — | ⬜ | ~2026-06 |
+| 38 | Apps | Immich photo/video library | immich | `blog-immich` | ⬜ | 2026-06-20→06-27 |
+| 39 | Security | GitHub OAuth as OKD IdP | github-oauth-idp | `blog-github-oauth-idp` | ⬜ | 2026-05-10 |
+| 40 | Security | Break-glass RBAC (SA tokens) | break-glass-sa + automation-sa | — placeholder — | ⬜ | ~2026-05 |
+| 41 | Security | Security hardening log | etcd-encryption + IPsec + sealed-secrets + SCC/NetworkPolicy + key rotation + MCO/network cascade | `blog-security-hardening` | ⬜ | 2026-05-18→06-27 |
+
+**Runbooks & incidents** (non-sequential — not part of the build narrative):
+
+| # | Type | Post (topic) | Homelab draft | Pub | Build date |
+|---|------|--------------|---------------|:---:|------------|
+| R1 | Incident | Pi-hole rebind broke ArgoCD UI (DNS regression) | `blog-pihole-cluster-local` | ⬜ | 2026-04-30→05-01 |
+| R2 | Runbook | OKD 4.20 → 4.21 → 4.22 upgrade campaign | `blog-okd-4.22-upgrade` | ⬜ | 2026-05-11→06-24 |
+| R3 | Runbook | Homelab power consumption | `blog-power-consumption` | ⬜ | 2026-05-21→05-26 |
+| R4 | Runbook | Graceful full-cluster shutdown / return | `blog-cluster-shutdown` | ⬜ | 2026-05-29→06-08 |
+
+**Using this tracker:**
+- **Build date vs narrative slot** — the Day-2 posts (Seq 12–19) were *authored* 2026-06-24+ but sit before Storage/Networking in the narrative even though that work happened earlier (dates in the table are the real build chronology; order follows the published narrative). Same draft can appear at two slots (e.g. `blog-rook-ceph` design at Seq 5, live ops at Seq 20; `blog-multus` NMState subset at Seq 19, full saga at Seq 25) — not duplicates.
+- **sealed-secrets** is intentionally *not* a placeholder — it's folded into Seq 41 (security-hardening draft, consolidated 2026-07-02).
+- **Seq 15–18** (Day-2 config placeholders) are LOW priority and may already be folded into the published Seq 13/14 posts — decide per-item whether they warrant a standalone post or a paragraph before treating them as real gaps.
+- **Approximate (`~`) dates** have no dated draft — verify against `git log components/<area>/` before pinning a real pubDate.
+
