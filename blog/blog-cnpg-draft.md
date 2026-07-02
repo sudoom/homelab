@@ -693,3 +693,88 @@ not the Cluster condition or the `*RecoverabilityPoint` fields.
   operator normalizes/owns spec fields after the plugin block was added (classic
   ArgoCD↔CNPG drift; last sync `Succeeded`, Clusters healthy, archiving works). Fix is an
   `ignoreDifferences` for the operator-managed Cluster fields — deferred to next session.
+
+## 2026-07-02 — node4 outage → OVN egress cascade → CNPG WAL-fill deadlock (media-postgres)
+
+The single worst CNPG event so far, and it started with hardware, not Postgres. **node4 went
+unreachable 2026-06-30T07:40Z (last heartbeat 06:10Z) — a power problem — and stayed down ~2
+days.** It surfaced on 2026-07-02 during a *deep* status sweep; a shallow `oc get nodes` earlier
+in the same session had returned a **stale `Ready`** (a real lesson: the quick readonly sweep can
+lie; the multi-probe deep sweep is what caught node4 `Ready=Unknown`, taint
+`node.kubernetes.io/unreachable`, Ceph capacity dropped 13.5→9.03 TB = 4 OSDs, and both CNPG
+clusters archiving-failed).
+
+**The cascade (one root cause, three downstream failures):**
+1. **node4 unreachable** → Ceph lost a full failure zone: `mon-a` + `osd-0` (NVMe) + `osd-3` (HDD)
+   `Pending`, quorum 2/3, `min_size=2` so I/O still served but **zero redundancy**.
+2. The node-down event **re-tripped the OVN pod-egress break** on the surviving nodes (the same
+   silent `ovnkube-node` regression documented in the network runbook — pods can't reach remote/
+   external IPs even though the pod reads `8/8 Running`). So the barman-cloud sidecars on node5/
+   node6 could reach **neither R2 (external) nor the in-cluster API VIP `172.30.0.1`**. Evidence in
+   the sidecar logs: `barman-cloud-wal-archive … Could not connect to the endpoint URL: …
+   r2.cloudflarestorage.com` (exit 4), and `dial tcp 172.30.0.1:443: i/o timeout`.
+   **→ R2 WAL archiving FAILED on BOTH clusters from ~06-30.** `ContinuousArchiving=False`.
+3. Postgres retains WAL until it's archived. Over ~2 days of un-archivable WAL, **media-postgres's
+   10Gi PVC filled** (media has constant *arr/transmission write load; immich, lighter, survived).
+   CNPG's `ensure_sufficient_disk_space` handler put Postgres into **`Not enough disk space`
+   safe-mode** — instances crashlooping (`Detected low-disk space condition`), 0/3 ready.
+
+**Why it was a deadlock, not a self-heal:** CNPG's normal *online* PVC auto-expansion is
+short-circuited by the very failure it would fix. Its reconcile tries to read each instance's
+`/pg/status` (`:8000`) first; Postgres is down → `connection refused` → the reconcile bails at the
+disk-space check every loop and logs `PostgreSQL cannot proceed until the PVC group is enlarged`
+**without ever patching the PVCs**. Growing `Cluster.spec.storage.size` alone did NOT propagate:
+after ArgoCD applied 20Gi to the CR, the PVCs stayed `requested=10Gi`. CNPG waits for an external
+enlargement in this state.
+
+**Recovery, in order (2026-07-02):**
+1. **node4 powered back** (operator, hardware) → rejoined 11:42Z. Ceph **auto re-peered** with no
+   intervention: all 6 OSDs + 3 mons back, PG backfill (`~870k objects degraded`) drained to
+   `active+clean`, capacity back to 13.5 TB. *No storage daemon was touched during the degraded
+   window* — the no-drain rule held.
+2. **OVN egress fix** — the node reboot did NOT clear the egress break (confirmed: sidecar still
+   logged `Could not connect` at 11:45Z, after node4 was `Ready` at 11:42Z). Restarted all three
+   `ovnkube-node` pods one at a time (break-glass, operator-authorized), gated on Ready:
+   ```
+   for n in node6 node5 node4; do
+     oc -n openshift-ovn-kubernetes delete pod -l app=ovnkube-node --field-selector spec.nodeName=$n.okd.sudops.pl
+     oc -n openshift-ovn-kubernetes wait --for=condition=Ready pod -l app=ovnkube-node --field-selector spec.nodeName=$n.okd.sudops.pl --timeout=200s
+   done
+   ```
+   immich-postgres started logging `Archived WAL file` within seconds (11:53Z) — egress restored,
+   backlog flushing. Safe for Ceph: mon/OSD msgr2 is on host-network/backnet, not the OVN overlay.
+3. **media-postgres deadlock break.** Grew the PVC via GitOps first (`components/apps/cnpg-clusters/
+   values.yaml` `media-postgres.storage.size` 10Gi→20Gi, commit `91bbe10`; `ceph-nvme-block`
+   `allowVolumeExpansion=true`; `nvme-replicated` had 162 GiB MAX AVAIL headroom; RBD is thin, so
+   ~0 immediate consumption). ArgoCD applied 20Gi to the CR but CNPG wouldn't propagate (the
+   deadlock above), so **manually patched the 3 PVCs** (break-glass, operator-approved — matches the
+   already-committed CR, so no drift):
+   ```
+   for p in media-postgres-1 media-postgres-2 media-postgres-3; do
+     oc -n media patch pvc $p --type=merge -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}'
+   done
+   ```
+   RBD resize was two-phase and clean: `ExternalExpanding`→`Resizing` (ControllerExpandVolume grows
+   the image) → `FileSystemResizeSuccessful` live on the mounted pods (NodeExpandVolume; -1 on node6,
+   -3 on node5). media-postgres-2 (no pod — was on node4) stayed `FileSystemResizePending` until
+   CNPG recreated it. Then **deleted the two crashlooping pods** (`oc -n media delete pod
+   media-postgres-1 media-postgres-3`) to clear the kubelet backoff (r35/r31, up to 5-min) so they
+   remounted the 20Gi filesystem fresh. Fresh pods (`restarts=0`) came up, Postgres started with
+   space, flushed the WAL backlog to R2 (~63 segments/3min), and the cluster reached **`Cluster in
+   healthy state`, 3/3 ready, `ContinuousArchiving=True` at 14:02Z.**
+
+**Final state:** both clusters healthy + archiving; media base backup `…20260702033000` running;
+immich's 07-02 base had *failed* during the outage (retries on tonight's 03:00 schedule; WAL covers
+PITR from the 06-30 base meanwhile — an on-demand immich base is the clean-close option).
+
+**Gaps this exposed (→ README follow-ups):**
+- A **node outage silently kills offsite WAL archiving** (via the OVN egress cascade) with no alert
+  — it ran broken for ~2 days unnoticed. Need an alert on `ContinuousArchiving` failing.
+- A **long-enough archiving outage fills the CNPG WAL PVC** into a hard deadlock. Need WAL-disk
+  `%used` alerting, and the 10Gi floor was too tight — **grown to 20Gi permanently.**
+- **CNPG will not auto-expand a PVC once in `Not enough disk space` safe-mode** (reconcile bails on
+  the unreachable instance before the resize step). Recovery = patch the PVC directly + bounce the
+  pods. Worth remembering: bumping `storage.size` on a *healthy* cluster resizes online fine, but
+  from the disk-full state it's manual.
+- The **stale-readonly-sweep false-green** — start-of-session shallow `oc get nodes` reported all
+  Ready while node4 had been down 2 days. The deep multi-probe sweep is the reliable check.
