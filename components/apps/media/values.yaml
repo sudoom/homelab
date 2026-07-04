@@ -25,7 +25,7 @@ storage:
 apps:
   bazarr:
     enabled: true
-    image: lscr.io/linuxserver/bazarr:1.5.6
+    image: lscr.io/linuxserver/bazarr:1.6.0
     port: 6767
     configSize: 1Gi
     readinessPath: /login
