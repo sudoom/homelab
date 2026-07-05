@@ -782,3 +782,45 @@ archive-all`; live health back to the benign `BLUESTORE_SLOW_OP_ALERT` only.
   from the disk-full state it's manual.
 - The **stale-readonly-sweep false-green** — start-of-session shallow `oc get nodes` reported all
   Ready while node4 had been down 2 days. The deep multi-probe sweep is the reliable check.
+
+## 2026-07-05 — immich R2 base backups failing: R2 `InvalidPart` on gzip multipart (not egress)
+
+immich-postgres R2 **base** backups failed every night 07-01→07-05 (`exit status 1`); WAL archiving
+stayed healthy. Two parallel investigations gave **conflicting** root causes — one said "OVN egress
+break" (it found real `Could not connect to the endpoint URL` lines from the never-restarted
+single-instance immich-postgres-1), the other said "R2 `InvalidPart` on gzip multipart." The 03:00
+failure logs had rotated out, so neither was conclusive from logs alone.
+
+**Resolved empirically, not by picking a synthesis:** triggered an on-demand `method: plugin` base
+backup *with gzip still on*. It failed in ~30 s with **`InvalidPart` ×3 in the sidecar, zero connect
+errors** — egress was fine, gzip multipart is the blocker. Decisive.
+
+**Root cause:** `barman-cloud-backup` streams the **gzip-compressed** base tarball to R2 as an S3
+multipart upload, flushing a part each time its buffer crosses `--min-chunk-size` (default 5 MB).
+gzip emits variable-length blocks → the per-part overshoot differs → **non-trailing parts have
+unequal lengths.** Plain S3 tolerates that; **R2's `CompleteMultipartUpload` rejects it**
+(`InvalidPart: all non-trailing parts must have the same length`, EnterpriseDB/barman#954). This is
+why base backups **succeeded 06-28→30** (immich DB small → single-part PUT, constraint vacuous) then
+**failed 07-01+** — the bulk library import grew the DB past the ~5 MB single-part threshold, so the
+base went multipart. WAL is always single-part → never affected (matches `ContinuousArchiving=True`).
+The 07-02 node4 OVN egress break was a **separate, overlapping** issue on the never-restarted
+single-instance immich-postgres-1 (self-recovered via a liveness restart ~18:00 07-05) — it muddied
+the logs but wasn't the base-backup blocker.
+
+**Fix (Option A — durable):** drop `data.compression` from the R2 ObjectStore so base parts are
+uniform (uncompressed); keep `wal.compression: gzip` (single-part). Applied to **both**
+`components/apps/immich/templates/cnpg-cluster.yaml` and `components/apps/cnpg-clusters/templates/clusters.yaml`
+(media has identical latent exposure on the same `psql-backup` bucket — its base still fits
+single-part today but would hit the same wall as it grows). Rejected Option B (`--min-chunk-size=5GB`
+to force a single part) — a silent time-bomb the moment the compressed base exceeds R2's 5 GiB
+single-part ceiling. No compressor helps (CRD only accepts gzip/bzip2/snappy, all stream
+variable-length parts). Commit `a22cdfd`.
+
+**Verified end-to-end:** after ArgoCD dropped `data.compression` from the live ObjectStore, an
+on-demand base backup reached **`phase=completed` in ~30 s, no InvalidPart** — the 5-day offsite gap
+is closed. (Trade-off accepted: larger uncompressed base objects on R2 — cheap + egress-free.)
+
+**Secondary lesson (single-instance CNPG + node outage):** immich-postgres is `instances: 1`, so
+when the node4 outage broke its pod egress it had no standby to fail over to and couldn't self-heal
+like media (which restarted 07-02) — it silently failed backups for days. Node-outage recovery should
+restart long-running CNPG *instance* pods that predate the outage, not just the app pods.
