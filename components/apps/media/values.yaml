@@ -36,6 +36,13 @@ apps:
       limits:
         memory: 500Mi
     mountData: true
+    # PUID=0/PGID=0 → run as root like sonarr/radarr (see sonarr comment). Bazarr
+    # WRITES sidecar .srt files INTO the root:root 0755 CephFS media tree that
+    # radarr/sonarr own; without root it ran as the LSIO non-root default and hit
+    # PermissionError(13) on /data/media/{movies,cartoons} (2026-07-05). Same
+    # future cleanup applies: shared securityContext.fsGroup + non-root PUID.
+    puid: "0"
+    pgid: "0"
 
   sonarr:
     enabled: true
