@@ -343,3 +343,39 @@ Two independent workstreams applied together (0.13 is the matching chart for app
 - **Migration window:** ~30–60 min apply + auto-migration + verify, + 20–30 min smoke test. **Total supervised window ~2h with 2h+ headroom**, prep done beforehand, quiet hours. One-way migration = no rushing step 5.
 
 Files touched: `Chart.yaml`, `Chart.lock`, `values.yaml` (tags + 0.13 reshape). No template/sync-wave changes; `templates/cnpg-cluster.yaml` untouched (same operand, no vchord ALTER this round).
+
+### 2026-07-05 — prep DONE + validated; cutover DEFERRED (backup gate open)
+
+Ran the prep locally (chart pull + values reshape + validate) and it de-risks the cutover
+significantly — **the reshape fear was overblown:**
+
+- **0.13.0's "breaking" #382 is just the *addition* of `values.schema.json`.** The chart's Go
+  templates are byte-identical 0.12.0 ↔ 0.13.1, and **our `values.yaml` was already
+  schema-conformant** — we set `immich.persistence.library.existingClaim` (accepted) and never used
+  the now-rejected `globalMounts`. So **NO structural reshape is needed.** The entire cutover diff is:
+  `Chart.yaml` dep `0.12.0 → 0.13.1` + the two image tags (`immich-server`, `immich-machine-learning`)
+  `v2.7.5 → v3.0.1`. That's it.
+- **Validated clean:** `helm dependency update` pulled `immich-charts:0.13.1` fine; `helm lint` 0 fail;
+  `helm template` clean (rendered tags = v3.0.1, all customizations preserved); `kubeconform -strict`
+  18/18 valid (Route skipped); v3 env audit clean (no `DB_VECTOR_EXTENSION`/pgvecto.rs, no removed ML
+  preload envs); vchord 1.1.1 in-range → no operand bump / no `ALTER EXTENSION`.
+- **immich chart `Chart.lock` + `charts/*.tgz` are gitignored** (unlike Rook) → a cutover commit shows
+  only `Chart.yaml` + `values.yaml`; ArgoCD re-pulls 0.13.1 fresh keyed off `Chart.yaml`. Local render
+  used the matching 0.13.1 tgz, so **local render == what ArgoCD deploys** (no stale-subchart trap).
+
+**Why deferred (not done 2026-07-05):** the backup gate isn't closed — **a restore rehearsal has
+never run for immich-postgres**, and a `completed` Backup CR proves the *write* path, not
+restorability. v3's schema migration is forward-only, so the only rollback is restore-from-backup;
+cutting over on unverified backups (hours after the same-day OSD_FULL storage incident, on the same
+Ceph the DB+backups live on) stacks avoidable risk. Prep reverted → tree clean.
+
+**Next-session cutover checklist (gate is genuinely small now):**
+1. **Restore rehearsal** — restore immich-postgres into a throwaway recovery Cluster from the
+   volumeSnapshot (and ideally the R2 base+WAL); confirm Immich schema/row counts. Closes Gate #1.
+2. Confirm the **07-06 03:00 R2 daily** completed green (the InvalidPart fix's first unattended run).
+3. Take a **named pre-V3 CNPG volumeSnapshot** (`immich-postgres-preV3-<ts>`) immediately before.
+4. Scale `immich-server` + `machine-learning` to 0.
+5. Bump `Chart.yaml` dep → 0.13.1 + both tags → v3.0.1; `oc diff` (expect only the tag deltas);
+   commit + push (**point of no easy return**).
+6. Watch the forward-only DB migration in the server logs → verify (vchord loads, Route serves,
+   ContinuousArchiving True) → smoke test (login/library/ML/mobile).
