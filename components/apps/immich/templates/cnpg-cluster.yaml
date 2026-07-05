@@ -112,8 +112,15 @@ spec:
         key: ACCESS_SECRET_KEY
     wal:
       compression: gzip
-    data:
-      compression: gzip
+    # NO data.compression for R2: barman's gzip base backup uploads UNEQUAL-length
+    # multipart parts once the DB exceeds the ~5MB single-part threshold, which R2's
+    # CompleteMultipartUpload rejects — `InvalidPart: all non-trailing parts must have
+    # the same length` (EnterpriseDB/barman#954). Confirmed empirically 2026-07-05: a
+    # gzip base backup failed with InvalidPart in ~30s (egress was fine). Base backups
+    # SUCCEEDED 06-28..30 while the DB was small (single-part), then failed 07-01+ once
+    # the library import grew it past the multipart threshold. Uncompressed base parts
+    # are uniform → R2 accepts. WAL stays gzip (single-part PUT, unaffected). Trade-off:
+    # larger base objects on R2 (cheap, egress-free). Do NOT re-add data.compression.
     # No `encryption:` — R2 encrypts at rest already and rejects barman's SSE header.
   retentionPolicy: {{ $os.retentionPolicy | quote }}
   instanceSidecarConfiguration:

@@ -91,10 +91,14 @@ spec:
         key: ACCESS_SECRET_KEY
     wal:
       compression: gzip
-    data:
-      compression: gzip
-    # No `encryption:` — R2 encrypts at rest already and rejects barman's SSE
-    # header. Don't hand-tune chunk sizes either (R2 InvalidPart).
+    # NO data.compression for R2: gzip base backups upload UNEQUAL-length multipart
+    # parts that R2 rejects (`InvalidPart`) once the DB crosses the ~5MB single-part
+    # threshold — hit on immich-postgres 2026-07-05 (confirmed empirically; see the
+    # immich cnpg-cluster.yaml comment + EnterpriseDB/barman#954). media-postgres base
+    # still fits single-part today, but it's the identical latent exposure on the same
+    # R2 bucket → dropped proactively. WAL stays gzip (single-part, fine). Do NOT
+    # re-add data.compression for R2.
+    # No `encryption:` — R2 encrypts at rest already and rejects barman's SSE header.
   retentionPolicy: {{ $os.retentionPolicy | quote }}
   instanceSidecarConfiguration:
     env:
