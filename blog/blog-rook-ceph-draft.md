@@ -2797,3 +2797,50 @@ on the two WAL images: **106/140 GiB → 5.5/5.4 GiB**. `ceph df` `nvme-replicat
 **%RAW 82% → 16.57%**, MAX AVAIL 81 GiB → 374 GiB, RAW USED 1.1 TiB → 237 GiB.
 ubi9/ubi + `nsenter -t1 -m -- fstrim -av` confirmed working on all 3 nodes; weekly
 cadence now prevents recurrence. RBD-no-trim drift: solved.
+
+### 2026-07-05 — it recurred: nvme-replicated OSD_FULL (weekly wasn't enough) + the fstrim-deadlock
+
+The "weekly cadence prevents recurrence" claim above was **wrong under heavy write load.** The
+same two stale-WAL images re-accumulated during a bulk Immich library-import week and the pool
+went to **`HEALTH_ERR` — 3/3 NVMe OSDs FULL** (osd.0/1/2 ~95%, `nvme-replicated` 100% USED, MAX
+AVAIL 0 B, 13 pools full). Cascade: both `prometheus-k8s` down (TSDB on ceph-nvme-block),
+transmission crashlooping (347+ restarts), media+keepers Progressing. **Discovered by the new
+`workflows/health-review.js` sweep** — nothing alerted, because monitoring lives on the pool that
+filled (it died as the pool filled) and there's no nvme-replicated nearfull alert.
+
+Diagnosis (`ceph osd df tree` + `rbd du -p nvme-replicated`): aggregate cluster only 47%, but the
+NVMe tier saturated — `size=3` on exactly 3 NVMe OSDs = no rebalance headroom. `rbd trash ls
+nvme-replicated` **empty** → no trash to purge. Same offenders as 06-19: `…deab95d6…` 141 GiB and
+`…88dc5225…` 133 GiB allocated (Loki WAL, stale again).
+
+**The deadlock (new lesson):** fstrim was already running but **hung ~2.5 h** — `fstrim`/discard
+issues I/O to the OSDs, and a FULL pool blocks I/O, so **fstrim can't dig out of a full pool.**
+The janitor stalls exactly when you need it. Recovery had to manually create headroom first:
+
+```
+# BRIDGE (break-glass; guard-loosening — classifier correctly required explicit confirmation):
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd set-full-ratio 0.97   # 0.95 -> 0.97
+# un-wedges writes/discard: HEALTH_ERR -> HEALTH_WARN (OSD_FULL/POOL_FULL clear, backfillfull remains)
+oc -n node-fstrim delete pod -l app=node-fstrim                                # fresh fstrim -av
+# …then WAIT — reclaim is LATENT (see below)…
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd set-full-ratio 0.95   # restore once %use safe
+```
+
+**Reclaim is slow + latent — don't call it dead early.** For ~15 min nvme %use held ~95% (even
+rose to 95.7% as unblocked writers caught up) — I nearly concluded "the space is real, fstrim
+won't help." Then at ~T+17min it dropped in one step **95% → 78.8% → ~50%** as the discard
+completed and Ceph returned the objects async (~228 GiB reclaimed across the 3 OSDs). `full_ratio`
+restored to 0.95 at ~50%; `HEALTH_WARN` benign-only; prometheus 6/6 + transmission 1/1 recovered.
+The `fstrim -av` log stays silent throughout (stdout block-buffered until exit) — **%use is the
+only real progress signal, and it lags the discard by 15+ min.** A host-ns `mount | grep -c
+/dev/rbd` = 33 confirmed fstrim CAN see the RBD mounts (ruled out the "can't reach mounts" theory).
+
+**Fixes:**
+- **Weekly → daily** `intervalSeconds 604800 → 86400` (`a0cd9fa`) — trim more often so we reclaim
+  BEFORE full (a full pool defeats fstrim).
+- **STILL PENDING (the two that actually matter — README):** an **nvme-replicated nearfull alert**
+  (this filled undetected for days; catch it at 85% while fstrim still works), and the **`discard`
+  mountOption on `ceph-nvme-block`** (continuous reclaim, no dependence on the cron + no deadlock).
+- Standing runbook for a full nvme-replicated: `rbd trash purge` first (was empty here) →
+  `set-full-ratio 0.97` bridge → fresh fstrim → **wait 15-20 min for the latent drop** → restore
+  `0.95`. Never roll/reweight an OSD (size=3-on-3, no headroom).
