@@ -8,9 +8,16 @@ namespace: node-fstrim
 # has an nsenter applet and is far smaller — swap if the full UBI is too heavy.
 image: registry.access.redhat.com/ubi9/ubi:latest
 
-# How often each node runs fstrim. Weekly matches the usual host fstrim.timer
-# cadence; the very first run happens at pod start (does the one-off reclaim).
-intervalSeconds: 604800
+# How often each node runs fstrim. DAILY (was weekly 604800) after the
+# 2026-07-05 incident: weekly reclaim was too coarse for a bulk-import week —
+# stale RBD blocks accrued on nvme-replicated faster than the cron reclaimed,
+# and once the pool hit OSD_FULL, fstrim itself DEADLOCKED (discard I/O blocks
+# on full OSDs → the safety net can't dig out of a full pool). Daily reclaim
+# keeps headroom so we trim BEFORE full. (Proper fix = `discard` mountOption on
+# ceph-nvme-block for continuous reclaim — SC-immutable, needs recreate; +
+# nvme-replicated nearfull alert — both tracked in README. See CLAUDE.md.)
+# The very first run happens at pod start (does the one-off reclaim).
+intervalSeconds: 86400
 
 resources:
   requests:
