@@ -389,3 +389,46 @@ replay into a throwaway vchord cluster, ~2.5 min, exact row/size parity (1987 as
 `blog/blog-cnpg-draft.md` 2026-07-06; manifest: `tests/immich-postgres-restore-drill.yaml`);
 (2) the **07-06 03:00 R2 daily completed unattended** (03:00:07Z). Proceeding with checklist
 steps 3–6 (pre-V3 snapshot → scale to 0 → bump+push → watch migration) — cutover chronicle below.
+
+### 2026-07-06 — v3 CUTOVER DONE (v2.7.5 → v3.0.1, chart 0.12.0 → 0.13.1)
+
+Executed the same morning the gate closed, per plan. Chronicle:
+
+1. **Pre-V3 snapshot:** on-demand `Backup` CR `immich-postgres-prev3-20260706`
+   (method volumeSnapshot) → `completed` in seconds. Old `helm template` render saved to
+   scratchpad. (Today's 03:00 R2 base `20260706T030001` + continuous WAL = the PITR layer,
+   restore-verified by the morning's drill.)
+2. **The bump** (commit `2c44971`): `Chart.yaml` dep `0.12.0→0.13.1` + both image tags
+   `v2.7.5→v3.0.1` + comment refresh. Validation: `helm dependency update` (0.13.1 pulled
+   clean), lint 0 fail, kubeconform 18/18, render-diff vs pre-V3 = chart labels + server/ML
+   images + **one unplanned-but-benign extra: 0.13.1 bumps the pinned Valkey `9.1-alpine`
+   digest** (same tag; disposable queue). `oc diff` live: the same 3 image deltas, **no stray
+   `thumbs` mount** (the 2026-06-27 SSA footgun didn't reappear), no library-mount churn.
+3. **Deviation from plan step "scale to 0":** skipped deliberately. All three Deployments
+   render `replicas: 1`, so ArgoCD selfHeal makes a manual scale-to-0 non-sticky — and the
+   race (selfHeal restoring replicas with the OLD cached render before the repo refresh)
+   could restart v2 mid-window. RollingUpdate overlap (old v2 serving while the v3 surge pod
+   migrates) was accepted instead: migrations take exclusive locks, 2-user instance, quiet
+   hours. Deterministic beats theoretically-cleaner.
+4. **Push → `argocd.argoproj.io/refresh=normal` annotation → sync Running** at `2c44971`
+   within ~30 s. v3 images pulled ~1.5 min.
+5. **Migration: 8 seconds.** `Running migrations` 10:22:04Z → `Immich Server is listening on
+   http://[::1]:2283 [v3.0.1]` 10:22:12Z → `Adding 3.0.1 to upgrade history` 10:23:07Z.
+   No errors, no interference from the outgoing v2 pod.
+6. **Verify:** rollout watcher reported v3 Ready + old pod gone; ML on v3; CNPG
+   `Cluster in healthy state`, `ContinuousArchiving=True` throughout; Route
+   `GET /api/server/version` → `{"major":3,"minor":0,"patch":1}`. **HPA scaled server to 2
+   during startup** (CPU spike tripped the 75% target) — post-migration second v3 pod is
+   safe; expected to settle back to 1 after the downscale stabilization window.
+
+**Remaining human smoke test (operator):** web login, library browse (thumbs off NFS), an ML
+job (search/face), one upload + storage-template placement, **then update the mobile apps**
+(v3 removed old editor features — client after server). Watch tonight's scheduled backups
+(03:00 R2 base, 04:30 snapshot) fire on v3.
+
+**Rollback posture (unused, for the record):** restore `immich-postgres-prev3-20260706` into
+immich-postgres + revert `2c44971`; secondary = R2 PITR to pre-10:22Z (drill-verified) or the
+NFS pg_dumpall. Do NOT start v2.7.5 against the migrated DB.
+
+Renovate #150 (v3 images) + #151 (chart 0.13.1) should auto-close/obsolete now that master
+carries both versions.
