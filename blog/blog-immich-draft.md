@@ -379,3 +379,13 @@ Ceph the DB+backups live on) stacks avoidable risk. Prep reverted → tree clean
    commit + push (**point of no easy return**).
 6. Watch the forward-only DB migration in the server logs → verify (vchord loads, Route serves,
    ContinuousArchiving True) → smoke test (login/library/ML/mobile).
+
+### 2026-07-06 — Gate #1 CLOSED: R2 restore rehearsal passed
+
+Checklist items 1–2 done this morning: (1) **restore rehearsal PASSED** — immich-postgres restored
+end-to-end from the R2 base (`20260706T030001`, first post-InvalidPart-fix uncompressed base) + WAL
+replay into a throwaway vchord cluster, ~2.5 min, exact row/size parity (1987 assets / 2 users /
+147 MB), vchord index queryable, live archive provably untouched (full write-up:
+`blog/blog-cnpg-draft.md` 2026-07-06; manifest: `tests/immich-postgres-restore-drill.yaml`);
+(2) the **07-06 03:00 R2 daily completed unattended** (03:00:07Z). Proceeding with checklist
+steps 3–6 (pre-V3 snapshot → scale to 0 → bump+push → watch migration) — cutover chronicle below.

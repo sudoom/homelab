@@ -824,3 +824,77 @@ is closed. (Trade-off accepted: larger uncompressed base objects on R2 — cheap
 when the node4 outage broke its pod egress it had no standby to fail over to and couldn't self-heal
 like media (which restarted 07-02) — it silently failed backups for days. Node-outage recovery should
 restart long-running CNPG *instance* pods that predate the outage, not just the app pods.
+
+## 2026-07-06 — R2 restore drill: immich-postgres restored end-to-end from Cloudflare R2 (Gate #1 closed)
+
+First-ever restore *exercise* of the barman-cloud plugin path on this cluster — until today every
+"backup is green" claim rested on the write side (`Backup` CR `completed` + bucket objects). The
+immich v3 migration is forward-only (restore-from-backup is the only rollback), so before cutting
+over I rehearsed the worst-case path: a full restore from the R2 base backup + WAL archive into a
+throwaway CNPG cluster, with the live cluster untouched and still archiving.
+
+**Manifest:** `tests/immich-postgres-restore-drill.yaml` (committed `baa443d`). Shape verified
+against `plugin-barman-cloud` v0.13.0 sources before applying — three findings worth keeping:
+
+- `bootstrap.recovery.source` → `externalClusters[].plugin` (**singular**) with
+  `parameters.barmanObjectName` + `parameters.serverName`. **`serverName` is mandatory for a
+  drill**: if omitted it defaults to the *recovering* cluster's own `metadata.name`
+  (`internal/cnpgi/operator/config/config.go`, `NewFromCluster`) — NOT the externalCluster name —
+  so `immich-postgres-drill` would have looked in the wrong bucket folder and found nothing.
+- The ObjectStore CR is resolved in the recovering Cluster's namespace only (no cross-ns field) →
+  drill lives in ns `immich`, reusing `immich-postgres-r2` + `immich-postgres-r2-creds` as-is
+  (the boto3≥1.36 checksum env rides along via `instanceSidecarConfiguration`).
+- **No `spec.plugins` on the drill = provably zero writes to R2.** The plugin only touches the
+  write path when a `plugins:` archiver exists; docs state the restored cluster doesn't archive.
+  Empirically confirmed in the drill logs: CNPG set `archive_command = false`, and the
+  timeline-2 `.history` file failed to archive *locally* — it never left the pod. Safety net:
+  even a misconfigured archiver at the same serverName would fail the non-empty-archive
+  pre-check rather than clobber the live archive.
+
+Also required in the drill spec: same `imageName` (`cloudnative-vectorchord:18-1.1.1`) **and**
+`postgresql.shared_preload_libraries: [vchord.so]` — recovery restores data files only; CNPG
+regenerates postgresql.conf from the *new* spec, so without the preload the drill would "pass"
+while vchord indexes were unusable at query time.
+
+**Run (break-glass, user-authorized; ~2.5 min apply→healthy):**
+
+```
+oc apply -f tests/immich-postgres-restore-drill.yaml
+# full-recovery job: barman-cloud-restore pulls base 20260706T030001 (today's 03:00,
+# post-InvalidPart-fix UNCOMPRESSED base), barman-cloud-wal-restore replays WAL,
+# recovery_target_action=promote → timeline 2
+# 10:09:27Z "database system is ready to accept connections"
+oc -n immich get cluster immich-postgres-drill
+#  Cluster in healthy state ready=1 tl=2
+```
+
+**Verification — exact parity + vchord functional:**
+
+```
+# psql peer-auth gotcha under OpenShift restricted SCC: the container runs as a random
+# UID (1000980000) and psql defaults the PG role to the OS user → "Peer authentication
+# failed". CNPG's pg_ident maps that UID to postgres — use `psql -U postgres`.
+oc -n immich exec immich-postgres-drill-1 -c postgres -- psql -U postgres -d immich -Atc \
+  "select (select count(*) from asset), (select count(*) from \"user\"),
+          pg_size_pretty(pg_database_size('immich')),
+          (select extversion from pg_extension where extname='vchord'),
+          current_setting('shared_preload_libraries')"
+# DRILL: 1987|2|147 MB|1.1.1|vchord.so
+# LIVE : 1987|2|147 MB|1.1.1|vchord.so     ← identical
+
+# vchord index actually queryable (not just "extension present"):
+#   set vchordrq.probes=1; set enable_seqscan=off;
+#   select "assetId" from smart_search order by embedding <=> (…) limit 1;
+# → returned a real asset UUID via the vchordrq index. (First attempt without the GUC
+#   errored "need 1 probes, but 0 probes provided" — which itself proves the vchord AM
+#   is engaged; Immich sets this GUC per-session at query time.)
+```
+
+**Teardown:** `oc -n immich delete cluster.postgresql.cnpg.io immich-postgres-drill` —
+PVC + CNPG-generated secrets cascade-deleted, zero residue; live cluster
+`Cluster in healthy state`, `ContinuousArchiving=True` throughout the whole drill.
+
+**Outcome:** the offsite R2 layer is now *restore-verified*, not just write-verified — the
+uncompressed base backups introduced by the 07-05 InvalidPart fix restore cleanly, WAL replay +
+promote works, and vchord survives recovery with full index functionality. Immich v3 Gate #1
+(restore rehearsal) is CLOSED.
