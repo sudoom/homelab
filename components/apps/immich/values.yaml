@@ -90,20 +90,20 @@ immich:
         - name: ndots
           value: "2"
   # The server container (bjw-s controllers.main). repository is set EXPLICITLY
-  # (== the chart 0.12.0 default) so Renovate's helm-values manager can resolve a
+  # (== the chart default) so Renovate's helm-values manager can resolve a
   # datasource and track app bumps — a bare `tag:` with no sibling `repository:`
-  # is invisible to Renovate. Running v2.7.5 (ahead of the chart's appVersion
-  # v2.6.3 — supported, same-major). Renovate groups server+ML (see renovate.json);
-  # take the bumps as reviewable PRs. MAJOR (v3.x) is breaking (OAuth/API/env +
-  # DB schema migrations, forward-only) AND wants a matching newer chart — do it
-  # by hand, after a verified DB backup, never a blind Renovate merge.
+  # is invisible to Renovate. Running v3.0.1 on chart 0.13.1 (cutover 2026-07-06:
+  # hand-done after the R2 restore drill closed the backup gate — v3's DB schema
+  # migration is forward-only, rollback = restore pre-V3 snapshot + git revert).
+  # Renovate groups server+ML (see renovate.json); take minors as reviewable PRs.
+  # MAJORs stay hand-done: verified+rehearsed DB backup first, never a blind merge.
   controllers:
     main:
       containers:
         main:
           image:
             repository: ghcr.io/immich-app/immich-server
-            tag: v2.7.5
+            tag: v3.0.1
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -200,7 +200,7 @@ immich:
               # repository explicit (== chart default) for Renovate tracking; MUST
               # stay version-locked to the server above — Renovate groups them.
               repository: ghcr.io/immich-app/immich-machine-learning
-              tag: v2.7.5
+              tag: v3.0.1
             resources:
               requests:
                 cpu: 500m
