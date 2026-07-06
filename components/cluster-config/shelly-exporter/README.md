@@ -38,7 +38,7 @@ Append to `values.yaml`:
 ```yaml
 plugs:
   - instance: node6
-    rpcUrl: http://192.168.1.77/rpc/Switch.GetStatus?id=0
+    rpcUrl: http://192.168.1.50/rpc/Switch.GetStatus?id=0
   - instance: node4
     rpcUrl: http://192.168.1.78/rpc/Switch.GetStatus?id=0  # example
 ```
@@ -68,7 +68,7 @@ To smoke-test the scrape after sync — from any pod with curl:
 
 ```bash
 oc -n shelly-exporter exec deploy/shelly-exporter -- \
-  wget -qO- 'http://localhost:7979/probe?target=http://192.168.1.77/rpc/Switch.GetStatus?id=0'
+  wget -qO- 'http://localhost:7979/probe?target=http://192.168.1.50/rpc/Switch.GetStatus?id=0'
 ```
 
 Should return Prometheus exposition format with the five metrics.

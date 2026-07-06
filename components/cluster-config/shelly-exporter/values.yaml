@@ -22,7 +22,7 @@ resources:
 # label is what shows up on every metric — keep it stable + descriptive.
 plugs:
   - instance: node6
-    rpcUrl: http://192.168.1.77/rpc/Switch.GetStatus?id=0
+    rpcUrl: http://192.168.1.50/rpc/Switch.GetStatus?id=0
   # Rack-level Shelly upstream of the PDU — measures the whole homelab
   # (3 nodes + Mac mini + Synology + RPi + switch + router + drives).
   # This is the meaningful denominator for cluster-wide power-lever
@@ -31,4 +31,4 @@ plugs:
   # manually from the Shelly web UI before this scrape config existed):
   # avg 372.5 W, max 377.5 W, min 370 W.
   - instance: rack
-    rpcUrl: http://192.168.1.50/rpc/Switch.GetStatus?id=0
+    rpcUrl: http://192.168.1.77/rpc/Switch.GetStatus?id=0
