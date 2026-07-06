@@ -1,0 +1,72 @@
+# R2 restore drill — immich-postgres (2026-07-06)
+#
+# PURPOSE: rehearse the offsite (Cloudflare R2) restore path end-to-end BEFORE the
+# immich v3 cutover. Bootstraps a THROWAWAY CNPG cluster from the live
+# `immich-postgres` R2 base backup + WAL archive (barman-cloud plugin recovery).
+# First-ever restore exercise of the plugin path on this cluster — validates the
+# post-InvalidPart-fix uncompressed base backups are actually restorable.
+#
+# MANUAL APPLY (operator, primary kubeconfig — NOT ArgoCD-managed; the immich app's
+# automated prune won't touch it, no tracking annotation):
+#   oc apply -f tests/immich-postgres-restore-drill.yaml
+#
+# WATCH:
+#   oc -n immich get cluster immich-postgres-drill -w
+#   oc -n immich logs -l cnpg.io/cluster=immich-postgres-drill,cnpg.io/jobRole=full-recovery -f
+#
+# VERIFY (row-count parity vs live):
+#   oc -n immich exec immich-postgres-drill-1 -c postgres -- psql -d immich -Atc \
+#     "select (select count(*) from asset), (select count(*) from \"user\"), pg_database_size('immich')"
+#   ... compare against the same query on immich-postgres-1.
+#
+# TEARDOWN (PVC + CNPG-generated secrets cascade-delete with the Cluster;
+# ceph-nvme-block reclaimPolicy=Delete reclaims the RBD image via trash):
+#   oc -n immich delete cluster.postgresql.cnpg.io immich-postgres-drill
+#
+# SAFETY:
+#   - NO `plugins:` archiver and NO `backup:` section → this cluster NEVER writes
+#     to R2. The live archive under serverName `immich-postgres` is read-only from
+#     here (restore side only). Do NOT add an archiver pointing at the same
+#     serverName — that would corrupt the live cluster's WAL archive.
+#   - Reads the existing namespace-scoped ObjectStore CR `immich-postgres-r2` +
+#     secret `immich-postgres-r2-creds` (both already in ns immich).
+#   - 10Gi on nvme-replicated: pool is ~50% post-fstrim — negligible headroom cost.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: immich-postgres-drill
+  namespace: immich
+spec:
+  instances: 1
+  # MUST match the live cluster's operand image: physical recovery needs the same
+  # PG major (18) and the vchord/pgvector .so files present in the image.
+  imageName: ghcr.io/tensorchord/cloudnative-vectorchord:18-1.1.1
+  postgresql:
+    # CNPG renders postgresql.conf from THIS spec (not from the restored files) —
+    # vchord.so must be preloaded here too or the restored catalog's vchord
+    # extension objects break on first use.
+    shared_preload_libraries:
+      - vchord.so
+  storage:
+    size: 10Gi
+    storageClass: ceph-nvme-block
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  bootstrap:
+    recovery:
+      # No recoveryTarget → replay to end-of-WAL (latest state in the archive).
+      source: immich-postgres-r2-source
+  externalClusters:
+    - name: immich-postgres-r2-source
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          # ObjectStore CR (ns immich) — carries the R2 endpoint/creds/boto3
+          # checksum env; the restore sidecar inherits instanceSidecarConfiguration.
+          barmanObjectName: immich-postgres-r2
+          # Folder in the bucket written by the live cluster's archiver.
+          serverName: immich-postgres
