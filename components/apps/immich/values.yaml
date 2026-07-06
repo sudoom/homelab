@@ -65,7 +65,8 @@ hpa:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Values passed THROUGH to the official immich subchart (bjw-s common-lib based).
-# Schema confirmed against immich-charts 0.12.0 (helm show values, 2026-06-18).
+# Schema confirmed against immich-charts 0.13.1 (v3 cutover 2026-07-06; 0.13.0
+# added a values.schema.json — our values were already conformant, no reshape).
 # ─────────────────────────────────────────────────────────────────────────────
 immich:
   # restricted-v2 / PSA-restricted hardening applied to ALL components (server,

@@ -45,6 +45,10 @@ plugs:
 
 Each entry's `instance` becomes the metric's `instance` label.
 
+**Currently monitored** (`values.yaml`): `node6` = `192.168.1.50` (single node),
+`rack` = `192.168.1.77` (whole-homelab feed upstream of the PDU — the meaningful
+denominator for cluster-wide power-lever decisions; ~1/3 of it is any one node).
+
 ## Files
 
 | File | Purpose |
