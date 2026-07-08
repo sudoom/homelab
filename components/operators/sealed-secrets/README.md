@@ -1,8 +1,8 @@
 # sealed-secrets
 
-Bitnami **sealed-secrets** controller (vendored chart `2.18.6`, committed
-`charts/*.tgz` + `Chart.lock`). Decrypts `SealedSecret` CRs into plain `Secret`s
-in-cluster; the cluster-private key never leaves the controller.
+Bitnami **sealed-secrets** controller (vendored chart `2.19.1` → controller
+`0.38.4`, committed `charts/*.tgz` + `Chart.lock`). Decrypts `SealedSecret` CRs
+into plain `Secret`s in-cluster; the cluster-private key never leaves the controller.
 
 ## Key auto-rotation (`--key-renew-period=720h`)
 
@@ -40,7 +40,7 @@ kubeseal --cert components/operators/sealed-secrets/sealed-secrets-pub.pem \
 
 | File | Purpose |
 |---|---|
-| `Chart.yaml` / `Chart.lock` / `charts/` | vendored bitnami sealed-secrets 2.18.6 |
+| `Chart.yaml` / `Chart.lock` / `charts/` | vendored bitnami sealed-secrets 2.19.1 (controller 0.38.4) |
 | `values.yaml` | `fullnameOverride` + `--key-renew-period=720h` |
 | `sealed-secrets-pub.pem` | current public sealing cert (offline `kubeseal --cert`) |
 | `templates/` | namespace + any local extras |
