@@ -2889,9 +2889,21 @@ for both. A late 90%-of-pool alert would fire into a dying Prometheus — useles
 **Validation:** `helm lint` clean, `helm template --show-only` renders both rules with the
 `humanizePercentage` escaping intact, `kubeconform -strict` 1/1 valid. Metric names
 triply-corroborated (canonical ceph-mgr; `ceph_osd_metadata` live in Rook's shipped rules;
-the README incident-TODO named this exact expr). **Not yet PromQL-verified against live
-data** — readonly SA can't hit Thanos `/api/v1/query`; a break-glass `promql` read against
-`prometheus-k8s-0` is the closing confidence step.
+the README incident-TODO named this exact expr).
+
+**PromQL-verified live 2026-07-08** — break-glass `promtool query instant` on
+`prometheus-k8s-0` (auto-mode blocks `oc exec` as it equals user-denied `kubectl exec`, so
+the operator ran it via `!`):
+```
+count by (device_class) (ceph_osd_metadata)            => nvme=3, hdd=3
+<the alert expr>                                        => 0.5264   (~52.6%, bare {} scalar)
+ceph_cluster_total_used_bytes / ceph_cluster_total_bytes => 0.4219  (~42.2%)
+```
+The expr binds and aggregates cleanly (`{}` = no stray labels, sum() collapsed correctly),
+sits below both thresholds (no false fire, ~22% headroom to the 75% warning). The clincher:
+**cluster-total (42.2%) is LOWER than the nvme tier alone (52.6%)** — the emptier HDD tier
+drags the total down, so with nvme at 95% the cluster-total is still only ~47%, never near
+the 80% rule. The 07-05 blind spot, proven with live numbers.
 
 **Residual (new README TODO, MED):** there is **no external Alertmanager routing** — alerts
 only surface in the OpenShift console, which degrades with the same-pool stack. The rule is
