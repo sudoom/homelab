@@ -1,0 +1,63 @@
+{{- $pg := .Values.postgres }}
+{{- if and $pg.backup $pg.backup.objectStore $pg.backup.objectStore.enabled }}
+# WAL-archiving-failure alert for immich-postgres — same design + rationale as
+# components/apps/cnpg-clusters/templates/prometheusrule-wal-archive.yaml (the
+# 2026-07-02 node4 outage silently killed R2 archiving on BOTH CNPG clusters).
+# Duplicated here (not shared) because UWM enforces namespace-isolation on user
+# PrometheusRules, so immich-postgres's alert must live in the immich namespace
+# to see its `cnpg_pg_stat_archiver_*` metrics. immich-postgres is `instances: 1`
+# (no standby to fail over to), so a stuck archiver is especially load-bearing —
+# it silently failed backups for days in the 07-02 incident with no self-heal.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: immich-postgres-wal-archive
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/part-of: immich
+    role: alert-rules
+spec:
+  groups:
+    - name: cnpg-wal-archiving
+      rules:
+        - alert: CNPGWALArchiveFailing
+          expr: |
+            increase(cnpg_pg_stat_archiver_failed_count[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CNPG WAL archiving to R2 failing ({{`{{ $labels.namespace }}`}}/{{`{{ $labels.pod }}`}})"
+            description: |
+              pg_stat_archiver.failed_count on {{`{{ $labels.pod }}`}} has been
+              increasing for 15m — WAL archiving to Cloudflare R2 is failing, so
+              offsite PITR backup has stopped and un-archivable WAL is beginning
+              to accumulate on the instance PVC.
+
+              Most likely cause on this cluster: pod→external egress broke after a
+              node outage (the OVN ovnkube-node egress cascade). Fix: restart all
+              3 `ovnkube-node` pods, then confirm archiving resumes (failed_count
+              stops climbing). Verify via the barman sidecar logs + the bucket,
+              NOT CNPG status conditions. Runbook: blog/blog-cnpg-draft.md 2026-07-02.
+        - alert: CNPGWALArchiveFailingCritical
+          expr: |
+            increase(cnpg_pg_stat_archiver_failed_count[15m]) > 0
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "CNPG WAL archiving to R2 failing >1h ({{`{{ $labels.namespace }}`}}/{{`{{ $labels.pod }}`}})"
+            description: |
+              WAL archiving has been failing continuously for over an hour on
+              {{`{{ $labels.pod }}`}}. Un-archivable WAL is accumulating toward a
+              PVC-full deadlock — once the WAL volume fills, CNPG enters
+              "Not enough disk space" safe-mode and will NOT auto-expand from that
+              state (reconcile bails before the resize step). immich-postgres is a
+              single instance, so there is no standby to absorb this.
+
+              Act now: restore egress (restart all 3 `ovnkube-node`); confirm the
+              WAL backlog drains; if the PVC is near full, `oc patch` its
+              `spec.resources.requests.storage` larger (RBD allowVolumeExpansion=true)
+              BEFORE the deadlock, then bounce the pod to remount the grown fs.
+              Full recovery order: blog/blog-cnpg-draft.md 2026-07-02.
+{{- end }}

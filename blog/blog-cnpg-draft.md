@@ -898,3 +898,50 @@ PVC + CNPG-generated secrets cascade-deleted, zero residue; live cluster
 uncompressed base backups introduced by the 07-05 InvalidPart fix restore cleanly, WAL replay +
 promote works, and vchord survives recovery with full index functionality. Immich v3 Gate #1
 (restore rehearsal) is CLOSED.
+
+## 2026-07-08 — WAL-archiving-failure alert shipped (the 07-02 outage follow-up)
+
+The 07-02 node4 outage silently killed R2 WAL archiving on both clusters for 2 days
+and filled media-postgres's PVC before anyone noticed. Shipped the alert that would
+have caught it in 15 minutes.
+
+**Metric surface investigation (why it landed where it did):**
+- CNPG exposes `cnpg_pg_stat_archiver_*` via the `pg_stat_archiver` query in the
+  `cnpg-default-monitoring` configmap (present in `media` + `immich` namespaces).
+  Columns → metrics: `failed_count`, `archived_count`, `last_archived_time`,
+  `last_failed_time`, etc.
+- **These metrics are user-workload-monitoring ONLY.** Confirmed empirically: a
+  `promtool query` on platform `prometheus-k8s-0` for `cnpg_pg_stat_archiver_.+`
+  returned **empty** — the CNPG PodMonitors are in user namespaces (media/immich),
+  scraped by `prometheus-user-workload`, not platform.
+- Repo PrometheusRules (rook-ceph, nmstate, smartctl-exporter, and today's nvme rule)
+  all live in user namespaces → evaluated by UWM. So a CNPG alert rule belongs in the
+  cluster's own namespace, and **UWM enforces namespace-isolation** on user rules —
+  a rule in `media` can only see `media` metrics. Hence one rule per namespace
+  (media via cnpg-clusters chart, immich via its chart), not one shared rule.
+- The originally-planned **PVC-%used backstop** (`kubelet_volume_stats_used_bytes`)
+  is a PLATFORM metric — NOT visible to UWM, and this cluster ships no
+  `KubePersistentVolumeFillingUp` default. So it can't be a user rule. `KubeNodeNotReady`
+  IS a platform default (so node4-down-2-days going unnoticed was the delivery gap, not
+  a missing rule). Net: the archiver-failing alert is the one genuinely-missing,
+  UWM-buildable piece — and it's the UPSTREAM signal (media took ~2 days of failed
+  archiving to fill 10Gi, so it fires with days of lead before the PVC-fill deadlock).
+
+**Shipped** (`prometheusrule-wal-archive.yaml` in both charts, gated on `objectStore.enabled`):
+```
+- alert: CNPGWALArchiveFailing          (warning, for: 15m)
+  expr: increase(cnpg_pg_stat_archiver_failed_count[15m]) > 0
+- alert: CNPGWALArchiveFailingCritical  (critical, for: 1h)
+  expr: increase(cnpg_pg_stat_archiver_failed_count[15m]) > 0
+```
+Why `increase() > 0` and not the last-archived-time age: `failed_count` only moves on
+a real failed archive attempt, so **no idle-DB false positive** (an idle Postgres that
+generates no WAL leaves `last_archived_time` stale → the age form would false-fire).
+Postgres routes `archive_command` through the CNPG instance manager → barman-cloud
+plugin; an R2 push failure (egress break/creds/endpoint) returns non-zero → failed_count
+increments. `increase()` handles counter resets on pod failover. Annotations carry the
+ovnkube-node-restart + PVC-grow-before-deadlock runbook.
+
+**Validation:** helm lint both, kubeconform 2/2 valid, rendered `namespace: media` +
+`immich` correct, Prometheus `$labels` templating preserved through Helm's `{{`` `}}``
+escaping. **PromQL-verified on UWM** — see below.
