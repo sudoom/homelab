@@ -48,4 +48,71 @@ spec:
               images (`rbd trash ls -p nvme-replicated`), or schedule
               the next storage expansion (bulk HDD addition; see
               TODO in README.md).
+    # Per-device-class NVMe-tier utilization. The cluster-total rule above is
+    # BLIND to a full NVMe tier: this cluster has 3 NVMe OSDs (~1.5 TiB raw) and
+    # 3 HDD OSDs (~12 TiB raw), so the 12 TiB HDD capacity dilutes the total —
+    # `nvme-replicated` reached OSD_FULL (95%) on 2026-07-05 while cluster-total
+    # sat far under 80% and NOTHING fired (blog/blog-rook-ceph-draft.md 2026-07-05).
+    # Rook's shipped CephOSDNearFull keys off the mgr `ceph_health_detail` flag at
+    # 85% per-OSD — a narrow, late signal whose delivery path degrades as the pool
+    # (and the co-located Prometheus TSDB on nvme-replicated) fills. These rules
+    # are RAW-BYTES + device-class-scoped so they fire EARLY, while Prometheus is
+    # still healthy AND while fstrim can still reclaim — critical because fstrim
+    # DEADLOCKS on a full pool (discard I/O blocks on full OSDs, so you cannot dig
+    # out once at 95%). The `ceph_osd_stat_bytes* and on(ceph_daemon) ceph_osd_metadata`
+    # join is Rook's own device-class idiom; nvme-replicated is the sole NVMe consumer
+    # so tier-raw% ~= pool-raw%. Ratio form is self-normalizing (double-scrape-safe).
+    - name: ceph-nvme-tier-utilization
+      rules:
+        - alert: CephNvmeTierNearFull
+          expr: |
+            sum(ceph_osd_stat_bytes_used and on(ceph_daemon) ceph_osd_metadata{device_class="nvme"})
+            /
+            sum(ceph_osd_stat_bytes and on(ceph_daemon) ceph_osd_metadata{device_class="nvme"})
+            > 0.75
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ceph NVMe tier raw utilization >75% for 30m"
+            description: |
+              NVMe-tier (device_class=nvme, backs `nvme-replicated` /
+              `ceph-nvme-block`) raw utilization has been >75% for 30m
+              ({{`{{ $value | humanizePercentage }}`}}). The cluster-total
+              alert will NOT catch this — the HDD tier dilutes it.
+
+              Act now, while there is headroom and fstrim still works:
+              trigger a reclaim (`oc -n node-fstrim delete pod -l app=node-fstrim`
+              to fire a fresh `fstrim -av`), purge trashed RBD images
+              (`rbd trash ls -p nvme-replicated`; deferred-delete leaves images
+              consuming space), and check the largest consumer (`ceph df`).
+              Do NOT let this reach 85% (CephNvmeTierCriticallyFull) — past
+              ~95% the pool blocks writes and fstrim can no longer reclaim.
+        - alert: CephNvmeTierCriticallyFull
+          expr: |
+            sum(ceph_osd_stat_bytes_used and on(ceph_daemon) ceph_osd_metadata{device_class="nvme"})
+            /
+            sum(ceph_osd_stat_bytes and on(ceph_daemon) ceph_osd_metadata{device_class="nvme"})
+            > 0.85
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ceph NVMe tier raw utilization >85% — approaching write-block + fstrim-deadlock"
+            description: |
+              NVMe-tier raw utilization is >85% ({{`{{ $value | humanizePercentage }}`}}) —
+              past mon_osd_nearfull_ratio, closing on the 95% mon_osd_full_ratio
+              that BLOCKS ALL WRITES on `nvme-replicated` (Prometheus, Grafana,
+              CNPG WAL, ArgoCD cache all live here). fstrim reclaim DEADLOCKS once
+              the pool is full (2026-07-05 incident) — reclaim NOW, not later.
+
+              1. Fresh reclaim: `oc -n node-fstrim delete pod -l app=node-fstrim`
+                 then watch `ceph df` for the nvme pool %USED to drop (latent
+                 ~15-20 min as Ceph returns objects async).
+              2. Purge RBD trash: toolbox `rbd trash purge nvme-replicated`.
+              3. If already write-blocked (HEALTH_ERR OSD_FULL), bridge with a
+                 TEMPORARY `ceph osd set-full-ratio 0.97` to un-wedge fstrim, let
+                 it reclaim, then RESTORE `ceph osd set-full-ratio 0.95`
+                 (guardrail-gated mutations — operator/break-glass).
+              Full runbook: blog/blog-rook-ceph-draft.md 2026-07-05.
 {{- end }}

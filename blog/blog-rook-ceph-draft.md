@@ -2844,3 +2844,56 @@ only real progress signal, and it lags the discard by 15+ min.** A host-ns `moun
 - Standing runbook for a full nvme-replicated: `rbd trash purge` first (was empty here) →
   `set-full-ratio 0.97` bridge → fresh fstrim → **wait 15-20 min for the latent drop** → restore
   `0.95`. Never roll/reweight an OSD (size=3-on-3, no headroom).
+
+### 2026-07-08 — NVMe-tier nearfull alert shipped (the 07-05 OSD_FULL follow-up)
+
+The 07-05 OSD_FULL recurrence exposed that **nothing alerted** as `nvme-replicated`
+filled. Diagnosed why and shipped the fix.
+
+**Why the existing alerts were blind:**
+- `CephClusterUtilizationHigh` (our own rule, 80%) is **cluster-TOTAL** raw bytes:
+  `ceph_cluster_total_used_bytes / ceph_cluster_total_bytes`. This cluster has 3 NVMe
+  OSDs (~1.5 TiB raw) + 3 HDD OSDs (~12 TiB raw), so the HDD capacity **dilutes** the
+  ratio — the NVMe tier hit 95% (OSD_FULL) while cluster-total sat well under 80%.
+  Never fired.
+- Rook's shipped `CephOSDNearFull` is `expr: ceph_health_detail{name="OSD_NEARFULL"} == 1`
+  — a **mgr health-FLAG** at 85% per-OSD. Narrow and late: it trips at 85%, and its
+  delivery path (mgr → scrape → Prometheus TSDB, all on the filling nvme pool) degrades
+  exactly as the pool fills. No early lead.
+
+**What shipped** (`components/storage/rook-ceph-cluster/templates/prometheusrule-cluster-utilization.yaml`,
+new group `ceph-nvme-tier-utilization`, gated on the existing `clusterUtilizationAlert.enabled`):
+- `CephNvmeTierNearFull` — **warning at 75%**, `for: 30m`. The real new value: multi-hour
+  lead while Prometheus is healthy and fstrim trivially reclaims.
+- `CephNvmeTierCriticallyFull` — **critical at 85%**, `for: 5m`. Raw-bytes based so it fires
+  even when the mgr health-flag path is flaky; annotation carries the fstrim-NOW-before-95%
+  runbook + the `set-full-ratio 0.97` bridge.
+
+Device-class scoping uses Rook's own join idiom:
+```
+sum(ceph_osd_stat_bytes_used and on(ceph_daemon) ceph_osd_metadata{device_class="nvme"})
+/
+sum(ceph_osd_stat_bytes  and on(ceph_daemon) ceph_osd_metadata{device_class="nvme"})
+```
+`and on(ceph_daemon)` keeps only the OSD-bytes series whose daemon has an
+`nvme`-class metadata series. `nvme-replicated` is the sole NVMe consumer, so
+tier-raw% ≈ pool-raw%. Ratio form is self-normalizing (double-scrape-safe). The 75%
+threshold sits well below the current ~50% fill, so it won't fire as noise now.
+
+**Design rationale — why EARLY matters here specifically:** the observability stack
+(Prometheus TSDB, Grafana, ArgoCD cache) lives on `nvme-replicated` itself, and fstrim
+**deadlocks** on a full pool. So an alert is only useful if it fires while (a) Prometheus
+can still evaluate + store it and (b) fstrim can still reclaim. 75% gives ~20% headroom
+for both. A late 90%-of-pool alert would fire into a dying Prometheus — useless.
+
+**Validation:** `helm lint` clean, `helm template --show-only` renders both rules with the
+`humanizePercentage` escaping intact, `kubeconform -strict` 1/1 valid. Metric names
+triply-corroborated (canonical ceph-mgr; `ceph_osd_metadata` live in Rook's shipped rules;
+the README incident-TODO named this exact expr). **Not yet PromQL-verified against live
+data** — readonly SA can't hit Thanos `/api/v1/query`; a break-glass `promql` read against
+`prometheus-k8s-0` is the closing confidence step.
+
+**Residual (new README TODO, MED):** there is **no external Alertmanager routing** — alerts
+only surface in the OpenShift console, which degrades with the same-pool stack. The rule is
+the early-warning; delivering it off-cluster (Pushover/ntfy/email) so it survives a brownout
+is a separate follow-up. The `discard` mountOption item (MED) still pairs with this.

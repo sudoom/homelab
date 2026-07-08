@@ -316,10 +316,15 @@ prometheusScrapeRBAC:
 mgrServiceMonitor:
   enabled: true
 
-# Cluster-wide raw-bytes utilization warning at 80%. Fills the gap
-# between the rook-shipped 85% per-OSD nearfull alerts and the 95%
-# mon_osd_full_ratio backstop. Rationale in
-# templates/prometheusrule-cluster-utilization.yaml header.
+# Raw-bytes utilization alerts (two groups in one PrometheusRule):
+#   1. Cluster-wide warning at 80% — fills the gap between rook's 85%
+#      per-OSD nearfull and the 95% mon_osd_full_ratio backstop.
+#   2. NVMe-tier (device_class=nvme) warning at 75% + critical at 85% —
+#      the cluster-total rule is blind to a full NVMe tier (HDD capacity
+#      dilutes it), which is how nvme-replicated hit OSD_FULL undetected
+#      2026-07-05. Device-class-scoped + raw-bytes so it fires early,
+#      while Prometheus is alive and fstrim can still reclaim.
+# Rationale in templates/prometheusrule-cluster-utilization.yaml header.
 clusterUtilizationAlert:
   enabled: true
 
