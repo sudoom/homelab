@@ -945,3 +945,20 @@ ovnkube-node-restart + PVC-grow-before-deadlock runbook.
 **Validation:** helm lint both, kubeconform 2/2 valid, rendered `namespace: media` +
 `immich` correct, Prometheus `$labels` templating preserved through Helm's `{{`` `}}``
 escaping. **PromQL-verified on UWM** — see below.
+
+**UWM verification (break-glass `promtool query` on `prometheus-user-workload-0`, operator-run via `!`):**
+```
+cnpg_pg_stat_archiver_failed_count
+  {namespace="immich", pod="immich-postgres-1"} => 0
+  {namespace="media",  pod="media-postgres-2"}  => 3     <- historical (07-02 era)
+increase(cnpg_pg_stat_archiver_failed_count[15m])          <- THE ALERT EXPR
+  {immich-postgres-1} => 0    {media-postgres-2} => 0     <- both healthy, not firing
+time() - cnpg_pg_stat_archiver_last_archived_time
+  {immich-postgres-1} => 363s   {media-postgres-2} => 279s  <- archiving every ~5 min, live
+```
+Metric binds in UWM with the `namespace`/`pod` labels the annotations use; the expr
+evaluates to 0 on both clusters (healthy). The clincher: **media's `failed_count=3`
+(stale, from an earlier failure) with `increase[15m]=0`** — a bare `failed_count > 0`
+threshold would false-fire on that historical count indefinitely; `increase() > 0`
+reads 0 correctly. The design rationale, proven on live data. Also confirms the DBs
+archive every ~5 min (never idle), so the idle-DB false-positive concern is moot here.
