@@ -9,7 +9,7 @@ dependencies:
     # supervised bump). The chart is VENDORED (committed charts/*.tgz + Chart.lock)
     # so a fresh bootstrap never depends on the remote — sealed-secrets is in the
     # bootstrap-critical path (it decrypts the Cloudflare token).
-    version: 2.18.6
+    version: 2.19.1
     # Repo moved bitnami-labs.github.io -> bitnami.github.io 2026 (the old URL
     # 404s after the Bitnami repo overhaul). Do NOT use the oci bitnamicharts ref:
     # that's the frozen/deprecated downstream catalog with bitnamilegacy images.
