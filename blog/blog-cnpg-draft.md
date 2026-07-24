@@ -962,3 +962,50 @@ evaluates to 0 on both clusters (healthy). The clincher: **media's `failed_count
 threshold would false-fire on that historical count indefinitely; `increase() > 0`
 reads 0 correctly. The design rationale, proven on live data. Also confirms the DBs
 archive every ~5 min (never idle), so the idle-DB false-positive concern is moot here.
+
+## 2026-07-24 — node6 reboot → immich WAL archiving broke silently for 21h (egress cascade; alert worked, delivery didn't)
+
+A node6 reboot on 2026-07-23 ~17:23Z re-tripped the OVN `ovnkube-node` egress cascade
+on node6. `immich-postgres` is a single instance pinned to node6, so its WAL→R2 archiving
+broke; `media-postgres` (primary on node4) was unaffected. Discovered ~21h later on a
+routine status check — `immich-postgres` `ContinuousArchiving=FALSE`.
+
+**The alert did its job; delivery didn't.** The `CNPGWALArchiveFailingCritical` rule shipped
+2026-07-08 was (by every indication) firing the whole 21h — but with no external Alertmanager
+route it only reached the in-console alert list, which nobody was watching. This is the exact
+real-world cost the "external alert delivery" README TODO predicted: **detection works, delivery
+is the gap.** Bumped that item's urgency with this concrete 21h-silent-gap datapoint.
+
+**Diagnosis care (a red herring caught):** node6's `ovnkube-node` pod showed
+`creationTimestamp: 2026-07-02` (22 days) with `restartCount: 1`, which looked like "node6
+never rebooted." It's the opposite: a DaemonSet **pod object persists** across a node reboot
+(never deleted from the API), and the reboot shows up as the **container** `restartCount: 1`.
+The other node6 pods (immich-postgres-1, mon-b, osd-2, osd-5) all have `startTime`
+2026-07-23T17:23Z — the actual reboot. Confirmed the cause was egress (not creds/InvalidPart)
+by reading the barman sidecar log directly (readonly `oc logs`, no exec needed):
+```
+barman-cloud-wal-archive … ERROR: Could not connect to the endpoint URL:
+  "https://<acct>.eu.r2.cloudflarestorage.com/psql-backup/immich-postgres/wals/…"  → exit status 4
+```
+"Could not connect to the endpoint" = pod→external egress down, full stop.
+
+**Fix** (break-glass; `oc delete pod` is permitted under break-glass, unlike `oc adm cordon`/`oc exec`):
+```
+oc -n openshift-ovn-kubernetes delete pod ovnkube-node-<node6-pod>   # force full ovnkube-node recreation
+```
+The reboot's container-restart alone did NOT re-establish egress flows — an explicit pod
+delete/recreate was required (the documented behavior). Recovery was immediate: the barman
+sidecar flipped from "Could not connect" to a burst of `Archived WAL file` successes (segments
+…15/16/17 in seconds, draining the 21h backlog), and `ContinuousArchiving` → `True`
+("Continuous archiving is working") within ~30s of the new pod going Ready.
+
+**Scoping — do NOT reflexively "restart all 3".** The 2026-06-11 "restart all 3 ovnkube-node"
+lesson applies when MULTIPLE nodes were disrupted. Here **only node6 rebooted** — node5/node4's
+`ovnkube-node` pods were the untouched originals (`creationTimestamp` 2026-07-02, `restartCount: 0`),
+so their egress was never broken (node4 additionally proven live by media-postgres archiving
+throughout). Restarting them would have been a needless network blip on healthy nodes. Restart
+the ovnkube-node(s) of the node(s) that actually rebooted/were-disrupted, not the whole fleet.
+
+**No deadlock this time:** immich-postgres stayed Ready through the 21h (its 10Gi PVC absorbed
+21h of low-rate WAL without filling), so unlike the 2026-07-02 media incident there was no
+`Not enough disk space` safe-mode deadlock — the gap simply closed once egress returned.

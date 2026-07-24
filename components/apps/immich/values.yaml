@@ -93,7 +93,8 @@ immich:
   # The server container (bjw-s controllers.main). repository is set EXPLICITLY
   # (== the chart default) so Renovate's helm-values manager can resolve a
   # datasource and track app bumps — a bare `tag:` with no sibling `repository:`
-  # is invisible to Renovate. Running v3.0.1 on chart 0.13.1 (cutover 2026-07-06:
+  # is invisible to Renovate. Running v3.0.3 on chart 0.13.1 (v3 cutover 2026-07-06 at
+  # v3.0.1; v3.0.1->v3.0.3 was a Renovate patch #154. Cutover was
   # hand-done after the R2 restore drill closed the backup gate — v3's DB schema
   # migration is forward-only, rollback = restore pre-V3 snapshot + git revert).
   # Renovate groups server+ML (see renovate.json); take minors as reviewable PRs.
