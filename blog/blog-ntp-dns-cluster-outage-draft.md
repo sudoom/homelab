@@ -233,6 +233,105 @@ during a NAS-maintenance window are expected, not OVN egress).
 - **A "Ready" ovnkube-node ≠ working egress/service routing.** Restart every disrupted node's,
   and re-verify after the *underlying* fabric (backnet) is fixed, not before.
 
+## Part 3 (2026-07-26): the tail wasn't fully cleared — a day-later stuck failover
+
+A day after the outage, the CNPG Grafana dashboard for `media-postgres` was red:
+**Replication: None**, `media-postgres-1` (fd-a/node4) **Down** ("last failure a day ago"),
+`-2`/`-3` Up but "Clustering/replication: No", **WAL Delayed**, **Backups: None recent**.
+Everything else on the board (lag, storage, CPU, mem) green.
+
+Fanned out four parallel read-only probes (media-postgres CR, etcd/control-plane, Ceph CR,
+recovery-tail docs). They converged on **one root cause**: the OVN **pod→ClusterIP
+(`172.30.0.1`) egress break from the 07-25 recovery was never fully cleared.** The 07-25
+"second ovnkube-node restart" fixed *immich's* path but not media-postgres's / the Ceph mgr's —
+node4 and node5's `ovnkube-node` pods still had 26h uptime and broken pod→service routing. The
+one fault pinned three layers at once:
+
+- **media-postgres** stuck `phase: Failing over` (`currentPrimary=media-postgres-1` unhealthy,
+  1/2 Ready 7 restarts; `targetPrimary=media-postgres-2` promoting; all three
+  `isPrimary=False` → *no serving primary for ~a day*). WAL archiving to R2 `ContinuousArchiving=False`
+  with `dial tcp 172.30.0.1:443 i/o timeout` — the barman sidecar couldn't reach the kube API.
+- **Ceph `HEALTH_ERR`** — `Module 'rook' has failed: HTTPSConnectionPool(host='172.30.0.1',
+  port=443) ... [Errno 101] Network is unreachable`. Data plane fully healthy (6 OSDs up, 3 mons
+  quorate, 8 TB free) — pure mgr→API egress.
+- **etcd ClusterOperator** falsely `Available=False, 1 of 3 members` while the API answered every
+  query — a lagging health assessment, same fabric root.
+
+### The fix — restart all 3 ovnkube-node, one at a time (break-glass)
+
+Not the runbook's all-at-once label delete — one at a time on a no-drain cluster, waiting for
+`8/8 Running` between each:
+
+```
+export KUBECONFIG=~/.kube/config-breakglass
+oc -n openshift-ovn-kubernetes delete pod ovnkube-node-cfbcw   # node4 (stuck primary + mgr-b)
+#   -> ovnkube-node-mf9rm  8/8 Running in ~24s
+oc -n openshift-ovn-kubernetes delete pod ovnkube-node-lpj8j   # node5 (mgr-a + target primary)
+#   -> ovnkube-node-lk4t7  8/8 Running in ~30s
+oc -n openshift-ovn-kubernetes delete pod ovnkube-node-dh48g   # node6
+#   -> ovnkube-node-vg455  8/8 Running in ~24s
+```
+
+media-postgres self-resolved in ~30s once pod→ClusterIP was reprogrammed:
+
+```
+t+15s: pg_phase=Failing over          ready=2 primary=media-postgres-2 Ready=False Archiving=True
+t+30s: pg_phase=Cluster in healthy... ready=3 primary=media-postgres-2 Ready=True  Archiving=True
+```
+
+etcd CO self-cleared to `Available=True Degraded=False`. immich-postgres unaffected (1/1, Archiving True).
+
+### Ceph mgr — a failed module does NOT self-reload after egress returns
+
+Ceph stayed `HEALTH_ERR` for minutes after egress was fixed: once the `rook` mgr module enters
+`has failed`, it stays cached-failed until the mgr reloads it. No toolbox needed — **fail the
+active mgr over via `oc delete pod`** (break-glass allows pod delete; `oc exec`/`ceph mgr fail`
+are classifier-blocked):
+
+```
+oc -n rook-ceph get pods -l app=rook-ceph-mgr -o custom-columns=NAME:...,ACTIVE:.metadata.labels.mgr_role
+#   rook-ceph-mgr-a-...-4rvbc  node5  active
+#   rook-ceph-mgr-b-...-b7sdz  node4  standby
+oc -n rook-ceph delete pod rook-ceph-mgr-a-8f475dc46-4rvbc
+#   t+72s: ceph=HEALTH_WARN   <- rook module reloaded, reconnected to 172.30.0.1
+```
+
+Remaining `HEALTH_WARN` = `3 OSD(s) ... slow operations in BlueStore` (documented benign
+consumer-NVMe fsync hair-trigger) + `1 mgr modules have recently crashed` (stale record). The
+crash record is the one thing break-glass can't clear (toolbox exec) — operator runs
+`ceph crash archive-all` to drop it, leaving only the benign slow-op alert.
+
+### Two more debris items the crashloop sweep caught
+
+With the shared root cause fixed, a full `phase!=Running` + actively-`WAITING` sweep turned up
+exactly two real items (everything else was cumulative restart counts over 114d of node uptime —
+etcd/coredns/haproxy/keepalived/multus/nmstate all restart on every reroll/reboot and mean nothing):
+
+- **`media/transmission-slave` — `CreateContainerError`** on node4:
+  `failed to resolve symlink ".../pvc-c0d00980.../mount": permission denied`. That PVC is
+  **`media-data-pvc` — the shared RWX `/data` on CephFS** — its per-pod mount on node4 was left
+  wedged (EACCES) by the outage churn. No other media pod was affected, so it was a stale per-pod
+  mount, not node-wide CephFS breakage. Fix: `oc delete pod` → it rescheduled to node5 and came
+  up `1/1 Running`. (If it had re-wedged on remount, next step is the CephFS nodeplugin restart on
+  node4 — it didn't.)
+- **7× `collect-profiles-2975...` OLM job pods in `Error`** — looked alarming, but the CronJob runs
+  every 15 min and only the **20:15 run** failed; the 20:00, 20:30, and 20:45 (post-fix) runs are
+  all `Complete` and `lastSuccessfulTime` is current. That one run failed *because it landed on a
+  node whose pod→ClusterIP was still broken* — the same root cause, and a neat demonstration of the
+  "silent until a pod lands on the broken node" property. The `Error` pods are stale history OLM GCs.
+
+### Lesson (part 3)
+
+**"Verify pod→ClusterIP after ovnkube restart" must be a real check, not a vibe.** On 07-25 we
+confirmed immich archiving recovered and moved on — but media-postgres and the Ceph mgr were on a
+*different* broken node's routing, and stayed broken silently for a day (mid-failover, no primary,
+WAL not archiving). A CNPG cluster with no serving primary is a real mini-outage; it only didn't
+page because the WAL PVC hadn't filled yet. The `CNPGWALArchiveFailing` rule (shipped 07-08)
+*should* have fired within 15 min of the archive stalling — worth confirming it did and where it
+went (the no-external-Alertmanager-delivery gap is likely why it went unseen). **A "Ready"
+ovnkube-node lies per-node; verify pod→ClusterIP from a pod on *every* node, or add a synthetic
+probe, before declaring a node-event recovery done.**
+
 ## Durable follow-ups (part 2)
 - **Alert on per-node Ceph backnet reachability** (`192.168.10.x` cross-node) — a down backnet
   NIC on one node silently kills that node's RBD I/O; today it was a manual 20-min discovery.
@@ -240,3 +339,8 @@ during a NAS-maintenance window are expected, not OVN egress).
   external-Alertmanager-delivery gap already tracked).
 - Everything in "Durable follow-ups (part 1)" (router-IP NTP in the Ansible role + DS3231 RTC)
   remains the top preventive item — it stops the whole chain at the source.
+- **Synthetic pod→ClusterIP (`172.30.0.1:443`) reachability probe, per node** — the 07-26
+  stuck-failover proved a "Ready" ovnkube-node hides broken service routing on a *specific* node
+  for a day. A blackbox/exec probe from a pod on each node (or an alert on
+  `cnpg_pg_stat_archiver_failed_count` + Ceph `MGR_MODULE_ERROR` correlated to a node) would turn
+  "manual dashboard catch a day later" into "fires in 15 min". Pairs with the backnet probe above.
