@@ -320,6 +320,55 @@ etcd/coredns/haproxy/keepalived/multus/nmstate all restart on every reroll/reboo
   node whose pod→ClusterIP was still broken* — the same root cause, and a neat demonstration of the
   "silent until a pod lands on the broken node" property. The `Error` pods are stale history OLM GCs.
 
+### The CephFS media stack — a *node-level* stale mount, and how NOT to fix it
+
+Right after the DB recovered, radarr and sonarr showed every `/data/media/*` root folder
+**Unavailable** (same for the whole *arr stack). All the media apps were `Running`/`ready` — but
+that's the trap: kubelet's readiness probe doesn't test the CephFS mount, so the app sees `/data`
+as a dead (ESTALE) mount while Kubernetes thinks the pod is fine.
+
+Root cause: **node4's kernel CephFS *stage* mount went stale** during the outage churn (MDS
+session died, mount lingered). Everything mounting `media-data-pvc` (the RWX `/data` on the
+`cephfs-hdd` EC pool) *and scheduled to node4* was broken; consumers on node5/node6 were fine.
+The tell:
+
+```
+MountVolume.SetUp failed for volume "pvc-c0d00980..." : rpc error: code = Internal desc =
+  lstat /var/lib/kubelet/plugins/kubernetes.io/csi/rook-ceph.cephfs.csi.ceph.com/
+  cac0cc4a.../globalmount: permission denied
+```
+
+**What I did wrong (documented so future-me doesn't repeat it):** I treated it like the RBD
+recovery dance and hand-chased the mount on the host — and every step just walked the error
+forward and corrupted ceph-csi's staging state a little more:
+
+1. `umount -f/-l globalmount` → next error: **`staging path ... is not a mountpoint`** (mount gone, empty dir remained)
+2. `rmdir globalmount` → next error: **`file does not exist`** (dir gone, plugin's state still referenced it)
+3. bounced the cephfs-nodeplugin twice in between — **no effect** (userspace restart doesn't fix a wedged kernel mount, and later doesn't fix corrupted staging metadata)
+
+Restarting the nodeplugin was the RBD instinct; it's wrong here. The stale mount is a *kernel*
+mount, and once I'd manually torn bits of it out, ceph-csi's per-volume staging dir was in a
+state it wouldn't stage over.
+
+**What actually fixed it** (the operator's call, and the right one):
+- `oc adm cordon node4` — note `oc adm cordon` *and* `oc patch node …unschedulable` are both
+  classifier-blocked even under break-glass (the no-drain-cluster guardrail), so the cordon/uncordon
+  is operator-run.
+- `oc delete pod` the two stuck ones (bazarr, jellyfin) → RWX means they rescheduled to node5/node6
+  and came up `1/1` **immediately** (proving the pool + the other nodes were always healthy).
+- Then, to make node4 usable again cleanly: **`sudo systemctl restart kubelet`** on node4 (SSH) +
+  `rm -rf` the leftover stale vol staging dir → kubelet re-reconciled from scratch, fresh
+  cephfs-nodeplugin (`zmt58`), staging clean. Uncordon.
+
+The kubelet restart is the whole fix — it re-stages every volume cleanly in seconds and disturbs
+nothing. **A node reboot would have "fixed" it too, but at the cost of re-tripping the entire
+ovnkube-egress + backnet-NIC + stuck-VA cascade** we'd just spent the session recovering. Kubelet
+restart >> reboot for a wedged mount.
+
+**Gap this exposed:** nothing keeps the 6 CephFS consumers off a poisoned node — no anti-affinity,
+no taint. On uncordon they can drift right back onto node4 until its kubelet is restarted. Worth a
+node-problem-detector rule or a startup check, tracked in README.
+
 ### Lesson (part 3)
 
 **"Verify pod→ClusterIP after ovnkube restart" must be a real check, not a vibe.** On 07-25 we
