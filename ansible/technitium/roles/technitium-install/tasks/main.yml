@@ -10,7 +10,7 @@
   register: technitium_unit
 
 - name: Download + install Technitium DNS Server
-  when: not technitium_unit.stat.exists or (technitium_force_reinstall | default(false))
+  when: not technitium_unit.stat.exists or (technitium_force_reinstall | default(false) | bool)
   block:
     - name: Fetch the official Technitium installer
       ansible.builtin.get_url:
