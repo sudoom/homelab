@@ -598,7 +598,7 @@ This codebase pairs with a personal+work Obsidian vault that holds long-form con
 
 ### Read permissions
 
-This repo's `.claude/settings.json` whitelists Read/Glob/Grep on the vault path; the vault's `.claude/settings.json` whitelists the same on this repo. Native Read works on absolute paths in both directions — no MCP needed for cross-repo reads.
+This repo's `.claude/settings.json` whitelists `Read(<vault-path>/**)` on the vault path; the vault's `.claude/settings.json` whitelists the same on this repo. **One `Read(path)` rule covers every file-reading tool (Read, Glob, Grep) — separate `Glob(path)`/`Grep(path)` entries are no-ops** and Claude Code warns about them at startup (they were removed here 2026-07-27). Native Read works on absolute paths in both directions — no MCP needed for cross-repo reads.
 
 ### Downstream: the published blog (sudops.pl)
 
