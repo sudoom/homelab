@@ -107,7 +107,7 @@ apps:
 
   prowlarr:
     enabled: true
-    image: lscr.io/linuxserver/prowlarr:2.4.0
+    image: lscr.io/linuxserver/prowlarr:2.5.2
     port: 9696
     configSize: 1Gi
     readinessPath: /
