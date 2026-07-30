@@ -381,6 +381,166 @@ went (the no-external-Alertmanager-delivery gap is likely why it went unseen). *
 ovnkube-node lies per-node; verify pod→ClusterIP from a pod on *every* node, or add a synthetic
 probe, before declaring a node-event recovery done.**
 
+## Part 4 (2026-07-30): it happened AGAIN — third recurrence, and the detection gap is now the story
+
+Four days after Part 3 I asked for a routine "how's it going" sweep. The cluster-level sweep came
+back *clean* — 3/3 nodes Ready, 45 ArgoCD apps healthy, all CSVs Succeeded, 5/5 certs Ready, no
+degraded ClusterOperators, Ceph `HEALTH_WARN` with only the benign `BLUESTORE_SLOW_OP_ALERT`. By
+every check in the documented end-of-session sweep, nothing was wrong.
+
+The console said otherwise: **32 alerts, 5 critical.**
+
+```
+NoOvnClusterManagerLeader   30 Jul 2026 21:33   "OVN-Kubernetes control plane is not functional"
+etcdInsufficientMembers     30 Jul 2026 18:35   "fewer instances available than needed (1)"
+etcdMembersDown x2          30 Jul 2026 18:35   "etcd cluster: members are down (1)"
+```
+
+### Step 1 — do NOT touch etcd
+
+Per the rule from the earlier incidents, confirm etcd is *actually* broken before acting:
+
+```
+$ oc -n openshift-etcd get pods -l app=etcd -o custom-columns=NAME:.metadata.name,READY:...
+etcd-node4.okd.sudops.pl   true,true,true,true,true
+etcd-node5.okd.sudops.pl   true,true,true,true,true
+etcd-node6.okd.sudops.pl   true,true,true,true,true
+
+$ oc get co etcd -o jsonpath='...'
+Available=True Degraded=False
+msg=NodeControllerDegraded: All master nodes are ready
+    EtcdMembersDegraded: No unhealthy members found
+```
+
+All three members healthy. **Three of the five criticals were false** — scrape-inferred, exactly the
+documented pattern. `prometheus-k8s-0` happened to be scheduled on node6, so when node6's egress
+broke, Prometheus couldn't scrape node4/node5 and inferred "members down."
+
+### Step 2 — the thing the sweep missed
+
+The lead wasn't in any cluster-level object. It was in a CNPG condition:
+
+```
+media/media-postgres    ready=3/3  primary=media-postgres-2  ContinuousArchiving=True
+immich/immich-postgres  ready=1/1  primary=immich-postgres-1 ContinuousArchiving=False
+```
+
+```
+reason=ContinuousArchivingFailing
+msg=rpc error: code = Unknown desc = unexpected failure invoking
+    barman-cloud-wal-archive: exit status 4
+lastTransition=2026-07-30T17:05:27Z
+```
+
+Sidecar logs (`-c plugin-barman-cloud`) gave the network-layer truth:
+
+```
+ERROR: Barman cloud WAL archiver exception: Could not connect to the endpoint URL:
+"https://<acct>.eu.r2.cloudflarestorage.com/psql-backup/immich-postgres/wals/...gz"
+...
+"Failed archiving WAL: PostgreSQL will retry" elapsedWalTime=1208.2  (retrying the SAME segment
+000000010000000700000004 every ~20 min since 17:05)
+```
+
+`Could not connect to the endpoint URL` = network, not auth, not the R2 `InvalidPart` compression
+trap. **Offsite backups had been silently dead for ~5 hours.**
+
+### Step 3 — proving it was node-scoped
+
+The control group is what makes this diagnosable without exec:
+
+| pod | node | external egress |
+|---|---|---|
+| `media-postgres-2` (primary, archiving) | node5 | **works** |
+| `cert-manager`, `argocd repo-server` | node5 | **works** |
+| `immich-postgres-1` | **node6** | broken |
+| `transmission-slave` (CrashLoopBackOff ×27) | **node6** | broken |
+| `ovnkube-control-plane` (7 restarts → `NoOvnClusterManagerLeader`) | **node6** | broken |
+| `prometheus-k8s-0` (→ false etcd criticals) | **node6** | broken |
+| `community-operators` / `operatorhubio-catalog` repeatedly `Unhealthy` | — | external registry reachability |
+
+Everything broken was on node6. Everything on node4/node5 was fine. And critically:
+
+```
+$ oc -n openshift-ovn-kubernetes get pods -l app=ovnkube-node
+ovnkube-node-vg455   true,true,true,true,true,true,true,true   node6   (created 2026-07-26T20:08Z)
+```
+
+**8/8 containers Ready on the broken node.** Same trap as Part 3 — Ready is not a statement about
+egress. Note also the creation timestamp: node6's ovnkube-node had been running untouched since the
+07-26 fix, so this was a *fresh* break at ~17:05 on 07-30, not leftover damage.
+
+### Step 4 — recovery
+
+Same fix, all three, one at a time (never a targeted subset):
+
+```
+$ oc -n openshift-ovn-kubernetes delete pod ovnkube-node-vg455   # node6
+  -> ovnkube-node-n6xb9  8/8 Ready in ~20s
+$ oc -n openshift-ovn-kubernetes delete pod ovnkube-node-lk4t7   # node5
+  -> ovnkube-node-7bq2w  8/8 Ready
+$ oc -n openshift-ovn-kubernetes delete pod ovnkube-node-mf9rm   # node4
+  -> ovnkube-node-mlvnq  8/8 Ready
+```
+
+Recovery was immediate and total:
+
+```
+20:27:41  transmission-slave  ready=true (self-recovered, no intervention)
+20:29:48  immich-postgres  ContinuousArchiving=True  reason=ContinuousArchivingSuccess
+20:29:58  Archived WAL file ...000000009
+20:30:00  Archived WAL file ...00000000A     <- flushing the 5h backlog, ~2s/segment
+20:30:03  Archived WAL file ...00000000B
+```
+
+Post-check: no degraded ClusterOperators, no non-Running pods, only the two known-benign
+`cnpg-clusters` / `immich` `OutOfSync/Healthy` apps.
+
+We caught it before the WAL PVC (10 Gi) filled — which matters, because that path ends in the CNPG
+`Not enough disk space` safe-mode deadlock that does **not** self-recover (needs a manual PVC expand
++ pod delete; see the 07-02 media-postgres entry).
+
+### What the RCA actually is — and what it isn't
+
+**Proximate cause (established):** node6's `ovnkube-node` lost pod→external and pod→remote-host
+egress at ~17:05 UTC while continuing to report 8/8 Ready. Restarting the OVN node pods restores it.
+
+**Upstream cause (NOT established, and I should stop pretending otherwise):** *why* OVN keeps losing
+that egress path. Three occurrences now — 07-25 (after a 2-node outage), 07-26 (unhealed tail), and
+07-30 (no preceding node event at all). The first two were plausibly "post-node-churn damage." This
+one has no such excuse: the ovnkube-node pod had been up 4 days, no reboot, no MCO roll, no NNCP.
+That breaks my working theory. Candidates worth investigating next time it fires, *before* restarting
+(the restart destroys the evidence):
+- `ovn-controller` / `ovnkube-controller` logs on the affected node around the break timestamp
+- conntrack / NAT table state for the egress path
+- whether it correlates with the `ovnkube-control-plane` leader election flapping (node6's had 7
+  restarts) — i.e. is the leader flap a *symptom* or the *cause*?
+- OKD 4.20 / OVN-K known issues for silent per-node egress loss
+
+**The honest summary: the recurrence rate is now high enough that detection matters more than root
+cause.** Three times in six days, and each time it was found by a human eyeballing something, not by
+an alert reaching anyone.
+
+### The real lesson: the sweep is blind to this class
+
+The documented cluster health sweep returned **completely clean** while offsite backups had been
+dead for five hours. Every check it runs is cluster-scoped — nodes, apps, CSVs, certs, COs, Ceph,
+non-Running pods. A per-node egress break shows up in *none* of them, because:
+
+- the node is `Ready`
+- the ovnkube-node pod is `8/8 Ready`
+- the affected app pods are `Running` (Postgres serves fine; only *archiving* is broken)
+- the CephCluster is `HEALTH_WARN`-benign
+- the ArgoCD apps are `Healthy`
+
+The signal lived in `.status.conditions[type=ContinuousArchiving]` on a CNPG Cluster CR — one field,
+in one namespace, that nothing was watching. **Adding CNPG `ContinuousArchiving` + a per-node egress
+probe to the standard sweep is now the highest-value change**, ahead of chasing the OVN root cause.
+
+And the `CNPGWALArchiveFailing` PrometheusRule (shipped 07-08) *did its job* — it fired. It just had
+nowhere to go. The missing external Alertmanager delivery is what turned a 15-minute detection into a
+5-hour one. That gap is now the top observability item, not a "nice to have."
+
 ## Durable follow-ups (part 2)
 - **Alert on per-node Ceph backnet reachability** (`192.168.10.x` cross-node) — a down backnet
   NIC on one node silently kills that node's RBD I/O; today it was a manual 20-min discovery.
