@@ -4,7 +4,7 @@ host: zot
 
 image:
   repository: ghcr.io/project-zot/zot-linux-amd64
-  tag: v2.1.18
+  tag: v2.1.19
 
 storage:
   storageClassName: ceph-nvme-block
