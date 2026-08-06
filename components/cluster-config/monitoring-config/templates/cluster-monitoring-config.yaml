@@ -8,6 +8,11 @@ data:
     enableUserWorkload: {{ .Values.userWorkload.enabled }}
     prometheusK8s:
       retention: {{ .Values.prometheus.retention }}
+      # Size cap; prunes on whichever of the two limits trips first. Must
+      # carry a `B` suffix (38GiB, not 38Gi) -- see values.yaml. CMO parses
+      # this ConfigMap with UnmarshalStrict, so a mis-cased or unknown key
+      # rejects the WHOLE config and degrades the `monitoring` CO.
+      retentionSize: {{ .Values.prometheus.retentionSize }}
       volumeClaimTemplate:
         spec:
           storageClassName: ceph-nvme-block
@@ -40,6 +45,10 @@ data:
   config.yaml: |
     prometheus:
       retention: {{ .Values.userWorkload.retention }}
+      # NOTE the different parent key: the platform cap hangs off
+      # `prometheusK8s`, the user-workload one off `prometheus`. Same field
+      # name, same units.
+      retentionSize: {{ .Values.userWorkload.retentionSize }}
       volumeClaimTemplate:
         spec:
           storageClassName: ceph-nvme-block

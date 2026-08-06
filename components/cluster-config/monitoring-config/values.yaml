@@ -1,5 +1,33 @@
 prometheus:
   retention: 15d
+  # SIZE cap on top of the time window. `retention` alone is not a disk
+  # guardrail: it bounds the TSDB by AGE, so the on-disk size floats with
+  # series count. On 2026-08-06 prometheus-k8s-1 sat at 41.3 GiB used of a
+  # 48.9 GiB filesystem and swung ~3 GiB per compaction cycle -- a
+  # momentary 90% read, 85% at rest, on 7.6 GiB of headroom. Prometheus
+  # prunes on whichever limit trips first, so this puts a ceiling under
+  # series growth instead of waiting for ENOSPC (which stops ingestion and
+  # can corrupt the WAL).
+  #
+  # 38GiB = 77.7% of the 48.9 GiB volume, under upstream's "at most 80-85%"
+  # guidance. Worst-case compaction writes a ~36h block (~4.1 GiB at the
+  # current 2.75 GiB/day density) BEFORE dropping its sources, and that
+  # transient is NOT counted against the cap -- so peak on-disk lands near
+  # 42 GiB (86%), leaving ~6.8 GiB. Effective retention becomes ~13d rather
+  # than the full 15d. If KubePersistentVolumeFillingUp still trips at
+  # compaction peaks, drop to 36GiB (~12.4d) rather than growing the PVC:
+  # nvme-replicated has ~178 GiB MAX AVAIL and each +1 GiB of PVC costs
+  # 3 GiB raw at size=3.
+  #
+  # UNITS: this is the Prometheus CRD's ByteSize, regex
+  #   (^0|([0-9]*[.])?[0-9]+((K|M|G|T|E|P)i?)?B)$
+  # so it MUST end in `B` -- `38GiB`, never `38Gi`. `volumeSize` two lines
+  # below is a k8s quantity and DOES use `50Gi`; they are different types.
+  # A bad unit passes CMO's config parse and only dies later at Prometheus
+  # CR admission inside the reconcile loop, which is a much muddier signal
+  # than a bad KEY (CMO uses UnmarshalStrict -> whole config rejected ->
+  # `monitoring` ClusterOperator degrades).
+  retentionSize: 38GiB
   volumeSize: 50Gi
 
 alertmanager:
@@ -8,4 +36,12 @@ alertmanager:
 userWorkload:
   enabled: true
   retention: 15d
+  # Same guardrail on the user-workload TSDB. Only ~0.2 GiB of the 10Gi
+  # volume is in use today, so this never binds at current volume -- it is
+  # insurance against per-namespace exporter growth (nmstate metrics start
+  # landing here once the RoleBinding fix in components/operators/nmstate/
+  # ships). 7GiB = 71.8% of the 9.75 GiB filesystem; deliberately looser
+  # than the platform ratio because 1 GiB of absolute headroom on a small
+  # volume is worth more than a percentage point of retention.
+  retentionSize: 7GiB
   volumeSize: 10Gi
