@@ -519,6 +519,72 @@ reflector backs off, so allow a few minutes; no Prometheus restart is needed.
 Filed as `bugs/upstream-community-operators-nmstate-csv-prometheus-rolebinding-wrong-namespace.md`.
 It is **not** covered by okd-operator-pipeline PR #19, which addresses (a) and (b) only.
 
+### Post-sync verification: the fix worked, and immediately exposed a FOURTH defect
+
+RBAC half, confirmed:
+
+```
+$ ... query 'sum(increase(prometheus_sd_kubernetes_failures_total[2m]))by(pod)'
+prometheus-k8s-0            0
+prometheus-k8s-1            0
+prometheus-user-workload-0  0
+prometheus-user-workload-1  0
+```
+
+Zero, on all four. The `forbidden` lines are gone from both platform Prometheus logs, and
+the target now *exists* for the first time — before the fix, discovery never ran, so there
+was no target at all:
+
+```
+$ ... /api/v1/targets?state=active
+serviceMonitor/nmstate/controller-manager-metrics-monitor/0  svc=nmstate-monitor  health=down
+  lastError: Get "https://10.128.1.99:8443/metrics": context deadline exceeded
+```
+
+**`health=down`.** Service discovery is fixed; the scrape itself fails. And the endpoint's
+own log shows why it is not a fluke:
+
+```
+$ oc -n nmstate logs nmstate-metrics-5fc4f8b44b-nkvpr --tail=20
+2026/08/06 13:48:03 http: TLS handshake error from 10.128.0.2:55302: EOF
+2026/08/06 13:48:03 http: TLS handshake error from 10.128.0.2:55312: EOF
+... (12 per minute, continuously)
+```
+
+Three things rule out the obvious suspects:
+
+1. **Not caused by this change.** The handshake errors run at a steady 12/min going back
+   well before the RoleBinding landed at 13:44Z (sampled from 12:00Z, uniform 12/min).
+   Pre-existing and independent.
+2. **Not the server cert.** `service.beta.openshift.io/serving-cert-secret-name:
+   openshift-nmstate-metrics` on the Service, secret is service-CA signed for hostname
+   `nmstate-monitor.nmstate.svc` — exactly the `serverName` the operator's own
+   ServiceMonitor pins — valid to 2028-04-25. The container mounts it at
+   `/tmp/k8s-metrics-server/serving-certs` and is `1/1 Running`, 0 restarts.
+3. **Not node-scoped, so not the OVN cascade.** Both replicas fail identically —
+   prometheus-k8s-0 on node6 (same node as the metrics pod) and prometheus-k8s-1 on node5.
+   A same-node pod→pod connection timing out is not a fabric problem.
+
+So: `nmstate-metrics` accepts the TCP connection, begins TLS, and the handshake never
+completes. Endpoint-side, and a fourth distinct defect in this operator's packaging.
+
+**This is a good outcome even though metrics still do not flow.** The RBAC gap was masking
+it completely: with discovery blocked on cache sync there was no target, no scrape, and
+nothing to be down — the broken endpoint was structurally invisible. Fixing the RBAC is
+what made it observable. Ordering matters here; chasing the endpoint first would have been
+impossible.
+
+Deliberately **not** chased further this session. It is a cosmetic metrics gap on a
+non-load-bearing operator, the RBAC fix is complete and verified on its own terms, and the
+remaining work (mTLS requirement? wedged metrics server? an upstream `IS_OPENSHIFT=true`
+path?) is upstream triage, not a local chart change. Tracked in the README TODO.
+
+Alert consequence to watch: `PrometheusKubernetesListWatchFailures` should now clear on
+both replicas (its input is exactly the SD failure counter, now 0). A `TargetDown` for the
+nmstate ServiceMonitor may appear in its place — that one would be **correct**, and is the
+first honest signal this endpoint has ever produced.
+
+
 ## Post-shim smoke test — 2026-05-11 (Phase 2 prerequisite validated)
 
 After all three NNCPs reached `gen=2 / TrueSuccessfullyConfigured`, re-ran the smoke pod with the new pod range. Pod scheduled on node4, got `net1=192.168.10.128` (ceph-public) and `net2=192.168.10.129` (ceph-cluster) — first two addresses of the shifted whereabouts range. Same dual-attachment annotation as the prior test.

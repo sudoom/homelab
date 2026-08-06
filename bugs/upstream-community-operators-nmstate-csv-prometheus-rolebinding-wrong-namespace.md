@@ -121,3 +121,15 @@ flap permanently against ArgoCD selfHeal.
   arrived via a different subject and a different symptom than anticipated.
 - Worth filing as a single issue against the k8s-operatorhub/community-operators packaging
   rather than folding into PR #19, which is scoped to the handler `clusterPermissions`.
+- **A fourth, separate defect sits behind this one.** With the RBAC fixed, discovery now
+  succeeds and the target appears — but `health=down`,
+  `Get "https://10.128.1.99:8443/metrics": context deadline exceeded`, and the
+  `nmstate-metrics` pod logs `http: TLS handshake error from <ip>: EOF` at a steady
+  12/min. That predates the RBAC fix (sampled well before it landed), so it is
+  independent. The serving cert is not the cause: the Service carries
+  `service.beta.openshift.io/serving-cert-secret-name: openshift-nmstate-metrics` and the
+  secret is service-CA signed for `nmstate-monitor.nmstate.svc` — the exact `serverName`
+  the operator's own ServiceMonitor pins — valid to 2028. Both Prometheus replicas fail
+  identically, including the one co-located with the metrics pod, so it is not a
+  node/network issue either. Needs its own upstream triage; the RBAC bug documented here
+  was merely masking it, since discovery never ran and therefore no target could be down.
