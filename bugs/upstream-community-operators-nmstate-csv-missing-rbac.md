@@ -102,6 +102,16 @@ Both shipped 2026-05-11 alongside an NNCP roll that triggered the issue.
 - The Red Hat *productized* `kubernetes-nmstate-operator` (from the `redhat-operators` catalog) likely has these permissions correctly. The bug is in the community-operators repackaging.
 - Worth checking whether the upstream `kubernetes-nmstate-operator` (https://github.com/nmstate/kubernetes-nmstate) project's CSV manifest is correct and the community-operators packaging dropped the permissions, vs. the upstream CSV itself being incomplete. Likely the former.
 - If a **third** permission surfaces on a future fresh handler pod, audit the full set rather than patching incrementally — repackaging RBAC piecewise is brittle.
+- **A third defect did surface, 2026-08-06 — but not on a handler pod.** The operator's own
+  `nmstate-monitor` / `prometheus-k8s` RoleBindings in ns `nmstate` bind the subject
+  ServiceAccount in namespace `monitoring`, which does not exist on OpenShift (it is
+  `openshift-monitoring`), so platform Prometheus could never list/watch pods/services/
+  endpoints there and nmstate metrics were never scraped. Written up separately in
+  `upstream-community-operators-nmstate-csv-prometheus-rolebinding-wrong-namespace.md` — it
+  is a *different subject* (`prometheus-k8s`, not `nmstate-handler`) and a *present-but-wrong*
+  binding rather than a missing one, so it is **not** covered by PR #19 and needs its own
+  upstream fix. Note the prediction above assumed the third would surface via a handler pod;
+  it did not, and went unnoticed for 12 days as a result.
 
 ## Local context
 

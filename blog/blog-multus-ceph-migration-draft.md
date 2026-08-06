@@ -374,6 +374,151 @@ Second workaround shipped alongside the SCC binding: `components/operators/nmsta
 
 Lesson for future fresh-pod regressions on this operator: the 15-day-old grandfathered pods are hiding multiple missing bindings. If a third missing permission shows up at the next code path, it's likely from the same lost binding set. Worth doing a wider audit if any more handler pod needs to be recreated.
 
+### Third CSV RBAC defect (2026-08-06): metrics RoleBindings bind subject namespace `monitoring`, not `openshift-monitoring`
+
+The wider audit above went undone, and the third defect showed up anyway — 12 days before
+anyone noticed, and not through a handler pod at all.
+
+Session-start alert triage found `PrometheusKubernetesListWatchFailures` firing on **both**
+platform Prometheus replicas, continuously since 2026-07-25:
+
+```
+$ oc -n openshift-monitoring logs prometheus-k8s-1 -c prometheus --tail=400 | grep -i forbidden
+failed to list *v1.Pod: pods is forbidden: User
+  "system:serviceaccount:openshift-monitoring:prometheus-k8s"
+  cannot list resource "pods" in API group "" in the namespace "nmstate"
+failed to list *v1.Endpoints: endpoints is forbidden: User ... in the namespace "nmstate"
+failed to list *v1.Service: services is forbidden: User ... in the namespace "nmstate"
+
+$ ... query 'sum(rate(prometheus_sd_kubernetes_failures_total[5m])) by (pod)'
+prometheus-k8s-0  0.0667
+prometheus-k8s-1  0.0667
+prometheus-user-workload-{0,1}  0
+```
+
+All three informers the `endpoints` discovery role needs are denied. Discovery blocks on
+cache sync, so this is not log noise — **nmstate metrics have never been scraped at all.**
+No `up` series, ever.
+
+The namespace is set up correctly otherwise, which is what makes this a different shape
+from defects (a) and (b):
+
+```
+$ oc get ns nmstate -o jsonpath='{.metadata.labels}'
+... "openshift.io/cluster-monitoring":"true" ...
+$ oc -n nmstate get servicemonitor
+controller-manager-metrics-monitor   101d
+$ oc -n nmstate get role
+nmstate-handler   nmstate-monitor   prometheus-k8s
+$ oc -n nmstate get role nmstate-monitor -o jsonpath='{range .rules[*]}{.apiGroups} {.resources} {.verbs}{"\n"}{end}'
+[""] ["services","endpoints","pods"] ["get","list","watch"]
+```
+
+Label present. ServiceMonitor present. RoleBindings present. Roles present and *correct*.
+The break is one field deeper:
+
+```
+$ oc -n nmstate get rolebinding nmstate-monitor prometheus-k8s \
+    -o jsonpath='{range .items[*]}{.metadata.name} -> {.roleRef.kind}/{.roleRef.name} subj={.subjects[*].namespace}:{.subjects[*].name}{"\n"}{end}'
+nmstate-monitor -> Role/nmstate-monitor subj=monitoring:prometheus-k8s
+prometheus-k8s  -> Role/prometheus-k8s  subj=monitoring:prometheus-k8s
+
+$ oc get ns monitoring
+Error from server (NotFound): namespaces "monitoring" not found
+```
+
+The subject namespace is `monitoring` — the upstream kube-prometheus convention. On
+OpenShift the platform Prometheus SA lives in `openshift-monitoring`. The value comes from
+`MONITORING_NAMESPACE` in the operator Deployment, which the operatorhub.io CSV leaves at
+the upstream default; the okderators build sets it correctly (which is its own irony,
+since we're on community-operators specifically to dodge the okderators ImageStream bug —
+see `nmstate-imagestream-bug.md`).
+
+**Why this hid for 12 days, and why the earlier audit wouldn't have caught it.** Defects
+(a) and (b) both manifested as a *missing* binding, and both surfaced through handler pod
+failures — admission rejection and a startup crash respectively. This one is a binding that
+**exists and is wrong**, for a *different subject entirely* (`prometheus-k8s`, not
+`nmstate-handler`). No handler pod ever restarts because of it. The only signal is an alert
+whose name mentions no namespace:
+
+```
+PrometheusKubernetesListWatchFailures
+  expr: increase(prometheus_sd_kubernetes_failures_total{job=~"prometheus-k8s|prometheus-user-workload"}[5m]) > 0
+```
+
+"Kubernetes service discovery is experiencing 19 failures with LIST/WATCH requests" reads
+like a transient API-server hiccup. It is trivially pattern-matched as noise, which is
+exactly what happened for 12 days. Worth stating plainly: the `nmstate-handler` *restart
+count* is on this cluster's known-benign list, and that entry is still correct — but it
+covers the restart signal only, and it is not license to treat anything nmstate-shaped as
+benign.
+
+### The fix, and two things deliberately not done
+
+Shipped `components/operators/nmstate/templates/prometheus-metrics-rbac.yaml` — our own
+`Role` + `RoleBinding` in ns `nmstate` granting `get/list/watch` on
+`services,endpoints,pods` to `openshift-monitoring:prometheus-k8s`.
+
+**Not done #1: adding a subject to the operator's existing RoleBindings.** They carry
+controller `ownerReferences` to the cluster-scoped `NMState` CR and the operator reconciles
+them every few hours. Editing them would produce a permanent flap — the operator reverting
+while ArgoCD selfHeal re-applies. The two broken bindings stay in place as dead weight;
+anyone reading `oc -n nmstate get rolebinding` later will see three bindings for the same
+purpose, and the comment header in the new template explains why.
+
+**Not done #2: binding to the operator's `nmstate-monitor` Role instead of shipping our
+own.** That Role is CR-owned too. If an upgrade renames or drops it, a binding pointing at
+it dangles with *no admission error* — metrics would silently stop again, reproducing the
+exact failure mode being fixed. A self-contained Role costs four lines and removes the
+dependency.
+
+**Also considered and rejected: `Subscription.spec.config.env` with
+`MONITORING_NAMESPACE=openshift-monitoring`.** OLM does merge env by name into the operator
+Deployment, so this looks like the "proper" fix. But whether the nmstate-operator *updates*
+the subjects of already-existing RoleBindings or only creates-them-if-absent could not be
+determined read-only. If it is create-if-absent, the override silently changes nothing —
+and a silent no-op is precisely how this bug survived 12 days. Not shipping a fix whose
+failure mode is indistinguishable from the bug.
+
+### Two namespaces, one chart — the footgun in this fix
+
+This chart spans two real namespaces and they are easy to conflate:
+
+- `.Values.namespace` = `openshift-nmstate` — the **OLM install** namespace
+  (Namespace + OperatorGroup + Subscription).
+- `nmstate` — the **operand** namespace, hardcoded upstream as `HANDLER_NAMESPACE` in the
+  CSV, where the handler DaemonSet, the ServiceMonitor and all these RoleBindings live.
+
+Both exist; neither is stale. The ArgoCD Application's `destination.namespace` is
+`openshift-nmstate`, so a namespaced resource that omits `metadata.namespace` lands
+**there**, creates successfully, and reports `Synced`/`Healthy` while granting nothing.
+That failure is invisible in ArgoCD — the same shape as the bugs the two sibling
+ClusterRoleBindings were written to fix. Hence `namespace: nmstate` hardcoded in both
+`metadata.namespace` and the subject, with a comment telling the next reader not to "DRY it
+up" into `{{ .Values.namespace }}`.
+
+Sync-wave is **6**, not the `1` used by the two sibling files. Those are cluster-scoped
+ClusterRoleBindings and apply fine before their subjects exist; a namespaced RoleBinding
+needs `ns/nmstate` to exist first, and that namespace is created by the operator while
+reconciling the `NMState` CR at wave 5. On a from-scratch bootstrap expect one transient
+OutOfSync while the operator catches up — ArgoCD's retry (5×, 5 s → 3 m) absorbs it.
+
+`oc diff` confirmed the delta is exactly the two new objects, landing in `nmstate`:
+
+```
++kind: Role         name: nmstate-prometheus-k8s-reader  namespace: nmstate
++kind: RoleBinding  name: nmstate-prometheus-k8s-reader  namespace: nmstate
++  subjects: [{kind: ServiceAccount, name: prometheus-k8s, namespace: openshift-monitoring}]
+```
+
+Verification after sync needs the operator kubeconfig (the readonly SA has no pods/exec):
+the `forbidden` lines in `prometheus-k8s-{0,1}` go quiet, `count(up{namespace="nmstate"})`
+becomes ≥ 1, and `PrometheusKubernetesListWatchFailures` clears on both replicas. The
+reflector backs off, so allow a few minutes; no Prometheus restart is needed.
+
+Filed as `bugs/upstream-community-operators-nmstate-csv-prometheus-rolebinding-wrong-namespace.md`.
+It is **not** covered by okd-operator-pipeline PR #19, which addresses (a) and (b) only.
+
 ## Post-shim smoke test — 2026-05-11 (Phase 2 prerequisite validated)
 
 After all three NNCPs reached `gen=2 / TrueSuccessfullyConfigured`, re-ran the smoke pod with the new pod range. Pod scheduled on node4, got `net1=192.168.10.128` (ceph-public) and `net2=192.168.10.129` (ceph-cluster) — first two addresses of the shifted whereabouts range. Same dual-attachment annotation as the prior test.

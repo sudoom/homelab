@@ -1,0 +1,90 @@
+# Grants the platform Prometheus ServiceAccount
+# (openshift-monitoring:prometheus-k8s) read access to services, endpoints
+# and pods in the OPERAND namespace `nmstate`, so its Kubernetes service
+# discovery can resolve the targets behind the operator's ServiceMonitor
+# `controller-manager-metrics-monitor`.
+#
+# The operator already ships two RoleBindings for exactly this
+# (`nmstate-monitor` and `prometheus-k8s`), and their Roles carry the
+# correct rules -- but their subject is ServiceAccount `prometheus-k8s` in
+# namespace `monitoring`, the upstream kube-prometheus convention. That
+# namespace does not exist on OpenShift; the real SA lives in
+# `openshift-monitoring`. The value comes from MONITORING_NAMESPACE in the
+# operator Deployment, which the operatorhub.io CSV leaves at the upstream
+# default (the okderators build passes openshift-monitoring correctly).
+#
+# Symptom, logged continuously by both prometheus-k8s pods for each of the
+# three informers the endpoints-role discovery needs:
+#
+#   failed to list *v1.Pod: pods is forbidden: User
+#   "system:serviceaccount:openshift-monitoring:prometheus-k8s"
+#   cannot list resource "pods" in API group "" in the namespace "nmstate"
+#
+# ...and the same for services and endpoints. Discovery blocks on cache
+# sync, so nmstate metrics are never scraped at all -- no `up` series --
+# and PrometheusKubernetesListWatchFailures fires forever. This went
+# unnoticed for 12 days (2026-07-25 -> 08-06) because the alert names no
+# namespace, and unlike the two sibling defects below it produces no pod
+# restarts: the RoleBindings EXIST and are merely wrong.
+#
+# This is the THIRD RBAC defect in the same CSV, after the `privileged`
+# SCC `use` grant (handler-scc-binding.yaml) and the apiservers read
+# (handler-apiserver-rbac.yaml). Tracked in the README TODO for upstreaming
+# and written up in bugs/.
+#
+# Two deliberate choices, both load-bearing:
+#
+#  1. We ship our OWN Role rather than binding the operator's
+#     `nmstate-monitor` Role. That Role is owned by the cluster-scoped
+#     NMState CR; if an operator upgrade renames or drops it, a binding
+#     pointing at it would dangle with NO admission error and metrics would
+#     silently stop again -- the same failure shape we are fixing.
+#
+#  2. `metadata.namespace: nmstate` is REQUIRED and must stay hardcoded.
+#     `.Values.namespace` is `openshift-nmstate` -- the OLM *install*
+#     namespace -- while `nmstate` is the *operand* namespace the operator
+#     deploys the handler into (HANDLER_NAMESPACE, baked into the CSV).
+#     The ArgoCD Application's destination.namespace is openshift-nmstate,
+#     so omitting this would land the RoleBinding there, report
+#     Synced+Healthy, and grant nothing. Do not "DRY this up" into
+#     {{ `{{ .Values.namespace }}` }}.
+#
+# Sync-wave 6, NOT 1 like the two sibling files: those are cluster-scoped
+# ClusterRoleBindings, which apply fine before their subjects exist. A
+# NAMESPACED RoleBinding needs ns/nmstate to exist first, and that namespace
+# is created by the operator while reconciling the NMState CR at wave 5.
+# On a from-scratch bootstrap expect one transient OutOfSync while the
+# operator catches up; ArgoCD's retry (5x, 5s->3m) absorbs it.
+#
+# Do NOT instead add a subject to the operator's own RoleBindings: they
+# carry controller ownerRefs to the NMState CR and are reconciled every few
+# hours, so the operator would revert the edit while ArgoCD selfHeal
+# re-applied it -- a permanent flap.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nmstate-prometheus-k8s-reader
+  namespace: nmstate
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nmstate-prometheus-k8s-reader
+  namespace: nmstate
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nmstate-prometheus-k8s-reader
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-k8s
+    namespace: openshift-monitoring
