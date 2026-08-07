@@ -407,6 +407,37 @@ Both from the *same* verification pass, both worth remembering:
 
 ### Residue
 
+### Residue — CLEARED (same day)
+
+Both residual items were closed the same afternoon:
+
+**`media/transmission-{master,slave}`** — deleting the pods was enough, but it took two attempts and
+the reason is worth recording. The Deployment carries
+`requiredDuringSchedulingIgnoredDuringExecution` anti-affinity on `component: transmission` with
+`topologyKey: kubernetes.io/hostname`, so with master on node5 the slave could only land on node4 or
+node6. It drew **node6 first and failed identically** — the staging dir was still poisoned — then
+node4 on the retry and came up clean. Final: master `1/1` on node5, slave `1/1` on node4, `/data`
+verified live in both (`stat -f` → `fs=ceph`, matching avail blocks — a real mount, not a stale one).
+
+**node6's poisoned CephFS staging dir** — fixed by `systemctl restart kubelet` on node6. Verified
+afterwards from the node:
+
+```
+/var/lib/kubelet/plugins/kubernetes.io/csi/rook-ceph.cephfs.csi.ceph.com/<volhandle>/globalmount
+  → staging dir GONE (clean slate; kubelet re-stages on next mount)
+cephfs mounts on node6: 1        # bazarr's pre-existing mount survived, still 1/1
+```
+
+node6 stayed `Ready` throughout, all 93 pods on it healthy. `prometheus-k8s-0` briefly read `5/6`
+during the restart and self-cleared with **zero container restarts** — the kubelet restart did not
+bounce a single workload, which is exactly why it is the right tool here rather than a reboot.
+
+Note the ordering lesson: restarting kubelet on the poisoned node **first** would have let the slave
+schedule anywhere and avoided the failed attempt entirely. Chasing the pod before fixing the node
+is backwards.
+
+### Original residue notes
+
 - `media/transmission-{master,slave}`: `CreateContainerError`,
   `failed to resolve symlink .../volumes/kubernetes.io~csi/pvc-c0d00980-.../mount: lstat ...
   permission denied` — the documented CephFS staging residue from the outage window. Fix is to
