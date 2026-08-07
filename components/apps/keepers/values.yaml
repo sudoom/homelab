@@ -22,7 +22,7 @@ sharedData:
 apps:
   transmission:
     enabled: true
-    image: haugene/transmission-openvpn:5.5.0
+    image: haugene/transmission-openvpn:5.5.1
     port: 9091
     # config PVC (transmission settings + resume files). 1Gi is plenty — the
     # downloads live on the shared NFS data volume, not here.
