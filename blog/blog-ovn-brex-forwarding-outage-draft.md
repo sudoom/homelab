@@ -363,3 +363,63 @@ The lesson worth keeping: **the cluster's own runbook was the source of the bias
 egress break → restart it" is a *symptom-and-remedy* pair with no mechanism, and reaching for it
 made the familiar remedy feel like an explanation. The right instinct when a documented failure
 recurs *without its documented trigger* is to distrust the documented cause.
+
+## Recovery (2026-08-07, ~14:20Z — ~5 h after onset)
+
+Operator applied `sysctl -w net.ipv4.conf.br-ex.forwarding=1` on all three nodes. No pod restarts,
+no ovnkube-node bounce, no disruption.
+
+Immediate, verified:
+
+```
+node4/node5/node6  br-ex.forwarding = 1
+pod -> 192.168.1.7:6443   200 / 0.020 s   (was 000 / 8.00 s hang, from every node)
+media-postgres    ContinuousArchiving = True/ContinuousArchivingSuccess
+immich-postgres   ContinuousArchiving = True/ContinuousArchivingSuccess
+etcd              EtcdMembersAvailable: 3 members are available
+etcdctl endpoint health --cluster → all 3 healthy (20-28 ms)
+repo-server       GenerateManifest grpc.code=OK  (was DeadlineExceeded)
+clusterissuer/letsencrypt-prod  Ready=True/ACMEAccountRegistered  (self-healed, no bounce)
+all 5 Certificates Ready=True
+```
+
+ArgoCD went from **45/45 `Unknown`** to 5 still converging within minutes; the `etcd` and
+`authentication` ClusterOperators cleared themselves once pod→host-IP worked again, confirming
+those messages were always probe-inferred rather than real.
+
+**A one-line sysctl write ended a five-hour cluster-wide outage.** Worth sitting with: the fix was
+never the heavyweight "restart all three ovnkube-node pods" the runbook prescribed — that only
+worked because full gateway init happens to re-assert this one flag. Knowing the mechanism turned a
+disruptive, ordered, multi-step remediation into a single idempotent write with zero pod churn.
+
+### Two probe artifacts that nearly caused false conclusions
+
+Both from the *same* verification pass, both worth remembering:
+
+1. **`curl https://1.1.1.1` returned `000` after the fix** — but in 0.038 s, not the 8 s hang. Fast
+   failure ≠ the original symptom. **Read the latency, not just the status code.**
+2. **`curl https://github.com` returned `000` from all three nodes**, consistently — which looked
+   like a real residual failure. It was the probe pod lacking a CA bundle:
+   `error setting certificate file: /etc/pki/tls/certs/ca-bundle.crt`. Raw TCP to `github.com:443`
+   returned **301 in 0.074 s**. Always confirm a "failure" is not your own instrument, especially
+   when it is suspiciously uniform across hosts.
+
+### Residue
+
+- `media/transmission-{master,slave}`: `CreateContainerError`,
+  `failed to resolve symlink .../volumes/kubernetes.io~csi/pvc-c0d00980-.../mount: lstat ...
+  permission denied` — the documented CephFS staging residue from the outage window. Fix is to
+  delete the pods so they re-stage (Deployment-managed, RWX so they can land anywhere); if they
+  return to the same node and fail again, `systemctl restart kubelet` on that node. **Do not
+  hand-chase with `umount`/`rmdir`/`rm -rf`** — that corrupted ceph-csi staging state on 2026-07-26.
+- `insights` ClusterOperator still `Available=False`: long-fuse external retrier that had not yet
+  reattempted its upload. Self-heals on the next cycle, or bounce `insights-operator`.
+- Leftover `Error` pods from the outage window (`installer-67-node5`, `collect-profiles-*`,
+  `descheduler-*`) are completed one-shot Jobs — cosmetic.
+
+### Follow-up worth doing
+
+Add a node-level alert on `net.ipv4.conf.br-ex.forwarding == 0`. Nothing in `ovnkube-node`'s
+readiness probe reads it, so all three pods reported healthy for the full five hours while the
+cluster had no egress. This single check would have cut detection from hours to minutes, and it is
+the only signal that is both unambiguous and instant.
