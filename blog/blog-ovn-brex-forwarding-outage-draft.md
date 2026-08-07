@@ -181,7 +181,90 @@ internal port created and owned by OVN-K; `br-ex` is a NetworkManager-managed de
 reapply/reactivation of `br-ex` resets its per-interface sysctls to the `default` (`0`) while
 leaving `mp0` alone.
 
-## Trigger — unproven, one strong fingerprint
+## Trigger — CONFIRMED: a 10G switch firmware upgrade
+
+**The Mikrotik 10G switch was rebooted for a firmware upgrade.** (Operator-confirmed mid-session;
+switch uptime `04:48:54` at `16:16:18` local = boot at `11:27:24` local = **09:27:24Z**.)
+
+The kernel logs on all three nodes agree to the second:
+
+```
+2026-08-07T09:24:35Z node4 kernel: mlx5_core 0000:01:00.0 enp1s0f0np0: Link down
+2026-08-07T09:24:35Z node5 kernel: mlx5_core 0000:01:00.0 enp1s0f0np0: Link down
+2026-08-07T09:24:35Z node6 kernel: mlx5_core 0000:01:00.0 enp1s0f0np0: Link down
+2026-08-07T09:28:15Z node{4,5,6} kernel: mlx5_core 0000:01:00.0 enp1s0f0np0: Link up
+```
+
+Down 09:24:35Z, up 09:28:15Z — 51 s after the switch finished booting. Last successful pod→remote-host
+connect was **09:23:59Z**. The two coincide exactly.
+
+### The causal chain, end to end
+
+1. **09:24:35Z** — 10G switch reboots. All three nodes lose `enp1s0f0np0` carrier, and with it the
+   `192.168.10.x` backnet address.
+2. **09:24:41Z** — the vanished address changes each node's host-address set, which fires
+   **OVN-K's gateway reconcile**. Visible on every node:
+   ```
+   I0807 09:24:41.710033 kube.go:133] Setting annotations
+     map[k8s.ovn.org/host-cidrs:["192.168.1.7/24","192.168.10.16/24"]
+         k8s.ovn.org/l3-gateway-config:{"default":{"mode":"local","bridge-id":"br-ex",...}}]
+   ```
+   NetworkManager also logs `state change: activated -> unavailable (reason 'carrier-changed')`
+   for `enp1s0f0np0` and `ceph-shim`, and `ovs-vswitchd` logs br-ex `flow_mods ... (deletes)` at
+   09:24:42Z.
+3. **That reconcile leaves `net.ipv4.conf.br-ex.forwarding = 0`.** The ovnkube-node entrypoint's
+   restricted-forwarding setup begins by zeroing `net.ipv4.ip_forward` — and in the Linux kernel,
+   **writing to `conf.all.forwarding` propagates the value to every interface**, br-ex included.
+   The reconcile re-asserts `ovn-k8s-mp0.forwarding=1` but **not** `br-ex.forwarding=1`; that
+   appears to happen only on full gateway init, i.e. at ovnkube-node start.
+4. Pod→external and pod→remote-host return traffic is dead on all three nodes, and **stays** dead —
+   nothing re-runs the init.
+
+Step 3's write is **inferred**, not directly observed (nothing logs the sysctl). But it is the only
+mechanism consistent with the end state — `all=0, ip_forward=0, mp0=1, br-ex=0` — and it explains
+every otherwise-odd feature of this failure: why all three nodes broke simultaneously (all three
+lost the same link), why `mp0` and `br-ex` diverge (asymmetric re-application), and why an
+ovnkube-node restart is the cure.
+
+### Why this is worse than it looks
+
+**The trigger is on the storage backnet, but the damage is on the frontnet.** VLAN 10 has nothing to
+do with pod egress — but OVN-K's gateway reconcile fires on *any* host-address change, on *any*
+interface. So a 10G switch reboot, an event with no logical connection to VLAN 5, silently kills
+cluster-wide pod egress and leaves it broken indefinitely.
+
+That also retro-explains the runbook's list of triggers (reboot, MCO reroll, nmstate change): every
+one of them changes the host address set. They were never the cause — they were all instances of
+*this*.
+
+**Operationally: every future firmware upgrade of the 10G switch will do this again.** It is not a
+one-off. Post-upgrade, check the sysctl on all three nodes and restart `ovnkube-node` if it reads 0.
+
+### What was ruled out along the way
+
+- **nmstate** — no enactment since 2026-07-30 (`nnce` Available=2026-07-30T16:34:28Z), zero handler
+  restarts, NNCPs unchanged at `gen=3`.
+- **MCO** — `mcp/master` Updated since 2026-07-26T21:17:57Z; newest rendered MachineConfig is
+  2026-05-28.
+- **Tuned / `power-tuning`** — profile sets no sysctls; pods have not restarted since 2026-04-03.
+- **Repo manifests** — `grep -rniE "ipv4\.conf|ip_forward|forwarding" components/ bootstrap/` → nothing.
+- **NetworkManager touching br-ex** — journal shows **zero** br-ex events on any node in 09:00-10:00Z.
+  This killed my own leading hypothesis; the reconcile is OVN-K's, not NM's.
+- **Clock/NTP** — `node_timex_sync_status=1`.
+- **The frontnet link** — `enp0s31f6` shows no carrier change on any node. The 1G path never flapped.
+
+### A measurement trap worth remembering
+
+My first pass used `node_network_carrier_changes_total` and concluded node4 and node5 had **no**
+carrier change, only node6. That was wrong. Prometheus (`prometheus-k8s-0`, on node6) stopped being
+able to scrape node4 and node5 at 09:24 *because of this very outage*, so their carrier flap was
+never recorded. The kernel log shows all three flapped identically.
+
+**Metrics gathered during an outage are truncated by that outage.** When a monitoring gap and the
+incident share a start time, absence of a metric is not evidence of absence of the event — go to the
+node journal.
+
+## Original trigger analysis (superseded by the confirmation above)
 
 Onset is sharp and precisely dated. Last successful TCP connect from the check-source to node4's
 apiserver endpoint: **2026-08-07T09:23:59Z**; to node6: **09:24:13Z**. The 10-entry success list
