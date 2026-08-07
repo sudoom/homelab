@@ -1,8 +1,9 @@
 # The `br-ex` forwarding outage — finding the mechanism behind the "ovnkube-node egress break"
 
 **Date:** 2026-08-07
-**Status:** root cause identified, fix pending operator execution
-**Severity:** cluster-wide, ~4.5 h and counting at time of diagnosis
+**Status:** RESOLVED — root cause + trigger confirmed, fixed by a one-line sysctl at ~14:20Z
+**Severity:** cluster-wide, ~5 h total (09:24Z → 14:20Z)
+**Trigger:** Mikrotik 10G switch rebooted for a firmware upgrade (will recur on every upgrade)
 
 For months this cluster has had a recurring failure documented in `CLAUDE.md` purely by its
 symptoms: "a node's `ovnkube-node` develops broken pod→remote-host egress; restart it." It shows
