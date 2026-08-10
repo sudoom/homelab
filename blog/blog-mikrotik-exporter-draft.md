@@ -193,3 +193,114 @@ Grafana dashboard 13679 is provisioned by `grafana-config` and bound to the `Pro
 Three weeks of fio runs against Ceph generated lots of "is the network in the way?" follow-ups. Without `node_network_*` on the switch side it's all guessing. Now there's a graphable answer. The PoE / wireless / DHCP signals are bonus — and turn out to be useful for the upcoming pi-hole → technitium migration, where the switch is going to be the most stable observability point as boxes get swapped in and out.
 
 Total session time: ~1 hour of chart writing, ~30 min of debug-and-fix on the four issues above. Cheaper than I'd guessed.
+
+---
+
+## 2026-08-10 — first real payoff: why the switch fans sit at 8.5k RPM
+
+**Question that started it:** the CRS317's Health panel showed `fan1-speed 8580 RPM` / `fan2-speed
+8430 RPM` with `cpu-temperature 37 C`. Why are the fans screaming when the CPU is cold?
+
+The whole diagnosis was answered from `mktxp` series in UWM Prometheus, without touching the
+switch. That is the payoff this chart was built for, so it belongs here.
+
+### The Health panel, as observed
+
+```
+cpu-temperature  = 37 C          fan-state       = ok
+fan1-speed       = 8580 RPM      psu1-state      = ok
+fan2-speed       = 8430 RPM      psu2-state      = fail
+sfp-temperature  = 69 C
+
+Health > Settings:  Fan Full Speed Temp 65 | Fan Target Temp 58
+                    Fan Min Speed Percent 1 | Fan Control Interval 00:00:30
+```
+
+`sfp-temperature 69` is above `fan-full-speed-temp 65`, so the controller is doing exactly what it
+is configured to do. RouterOS drives the fan curve off the **hottest** monitored sensor (CPU / PHY /
+SWITCH / SFP), not off `cpu-temperature` — so 37 C on the CPU is irrelevant. Worth noting: **65 is
+the maximum value RouterOS accepts** for `fan-full-speed-temp`, so this is stock, and "just raise
+the threshold" is not an available move.
+
+### Which cage is hot — answered by `mktxp_interface_sfp_info`
+
+Only one module on the switch reports DDM at all:
+
+```promql
+mktxp_interface_sfp_temperature{routerboard_name="home-switch"}
+  → {name="Mac mini"} 68
+```
+
+`mktxp_interface_sfp_info` names it outright:
+
+| Port comment          | Vendor      | Part            | Connector               |
+|---|---|---|---|
+| **Mac mini**          | MikroTik    | **S+RJ10**      | **RJ45**                |
+| Reserved (Node 4 sto) | MikroTik    | XS+DA0001       | copper-pigtail (DAC)    |
+| Reserved (Node 5 sto) | MikroTik    | XS+DA0001       | copper-pigtail (DAC)    |
+| Reserved (Node 6 sto) | EXTRALINK   | EX.2275         | copper-pigtail (DAC)    |
+| sfp-sfpplus1          | Ubiquiti    | DAC-SFP10-0.5M  | no-separable-connector  |
+
+The `S+RJ10` is MikroTik's 10GBASE-T copper RJ45 transceiver — the one module class that dissipates
+real power (single-digit watts vs. ~0.1 W for a passive DAC). The other four are all passive DACs,
+which is also why only one temperature series exists: **a passive DAC has no DDM, so it reports no
+temperature.** The absence of four series is not a scrape gap; it is the expected shape.
+
+So: one active copper module heats the cage area, the board sensor next to it reads 69 C, and the
+fan controller pins the fans. The three Ceph backnet links are DACs and contribute ~nothing.
+
+### It is not new, and the firmware upgrade did not cause it
+
+The obvious suspicion was the 2026-08-07 firmware upgrade (the same reboot that caused the
+`br-ex.forwarding` outage — see `blog/blog-ovn-brex-forwarding-outage-draft.md`). The 15-day
+retention window covers both sides of that boundary, and it refutes the idea outright:
+
+```
+sfp DDM temp, daily:  69 67 68 67 71 70 68 69 70 70 72 69 70 70 69
+15d min/max:          64 C … 73 C
+fan1 15d min/max:     4335 … 8595 RPM
+```
+
+No step change on 08-07 — the module has been sitting in the mid-to-high 60s for the entire window.
+The fan swing is **diurnal**: the module straddles the 65 C threshold, dipping just under it in the
+coolest hours (min 64 C → fans drop to 4335 RPM) and sitting above it the rest of the day (→ pinned
+~8580). "The fans got loud" is ambient temperature moving a distribution that was always centred on
+the threshold, not an event.
+
+Incidental confirmation of the 08-07 outage: both series have a **hole at 08-07 ~14:23Z**, the
+scrape blackout during the pod-egress break. The monitoring gap and the incident share a timestamp —
+the same trap documented in the `br-ex` writeup.
+
+### `psu2-state: fail` — a separate, non-thermal finding
+
+`mktxp_system_psu2_state{routerboard_name="home-switch"}` reads `0` for **all 15 days**, and the
+operator confirmed the cause: the second power cord is simply not plugged in. Worth being precise
+about why the panel can't tell you that itself — the RouterOS field (`mtxrHlPowerSupplyState`) is a
+boolean with no "absent" state, so "no mains on inlet 2" and "PSU is dead hardware" both render as
+`fail`. The log discriminates (`PSU2 power input not detected` vs `PSU2 removed from the slot`); the
+Health panel does not.
+
+I briefly floated that an unpowered PSU might be reducing chassis airflow and thus *contributing* to
+the SFP temp. The data kills that: `psu2_state` has been `0` across the entire window while the
+module temperature stayed flat, so there is no before/after to attribute anything to. No source was
+found either way on whether MikroTik PSUs contribute airflow — dropping the theory rather than
+carrying it as folklore.
+
+What remains true is the boring part: **this switch is single-corded, and it is the only path for
+the Ceph storage backnet.** Given that a 3m40s link flap on it cost a 5-hour cluster-wide outage on
+08-07, that is the finding worth acting on — not the fan noise.
+
+### Conclusions
+
+- Fans are **correct, not faulty**. The controller is saturated because a 10GBASE-T copper module
+  parks the cage sensor above the maximum-permitted full-speed threshold.
+- The lever that actually works is **removing the heat**: relocate/replace the `S+RJ10`, or improve
+  ambient/airflow. Raising the threshold is both unavailable (65 is the ceiling) and wrong — the
+  curve is already 11 C above `fan-target-temp` (58), meaning heat input exceeds what the fans can
+  remove at 100%. Muting that signal is how you get an unplanned thermal event on the switch that
+  carries the storage backnet.
+- The Noctua NF-A4x20 swap costed in the vault is the wrong trade here: the vault's own note says it
+  *raises* switch temperature ~3 C and to skip it under heavy SFP+ load. Quieter, hotter.
+- **Gaps this exposed:** `mktxp` exports no `sfp-temperature` board sensor (only per-module DDM), and
+  there are **zero PrometheusRules** for any mktxp metric — the chart ships a ServiceMonitor and
+  dashboards but nothing that fires. Both queued in the README.
