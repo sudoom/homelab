@@ -304,3 +304,120 @@ the Ceph storage backnet.** Given that a 3m40s link flap on it cost a 5-hour clu
 - **Gaps this exposed:** `mktxp` exports no `sfp-temperature` board sensor (only per-module DDM), and
   there are **zero PrometheusRules** for any mktxp metric — the chart ships a ServiceMonitor and
   dashboards but nothing that fires. Both queued in the README.
+
+### 2026-08-11 follow-up — the port is also flapping, and heatsinks won't fix it
+
+Two follow-ups to the above: an unprompted finding, and an evaluation of the obvious fix.
+
+#### The `S+RJ10` port flaps, and the rate tracks temperature
+
+`mktxp_link_downs_total` for the Mac mini port shows **266 link-down events over the 15-day
+window** — by far the worst port on the switch:
+
+```
+link-down events per port, 15d:
+  Mac mini      266        <- the S+RJ10
+  ether1         62
+  TrueNAS         7
+  (Node 4/5/6 sto: zero)   <- the Ceph backnet DACs are clean
+```
+
+These are not a sleeping Mac. The port was **UP 99.93 % of the window**, so 266 events across
+~15 minutes of total downtime is ~3.4 s each — PHY retraining, not a host powering down. Error
+counters are all zero (`rx_error`, `tx_error`, `rx_drop` = 0), so nothing is being corrupted; the
+link just re-negotiates.
+
+Binning flap counts by module temperature:
+
+```
+mean flaps/2h, module >= 69 C : 3.24   (n=36)
+mean flaps/2h, module <  69 C : 0.60   (n=47)
+```
+
+A 5.4x skew, and it holds *within* the last four days as well as across the whole window — the
+drops cluster at 69-70 C and mostly vanish at 67-68 C. Temperature-dependent retraining is what a
+thermally marginal 10GBASE-T link looks like.
+
+**Two caveats I can't resolve from switch-side data.** The flap rate fell off sharply around
+08-06/08-07 — roughly *eight hours before* the firmware reboot, so the upgrade doesn't explain it;
+something changed at the Mac end or in the cabling. And correlation isn't causation: a marginal
+cable would also flap more when warm. 10GBASE-T is unusually sensitive to cable category and length,
+so the cable is a live alternative hypothesis.
+
+#### The link is using 2.4 % of its rate
+
+```
+Mac mini port, 15d:   peak rx 241.3 Mbit/s | peak tx 77.0 Mbit/s
+                      p99 rx  28.4 Mbit/s | avg rx 1.4 Mbit/s
+```
+
+Peak is 2.4 % of 10 Gbps. Gigabit would carry the observed peak with 4x headroom. Worth stating
+plainly because it reframes every option below: the switch is burning ~2.7 W and its entire fan
+budget to run a link whose measured ceiling fits comfortably in 1 Gbps.
+
+#### Port position is already optimal
+
+`mktxp_interface_default_name_info` puts the `S+RJ10` on **`sfp-sfpplus12`**, with `sfp-sfpplus11`
+and `sfp-sfpplus13` both empty. MikroTik's guidance is not to seat these in adjacent ports — already
+satisfied. **Relocating it within the chassis is not a lever**, which rules out the cheapest
+physical option before spending anything.
+
+#### Heatsinks: right mechanism, wrong magnitude
+
+The barrel is genuinely convection-limited — forced air over the protruding nose measured **~15 C**
+on a CRS317 + S+RJ10 (a taped-on 40 mm fan). So the nose *is* a real thermal path. But fins add
+surface area, not air velocity, and area is the weak lever in still air. Measured passive clip-on
+results:
+
+| Source | Result |
+|---|---|
+| gilesthomas (charted, same module) | **3.5 C** |
+| MikroTik forum, CRS326 | ~0-1 C |
+| MikroTik forum, **CRS317 + S+RJ10r2 @ 71 C** | **null — heatsinks fitted, fans still ~8000 RPM** |
+
+The "58 -> 42 C" figures on AliExpress-style wiki pages are content-farm fabrications; ignore them.
+
+**Size the gap against our own numbers:** median DDM 69 C, and 64 C is empirically where the fans
+drop (to 4335 RPM). So the median needs ~5 C and the 72 C days need ~8 C just to get *off* the
+threshold; reaching `fan-target-temp` 58 needs ~11 C. Derating the 3.5 C reference for our ΔT regime
+lands ~2-3 C. Not in the required class — and the one published test on this exact switch and module
+is a null result.
+
+There's also a feedback trap: cool it to 64 C, the fans drop to ~4335 RPM, thermal resistance rises,
+and it drifts back to 65. Only an intervention with margin well past 11 C escapes that loop.
+
+**Blast radius argues against it too.** Fitting clip-ons means reaching into a live front panel
+directly beside the three Ceph backnet DACs. A fumbled DAC is a backnet flap, and the last one of
+those cost a ~5 h cluster-wide outage.
+
+#### The rate lever, and why it isn't a RouterOS change
+
+Power scales with negotiated rate: **2.7 W at 10GBASE-T** (MikroTik's own figure) vs well under 1 W
+at 1000BASE-T. Traffic volume is irrelevant — link-up dominates, which matches the flat 15-day
+temperature trend.
+
+But it **cannot be done switch-side**. MikroTik states verbatim for the `S+RJ10` that *"forced link
+speeds and configurable link speed advertisements are not supported."* So capping has to happen at
+the Mac (Settings -> Network -> Ethernet -> Details -> Hardware -> Configure Manually -> Speed), and
+that disables autonegotiation, which the module wants. Reversible, but a non-zero chance of dropping
+the link — and 1000BASE-T mandates autoneg by standard, so "manual 1G" behaviour here is genuinely
+uncertain. Test it when a dropped link is cheap, not remotely.
+
+#### Not a safety issue
+
+`sfp-shutdown-temperature` is **95 C**. At 69 C, flat for 15 days, this is noise and (possibly) link
+churn — not a risk of thermal shutdown. **"Do nothing" is a legitimate option** and worth naming as
+such rather than defaulting to action.
+
+#### The one measurement that settles it
+
+Disable the Mac port for ~30 min and watch `sfp-temperature` + fan RPM:
+
+```routeros
+/interface ethernet disable sfp-sfpplus12     # then re-enable
+```
+
+That bounds the payoff of *every* module-side option — heatsink, fan, rate cap — at zero cost. If
+killing the module's 2.7 W entirely doesn't take the fans off full speed, nothing done to that module
+will. Caveat: a soft disable may not fully power down the PHY, so a positive result is definitive and
+a null one is inconclusive.
