@@ -178,7 +178,7 @@ apps:
 
   transmission:
     enabled: true
-    image: haugene/transmission-openvpn:5.5.1
+    image: haugene/transmission-openvpn:5.5.2
     port: 9091
     configSize: 5Gi
     resources:
