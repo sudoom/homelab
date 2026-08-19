@@ -1,6 +1,6 @@
 # Ansible playbook — technitium DNS server
 
-Configures and maintains the home DNS server (replacing pi-hole). Runs against a Raspberry Pi 3B+ (primary) at `192.168.1.12`, and eventually a Raspberry Pi Zero 2W (secondary). See `blog/blog-technitium-dns-migration-draft.md` at the repo root for the design rationale.
+Configures and maintains the home DNS server (replacing pi-hole). Runs against a Raspberry Pi 3B+ (primary) at `192.168.1.12`, and a second box as secondary (RPi 3B+, decided 2026-08-19 — the Zero 2W was rejected: WiFi-only, 512 MB, and a December ship date on a SPOF). See `blog/blog-technitium-dns-migration-draft.md` at the repo root for the design rationale.
 
 ## Why this lives outside ArgoCD
 
@@ -137,6 +137,6 @@ Common edits and the file they live in:
 
 - **Operator-manual bootstrap steps 1-5** above (SD flash + Technitium install + admin password) — playbook expects an already-installed Technitium and a populated `vars/vault.yml`.
 - **End-to-end run against a live Technitium API** still needs to happen — the param names are pinned to the docs but haven't been validated against the running instance yet.
-- **Primary/secondary cluster role** is still a placeholder pending the RPi Zero 2W.
+- **Primary/secondary cluster role** is still a placeholder of `debug` tasks, pending the RPi 3B+.
 
 See the open-items checklist in `blog/blog-technitium-dns-migration-draft.md` for the full punch list.

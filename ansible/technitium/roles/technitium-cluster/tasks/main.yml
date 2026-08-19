@@ -2,7 +2,7 @@
 # Configure primary/secondary replication.
 #
 # Only fires when the host has a `technitium_role` set in inventory (primary
-# or secondary). Until the RPi Zero 2W secondary exists, this role is a
+# or secondary). Until the secondary exists (RPi 3B+, decided 2026-08-19), this role is a
 # placeholder — running the playbook against just the primary is a no-op here.
 #
 # Technitium supports zone-level replication via its "Secondary" zone type:
@@ -26,7 +26,7 @@
 - name: Cluster role tasks for secondary
   ansible.builtin.debug:
     msg: |
-      TODO when secondary lands (RPi Zero 2W):
+      TODO when secondary lands (RPi 3B+):
         - Create a Secondary zone for okd.sudops.pl pointing at
           {{ technitium_primary_host | default('192.168.1.12') }}
         - Sync blocklist URLs from the primary (or apply the same list

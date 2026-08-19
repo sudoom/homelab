@@ -14,7 +14,7 @@
 #     --limit dns-master
 #
 # Expected impact: ~30 s DNS downtime if a reboot fires, ~10 s if not.
-# Once the RPi Zero 2W secondary is in service, run upgrade.yml against the
+# Once the secondary is in service (RPi 3B+, decided 2026-08-19), run upgrade.yml against the
 # secondary first, verify it's healthy, then upgrade the primary (DNS stays
 # answered by the secondary during the primary's brief restart window).
 

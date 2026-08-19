@@ -5,7 +5,9 @@
 #   - dns-master    — primary, RPi 3B+ at 192.168.1.12 (the same physical box
 #                     currently running pi-hole; we'll rebuild it on a spare
 #                     SD card with Technitium, swap SD cards, keep the IP).
-#   - dns-secondary — future, RPi Zero 2W, not yet procured.
+#   - dns-secondary — RPi 3B+ (decided 2026-08-19; the Zero 2W was rejected —
+#                     no Ethernet at all, 512 MB, and a ~2026-12-04 ship date on
+#                     what is currently a single point of failure).
 #
 # Bootstrap order: stand up the primary on a spare SD card with a temporary
 # IP first, validate via this playbook, then physically swap SD cards on the
