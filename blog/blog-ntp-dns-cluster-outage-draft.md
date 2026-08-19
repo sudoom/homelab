@@ -546,10 +546,96 @@ nowhere to go. The missing external Alertmanager delivery is what turned a 15-mi
   NIC on one node silently kills that node's RBD I/O; today it was a manual 20-min discovery.
 - **Alert on `OSD_DOWN` / `OSD_HOST_DOWN`** reaching the console early (pairs with the
   external-Alertmanager-delivery gap already tracked).
-- Everything in "Durable follow-ups (part 1)" (router-IP NTP in the Ansible role + DS3231 RTC)
-  remains the top preventive item — it stops the whole chain at the source.
+- ~~Everything in "Durable follow-ups (part 1)" (router-IP NTP in the Ansible role + DS3231 RTC)
+  remains the top preventive item~~ — **NTP half SHIPPED 2026-08-19, and the framing above was
+  itself part of the bug. See Part 5.**
 - **Synthetic pod→ClusterIP (`172.30.0.1:443`) reachability probe, per node** — the 07-26
   stuck-failover proved a "Ready" ovnkube-node hides broken service routing on a *specific* node
   for a day. A blackbox/exec probe from a pod on each node (or an alert on
   `cnpg_pg_stat_archiver_failed_count` + Ceph `MGR_MODULE_ERROR` correlated to a node) would turn
   "manual dashboard catch a day later" into "fires in 15 min". Pairs with the backnet probe above.
+
+
+---
+
+## Part 5 (2026-08-19): the actual root cause was a config *directive*, not missing hardware
+
+Three parts of this draft blamed "the RPi has no RTC and the MikroTik was its only NTP source",
+and the durable follow-up was written as **"router-IP NTP in the Ansible role + DS3231 RTC"**.
+That framing was wrong in a way that would have left the failure fully reachable.
+
+The operator's own mitigation after the outage was to **add three more NTP servers to the
+MikroTik**. Reasonable-sounding, and it does nothing: that is one hop *upstream* of the
+dependency. The Pi never talks to those servers.
+
+### What was actually on the box
+
+```
+$ timedatectl show-timesync --property=SystemNTPServers --property=FallbackNTPServers
+LinkNTPServers=
+SystemNTPServers=192.168.1.1
+FallbackNTPServers=195.176.26.215 194.146.251.100 194.146.251.101
+
+$ ls /etc/systemd/timesyncd.conf.d/
+10-router-ntp.conf          # hand-written over SSH. NOT in the Ansible role.
+```
+
+So three good public servers *were* already configured — METAS plus tempus1/tempus2.gum.gov.pl
+(confirmed by PTR) — and they were **never once consulted**. From `man 5 timesyncd.conf` on the
+box itself:
+
+> **FallbackNTP=** … Any per-interface NTP servers obtained from systemd-networkd take precedence
+> over this setting, **as do any servers set via NTP= above. This setting is hence only relevant
+> if no other NTP server information is known.**
+
+With `NTP=192.168.1.1` set, `FallbackNTP=` is dead config. **One effective time source.** The
+2026-07-25 chain — clock drifts → DNSSEC RRSIGs read as out-of-window → SERVFAIL → LAN loses
+name resolution → cluster follows — was still fully reproducible on 2026-08-19, a month later,
+while looking superficially redundant.
+
+Two failures compounding:
+1. **The wrong directive.** Splitting a server list across `NTP=` and `FallbackNTP=` silently
+   disables the second half. It reads like a priority list. It is not.
+2. **Unmanaged.** The file existed only because someone wrote it over SSH — it would not have
+   survived an SD-card reimage, and nothing in the repo would have recreated it. Exactly the
+   failure mode the "code-only for Ansible-managed boxes" rule exists to prevent, found in the
+   wild on the box that rule was written for.
+
+### The fix
+
+`ntp_servers` in `group_vars/all.yml`, rendered by `roles/base/templates/10-ntp.conf.j2`, with
+tasks + a handler in the `base` role. Every server in `NTP=`. Nothing in `FallbackNTP=`.
+
+The old drop-in is **explicitly deleted**, not just superseded: `10-router-ntp.conf` sorts *after*
+`10-ntp.conf`, so leaving it would have let the broken config keep winning.
+
+Servers are **IP addresses on purpose** — this box *is* the LAN resolver, so a hostname would make
+NTP depend on the DNS that a correct clock is required to validate. That loop is the deadlock.
+
+Diversity note: `194.146.251.100` and `.101` are adjacent IPs at one operator (GUM), so "three
+public servers" was really **two** failure domains. Added Cloudflare anycast `162.159.200.123`
+as a genuinely independent third.
+
+```
+$ ansible-playbook -i inventory.yml base-only.yml --limit dns-master --tags ntp
+dns-master : ok=6  changed=3   # write drop-in, remove old, restart timesyncd
+
+$ timedatectl show-timesync --property=SystemNTPServers
+SystemNTPServers=192.168.1.1 194.146.251.100 194.146.251.101 162.159.200.123 195.176.26.215
+$ timedatectl show --property=NTPSynchronized
+NTPSynchronized=yes
+
+$ ansible-playbook ... --tags ntp     # re-run
+dns-master : ok=5  changed=0         # idempotent
+```
+
+### Lesson (part 5)
+
+**"We added redundancy" is a claim to verify on the box, not to accept.** The redundancy was
+present, plausible, and inert. Nothing in any dashboard or alert would ever have said so — the
+box reported healthy, synced, sub-millisecond offset, right up until its single source vanished.
+
+Corollary: the **DS3231 RTC drops from HIGH to optional.** With five IP-specified sources the
+drift scenario now needs all five unreachable at once, and there is no DNSSEC deadlock because
+NTP never resolves anything. The RTC now only buys correct time at cold boot before timesyncd's
+first poll — nice, not load-bearing. The hardware was never the root cause.

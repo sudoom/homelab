@@ -17,7 +17,10 @@ ansible/technitium/
 ├── files/
 │   └── blocked.urls                       # blocklist URLs, one per line
 ├── roles/
-│   ├── base/                              # OS hygiene (hostname, timezone, packages, unattended-upgrades, pi-hole purge)
+│   ├── base/                              # OS hygiene (hostname, timezone, NTP, packages, unattended-upgrades, pi-hole purge)
+│   │   ├── tasks/main.yml
+│   │   ├── handlers/main.yml              # restart systemd-timesyncd
+│   │   └── templates/10-ntp.conf.j2       # timesyncd drop-in — ALL servers in NTP=, never FallbackNTP=
 │   ├── technitium-install/                # idempotent Technitium install/upgrade via upstream installer
 │   ├── technitium-config/                 # zones + settings + blocklists via Technitium HTTP API
 │   └── technitium-cluster/                # primary/secondary replication (placeholder until secondary lands)
@@ -79,7 +82,7 @@ What it does:
 3. Re-run Technitium's upstream installer (in-place upgrade; preserves `/etc/dns/config/`)
 4. Post-checks: `dns.service` active + Technitium API responding
 
-Expected DNS downtime: **~30 s if a reboot fires**, **~10 s if not** (the Technitium installer restarts the service). Once the RPi Zero 2W secondary is in service, run `upgrade.yml` against the secondary first, verify it's healthy, then the primary — keeps the LAN's DNS answered throughout.
+Expected DNS downtime: **~30 s if a reboot fires**, **~10 s if not** (the Technitium installer restarts the service). Once the secondary is in service (RPi 3B+, decided 2026-08-19 — see the README TODO), run `upgrade.yml` against the secondary first, verify it's healthy, then the primary — keeps the LAN's DNS answered throughout.
 
 Cadence suggestion: **monthly**, or on demand when a CVE for Technitium / glibc / kernel lands. Cron-it later if drift becomes a concern.
 
