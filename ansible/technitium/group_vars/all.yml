@@ -11,6 +11,30 @@ technitium_api_base: "http://127.0.0.1:5380"   # always call the API on the loca
 # Web UI / API port (Technitium default 5380)
 technitium_http_port: 5380
 
+# ---- Time sync ----
+# ALL of these go in NTP=, never FallbackNTP= — see the header of
+# roles/base/templates/10-ntp.conf.j2 for why that split is a trap and how it
+# caused the 2026-07-25 outage.
+#
+# IPs, not hostnames: this box is the LAN resolver, so a hostname would make
+# NTP depend on the DNS that a correct clock is required to validate.
+#
+# Order is preference — timesyncd walks the list until one answers.
+ntp_servers:
+  - 192.168.1.1        # MikroTik CCR2004, LAN gateway — lowest latency, first choice
+  - 194.146.251.100    # tempus1.gum.gov.pl — Główny Urząd Miar (PL national metrology)
+  - 194.146.251.101    # tempus2.gum.gov.pl — SAME operator, adjacent IP: correlated
+  - 162.159.200.123    # time.cloudflare.com — anycast, independent operator
+  - 195.176.26.215     # carried over from the old hand-written drop-in; PTR is
+                       # delegated so the operator is unconfirmed. Candidate for
+                       # removal once the Cloudflare entry has proven itself.
+#
+# On diversity: .100 and .101 are adjacent addresses at one organisation, so
+# "three public servers" was really two independent failure domains. Cloudflare
+# anycast adds a genuinely separate one. (Cloudflare leap-SMEARS and GUM does
+# not; sub-second disagreement around a leap second is irrelevant here, where
+# the accuracy that matters is "within the DNSSEC signature window".)
+
 # ---- Authoritative split-horizon zone for okd.sudops.pl ----
 # Records that technitium serves authoritatively to LAN clients.
 # These mirror the on-host CoreDNS templates inside the cluster — same answers,

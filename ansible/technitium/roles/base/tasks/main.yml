@@ -46,6 +46,45 @@
   when: current_timezone.stdout != "Europe/Warsaw"
   tags: [base, timezone]
 
+# ---- Time sync ---------------------------------------------------------
+# Was unmanaged: /etc/systemd/timesyncd.conf.d/10-router-ntp.conf existed only
+# because someone wrote it over SSH. It would not survive an SD-card reimage,
+# and it had the servers in the wrong directive. Managed here now so the fix
+# is reproducible and the reasoning travels with it.
+#
+# Deliberately NOT guarded to ARM/RPi: timesyncd is platform-neutral and the
+# x86 secondary needs exactly the same config.
+- name: Ensure timesyncd drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    mode: "0755"
+  tags: [base, ntp]
+
+- name: Configure NTP servers for systemd-timesyncd
+  ansible.builtin.template:
+    src: 10-ntp.conf.j2
+    dest: /etc/systemd/timesyncd.conf.d/10-ntp.conf
+    mode: "0644"
+  notify: Restart systemd-timesyncd
+  tags: [base, ntp]
+
+- name: Remove the superseded hand-written NTP drop-in
+  # 10-router-ntp.conf sorts AFTER 10-ntp.conf, so leaving it in place would
+  # let the old single-server config win. Must be deleted, not just replaced.
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d/10-router-ntp.conf
+    state: absent
+  notify: Restart systemd-timesyncd
+  tags: [base, ntp]
+
+- name: Ensure systemd-timesyncd is enabled and running
+  ansible.builtin.systemd:
+    name: systemd-timesyncd
+    enabled: true
+    state: started
+  tags: [base, ntp]
+
 - name: Install required packages
   ansible.builtin.apt:
     name:

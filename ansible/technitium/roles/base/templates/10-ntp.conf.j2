@@ -1,0 +1,27 @@
+# MANAGED BY ANSIBLE — roles/base/templates/10-ntp.conf.j2
+# Local edits are overwritten on the next playbook run.
+#
+# EVERY server goes in NTP=. Nothing goes in FallbackNTP=.
+#
+# systemd.timesyncd(5) on FallbackNTP=:
+#   "Any per-interface NTP servers obtained from systemd-networkd take
+#    precedence over this setting, as do any servers set via NTP= above.
+#    This setting is hence only relevant if no other NTP server information
+#    is known."
+#
+# So splitting the list across both directives leaves the FallbackNTP entries
+# permanently INERT. That is exactly how this box ended up with one effective
+# time source: the hand-written 10-router-ntp.conf had NTP=192.168.1.1 and
+# three public servers in FallbackNTP=, which were never once consulted. When
+# the router's NTP stopped on 2026-07-25 the clock drifted -3.5 h, DNSSEC
+# validation started failing on expired signature windows, and the LAN lost
+# name resolution — which took the cluster with it.
+#
+# Servers are IP ADDRESSES on purpose. This box IS the LAN resolver, so a
+# hostname here would need DNS to look up its own time source. With DNSSEC
+# validation enabled a wrong clock breaks validation, which breaks the very
+# lookup needed to fix the clock. IPs cut that loop.
+#
+# timesyncd contacts servers in listed order until one responds.
+[Time]
+NTP={{ ntp_servers | join(' ') }}
