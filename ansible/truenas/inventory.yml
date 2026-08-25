@@ -13,12 +13,29 @@
 all:
   hosts:
     truenas:
-      ansible_host: 192.168.1.13                       # frontnet/VLAN 5 mgmt address (onboard 1G)
+      # MikroTik DHCP RESERVATION, not a TrueNAS static (chosen 2026-08-25).
+      # Reserving at the router keeps eno1 on DHCP inside TrueNAS, which avoids a
+      # static-address commit that would drop the SSH session mid-apply and leave
+      # the 60s rollback timer un-checked-in -- the exact trap that ate an evening.
+      ansible_host: 192.168.1.25                       # frontnet/VLAN 5 mgmt (onboard 1G eno1)
       ansible_user: truenas_admin                      # install-time admin account; root SSH stays disabled
-      ansible_ssh_private_key_file: ~/.ssh/vadz_key    # workstation-side key path; not committed
+      # NOTE: id_rsa, not vadz_key -- the TrueNAS admin account was set up with a
+      # different key than the Technitium boxes. Verified 2026-08-25. If you ever
+      # unify these, add vadz_key.pub to truenas_admin FIRST and confirm it
+      # authenticates before removing id_rsa, or the playbook loses its transport.
+      ansible_ssh_private_key_file: ~/.ssh/id_rsa      # workstation-side key path; not committed
       ansible_python_interpreter: /usr/bin/python3
 
   vars:
-    # Every midclt call needs root. TrueNAS ships sudo for the admin account.
-    ansible_become: true
-    ansible_become_method: sudo
+    # NO become. Verified on the live box 2026-08-25: `truenas_admin` is a member
+    # of `builtin_administrators` (gid 544), which is what authorises the
+    # middleware socket -- so `midclt` works unprivileged. Confirmed OK for
+    # interface.query, pool.query, pool.dataset.query, sharing.nfs.query,
+    # system.general.config and service.query.
+    #
+    # This matters beyond tidiness: `sudo` on this box REQUIRES A PASSWORD
+    # (`sudo -n true` -> "a password is required"), so a `become: true` role
+    # would hang on the prompt or need the become password in the vault. Neither
+    # is necessary. Do not "fix" a permission error by adding become -- if a
+    # midclt method is refused, the account's ROLE is what to look at.
+    ansible_become: false

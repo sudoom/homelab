@@ -324,7 +324,7 @@ Settled addressing:
 | | |
 |---|---|
 | TrueNAS NFS | `192.168.10.5` — clear of nodes (`.2-.4`), `ceph-shim` (`.16-.18`), and **outside the `192.168.10.128/25` Multus pod range** |
-| TrueNAS mgmt | `192.168.1.13` on onboard 1G, VLAN 5 (frontnet). `.3-.12` are allocated; `.12` is dns-master |
+| TrueNAS mgmt | `192.168.1.25` on onboard 1G, VLAN 5 — pinned by a **MikroTik DHCP reservation**, not a TrueNAS static (see the 19:30 section) |
 | MTU | **9000**, and raise that CRS317 port's L2MTU to 9214 to match the three node-storage ports. TCP MSS negotiation would hide a 1500/9000 mismatch — it would "work" while silently losing jumbo on the one link that most benefits |
 | Pool | `tank` |
 
@@ -489,7 +489,7 @@ per-topic `.gitignore` + `vars/vault.yml.example`, same README structure.
 
 ```
 ansible/truenas/
-├── inventory.yml            # host truenas @ 192.168.1.13, truenas_admin + sudo
+├── inventory.yml            # host truenas @ 192.168.1.25, truenas_admin, NO become
 ├── group_vars/all.yml       # ALL declarative inputs
 ├── vars/vault.yml.example   # SMTP only — no api key exists in this topic
 ├── playbook.yml             # full convergence (needs vault)
@@ -562,3 +562,157 @@ $ grep -rhoE "[a-z_]+\.[a-z_]+\.[a-z_]+:" ansible/truenas/ | grep -v '^ansible\.
 
 Nothing has been run against the box yet: the pool does not exist until burn-in
 finishes, and `truenas-storage` will correctly refuse to proceed until it does.
+
+## 2026-08-25 (19:30) — why the 10G interface would not take an IP
+
+Symptom: setting an IPv4 address on `enp2s0f0np0` "does not apply properly" — the
+UI accepts it, `midclt call interface.update` returns the updated record, and the
+address never appears in `ip -br a`.
+
+### It was not the MTU
+
+That was my first hypothesis and it was wrong. `interface.query` shows the live
+kernel MTU already at 9000 while the desired value is unset:
+
+```
+enp2s0f0np0    dhcp=True  desired=-  live=-  mtu=None->9000
+```
+
+Jumbo had applied and survived. Only the address failed.
+
+### The actual cause: TrueNAS's interface DB is authoritative AND exclusive
+
+`/var/log/middlewared.log`, one commit cycle:
+
+```
+18:13:24 InterfaceService.configure()  Configuring interface 'enp2s0f0np0'
+18:13:24 InterfaceService.configure()  enp2s0f0np0: adding 192.168.10.10/255.255.255.0
+18:13:24 InterfaceService.sync()       Interfaces in database: enp2s0f0np0
+18:13:24 InterfaceService.unconfigure() Unconfiguring interface 'eno1'
+18:13:24 InterfaceService.unconfigure() Unconfiguring interface 'eno2'
+18:13:24 InterfaceService.unconfigure() Unconfiguring interface 'enp2s0f1np1'
+18:14:24 InterfaceService.sync()       Interfaces in database: NONE
+18:14:24 InterfaceService.unconfigure() Unconfiguring interface 'enp2s0f0np0'
+18:14:25 RouteService.sync()  ERROR  Failed adding 192.168.1.1 as default gateway:
+                                     NetlinkError(101, 'Network is unreachable')
+```
+
+Read the third line: **`Interfaces in database: enp2s0f0np0`** — exactly one. Any
+interface NOT in TrueNAS's config database is **unconfigured on every apply**.
+`eno1` came up via DHCP at install time and was never committed, so it exists
+only as a `dhclient` lease. So the sequence is:
+
+1. `commit` applies the 10G address **and tears down `eno1`**,
+2. the default gateway (`192.168.1.1`, reachable only via `eno1`) becomes
+   unreachable — hence the `NetlinkError(101)`,
+3. connectivity validation fails, and at **exactly +60 s** the rollback timer
+   fires and wipes everything back to `Interfaces in database: NONE`.
+
+`interface.checkin` returned `null` (success) but could not save it: by the time
+it ran, the network it was meant to validate had already been dismantled. The
+same mechanism explains the earlier UI attempts.
+
+Confirmed by querying the box directly — after the rollbacks, **nothing** is
+managed and the working default route belongs to dhclient, not TrueNAS:
+
+```
+eno1           dhcp=True  desired=-  live=['192.168.1.25']  mtu=None->1500
+eno2           dhcp=True  desired=-  live=-                 mtu=None->1500
+enp2s0f0np0    dhcp=True  desired=-  live=-                 mtu=None->9000
+enp2s0f1np1    dhcp=True  desired=-  live=-                 mtu=None->1500
+gw4 = (unset)   ns1 = (unset)   domain = local
+```
+
+### The fix, and the trap inside the fix
+
+`eno1` must be **in the database** before any commit touches the 10G port.
+
+The obvious move — give `eno1` a static address — contains its own trap: changing
+the management IP in the same commit drops the SSH session mid-apply, so
+`interface.checkin` never runs and the whole thing rolls back at +60 s. The
+failure looks identical to the original bug.
+
+Chosen instead (2026-08-25): **a MikroTik DHCP reservation pinning `eno1` to
+`192.168.1.25`**, and telling TrueNAS to manage the interface *as DHCP*. That
+puts `eno1` in the database (so it stops being torn down) without ever changing
+the address, so the session survives the apply and the check-in lands. The
+address is pinned at the router, which is where reservations belong anyway.
+
+Also worth recording: the management address had already drifted `.67 → .25`
+between two screenshots during this session. An unpinned mgmt IP would have
+broken the cert-sync CronJob and the Technitium `nas` record later.
+
+## 2026-08-25 (20:00) — the ansible role, validated against the real box
+
+Three corrections that only surfaced by running it rather than reasoning about it.
+
+**1. `become` was unnecessary, and would have hung the playbook.** I had written
+`ansible_become: true` on the assumption that `midclt` needs root. It does not:
+
+```
+$ sudo -n true
+sudo: a password is required          <-- would have hung every run
+
+$ id
+uid=950(truenas_admin) gid=950(truenas_admin) groups=950(truenas_admin),544(builtin_administrators)
+
+$ for m in interface.query pool.query pool.dataset.query sharing.nfs.query \
+           system.general.config service.query; do
+    printf "%-26s " "$m"; midclt call $m >/dev/null 2>&1 && echo OK || echo DENIED
+  done
+interface.query            OK
+pool.query                 OK
+pool.dataset.query         OK
+sharing.nfs.query          OK
+system.general.config      OK
+service.query              OK
+```
+
+Membership in **`builtin_administrators` (gid 544)** is what authorises the
+middleware socket. So the whole topic runs **unprivileged** — no `become`, no
+become-password in the vault, no sudo prompt. Recorded in `inventory.yml` with a
+warning not to "fix" a future permission error by adding `become`: if a method is
+refused, the account's ROLE is the thing to look at.
+
+**2. The SSH key is `id_rsa`, not `vadz_key`.** The Technitium topic uses
+`vadz_key`; the TrueNAS admin account was set up with a different key. Copying the
+inventory verbatim produced `Permission denied (publickey)`.
+
+**3. Two Jinja bugs in `check.yml`, both caught only by execution.**
+
+```
+'>' not supported between instances of 'int' and 'str'
+```
+`|` binds tighter than `>`, so `x | length > 0 | ternary('PRESENT','ABSENT')`
+parses as `length > ('PRESENT')`. Needs explicit parens.
+
+```
+object of type 'dict' has no attribute 'healthy'
+```
+`ternary` evaluates **both** branches eagerly, so `_pool.healthy` was evaluated
+even when the pool was absent and `_pool` was `{}`. Jinja's inline `if/else` is
+lazy; `ternary` is not. Both `--syntax-check` and `helm lint`-style static checks
+pass straight over these — only running it finds them.
+
+Result, against the live box:
+
+```
+$ ansible-playbook -i inventory.yml check.yml
+TASK [Report]
+ok: [truenas] => {
+    "msg": [
+        "version   : TrueNAS-25.10.6",
+        "pool      : ABSENT - create it by hand first, see README",
+        "datasets  : (none)",
+        "nfs       : (none)"
+    ]
+}
+PLAY RECAP
+truenas : ok=5  changed=0  unreachable=0  failed=0
+```
+
+`changed=0`, and the pool guard correctly refuses with the right instruction.
+The transport, the unprivileged `midclt` path and the JSON parsing are all
+validated — before the pool exists, which is the right time to find out.
+
+Burn-in still running: all six units `active running`.

@@ -11,7 +11,7 @@
 - name: Configure TrueNAS SCALE
   hosts: all
   gather_facts: true
-  become: true
+  become: false          # midclt works unprivileged — see inventory.yml
 
   vars_files:
     # Vault-encrypted: SMTP credentials for alert email. There is NO api key --

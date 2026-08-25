@@ -13,7 +13,7 @@
 - name: Inspect TrueNAS state (read-only)
   hosts: all
   gather_facts: false
-  become: true
+  become: false         # midclt works unprivileged — see inventory.yml
 
   tasks:
     - name: TrueNAS version
@@ -42,9 +42,17 @@
 
     - name: Report
       ansible.builtin.debug:
-        msg: >-
-          version={{ v.stdout | trim }}
-          pool={{ (p.stdout | from_json | length) > 0 | ternary('PRESENT', 'ABSENT') }}
-          {% if (p.stdout | from_json | length) > 0 %}health={{ (p.stdout | from_json | first).healthy | ternary('healthy','DEGRADED') }}{% endif %}
-          datasets={{ d.stdout | from_json | map(attribute='id') | list | join(',') }}
-          nfs_exports={{ n.stdout | from_json | map(attribute='path') | list | join(',') }}
+        msg:
+          - "version   : {{ v.stdout | trim }}"
+          - "pool      : {{ ('PRESENT (' ~ (_pool.healthy | default(false) | ternary('healthy', 'DEGRADED')) ~ ')') if _present else 'ABSENT - create it by hand first, see README' }}"
+          - "datasets  : {{ (d.stdout | from_json | map(attribute='id') | list | join(', ')) or '(none)' }}"
+          - "nfs       : {{ (n.stdout | from_json | map(attribute='path') | list | join(', ')) or '(none)' }}"
+      vars:
+        # Two Jinja traps, both caught by running this for real on 2026-08-25:
+        #  1. `|` binds TIGHTER than `>`, so `x | length > 0 | ternary(...)`
+        #     parses as `length > ('PRESENT')`. Hence the explicit parens.
+        #  2. `ternary` evaluates BOTH branches eagerly, so referencing
+        #     `_pool.healthy` inside one blows up when the pool is absent.
+        #     The inline `if/else` below is lazy; ternary is not.
+        _present: "{{ ((p.stdout | from_json) | length) > 0 }}"
+        _pool: "{{ (p.stdout | from_json | first) if ((p.stdout | from_json) | length) > 0 else {} }}"
