@@ -126,10 +126,13 @@ technitium_blocklist_update_interval_hours: 24
 # creates those independently on every box, so they need no transfer.
 technitium_replicated_zones:
   - "{{ okd_zone_name }}"
-  # homelab.sudops.pl is deliberately NOT here (2026-08-26): it is the CLUSTER
-  # DOMAIN, so Technitium's Cluster feature replicates it natively. Listing it
-  # here as well would have roles/technitium-replication create a competing
-  # Secondary zone for it on the slave. One zone, one mechanism.
+  # homelab.sudops.pl is BACK here (2026-08-26, later): the cluster domain moved
+  # to the private `.home`, so homelab.sudops.pl is no longer cluster-managed and
+  # needs the classic AXFR/IXFR mechanism again. When the cluster domain WAS
+  # homelab.sudops.pl this line had to be absent, or two mechanisms would have
+  # fought over one zone. The rule is invariant even though the answer flipped:
+  # one zone, one mechanism.
+  - "{{ homelab_zone_name }}"
 
 # The slave's address, used on the PRIMARY to build the zone-transfer ACL and
 # the NOTIFY target list. Kept here (not in inventory) so the primary can be
@@ -154,19 +157,28 @@ technitium_cluster_enabled: true
 
 # Becomes a real DNS zone on the primary (Primary) and on each secondary
 # (Secondary), transferred by TSIG-authenticated AXFR/IXFR, and the parent under
-# which node names are formed — dns-master.homelab.sudops.pl /
-# dns-slave.homelab.sudops.pl (operator's choice, 2026-08-26).
+# which node names are formed: dns-master.home / dns-slave.home.
 #
 # IMMUTABLE after init: changing it means deleting the cluster
 # (api/admin/cluster/primary/delete) and re-forming it.
 #
-# NOTE this is an EXISTING zone: technitium-config creates homelab.sudops.pl as
-# a Primary zone holding the LAN appliance records (`nas`, `dns`). Using it as
-# the cluster domain therefore hands that zone to the cluster, which is why it
-# is deliberately ABSENT from technitium_replicated_zones below — the cluster
-# replicates it natively, and having roles/technitium-replication also make it
-# Secondary on the slave would be two mechanisms fighting over one zone.
-technitium_cluster_domain: homelab.sudops.pl
+# PRIVATE-USE NAME, DELIBERATELY (operator's choice, 2026-08-26). Consequence
+# worth stating once so nobody re-opens it: `.home` is not a delegated TLD, so
+# **Let's Encrypt can never issue for it** — no public hierarchy exists to
+# validate an ACME challenge against. That costs nothing here, because cluster
+# node-to-node TLS uses DANE-EE: the TLSA records in this zone pin the exact
+# certificate, so trust comes from DNS rather than a CA chain and the
+# self-signed cert that `init` generates is the intended path. It also removes
+# a renewal path that can silently break — see the 2026-08-26 Synology incident
+# where the cert-manager wildcard expired at the consumer while cert-manager
+# itself stayed green.
+#
+# Technitium is authoritative for this zone, so queries do not leak upstream.
+# If the unreserved-name risk ever matters, `home.arpa` (RFC 8375, IANA
+# special-use, guaranteed never delegated) and `.internal` (ICANN-reserved
+# 2024) are the standards-track alternatives — but both mean tearing the
+# cluster down, since the domain is immutable.
+technitium_cluster_domain: home
 
 # Which inventory host is the cluster Primary. Config flows FROM here.
 technitium_cluster_primary_host: dns-master

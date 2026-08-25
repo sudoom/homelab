@@ -678,3 +678,61 @@ live in `group_vars`, so a playbook re-run restores them either way.
 
 This is the kind of thing worth watching on the first run rather than
 discovering later: the cluster domain cannot be changed afterwards.
+
+## 2026-08-26 (later) — cluster domain lands on `.home`
+
+Third and final answer on the cluster domain: **`home`**, so nodes read
+`dns-master.home` / `dns-slave.home`. The operator's framing was "`*.home`;
+let's encrypt; no public" — and one half of that is not possible, which is worth
+recording rather than quietly working around.
+
+### Let's Encrypt cannot issue for `.home`
+
+`.home` is not a delegated TLD. ICANN rejected the gTLD application, so there is
+no public DNS hierarchy for an ACME challenge to be validated against. No
+configuration makes this work; it is structural.
+
+**It also does not matter**, and the reason is the interesting part. Technitium's
+clustering authenticates node-to-node TLS with **DANE-EE**: TLSA records in the
+cluster zone pin the *exact end-entity certificate*. Trust is anchored in DNS,
+not in a CA chain. So the self-signed certificate that `init` generates is the
+designed mechanism, not a fallback — a publicly-trusted cert would add precisely
+nothing to node-to-node trust, and would only remove a browser warning on an
+admin UI.
+
+And it removes a failure mode rather than adding one. Earlier the same day the
+cert-manager `*.homelab.sudops.pl` wildcard was found **expired at the consumer**
+(the Synology) while cert-manager itself reported healthy — the delivery CronJob
+had been failing nightly for a month. A `.home` cluster with DANE-EE has no
+renewal path that can break that way.
+
+### The companion change, and a rule that survived flipping
+
+Two turns earlier the cluster domain was `homelab.sudops.pl`, which forced
+`homelab.sudops.pl` OUT of `technitium_replicated_zones` — the cluster
+replicated it natively, so classic AXFR/IXFR would have been a second mechanism
+on the same zone.
+
+Moving the cluster domain to `.home` **reverses that**: `homelab.sudops.pl` is
+no longer cluster-managed, so it goes back into `technitium_replicated_zones`.
+
+Worth noting that the *rule* never changed even though the answer flipped twice:
+**one zone, one mechanism.** A rule that produces different answers as the
+context changes, without itself needing revision, is the kind worth writing
+down — it caught the collision in one direction and the gap in the other.
+
+### On the name itself
+
+`.home` is unreserved. ICANN rejected it as a gTLD but did not protect it, and
+it is among the most-leaked invalid TLDs at the root servers. The
+standards-track alternatives are `home.arpa` (RFC 8375, IANA special-use,
+guaranteed never delegated) and `.internal` (ICANN-reserved for private use,
+2024). Both are safer; both are longer.
+
+Flagged, operator chose `.home`, recorded. Technitium is authoritative for the
+zone so nothing leaks upstream in practice, and the risk is theoretical. But the
+domain is **immutable** — switching later means deleting and re-forming the
+cluster, so this is the moment the choice is cheap.
+
+No collision with the existing `home.lab` / `homelab.net` conditional-forwarder
+zones.

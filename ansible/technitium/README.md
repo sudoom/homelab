@@ -191,26 +191,27 @@ would be replicating the same zone.
 
 ### Cluster specifics
 
-- **`technitium_cluster_domain` is IMMUTABLE** — set to **`homelab.sudops.pl`**
-  (2026-08-26), so node names read `dns-master.homelab.sudops.pl` /
-  `dns-slave.homelab.sudops.pl`. It becomes a real zone: Primary on the primary
-  node, Secondary on each other node. Changing it means deleting the cluster
-  (`api/admin/cluster/primary/delete`) and re-forming it.
+- **`technitium_cluster_domain` is IMMUTABLE** — set to **`home`** (2026-08-26),
+  so node names read `dns-master.home` / `dns-slave.home`. It becomes a real
+  zone: Primary on the primary node, Secondary on each other node. Changing it
+  means deleting the cluster (`api/admin/cluster/primary/delete`) and re-forming.
 
-  **This is an EXISTING zone** — `technitium-config` creates
-  `homelab.sudops.pl` as a Primary zone holding the LAN appliance records
-  (`nas`, `dns`). Two things follow:
-  - It is deliberately **absent from `technitium_replicated_zones`**. The
-    cluster replicates it natively; listing it there too would have
-    `technitium-replication` create a competing Secondary zone on the slave.
-    One zone, one mechanism.
-  - **Unverified:** whether `init` adopts a pre-existing zone of that name or
-    refuses it. `technitium-config` runs first, so the zone exists before init
-    is attempted — which is the safer order, but watch the first run. If init
-    fails on a zone conflict, the options are a dedicated subdomain
-    (`cluster.homelab.sudops.pl`) or deleting the zone and letting the cluster
-    recreate it (which would need the `nas`/`dns` records re-added — they are in
-    `group_vars`, so a re-run restores them).
+  **`.home` is a private-use name, and that is the point.** Let's Encrypt
+  **cannot** issue for it — `.home` is not a delegated TLD, so no ACME challenge
+  can be validated. That costs nothing: cluster node-to-node TLS uses **DANE-EE**,
+  where the TLSA records in this zone pin the exact certificate. Trust comes from
+  DNS, not a CA chain, so the self-signed cert `init` generates is the intended
+  path rather than a compromise — and there is no renewal path to break. (See the
+  2026-08-26 incident where the cert-manager wildcard expired *at the consumer*
+  while cert-manager itself reported healthy.)
+
+  Technitium is authoritative for the zone, so queries do not leak upstream. If
+  the unreserved-name risk ever matters, `home.arpa` (RFC 8375, IANA special-use)
+  and `.internal` (ICANN-reserved 2024) are the standards-track alternatives —
+  both would require tearing the cluster down, since the domain is immutable.
+
+  No collision with the existing `home.lab` / `homelab.net` forwarder zones.
+
 - **Init auto-enables HTTPS** with a self-signed cert on port 53443 and restarts
   the admin web service ~2 s after responding. The role waits this out with a
   `retries`/`until` loop rather than assuming.
