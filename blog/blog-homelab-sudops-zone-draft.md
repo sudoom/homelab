@@ -211,3 +211,84 @@ End-to-end now: cert-manager auto-renews 30d before expiry → next daily CronJo
 - **cert-manager `tls.crt` is a bundle; DSM expects split.** The empty `inter_cert` form silently returns 5512 — diagnostic was clear once we knew to split.
 - **`SYNO.Core.Certificate.CRT/list` is the right endpoint for cert enumeration in DSM 7.x** (despite the `.import` call being on the non-`.CRT` namespace). Useful to remember if/when we automate other DSM cert operations.
 - **Wildcards cover ANY single-label subdomain** — `*.homelab.sudops.pl` is valid for `nas.homelab.sudops.pl`, `dns.homelab.sudops.pl`, and any future name. We don't need (or want) per-host certs in DSM. Confirmed visually: DSM cert list shows `*.homelab.sudops.pl` covering all services, no per-host cert needed.
+
+## 2026-08-26 — the wildcard expired on the Synology while cert-manager was green
+
+Spotted from a browser cert dialog: `*.homelab.sudops.pl` **expired Saturday 22
+August 2026 at 14:20:32 CEST**. Meanwhile, in-cluster:
+
+```
+$ oc -n cert-manager get secret homelab-wildcard-tls -o jsonpath='{.data.tls\.crt}' \
+    | base64 -d | openssl x509 -noout -subject -enddate
+subject=CN=*.homelab.sudops.pl
+notAfter=Oct 21 11:24:57 2026 GMT
+```
+
+cert-manager had renewed correctly. **Delivery** was what broke.
+
+```
+$ oc -n synology-cert-sync get cronjob,job
+cronjob.batch/synology-cert-sync   14 3 * * *   False   0   18h   93d
+job.batch/synology-cert-sync-29746274   Complete   33d
+job.batch/synology-cert-sync-29790914   Failed     2d18h
+job.batch/synology-cert-sync-29792354   Failed     42h
+job.batch/synology-cert-sync-29793794   Failed     18h
+```
+
+### The timeline is the whole diagnosis
+
+Last `Complete` run ≈ **33 days ago**. Let's Encrypt renews ~30 days before
+expiry, and the cert expired 22 Aug — so renewal was ~23 Jul, which is exactly
+when the successes stop.
+
+That means: for every run up to the renewal, the job was a **no-op** — the
+script compares the cluster cert's SHA-256 fingerprint against what DSM is
+serving and exits 0 when they match. It reported green for months **while doing
+nothing**. The first time it had actual work to do, it failed — and has failed
+every night since, unnoticed, until the old cert ran out and a browser complained.
+
+**The no-op path worked; the replacement path was broken.** And the replacement
+path only executes once every ~60–90 days, so it is the one path that is never
+exercised until the moment it matters. Any `*-cert-sync` job has this shape by
+construction.
+
+### Ruled out
+
+An appealing theory — DSM's cert expired, so the sync could no longer connect
+over HTTPS to fix it, a self-inflicted deadlock — is **wrong**. The script uses
+`curl -sk` throughout; `-k` skips validation, so an expired DSM cert cannot
+block the connection. Worth writing down because it is exactly the kind of
+tidy-sounding explanation that gets adopted without checking.
+
+Remaining candidates, all on the DSM side of the replacement path: login
+rejected (2FA enforcement on the admin account, changed password, or DSM's
+auto-block after repeated attempts), or `SYNO.Core.Certificate` import failing.
+The failed pods were garbage-collected, so a manual run is needed to capture the
+response — the script echoes it.
+
+### Two monitoring gaps, both worse than the cert
+
+1. **Nothing alerts on a recurring CronJob failing.** `KubeJobFailed` is on this
+   repo's known-benign list, but that entry is scoped to *completed one-shot
+   bootstrap Jobs*. A CronJob failing nightly for a month is a different animal
+   and must not be pattern-matched into the same bucket. This is precisely the
+   trap CLAUDE.md already warns about with `PrometheusKubernetesListWatchFailures`
+   — an unfamiliar alert absorbed into the benign list — and it happened again.
+2. **Nothing alerts on certificate expiry at the consumer.** Only cert-manager's
+   own view is monitored, and it was green the entire time. The measurement has
+   to be taken where a *client* stands, not where the issuer does — a blackbox
+   TLS probe against `nas.homelab.sudops.pl:5001` would have fired 30 days out.
+
+Honest note on process: the session-start sweep earlier the same day reported
+"12 alerts firing / 0 critical" without enumerating them. If a `KubeJobFailed`
+for this was in that list, it was dismissed by counting rather than reading.
+Counting alerts is not triaging them.
+
+### Bearing on the Technitium cluster cert question
+
+Asked in the same session whether Technitium's cluster TLS could use the
+cert-manager wildcard instead of the self-signed cert init generates. The
+argument against leaned on renewal being the risky part rather than first
+install. This is that argument, live, on the very same wildcard — and it
+strengthens the recommendation to leave Technitium's cluster on its self-signed
+cert, where DANE-EE pins the certificate and there is no renewal path to break.
