@@ -23,7 +23,7 @@ ansible/technitium/
 │   │   └── templates/10-ntp.conf.j2       # timesyncd drop-in — ALL servers in NTP=, never FallbackNTP=
 │   ├── technitium-install/                # idempotent Technitium install/upgrade via upstream installer
 │   ├── technitium-config/                 # zones + settings + blocklists via Technitium HTTP API
-│   └── technitium-cluster/                # primary/slave zone replication (WRITTEN 2026-08-25; slave half idle until the RPi 3B+ lands)
+│   └── technitium-replication/                # primary/slave zone replication (WRITTEN 2026-08-25; slave half idle until the RPi 3B+ lands)
 └── .gitignore                             # vars/vault.yml stays out of Git
 ```
 
@@ -164,7 +164,55 @@ Common edits and the file they live in:
 
 - **Operator-manual bootstrap steps 1-5** above (SD flash + Technitium install + admin password) — playbook expects an already-installed Technitium and a populated `vars/vault.yml`.
 - **End-to-end run against a live Technitium API** still needs to happen — the param names are pinned to the docs but haven't been validated against the running instance yet.
-- **Primary/slave replication** is implemented (`roles/technitium-cluster`, 2026-08-25). The **primary half applies today**: it sets each replicated zone's transfer ACL and NOTIFY target to `technitium_slave_ip` (`192.168.1.13`). The **slave half is idle** until the RPi 3B+ arrives — uncomment the `dns-slave` block in `inventory.yml` and it runs.
+- **Primary/slave replication** is implemented (`roles/technitium-replication`, 2026-08-25). The **primary half applies today**: it sets each replicated zone's transfer ACL and NOTIFY target to `technitium_slave_ip` (`192.168.1.13`). The **slave half is idle** until the RPi 3B+ arrives — uncomment the `dns-slave` block in `inventory.yml` and it runs.
+
+## Why we do NOT use Technitium's built-in Cluster feature
+
+Technitium v14 added **Administration → Cluster**. It is a genuine feature and it
+*is* automatable — `/api/admin/cluster/…` endpoints (`init`, `initJoin`) are
+documented in `APIDOCS.md`. We deliberately leave it uninitialized. "Cluster Not
+Initialized" is the intended end state here, not unfinished work.
+
+What it syncs: server settings, Allowed/Blocked lists, Apps, **Users/Groups/
+Permissions**, API tokens, and — opt-in, via an auto-created
+`cluster-catalog.<cluster-domain>` zone — selected zones. What it does not sync:
+zones by default, cache, logs, DHCP scopes.
+
+Five reasons it is the wrong fit for this repo:
+
+1. **Source of truth moves from git to the primary's runtime state.** Today
+   `technitium-config` pushes settings and blocklists to BOTH boxes from the
+   repo, and each converges independently. Under clustering, the secondary's
+   config becomes a copy of whatever the primary currently holds — which is the
+   opposite of this repo's whole premise.
+2. **It would fight `technitium-config`, with undefined results.** Technitium
+   publishes no field-level list of which Settings keys are cluster-common vs
+   per-node, so `/api/settings/set` against a clustered secondary is either
+   silently overwritten on the next config refresh or in contention with the
+   primary. That is a drift generator.
+3. **Cluster state is unreproducible runtime data** — node IDs, the TSIG key
+   minted at init, the auto-generated self-signed cert, the cluster-catalog
+   zone. The documented bring-up path for these RPis is an SD-card rebuild,
+   which restores none of it; the cluster would have to be town down and
+   re-formed. Everything else here survives a reimage.
+4. **It forces same-version lockstep upgrades**, which kills `upgrade.yml`'s
+   deliberate staggered design (slave first, verify, then primary, so DNS keeps
+   answering throughout).
+5. **It syncs Users/Groups**, so joining would overwrite dns-slave's local admin
+   account with dns-master's — breaking the per-host
+   `technitium_admin_passwords` this repo now relies on.
+
+Clustering also auto-enables HTTPS with a self-signed cert, uses DANE-EE for
+node-to-node TLS, moves the admin panel to port 53443, and forbids terminating
+TLS at an HTTPS reverse proxy by design.
+
+**Revisit if** a third or fourth node appears, or if the Allowed/Blocked/Apps
+lists start changing faster than a playbook run. At two boxes driven from one
+repo, Ansible already delivers what clustering would, and reproducibly.
+
+Note the naming: `roles/technitium-replication` (renamed from
+`technitium-cluster`, 2026-08-25) does classic DNS zone replication. It is not
+related to the vendor's Cluster feature, and the old name implied otherwise.
 
 ## Primary/slave replication
 
@@ -172,7 +220,7 @@ Two boxes is **resilience, not HA**: stub resolvers try nameservers in order and
 
 | | Primary (`dns-master`, `.12`) | Slave (`dns-slave`, `.13`) |
 |---|---|---|
-| Zone type | `Primary` (created by `technitium-config`) | `Secondary` (created by `technitium-cluster`) |
+| Zone type | `Primary` (created by `technitium-config`) | `Secondary` (created by `technitium-replication`) |
 | Replicated zones | `technitium_replicated_zones` — `okd.sudops.pl`, `homelab.sudops.pl` | pulled by AXFR/IXFR from `technitium_primary_host` |
 | Zone transfer | `zoneTransfer=UseSpecifiedNetworkACL`, ACL = `technitium_slave_ip` | — |
 | Change propagation | `notify=SpecifiedNameServers` → slave pulls within seconds | `/api/zones/resync` forces an immediate pull on first run |

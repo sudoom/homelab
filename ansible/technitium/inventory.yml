@@ -25,7 +25,7 @@ all:
     # LIVE since 2026-08-25. RPi 3B+, verified identical to dns-master:
     # Debian 13 (trixie), arm64, kernel 6.18.34+rpt-rpi-v8, dhcpcd present.
     # `technitium_role: slave` gates every slave-side task in
-    # roles/technitium-cluster; the primary half is gated on `primary` and sets
+    # roles/technitium-replication; the primary half is gated on `primary` and sets
     # the zone-transfer ACL + NOTIFY target from `technitium_slave_ip`.
     #
     # ORDER MATTERS on first bring-up: Technitium is NOT yet installed here, so

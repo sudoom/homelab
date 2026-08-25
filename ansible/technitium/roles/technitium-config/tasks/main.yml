@@ -212,7 +212,7 @@
     - okd_primary_zone_response.json.status != "ok"
     - "'already exists' not in (okd_primary_zone_response.json.errorMessage | default(''))"
   # PRIMARY ONLY. On a slave these zones exist as type=Secondary, pulled by
-  # AXFR/IXFR (see roles/technitium-cluster). Creating them as Primary here
+  # AXFR/IXFR (see roles/technitium-replication). Creating them as Primary here
   # would collide with that. Blocked + forwarder zones are NOT guarded --
   # they are config rather than replicated data, so each box owns its own.
   when: technitium_role | default('primary') == 'primary'
@@ -226,7 +226,7 @@
       - { domain: "api-int.{{ okd_zone_name }}", ipAddress: "{{ okd_api_vip }}" }
       - { domain: "*.apps.{{ okd_zone_name }}",  ipAddress: "{{ okd_ingress_vip }}" }
   # PRIMARY ONLY. On a slave these zones exist as type=Secondary, pulled by
-  # AXFR/IXFR (see roles/technitium-cluster). Creating them as Primary here
+  # AXFR/IXFR (see roles/technitium-replication). Creating them as Primary here
   # would collide with that. Blocked + forwarder zones are NOT guarded --
   # they are config rather than replicated data, so each box owns its own.
   when: technitium_role | default('primary') == 'primary'
@@ -250,7 +250,7 @@
   loop_control:
     label: "{{ item.domain }} → {{ item.ipAddress }}"
   # PRIMARY ONLY. On a slave these zones exist as type=Secondary, pulled by
-  # AXFR/IXFR (see roles/technitium-cluster). Creating them as Primary here
+  # AXFR/IXFR (see roles/technitium-replication). Creating them as Primary here
   # would collide with that. Blocked + forwarder zones are NOT guarded --
   # they are config rather than replicated data, so each box owns its own.
   when: technitium_role | default('primary') == 'primary'
@@ -274,7 +274,7 @@
   loop_control:
     label: "{{ item.name }}.{{ okd_zone_name }} → {{ item.ip }}"
   # PRIMARY ONLY. On a slave these zones exist as type=Secondary, pulled by
-  # AXFR/IXFR (see roles/technitium-cluster). Creating them as Primary here
+  # AXFR/IXFR (see roles/technitium-replication). Creating them as Primary here
   # would collide with that. Blocked + forwarder zones are NOT guarded --
   # they are config rather than replicated data, so each box owns its own.
   when: technitium_role | default('primary') == 'primary'
@@ -302,7 +302,7 @@
     - homelab_primary_zone_response.json.status != "ok"
     - "'already exists' not in (homelab_primary_zone_response.json.errorMessage | default(''))"
   # PRIMARY ONLY. On a slave these zones exist as type=Secondary, pulled by
-  # AXFR/IXFR (see roles/technitium-cluster). Creating them as Primary here
+  # AXFR/IXFR (see roles/technitium-replication). Creating them as Primary here
   # would collide with that. Blocked + forwarder zones are NOT guarded --
   # they are config rather than replicated data, so each box owns its own.
   when: technitium_role | default('primary') == 'primary'
@@ -326,7 +326,7 @@
   loop_control:
     label: "{{ item.name }}.{{ homelab_zone_name }} → {{ item.ip }}"
   # PRIMARY ONLY. On a slave these zones exist as type=Secondary, pulled by
-  # AXFR/IXFR (see roles/technitium-cluster). Creating them as Primary here
+  # AXFR/IXFR (see roles/technitium-replication). Creating them as Primary here
   # would collide with that. Blocked + forwarder zones are NOT guarded --
   # they are config rather than replicated data, so each box owns its own.
   when: technitium_role | default('primary') == 'primary'

@@ -478,3 +478,53 @@ Accepted cost, stated rather than buried: an SSH key on these boxes is root on
 these boxes, with no second factor. SSH is key-only with password auth off, and
 this was already true of dns-master — the change records reality rather than
 creating it.
+
+### 2026-08-25 (late) — "clustering" meant the vendor feature, not zone transfer
+
+The operator asked for "the technitium cluster playbook". I read that as classic
+DNS primary/secondary and built AXFR/IXFR zone replication. They meant
+**Administration → Cluster**, added in Technitium **v14** — a different and much
+broader feature. Source: https://blog.technitium.com/2025/11/understanding-clustering-and-how-to.html
+
+What it syncs: server settings, Allowed/Blocked lists, Apps and their config,
+**Users/Groups/Permissions**, API tokens, and opt-in zones via an auto-created
+`cluster-catalog.<cluster-domain>` zone. Not synced: zones by default, cache,
+logs, DHCP scopes. One node is Primary; config can only be changed while it is
+online. Init auto-enables HTTPS with a self-signed cert, uses DANE-EE for
+node-to-node TLS, and moves the admin panel to 53443.
+
+**A correction I owe the record.** I first concluded the Cluster feature had no
+HTTP API and therefore could not be automated — and made that the centrepiece of
+the recommendation. That was wrong. `initJoin` is present in `APIDOCS.md`,
+`DnsServerCore/www/js/cluster.js` and `DnsServerCore/DnsWebService.cs`; the
+endpoints live under `/api/admin/cluster/…`, which a grep for `/api/cluster`
+misses. Two separate WebFetch calls told me the endpoints did not exist — both
+were **truncation artifacts**: APIDOCS.md is large enough that the fetcher never
+reached that section, and it even said so ("the document excerpt provided does
+not continue far enough"), which I should have treated as "unknown" rather than
+"absent". GitHub code search settled it. **Absence of evidence from a
+summarising fetcher is not evidence of absence.**
+
+The recommendation survives the correction, but for different reasons: not
+"can't automate it" — it can be — but that it conflicts with git as the source
+of truth. Five reasons, now recorded in `ansible/technitium/README.md`:
+config ownership moves to the primary's runtime state; it would contend with
+`technitium-config`'s `/api/settings/set` with no documented field-level split
+of cluster-common vs per-node keys; cluster state (node IDs, the TSIG key minted
+at init, the self-signed cert, the catalog zone) is unreproducible runtime data
+that an SD rebuild does not restore; it forces same-version lockstep upgrades,
+killing `upgrade.yml`'s staggered slave-then-primary window; and it syncs
+Users/Groups, which would overwrite the per-host admin accounts.
+
+Also renamed `roles/technitium-cluster` → **`roles/technitium-replication`**.
+The old name read as if it drove the vendor feature, which is precisely the
+ambiguity that caused this detour.
+
+### Per-host admin passwords
+
+Separately, the operator pointed out the vault held ONE
+`technitium_admin_password` for two servers. Technitium accounts are local to
+each server, so that was simply wrong. Now a dict keyed by `inventory_hostname`,
+resolved in `group_vars/all.yml`, with an explicit assert giving a readable
+message instead of a Jinja KeyError when a key is missing. Still one vault file,
+so the operator types the vault password once.

@@ -1,6 +1,6 @@
 ---
 # ---------------------------------------------------------------------------
-# technitium-cluster — primary/slave zone replication
+# technitium-replication — primary/slave zone replication
 # ---------------------------------------------------------------------------
 # Runs on BOTH boxes; each half is guarded on `technitium_role` from inventory.
 # Every call goes to the LOCAL API (technitium_api_base = 127.0.0.1:5380), so
@@ -49,7 +49,7 @@
   loop_control:
     label: "{{ item }} -> ACL+NOTIFY {{ technitium_slave_ip }}"
   when: technitium_role | default('') == 'primary'
-  tags: [cluster]
+  tags: [replication]
 
 # ===========================================================================
 # SLAVE — create the Secondary zones that pull from the primary
@@ -76,7 +76,7 @@
   loop_control:
     label: "{{ item }} <- {{ technitium_primary_host | default('UNSET') }}"
   when: technitium_role | default('') == 'slave'
-  tags: [cluster]
+  tags: [replication]
 
 # A freshly created Secondary zone does not transfer until its refresh timer
 # fires or a NOTIFY arrives. Forcing it here means the playbook leaves behind a
@@ -99,7 +99,7 @@
   loop_control:
     label: "resync {{ item }}"
   when: technitium_role | default('') == 'slave'
-  tags: [cluster]
+  tags: [replication]
 
 # ===========================================================================
 # SLAVE — verify the transfer actually happened
@@ -125,7 +125,7 @@
   loop_control:
     label: "{{ item }}"
   when: technitium_role | default('') == 'slave'
-  tags: [cluster]
+  tags: [replication]
 
 - name: "SLAVE | Assert each replicated zone carries more than just its SOA/NS"
   ansible.builtin.assert:
@@ -148,4 +148,4 @@
     - technitium_role | default('') == 'slave'
     - technitium_slave_records is defined
     - not (item.skipped | default(false))
-  tags: [cluster]
+  tags: [replication]

@@ -119,7 +119,7 @@ technitium_dnssec_validation: true
 # Technitium re-fetches from each URL every N hours; 24 is the upstream default.
 technitium_blocklist_update_interval_hours: 24
 
-# ---- Primary/slave replication (roles/technitium-cluster) ----
+# ---- Primary/slave replication (roles/technitium-replication) ----
 # Only RECORD-BEARING authoritative zones are replicated. The blocked zones
 # (cluster.local, svc.cluster.local.okd.sudops.pl) and the conditional
 # forwarder zones are configuration rather than data — technitium-config

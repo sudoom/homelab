@@ -25,4 +25,4 @@
     - role: base                  # OS hardening: unattended-upgrades, timezone, ssh-key auth, fail2ban
     - role: technitium-install    # Install (or upgrade in place) Technitium DNS Server
     - role: technitium-config     # Server settings + zones + blocklists via Technitium HTTP API
-    - role: technitium-cluster    # Primary/secondary replication (only fires when secondary is enabled)
+    - role: technitium-replication  # Zone replication primary->slave (AXFR/IXFR). NOT Technitium's vendor "Cluster" feature - see README.
