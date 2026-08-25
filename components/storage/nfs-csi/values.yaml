@@ -34,8 +34,10 @@ nfs:
 #     1G-attached Synology, so it caps at ~118 MB/s -- under 10% of the 10G
 #     backnet. OSD replication and heartbeats keep ample headroom.
 #
-# .5 is chosen to stay clear of the nodes (.2-.4), the ceph-shim macvlans
-# (.16-.18) and -- importantly -- the 192.168.10.128/25 Multus pod range.
+# .10 stays clear of the nodes (.2-.4), the ceph-shim macvlans (.16-.18) and --
+# importantly -- the 192.168.10.128/25 Multus pod range. Confirmed live
+# 2026-08-25: all three nodes reachable from it, standard AND jumbo (9000, DF
+# set), ARP REACHABLE in both directions.
 # ACCEPTED COST: Ceph and the NAS now share a failure domain. A backnet
 # incident (2026-07-25 node6 NIC down, 2026-08-07 switch firmware reboot)
 # takes out both at once.
@@ -43,7 +45,7 @@ nfs:
 # Inert until `enabled: true` -- same gating precedent as the CNPG R2 work.
 truenas:
   enabled: false
-  server: 192.168.10.5
+  server: 192.168.10.10
   # One StorageClass per dataset, rendered as nfs-truenas-<name>. Separate
   # classes (not one shared class) so each consumer gets its own ZFS dataset
   # with its own recordsize, quota and snapshot policy.

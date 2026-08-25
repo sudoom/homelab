@@ -716,3 +716,90 @@ The transport, the unprivileged `midclt` path and the JSON parsing are all
 validated — before the pool exists, which is the right time to find out.
 
 Burn-in still running: all six units `active running`.
+
+## 2026-08-25 (20:15) — storage network live, and the last failure was the switch
+
+After the interface-database fix landed, the address stuck past the rollback
+window but `ping 192.168.10.2` still failed:
+
+```
+From 192.168.10.10 icmp_seq=1 Destination Host Unreachable
+```
+
+That wording matters. On a **directly-attached** subnet, "Destination Host
+Unreachable" sourced from *your own address* is not a routing failure — it is
+the local kernel reporting that **ARP got no reply**. Confirmed:
+
+```
+$ ip neigh show dev enp2s0f0np0
+192.168.10.2 FAILED
+
+$ ip -s link show enp2s0f0np0
+RX:  bytes packets errors dropped  missed   mcast
+    220472    1016      0       0       0    1016     <-- ALL RX is multicast
+TX:  bytes packets errors dropped carrier collsns
+    111158     442      0       0       0       0
+
+$ ethtool enp2s0f0np0 | grep -iE "speed|link detected"
+Speed: 10000Mb/s
+Link detected: yes
+```
+
+**Zero unicast received, 1016 of 1016 RX packets multicast.** A healthy 10G link
+hearing broadcast chatter from *some* VLAN while being invisible to the nodes —
+the signature of a port sitting in the wrong VLAN (broadcast noise from frontnet
+rather than silence from a dead link). Nothing left to fix on TrueNAS; it was the
+CRS317 port's VLAN membership plus its `l2mtu`, neither of which had been set for
+this new port. The three node-storage ports had been done back on 2026-05-21.
+
+Useful trick for finding which physical port a DAC landed in, without tracing
+cables: look the MAC up in the switch's bridge host table.
+
+```
+/interface/bridge/host/print where mac-address=E8:EB:D3:10:76:CE
+```
+
+After the switch-side fix — VLAN 10 untagged + `pvid=10` + `l2mtu=9214`, matching
+the node ports:
+
+```
+$ for n in 2 3 4; do ping -c2 -W2 -q 192.168.10.$n; ping -c2 -W2 -q -M do -s 8972 192.168.10.$n; done
+node@192.168.10.2   std=0% packet loss   jumbo9000=0% packet loss
+node@192.168.10.3   std=0% packet loss   jumbo9000=0% packet loss
+node@192.168.10.4   std=0% packet loss   jumbo9000=0% packet loss
+
+$ ip neigh show dev enp2s0f0np0
+192.168.10.2 lladdr ec:0d:9a:75:a5:d8 REACHABLE
+192.168.10.3 lladdr ec:0d:9a:75:a6:88 REACHABLE
+192.168.10.4 lladdr ec:0d:9a:75:a6:e0 REACHABLE
+```
+
+`-M do -s 8972` is the test that matters and it is worth insisting on: 8972 bytes
+of payload plus 28 of header is exactly a 9000-byte frame, and `-M do` sets DF so
+no hop is allowed to fragment it. Without it, standard pings pass on a 1500-byte
+path and the jumbo misconfiguration only surfaces later as NFS silently
+black-holing large writes — mid-migration, on 7 TiB.
+
+**The storage network path is done.** TrueNAS `192.168.10.10/24` on the Ceph
+backnet, MTU 9000, all three nodes reachable at both frame sizes. Repo updated:
+`components/storage/nfs-csi/values.yaml` now points at `.10` (the earlier `.5`
+was a plan, `.10` is what exists).
+
+### Running total of what this evening actually cost
+
+Three separate faults stacked on one symptom ("the IP won't apply"), and only the
+last one was where anyone would have looked first:
+
+1. **`eno1` not in the interface database** → every commit tore down management
+   and the default gateway → connectivity validation failed → +60 s rollback.
+   Fixed by making `eno1` a managed DHCP record (no address change, so the SSH
+   session survived to run `checkin`) plus a MikroTik reservation pinning `.25`.
+2. **MTU was never the problem** — it had applied and persisted at the kernel
+   level the whole time. I suspected it first and was wrong.
+3. **The CRS317 port was in the wrong VLAN with a default `l2mtu`.**
+
+The lesson worth keeping: `interface.update` returning the updated record proves
+only that the *desired config* was stored. The `state` sub-object is the live
+kernel, and when the two disagree the middleware log is the only place the reason
+appears — none of it surfaces as an error from `commit` or `checkin`, both of
+which returned `null` (success) throughout.
