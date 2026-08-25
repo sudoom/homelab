@@ -19,7 +19,7 @@ Plus, pi-hole's conditional-forwarding chain for `okd.sudops.pl` is fundamentall
 | Hardware (secondary) | RPi Zero 2W | Future addition; small, low-power, sufficient for hot-standby DNS. |
 | Topology | Technitium primary/secondary cluster | Built-in feature of Technitium DNS Server; trivial to set up. |
 | Primary IP | `192.168.1.12` (same as pi-hole) | Transparent cutover. No DHCP option change. LAN clients keep working without reconfiguration. |
-| Secondary IP | TBD (likely `192.168.1.13`) | Decide when the Zero 2W lands; needs DHCP reservation. |
+| Secondary IP | **`192.168.1.13`, confirmed 2026-08-25** | Allocated to `dns-secondary`. Hardware is an **RPi 3B+** (decided 2026-08-19 — the Zero 2W was rejected: no Ethernet, 512 MB, ~2026-12-04 ship date on what is currently a SPOF). Needs a MikroTik DHCP reservation. |
 | Software | Technitium DNS Server | Authoritative + recursive + forwarding + split-horizon + clustering + web UI + ARM-supported. Native config in JSON files, can be Git-tracked. |
 | Upstream resolution | Recursive (built-in) with DNSSEC | Technitium's recursive resolver bypasses upstream dependence. Optional fallback forward to 1.1.1.1 via DoT for the cases where recursion is slow. |
 | Authoritative zones served | `okd.sudops.pl` (split-horizon, see below) | Eliminates the conditional-forwarding chain to gw.home.lab. |
@@ -48,7 +48,7 @@ technitium (RPi 3B+ @ 192.168.1.12) — Technitium DNS Server
     │
     ├── Recursive resolver (built-in, DNSSEC-validating) — for everything else.
     │
-    └── (future) replication to secondary on 192.168.1.13 (RPi Zero 2W)
+    └── (future) replication to secondary on 192.168.1.13 (RPi 3B+)
 
 Cluster's on-host CoreDNS:
     DNSUpstreams = 192.168.1.12  ← keeps pointing at technitium (because same IP)
@@ -140,7 +140,7 @@ Decision: **start with recursive + DNSSEC** as the primary mode. If cold-cache l
 Technitium's built-in zone-replication makes this almost free. Future shape when the Zero 2W lands:
 
 - **Primary** (`192.168.1.12`, RPi 3B+): writable, accepts admin changes, holds authoritative zones.
-- **Secondary** (`192.168.1.13`, RPi Zero 2W): read-only replica, polls primary for zone transfers (NOTIFY+IXFR), serves the same answers.
+- **Secondary** (`192.168.1.13`, RPi 3B+ — not the Zero 2W, see 2026-08-19): read-only replica, polls primary for zone transfers (NOTIFY+IXFR), serves the same answers.
 - **LAN DHCP option**: advertise both nameservers (`192.168.1.12, 192.168.1.13`). Clients fall over to the secondary if the primary is unreachable.
 
 Open question for the secondary build: same OS image (presumably Raspberry Pi OS Lite)? Same Technitium version? Bootstrap with an Ansible playbook so primary + secondary stay in sync.

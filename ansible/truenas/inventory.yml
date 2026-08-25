@@ -17,6 +17,10 @@ all:
       # Reserving at the router keeps eno1 on DHCP inside TrueNAS, which avoids a
       # static-address commit that would drop the SSH session mid-apply and leave
       # the 60s rollback timer un-checked-in -- the exact trap that ate an evening.
+      # NOT .13 -- that is allocated to dns-secondary (see
+      # ansible/technitium/inventory.yml). Frontnet allocations as of 2026-08-25:
+      #   .1 gw | .2 Synology | .3 Mac mini | .4-.6 old node1-3 | .7-.9 node4-6
+      #   .10-.11 future node7-8 | .12 dns-master | .13 dns-secondary | .25 truenas
       ansible_host: 192.168.1.25                       # frontnet/VLAN 5 mgmt (onboard 1G eno1)
       ansible_user: truenas_admin                      # install-time admin account; root SSH stays disabled
       # NOTE: id_rsa, not vadz_key -- the TrueNAS admin account was set up with a

@@ -803,3 +803,44 @@ only that the *desired config* was stored. The `state` sub-object is the live
 kernel, and when the two disagree the middleware log is the only place the reason
 appears — none of it surfaces as an error from `commit` or `checkin`, both of
 which returned `null` (success) throughout.
+
+### Address allocation — and a collision I proposed and did not catch
+
+`192.168.1.13` is **allocated to `dns-secondary`**, confirmed by the operator
+2026-08-25. It has been earmarked there since the Technitium migration:
+`ansible/technitium/inventory.yml` carries a commented `dns-secondary` stub with
+`ansible_host: 192.168.1.13`, and `blog-technitium-dns-migration-draft.md`
+references it in three places.
+
+I proposed `.13` for the TrueNAS management address earlier the same day, having
+already read that inventory file in the same session. The collision never
+happened only because DHCP moved the box's lease `.67 -> .25` and we pinned `.25`
+at the router instead — luck, not diligence. Recording it because the fix is
+mechanical: **check `ansible/*/inventory.yml` before proposing any LAN address**,
+since that is where reservations actually live; the vault's IP-plan table stops
+at `.12` and calls everything above it "Reserved DHCP", which is no longer true.
+
+Frontnet allocations as they actually stand:
+
+| IP | Host |
+|---|---|
+| .1 | Gateway (MikroTik CCR2004) |
+| .2 | Synology DS418 (until sold) |
+| .3 | Mac mini |
+| .4–.6 | old node1-3 |
+| .7–.9 | node4/5/6 |
+| .10–.11 | reserved, future node7-8 |
+| .12 | dns-master (Technitium primary) |
+| **.13** | **dns-secondary** — RPi 3B+, not yet built |
+| **.25** | **truenas** — MikroTik DHCP reservation |
+
+Two doc-drift items fixed in `blog-technitium-dns-migration-draft.md` while
+confirming this: the secondary's IP was still recorded as *"TBD (likely
+192.168.1.13)"*, and the hardware was still described as an **RPi Zero 2W** in
+three places — superseded 2026-08-19 in favour of an RPi 3B+ (the Zero 2W has no
+Ethernet at all, 512 MB, and a ~2026-12-04 ship date on what is currently a
+single point of failure).
+
+Naming note: the operator called it `dns-slave`; the repo consistently uses
+`dns-secondary`, which is both the modern DNS term and what Technitium's own UI
+calls the zone type. Keeping `dns-secondary` in code unless told otherwise.
