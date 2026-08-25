@@ -126,7 +126,10 @@ technitium_blocklist_update_interval_hours: 24
 # creates those independently on every box, so they need no transfer.
 technitium_replicated_zones:
   - "{{ okd_zone_name }}"
-  - "{{ homelab_zone_name }}"
+  # homelab.sudops.pl is deliberately NOT here (2026-08-26): it is the CLUSTER
+  # DOMAIN, so Technitium's Cluster feature replicates it natively. Listing it
+  # here as well would have roles/technitium-replication create a competing
+  # Secondary zone for it on the slave. One zone, one mechanism.
 
 # The slave's address, used on the PRIMARY to build the zone-transfer ACL and
 # the NOTIFY target list. Kept here (not in inventory) so the primary can be
@@ -150,11 +153,20 @@ technitium_zone_transfer_protocol: Tcp
 technitium_cluster_enabled: true
 
 # Becomes a real DNS zone on the primary (Primary) and on each secondary
-# (Secondary), transferred by TSIG-authenticated AXFR/IXFR. Chosen under
-# homelab.sudops.pl — a zone we already own and serve LAN-only, so the cluster
-# domain never needs to resolve publicly.
-# IMMUTABLE after init: changing it means tearing the cluster down.
-technitium_cluster_domain: cluster.homelab.sudops.pl
+# (Secondary), transferred by TSIG-authenticated AXFR/IXFR, and the parent under
+# which node names are formed — dns-master.homelab.sudops.pl /
+# dns-slave.homelab.sudops.pl (operator's choice, 2026-08-26).
+#
+# IMMUTABLE after init: changing it means deleting the cluster
+# (api/admin/cluster/primary/delete) and re-forming it.
+#
+# NOTE this is an EXISTING zone: technitium-config creates homelab.sudops.pl as
+# a Primary zone holding the LAN appliance records (`nas`, `dns`). Using it as
+# the cluster domain therefore hands that zone to the cluster, which is why it
+# is deliberately ABSENT from technitium_replicated_zones below — the cluster
+# replicates it natively, and having roles/technitium-replication also make it
+# Secondary on the slave would be two mechanisms fighting over one zone.
+technitium_cluster_domain: homelab.sudops.pl
 
 # Which inventory host is the cluster Primary. Config flows FROM here.
 technitium_cluster_primary_host: dns-master

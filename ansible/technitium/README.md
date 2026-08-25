@@ -191,9 +191,26 @@ would be replicating the same zone.
 
 ### Cluster specifics
 
-- **`technitium_cluster_domain` is IMMUTABLE** (`cluster.homelab.sudops.pl`).
-  It becomes a real zone — Primary on the primary node, Secondary on each other
-  node. Changing it means deleting the cluster and re-forming it.
+- **`technitium_cluster_domain` is IMMUTABLE** — set to **`homelab.sudops.pl`**
+  (2026-08-26), so node names read `dns-master.homelab.sudops.pl` /
+  `dns-slave.homelab.sudops.pl`. It becomes a real zone: Primary on the primary
+  node, Secondary on each other node. Changing it means deleting the cluster
+  (`api/admin/cluster/primary/delete`) and re-forming it.
+
+  **This is an EXISTING zone** — `technitium-config` creates
+  `homelab.sudops.pl` as a Primary zone holding the LAN appliance records
+  (`nas`, `dns`). Two things follow:
+  - It is deliberately **absent from `technitium_replicated_zones`**. The
+    cluster replicates it natively; listing it there too would have
+    `technitium-replication` create a competing Secondary zone on the slave.
+    One zone, one mechanism.
+  - **Unverified:** whether `init` adopts a pre-existing zone of that name or
+    refuses it. `technitium-config` runs first, so the zone exists before init
+    is attempted — which is the safer order, but watch the first run. If init
+    fails on a zone conflict, the options are a dedicated subdomain
+    (`cluster.homelab.sudops.pl`) or deleting the zone and letting the cluster
+    recreate it (which would need the `nas`/`dns` records re-added — they are in
+    `group_vars`, so a re-run restores them).
 - **Init auto-enables HTTPS** with a self-signed cert on port 53443 and restarts
   the admin web service ~2 s after responding. The role waits this out with a
   `retries`/`until` loop rather than assuming.

@@ -640,3 +640,41 @@ already match.
 Untested against the live pair as of writing: `dns-slave` has Technitium
 installed but the playbook has not completed a full run. First run is the first
 real test.
+
+## 2026-08-26 — cluster domain set to `homelab.sudops.pl`
+
+Operator's call, on the naming: with the cluster domain as `homelab.sudops.pl`
+the nodes read `dns-master.homelab.sudops.pl` / `dns-slave.homelab.sudops.pl`,
+where `cluster.homelab.sudops.pl` would have given the uglier
+`dns-master.cluster.homelab.sudops.pl`.
+
+The consequence is not cosmetic. **`homelab.sudops.pl` is already a live Primary
+zone** — `technitium-config` creates it and populates the LAN appliance records
+(`nas`, `dns`), and it exists precisely so LAN boxes can hold real public-CA
+certs without publishing LAN IPs to Cloudflare. The cluster domain also becomes
+a zone (Primary on the primary, Secondary on every other node). So this hands an
+existing, load-bearing zone to the cluster.
+
+Two changes fell out of that:
+
+1. **`homelab.sudops.pl` removed from `technitium_replicated_zones`.** The
+   cluster now replicates it natively; leaving it in the list would have
+   `roles/technitium-replication` create a competing Secondary zone for it on
+   the slave. That is exactly the two-mechanisms collision the design was built
+   to avoid — the standing rule ("one zone, one mechanism") caught it
+   immediately, which is the entire reason the rule was written down.
+   `okd.sudops.pl` is now the only classically-replicated zone.
+2. Documented as **immutable**, with the recovery path (`primary/delete` then
+   re-form) recorded next to it.
+
+**Open and unverified:** whether `api/admin/cluster/init` *adopts* a
+pre-existing zone with the cluster-domain name, or refuses it. Nothing in the
+UI source settles this, and I am not going to guess at it after this session's
+record on guessing. Mitigating factors: `technitium-config` runs before
+`technitium-cluster`, so the zone exists first, which is the safer of the two
+orders; and if init does refuse, the fallbacks are a dedicated subdomain or
+deleting the zone and letting the cluster recreate it — the `nas`/`dns` records
+live in `group_vars`, so a playbook re-run restores them either way.
+
+This is the kind of thing worth watching on the first run rather than
+discovering later: the cluster domain cannot be changed afterwards.
