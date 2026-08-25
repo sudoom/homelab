@@ -292,3 +292,103 @@ argument against leaned on renewal being the risky part rather than first
 install. This is that argument, live, on the very same wildcard — and it
 strengthens the recommendation to leave Technitium's cluster on its self-signed
 cert, where DANE-EE pins the certificate and there is no renewal path to break.
+
+### Root cause: a SyntaxError that only ran once a quarter
+
+A manual run gave the answer immediately:
+
+```
+cluster cert fp: DA:CE:84:F3:9D:05:...
+dsm     cert fp: AF:6F:D6:9E:BF:D9:...
+Fingerprints differ; uploading.
+DSM login OK.
+  File "<string>", line 14
+SyntaxError: f-string expression part cannot include a backslash
+```
+
+DSM login was fine. The failure was in the embedded Python that resolves which
+DSM certificate to replace:
+
+```python
+f"replacing id={chosen.get(\"id\")}, leaving {len(matches)-1} duplicate(s) alone.\n"
+```
+
+An **escaped double quote inside an f-string expression** — a SyntaxError on
+Python < 3.12 (PEP 701 relaxed this in 3.12; the container image is older). And
+the escape was not carelessness: the whole block is passed to `python3 -c '...'`
+inside a **single-quoted shell string**, so a plain single quote would have
+terminated that string early. Cornered by three levels of quoting, the author
+picked the option that happened to be invalid Python.
+
+**That code had never worked.** When the fingerprints match, the script exits 0
+*before* reaching it — so the only runs that even compile it are the ~quarterly
+ones with a certificate to replace. A daily job, green for months, whose single
+purpose had never once been exercised.
+
+Fix: bind the value to a name first, so the f-string needs no backslash.
+
+```python
+chosen_id = chosen.get("id", "")
+print(chosen_id)
+...
+f"replacing id={chosen_id}, leaving {len(matches)-1} duplicate(s) alone.\n"
+```
+
+### Nearly repeating the mistake while fixing it
+
+The first patch added an explanatory comment containing the literal text
+`python3 -c '...'` — single quotes, inside the single-quoted block. That would
+have ended the shell string early and broken the script in a *new* way. It
+surfaced only because an extraction regex choked on it.
+
+So two assertions now run against the rendered chart, both of which would have
+caught the original bug at commit time rather than at renewal time:
+
+```
+$ helm template … > rendered.yaml
+$ python3 checkpy.py rendered.yaml
+single quotes inside python -c block: NONE (good)
+embedded python COMPILES ok
+$ sh -n sync.sh && echo "shell syntax: OK"
+shell syntax: OK
+```
+
+Generalisable: **an embedded interpreter, inside a quoted shell string, inside
+YAML, has three levels of quoting and zero syntax checking.** Nothing in
+`helm lint`, `kubeconform` or ArgoCD looks inside that string. Any future
+`*-cert-sync` has the identical shape.
+
+### Verified end to end
+
+```
+$ oc -n synology-cert-sync logs job/cert-sync-fix-… --all-containers
+Fingerprints differ; uploading.
+DSM login OK.
+Replacing existing DSM cert id=KB7FpK.      <-- the path that had never run
+DSM cert import OK.
+
+$ echo | openssl s_client -connect 192.168.1.2:5001 -servername nas.homelab.sudops.pl \
+    | openssl x509 -noout -subject -issuer -enddate -fingerprint -sha256
+subject=CN=*.homelab.sudops.pl
+issuer=C=US, O=Let's Encrypt, CN=YR2
+notAfter=Oct 21 11:24:57 2026 GMT
+sha256 Fingerprint=DA:CE:84:F3:9D:05:...:66:95:00
+```
+
+`notAfter` moved from the expired 22 Aug to 21 Oct, and the served fingerprint
+now matches the cluster secret exactly. Closed.
+
+### What actually failed here
+
+Three independent things, each individually reasonable:
+
+1. A **quoting trap** produced code that could not run.
+2. The broken path was **only reachable once a quarter**, so months of green
+   runs proved nothing about it.
+3. **Nothing alerted**, because OpenShift's `KubeJobFailed` is scoped to
+   platform namespaces and this namespace was never in scope.
+
+Any one of the three alone would have been caught. The lesson worth keeping is
+(2): *a scheduled job whose common path is a no-op is not tested by running it.*
+The only meaningful test is forcing the rare path — which for a cert-sync means
+deliberately pushing a cert that differs, not waiting for a renewal to do it.
