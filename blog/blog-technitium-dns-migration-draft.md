@@ -417,3 +417,64 @@ is uncommented, which is the single change needed when the Pi arrives.
 Untested end-to-end: there is no second box yet. Both YAML and the API parameter
 names are verified, but the first real run is the first real test — treat any
 surprise as a role defect to fix and record, not something to work around by hand.
+
+### Passwordless sudo — codifying drift found on the primary
+
+Setting up `dns-slave` surfaced an inconsistency:
+
+```
+$ ssh admin@192.168.1.12 -i ~/.ssh/vadz_key 'sudo -n true && echo PASSWORDLESS || echo NEEDS-PASSWORD'
+PASSWORDLESS            # dns-master
+                        # dns-slave prompts
+```
+
+`dns-master`'s passwordless sudo was created out of band — RPi Imager or by hand
+— and recorded nowhere. **It would not survive an SD reimage.** Structurally the
+same defect as the hand-written `10-router-ntp.conf` drop-in that caused the
+2026-07-25 outage: working state living only on the box.
+
+The initial instinct was the opposite fix — keep the password and put
+`ansible_become_password` in the vault, which `vars/vault.yml.example` already
+anticipates. That is the better *security* answer in the abstract. But it was
+the wrong answer here, and the evidence inverted it: the primary is **already**
+passwordless, so codifying it changes nothing about the real posture and fixes
+the drift. Storing a become password instead would have left dns-master's
+unmanaged sudoers file in place, unrecorded, still one reimage from vanishing.
+
+Shipped in `roles/base` so both boxes converge:
+
+```yaml
+- name: Grant the ansible user passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/010_{{ ansible_user }}-nopasswd"
+    content: "{{ ansible_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    owner: root
+    group: root
+    mode: "0440"          # sudo REFUSES to read a group/world-writable file
+    validate: "visudo -cf %s"
+```
+
+`validate:` is not optional. Ansible writes to a temp file, runs `visudo -cf`
+against it, and installs it only if it parses. A malformed sudoers file locks out
+sudo entirely; recovery is physical console or an SD swap.
+
+Applied to `dns-slave` by hand for now (the box is not in the inventory yet),
+using the same validate-before-install property:
+
+```bash
+printf 'admin ALL=(ALL) NOPASSWD: ALL\n' | EDITOR='tee' visudo -f /etc/sudoers.d/010_admin-nopasswd
+```
+
+`visudo -f` copies to a temp file, runs `$EDITOR` on it (`tee` just dumps stdin
+in), parses the result, and only then installs — and sets `0440` itself. The
+naive `echo > /etc/sudoers.d/...` skips the parse and is how people lock
+themselves out. Keep an existing root shell open until a *new* session confirms
+`sudo -n true` succeeds.
+
+Because the role task already exists, this is not drift: when `dns-slave` enters
+the inventory the playbook asserts the same file and reports `ok`, not `changed`.
+
+Accepted cost, stated rather than buried: an SSH key on these boxes is root on
+these boxes, with no second factor. SSH is key-only with password auth off, and
+this was already true of dns-master — the change records reality rather than
+creating it.

@@ -2,6 +2,37 @@
 # Base OS hygiene for the technitium box.
 # Keep this minimal — the box's only job is DNS; don't pile on.
 
+# ---- Passwordless sudo for the ansible user --------------------------------
+# Codifies what `dns-master` already has. Discovered 2026-08-25: dns-master
+# answers `sudo -n true` fine while dns-slave prompts — i.e. the primary's
+# passwordless sudo was created out of band (RPi Imager, or by hand) and was
+# recorded nowhere. That is exactly the shape of the hand-written NTP drop-in
+# that caused the 2026-07-25 outage: working state that would vanish on an SD
+# reimage. Making it a role task fixes the drift AND brings the slave in line.
+#
+# `validate:` is not optional. Ansible writes to a temp file, runs
+# `visudo -cf` against it, and only installs it if it parses. A malformed
+# sudoers file locks out sudo entirely — recovery is physical console or an SD
+# swap. Never write to /etc/sudoers.d without it.
+#
+# FIRST RUN against a box whose sudo still needs a password requires the become
+# password (`ansible_become_password` in vars/vault.yml, or --ask-become-pass).
+# After this task lands, subsequent runs no longer need it.
+#
+# Security note, stated plainly rather than buried: this means an SSH key on
+# this box is root on this box, with no second factor. Accepted because SSH is
+# key-only with password auth off, and because it was ALREADY true on
+# dns-master — this records reality rather than changing it.
+- name: Grant the ansible user passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/010_{{ ansible_user }}-nopasswd"
+    content: "{{ ansible_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    owner: root
+    group: root
+    mode: "0440"          # sudo REFUSES to read a group/world-writable file
+    validate: "visudo -cf %s"
+  tags: [base, sudo]
+
 - name: Check whether dhcpcd is in use
   ansible.builtin.stat:
     path: /etc/dhcpcd.conf

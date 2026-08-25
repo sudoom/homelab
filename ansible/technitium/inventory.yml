@@ -27,13 +27,13 @@ all:
     # `technitium_role: slave` is what gates every slave-side task; the primary
     # half of that role is gated on `primary` and already applies today (it sets
     # the zone-transfer ACL + NOTIFY target from `technitium_slave_ip`).
-    # dns-slave:
-    #   ansible_host: 192.168.1.13
-    #   ansible_user: admin
-    #   ansible_ssh_private_key_file: ~/.ssh/vadz_key
-    #   ansible_python_interpreter: /usr/bin/python3
-    #   technitium_role: slave
-    #   technitium_primary_host: 192.168.1.12
+    dns-slave:
+      ansible_host: 192.168.1.13
+      ansible_user: admin
+      ansible_ssh_private_key_file: ~/.ssh/vadz_key
+      ansible_python_interpreter: /usr/bin/python3
+      technitium_role: slave
+      technitium_primary_host: 192.168.1.12
 
   vars:
     # become for system-level tasks (apt, systemd, /etc/dns/*)
