@@ -19,6 +19,13 @@
 # Tagged `always` so authentication runs regardless of which --tags filter the
 # operator picks (e.g. --tags forwarders). Without this, narrow-scoped re-runs
 # fail with "technitium_auth_headers is undefined".
+# THE BODY-STATUS TRAP, applied to login itself. Technitium answers a WRONG
+# PASSWORD with HTTP 200 and {"status":"error","errorMessage":"..."} — so a
+# plain `status_code: 200` task reports `ok` on a failed login, and the failure
+# only surfaces one task later as an inscrutable
+#   "object of type 'dict' has no attribute 'token'"
+# on the token extraction. Hit for real on dns-slave's first run, 2026-08-25.
+# `failed_when: false` here is deliberate: we branch on the BODY below.
 - name: Login to Technitium API
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/user/login"
@@ -31,7 +38,88 @@
     status_code: 200
     return_content: true
   register: technitium_login
+  failed_when: false
   no_log: true
+  tags: [config, always]
+
+# ---- First-boot bootstrap --------------------------------------------------
+# A freshly installed Technitium still has the documented installer default
+# (admin/admin), so the managed password cannot work yet. Rather than making
+# that a manual "go set it in the web UI" step — which would not survive an SD
+# reimage, the same class of drift as the hand-written NTP drop-in that caused
+# the 2026-07-25 outage — adopt the box: log in with the default, change the
+# password to the managed one, and continue. Idempotent by construction: on
+# every subsequent run the first login succeeds and this whole block skips.
+- name: Adopt a freshly installed Technitium (default credentials still in place)
+  when: (technitium_login.json.status | default('error')) != 'ok'
+  tags: [config, always]
+  block:
+    - name: Login with the installer default credentials
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/user/login"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          user: "{{ technitium_admin_user }}"
+          pass: admin
+          includeInfo: "false"
+        status_code: 200
+        return_content: true
+      register: technitium_default_login
+      failed_when: (technitium_default_login.json.status | default('error')) != 'ok'
+      no_log: true
+
+    - name: Change the admin password to the managed one
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/user/changePassword"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ technitium_default_login.json.token }}"
+        body_format: form-urlencoded
+        body:
+          pass: admin
+          newPass: "{{ technitium_admin_password }}"
+        status_code: 200
+        return_content: true
+      register: technitium_pwchange
+      failed_when: (technitium_pwchange.json.status | default('error')) != 'ok'
+      no_log: true
+
+    - name: Re-login with the managed password
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/user/login"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          user: "{{ technitium_admin_user }}"
+          pass: "{{ technitium_admin_password }}"
+          includeInfo: "false"
+        status_code: 200
+        return_content: true
+      register: technitium_login
+      failed_when: (technitium_login.json.status | default('error')) != 'ok'
+      no_log: true
+
+  rescue:
+    - name: Explain why authentication failed
+      ansible.builtin.fail:
+        msg: >-
+          Could not authenticate to Technitium at {{ technitium_api_base }}.
+          The managed password (technitium_admin_password, from vars/vault.yml)
+          was rejected, AND so was the installer default (admin/admin), so this
+          box is neither freshly installed nor set to the managed password.
+          Most likely: the admin password was changed by hand to a third value.
+          Fix by resetting it — stop dns.service, edit the Technitium config to
+          reset the admin user, or reinstall — then re-run. Do NOT work around
+          this by changing the vault to match the box: the vault is the source
+          of truth for BOTH boxes, and they must share one password.
+
+- name: Assert we actually hold a session token
+  ansible.builtin.assert:
+    that:
+      - technitium_login.json.token is defined
+    fail_msg: "Login returned no token — see the task above."
+    quiet: true
   tags: [config, always]
 
 - name: Extract session token + build Bearer auth header

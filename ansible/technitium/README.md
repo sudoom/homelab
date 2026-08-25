@@ -41,14 +41,31 @@ ansible/technitium/
    ```
    curl -sSL https://download.technitium.com/dns/install.sh | sudo bash
    ```
-5. **Browse to `http://<box-ip>:5380`** and set the admin password (Technitium forces this on first visit).
+5. **Admin password — nothing to do by hand (changed 2026-08-25).** A fresh
+   Technitium install carries the documented default `admin`/`admin`. The
+   `technitium-config` role now **adopts** the box: it tries the managed
+   password, and on failure logs in with the default, calls
+   `/api/user/changePassword`, and continues. So the admin password is set from
+   the vault on first run and survives an SD reimage. Previously this was a
+   manual web-UI step, which meant the box's most important credential lived
+   only on the box — the same class of drift as the hand-written NTP drop-in
+   behind the 2026-07-25 outage.
+
+   Both boxes share one `technitium_admin_password`. If a box is set to some
+   *third* password by hand, neither the managed value nor the default works and
+   the role fails with an explicit message — reset the box rather than editing
+   the vault to match it.
 6. **Workstation**: install Ansible (`brew install ansible` / `apt install ansible`). All tasks use `ansible.builtin.*` modules only — no external collections required.
 7. **Vault**: create the encrypted secrets file:
    ```
    cd ansible/technitium
    ansible-vault create vars/vault.yml
    ```
-   Paste the template from `vars/vault.yml.example` and set `technitium_admin_password` to whatever you set in step 5. Add `ansible_become_password` too if sudo on the box is password-protected (skip if passwordless).
+   Paste the template from `vars/vault.yml.example` and choose
+   `technitium_admin_password` — the role applies it to the box, so it does not
+   have to match anything pre-existing. `ansible_become_password` is no longer
+   needed: `roles/base` grants the ansible user passwordless sudo (validated
+   with `visudo -cf` before install).
 
 ## Day-2: apply config
 
