@@ -86,11 +86,24 @@ data:
         if matches:
             defaults = [c for c in matches if c.get("is_default")]
             chosen = (defaults[0] if defaults else matches[0])
-            print(chosen.get("id", ""))
+            # Bound to a NAME first, deliberately. This used to inline the
+            # .get lookup directly inside the f-string below with an escaped
+            # double quote, which is a SyntaxError on Python < 3.12:
+            # "f-string expression part cannot include a backslash". The escape
+            # was unavoidable because this whole block is passed to python3 -c
+            # inside a single-quoted shell string, so a plain single quote here
+            # would end that string early. NO SINGLE QUOTES IN THIS BLOCK.
+            # It never surfaced because the fingerprint-match path exits 0
+            # BEFORE reaching this code, so the only runs that compile it are
+            # the ~quarterly ones that actually have a cert to replace.
+            # Result: silently broken for a month, and the wildcard expired on
+            # DSM on 2026-08-22. Keep the binding.
+            chosen_id = chosen.get("id", "")
+            print(chosen_id)
             if len(matches) > 1:
                 sys.stderr.write(
                     f"WARN: {len(matches)} certs with desc={desc!r}; "
-                    f"replacing id={chosen.get(\"id\")}, leaving {len(matches)-1} duplicate(s) alone.\n"
+                    f"replacing id={chosen_id}, leaving {len(matches)-1} duplicate(s) alone.\n"
                 )
         else:
             sys.stderr.write("INFO: no existing cert with matching desc; creating new.\n")
