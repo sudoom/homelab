@@ -22,11 +22,16 @@ all:
       ansible_python_interpreter: /usr/bin/python3
       technitium_role: primary
 
-    # Uncommenting this block is the ONLY inventory change needed when the RPi
-    # 3B+ lands — roles/technitium-cluster is written and waiting for it.
-    # `technitium_role: slave` is what gates every slave-side task; the primary
-    # half of that role is gated on `primary` and already applies today (it sets
-    # the zone-transfer ACL + NOTIFY target from `technitium_slave_ip`).
+    # LIVE since 2026-08-25. RPi 3B+, verified identical to dns-master:
+    # Debian 13 (trixie), arm64, kernel 6.18.34+rpt-rpi-v8, dhcpcd present.
+    # `technitium_role: slave` gates every slave-side task in
+    # roles/technitium-cluster; the primary half is gated on `primary` and sets
+    # the zone-transfer ACL + NOTIFY target from `technitium_slave_ip`.
+    #
+    # ORDER MATTERS on first bring-up: Technitium is NOT yet installed here, so
+    # do NOT advertise .13 in DHCP until the playbook has run and
+    # `dig @192.168.1.13 api.okd.sudops.pl` answers. A resolver advertised
+    # before it can answer makes the LAN worse, not more resilient.
     dns-slave:
       ansible_host: 192.168.1.13
       ansible_user: admin
