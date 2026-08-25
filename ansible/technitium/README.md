@@ -193,7 +193,7 @@ Five reasons it is the wrong fit for this repo:
 3. **Cluster state is unreproducible runtime data** — node IDs, the TSIG key
    minted at init, the auto-generated self-signed cert, the cluster-catalog
    zone. The documented bring-up path for these RPis is an SD-card rebuild,
-   which restores none of it; the cluster would have to be town down and
+   which restores none of it; the cluster would have to be torn down and
    re-formed. Everything else here survives a reimage.
 4. **It forces same-version lockstep upgrades**, which kills `upgrade.yml`'s
    deliberate staggered design (slave first, verify, then primary, so DNS keeps
