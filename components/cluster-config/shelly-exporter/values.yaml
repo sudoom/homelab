@@ -32,3 +32,12 @@ plugs:
   # avg 372.5 W, max 377.5 W, min 370 W.
   - instance: rack
     rpcUrl: http://192.168.1.77/rpc/Switch.GetStatus?id=0
+  # TrueNAS NAS box (Supermicro X11SCH-F / Xeon E-2146G / 6x HGST 4TB).
+  # Added 2026-08-25 when the box came up. Like node6, this is a SUB-METER
+  # of `rack` if the plug sits downstream of the rack feed -- do not sum
+  # instances blindly. Baseline worth capturing before the pool is built
+  # and again once 6 spinning HDDs are under load: the ~15-30 W delta for
+  # 3.5" drives is the number the README's "NVMe-only compact nodes"
+  # power argument turns on.
+  - instance: truenas
+    rpcUrl: http://192.168.1.55/rpc/Switch.GetStatus?id=0

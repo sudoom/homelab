@@ -47,7 +47,19 @@ Each entry's `instance` becomes the metric's `instance` label.
 
 **Currently monitored** (`values.yaml`): `node6` = `192.168.1.50` (single node),
 `rack` = `192.168.1.77` (whole-homelab feed upstream of the PDU — the meaningful
-denominator for cluster-wide power-lever decisions; ~1/3 of it is any one node).
+denominator for cluster-wide power-lever decisions; ~1/3 of it is any one node),
+`truenas` = `192.168.1.55` (the NAS box, added 2026-08-25).
+
+`node6` and `truenas` are **sub-meters** of `rack` when their plugs sit downstream
+of the rack feed — the dashboard's `$instance` variable is multi-select, so it shows
+them as separate series rather than summing, but don't hand-add the numbers.
+
+Adding a plug is a `values.yaml` edit only: the ServiceMonitor ranges over `plugs`,
+and the Grafana dashboard's `$instance` variable is populated by
+`label_values(shelly_power_watts, instance)` — so a new plug appears in the
+dropdown with no dashboard change. This holds only for Gen 2/3 plugs sharing the
+`/rpc/Switch.GetStatus?id=0` shape; a Gen 1 plug (`/status`, `.meters[0].power`)
+would need its own `json_exporter` module in `templates/configmap.yaml`.
 
 ## Files
 

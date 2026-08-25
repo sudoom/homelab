@@ -1301,3 +1301,58 @@ the [homelab GitOps repo](https://github.com/sudoom/homelab) under
 `components/cluster-config/power-tuning/`,
 `components/cluster-config/grafana-config/files/shelly-power.json`,
 and `CLAUDE.md` respectively.
+
+## 2026-08-25 — third plug: the TrueNAS box
+
+The TrueNAS NAS (Supermicro X11SCH-F / Xeon E-2146G / 6× HGST 4 TB) came up on its
+own Shelly plug at `192.168.1.55`. Adding it to telemetry turned out to be a
+two-line change, which is the point of how this chart was built back in May:
+
+```yaml
+# components/cluster-config/shelly-exporter/values.yaml
+  - instance: truenas
+    rpcUrl: http://192.168.1.55/rpc/Switch.GetStatus?id=0
+```
+
+Nothing else moved. The `ServiceMonitor` template already `range`s over `.Values.plugs`,
+so a new entry becomes a new scrape endpoint; and the Grafana dashboard
+(`components/cluster-config/grafana-config/files/shelly-power.json`) drives every panel
+off `instance=~"$instance"` where `$instance` is a query variable of
+`label_values(shelly_power_watts, instance)`. A new plug therefore shows up in the
+dropdown on its own, with no dashboard edit. Worth recording as a design that paid off —
+the alternative (hardcoded per-plug panels) would have meant touching 10 panels.
+
+Validation:
+
+```
+$ helm lint components/cluster-config/shelly-exporter/
+1 chart(s) linted, 0 chart(s) failed
+
+$ helm template shelly-exporter components/cluster-config/shelly-exporter/ | grep -A1 'target:'
+        target:
+          - "http://192.168.1.50/rpc/Switch.GetStatus?id=0"
+        target:
+          - "http://192.168.1.77/rpc/Switch.GetStatus?id=0"
+        target:
+          - "http://192.168.1.55/rpc/Switch.GetStatus?id=0"
+
+$ ... | kubeconform -strict -ignore-missing-schemas ...   # exit 0
+```
+
+**Unverified at commit time:** whether the `.55` plug is the same Gen 3 Plus Plug S as the
+other two. The config module is shared across all plugs, so a Gen 1 plug (`/status`,
+`.meters[0].power`) would return no data rather than fail loudly — the symptom would be
+`shelly_power_watts{instance="truenas"}` simply absent from the dropdown. Confirm with
+`curl -s http://192.168.1.55/rpc/Shelly.GetDeviceInfo` (a Gen 1 returns 404 there).
+
+**Two baselines worth capturing while the box is still empty**, because they answer a
+question the README's power section has been carrying as an assumption:
+
+1. **Idle, pre-pool** — board + CPU + boot SSD, no spinning drives loaded.
+2. **Idle, 6 HDDs spun up** — after the pool exists.
+
+The delta is the real cost of the 3.5" tier. README's "Power (~15–30 W for 3× 3.5" HDD) is
+the only real argument for NVMe-only-compact nodes" is an estimate; this measures it, at 6
+drives instead of 3. It also feeds the Synology-vs-TrueNAS comparison — the DS418 it
+replaces has 4 bays and its own draw, so the migration's true power delta is
+`truenas − ds418`, not `truenas` alone. Capture the DS418 figure before it is sold.
