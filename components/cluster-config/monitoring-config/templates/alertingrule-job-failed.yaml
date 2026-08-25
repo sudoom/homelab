@@ -1,0 +1,78 @@
+# Alerting on FAILED JOBS IN USER NAMESPACES.
+#
+# Why this exists (found 2026-08-26): OpenShift's built-in KubeJobFailed rule is
+# scoped to platform namespaces ONLY —
+#
+#   kube_job_failed{job="kube-state-metrics",
+#                   namespace=~"(openshift-.*|kube-.*|default)"} > 0
+#
+# — so every CronJob this repo ships in its own namespace is invisible to job
+# failure alerting: synology-cert-sync, node-fstrim, loki-pdb-override,
+# rbd-trash-purge, the OADP schedules. The metric is present and correct; simply
+# nothing evaluates it outside the platform namespaces.
+#
+# That blind spot cost a real outage. `synology-cert-sync` failed nightly for
+# ~a month, so the renewed *.homelab.sudops.pl wildcard never reached the
+# Synology, and the cert EXPIRED 2026-08-22 at the consumer while cert-manager
+# itself reported perfectly healthy. It was noticed by a browser warning.
+#
+# WHY AlertingRule AND NOT PrometheusRule: kube_job_failed comes from the
+# PLATFORM kube-state-metrics. Verified on this cluster — user-workload
+# Prometheus returns ZERO series for it, so a PrometheusRule in a user namespace
+# cannot see the metric no matter how it is written. `AlertingRule`
+# (monitoring.openshift.io/v1) is OpenShift's supported CRD for adding rules
+# over platform metrics, and it lands in the platform Prometheus that does.
+apiVersion: monitoring.openshift.io/v1
+kind: AlertingRule
+metadata:
+  name: user-namespace-job-failures
+  namespace: openshift-monitoring
+  labels:
+    openshift.io/managed-by: argocd
+spec:
+  groups:
+    - name: user-namespace-jobs
+      rules:
+        # Deliberately the INVERSE of the platform selector: everything the
+        # built-in rule excludes. Keeping it as a negative match means a new
+        # namespace is covered the day it is created, with nothing to remember.
+        - alert: UserNamespaceJobFailed
+          expr: |
+            kube_job_failed{job="kube-state-metrics",
+                            namespace!~"(openshift-.*|kube-.*|default)"} > 0
+          # 15m rather than firing instantly: a Job that fails once and succeeds
+          # on retry is noise. A CronJob that is genuinely broken stays failed.
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Job {{ `{{ $labels.namespace }}/{{ $labels.job_name }}` }} has failed.
+            description: >-
+              Job {{ `{{ $labels.namespace }}/{{ $labels.job_name }}` }} is in a
+              failed state. OpenShift's built-in KubeJobFailed does NOT cover
+              this namespace, which is why this rule exists. For a CronJob,
+              check whether it has been failing repeatedly — the no-op path of a
+              sync job can succeed for months while the path that does real work
+              is broken. Logs: `oc -n {{ `{{ $labels.namespace }}` }} logs job/{{ `{{ $labels.job_name }}` }}`
+              (failed pods are garbage-collected, so re-run it if they are gone).
+
+        # A CronJob whose most recent scheduled run never produced a successful
+        # Job is the shape that actually hurt: the failures were visible in
+        # `oc get jobs` the whole time and nobody was looking.
+        - alert: UserNamespaceCronJobNotSucceeding
+          expr: |
+            (time() - max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{job="kube-state-metrics",
+                                                    namespace!~"(openshift-.*|kube-.*|default)"})) > 172800
+          # 48h covers a daily CronJob missing two consecutive runs, without
+          # firing on weekly/monthly schedules.
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              CronJob {{ `{{ $labels.namespace }}/{{ $labels.cronjob }}` }} has not been scheduled in 48h.
+            description: >-
+              CronJob {{ `{{ $labels.namespace }}/{{ $labels.cronjob }}` }} has no
+              successful schedule in the last 48 hours. Either it is suspended,
+              or its schedule is not firing.
