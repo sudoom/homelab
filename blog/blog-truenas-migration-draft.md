@@ -177,3 +177,122 @@ that made the pause necessary in the first place.
   ~7 TiB Synology bulk and the ~1.5 TiB CephFS `/data` are distinct or overlapping bodies of
   data. Distinct puts ~10.3 TiB against an ~11.6 TiB working ceiling (80 % of 14.5 TiB) before
   any growth or snapshot reserve.
+
+## 2026-08-25 (later) — pre-pool hardware verification
+
+Ran the runbook's pre-pool checks against the live box. All four open unknowns from the
+read-in closed, and one unexpected finding.
+
+### ECC is genuinely active, not merely present
+
+The distinction matters and is worth stating once: the TrueNAS dashboard's "(ECC)" label and
+`dmidecode`'s `Error Correction Type: Single-bit ECC` both only prove **ECC-type DIMMs are
+installed**. Neither proves the memory controller is *running* in ECC mode and reporting
+corrections. The proof is EDAC registering a memory controller:
+
+```
+root@truenas[~]# ls /sys/devices/system/edac/mc/
+mc0  power  subsystem  uevent
+root@truenas[~]# grep . /sys/devices/system/edac/mc/mc0/{ce_count,ue_count}
+/sys/devices/system/edac/mc/mc0/ce_count:0
+/sys/devices/system/edac/mc/mc0/ue_count:0
+```
+
+`mc0` present = ECC active. Zero correctable and zero uncorrectable errors. Both
+`M391A2K43BB1-CTD` sticks seen, 2 of 4 slots populated. **The runbook's hard gate is cleared.**
+
+### Boot device resolved — it is the S3510
+
+An open unknown in the notes was whether the running install sat on the intended Intel DC
+S3510 or on the test NVMe:
+
+```
+root@truenas[~]# zpool status boot-pool
+  pool: boot-pool
+ state: ONLINE
+        NAME        STATE     READ WRITE CKSUM
+        boot-pool   ONLINE       0     0     0
+          sdg3      ONLINE       0     0     0
+```
+
+`sdg` = `INTEL SSDSC2BB480G6`, 447.1 G, `ROTA=0`, WWN `0x55cd2e414d882542`. `SSDSC2BB…G6` is
+the DC S3510 480 GB. It is on the intended device — no reinstall needed.
+
+### All 8 SATA ports enumerate; 7 populated, 1 free
+
+```
+[    1.581618] ata1: SATA link up 6.0 Gbps
+[    1.581638] ata7: SATA link down
+[    1.581658] ata4: SATA link up 6.0 Gbps
+[    1.581702] ata5: SATA link up 6.0 Gbps
+[    1.581722] ata3: SATA link up 6.0 Gbps
+[    1.581739] ata2: SATA link up 6.0 Gbps
+[    1.581758] ata6: SATA link up 6.0 Gbps
+[    1.581774] ata8: SATA link up 6.0 Gbps
+```
+
+Seven links up = 6 HDD + 1 boot SSD; one free port. Confirms the no-HBA decision empirically
+rather than by datasheet.
+
+### Unexpected: the 6 HGST drives are already two cohorts
+
+| Serial | WWN | Cohort |
+|---|---|---|
+| K7GE89HL | `0x5000cca269c60801` | A |
+| K7GEX0MR | `0x5000cca269c65202` | A |
+| K7GE897L | `0x5000cca269c607f9` | A |
+| K7GEWZLR | `0x5000cca269c651e2` | A |
+| K4KSH3VL | `0x5000cca25df4f3d2` | **B** |
+| K4KTDL9L | `0x5000cca25df55eae` | **B** |
+
+HGST allocates WWNs sequentially, so `269c6…` and `25df…` are different production runs —
+a 4 + 2 split. This matters because the *entire* motivation for the 2026-06-22 plan's
+"mix in 3 ex-Ceph pulls" idea was avoiding a pure age-cohort. **The 6× HGST set is already
+not one.** Suggestive rather than proven — `Power_On_Hours` from the SMART baseline is what
+settles it — but it removes the last argument for touching `osd.3–5`.
+
+### DDF superblocks: check before writing anything
+
+`HUS726040ALA610` is the same model family CLAUDE.md documents as carrying **DDF
+firmware-RAID superblocks** on used datacenter pulls. On the cluster those auto-assembled an
+md raid0 on insertion, and a broken array hung kernel disk-stats long enough to wedge
+kubelet's cAdvisor → ~31 false alerts including **critical** `etcdMembersDown` and
+`ClusterVersionOperatorDown`. Different box, identical superblocks.
+
+Read-only check first (`-n` is a dry run — reports signatures, touches nothing):
+
+```bash
+cat /proc/mdstat
+mdadm --examine --scan
+for d in sda sdb sdc sdd sde sdf; do echo "== $d"; wipefs -n /dev/$d; done
+```
+
+If DDF appears: `mdadm --stop /dev/md*`, then `wipefs -a` on the affected drives, **then**
+burn-in. Wiping after a burn-in that ran against an auto-assembled array proves nothing.
+
+### Burn-in
+
+`badblocks` needs **`-b 4096` on >2 TB drives** or it aborts with "Value too large for defined
+data type". Run all six in parallel under tmux so an SSH drop does not kill it.
+
+```bash
+tmux new -s burnin
+
+# baseline FIRST — this is the comparison point, and it is unrecoverable afterwards
+for d in sda sdb sdc sdd sde sdf; do smartctl -a /dev/$d > /root/smart-baseline-$d.txt; done
+grep -HE "Power_On_Hours|Reallocated_Sector|Current_Pending|Offline_Uncorrect|Reported_Uncorrect" \
+  /root/smart-baseline-*.txt
+
+# destructive write test — single random pattern ~15 h; drop -t random for the
+# full 4-pattern sweep (~60 h) if the stronger test is wanted on used pulls
+for d in sda sdb sdc sdd sde sdf; do
+  badblocks -wsv -b 4096 -c 32768 -t random -o /root/bb-$d.log /dev/$d &
+done
+```
+
+Then SMART long tests and a delta against the baseline. **Any growth in
+`Reallocated_Sector_Ct`, `Current_Pending_Sector` or `Offline_Uncorrectable` means the bin,
+not the pool** — with used pulls that is the entire point.
+
+The UPS shipping window is the right time to spend on this: it is the one multi-day job on
+the critical path that costs nothing but wall-clock.

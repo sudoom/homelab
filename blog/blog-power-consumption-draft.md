@@ -1339,11 +1339,30 @@ $ helm template shelly-exporter components/cluster-config/shelly-exporter/ | gre
 $ ... | kubeconform -strict -ignore-missing-schemas ...   # exit 0
 ```
 
-**Unverified at commit time:** whether the `.55` plug is the same Gen 3 Plus Plug S as the
-other two. The config module is shared across all plugs, so a Gen 1 plug (`/status`,
-`.meters[0].power`) would return no data rather than fail loudly — the symptom would be
-`shelly_power_watts{instance="truenas"}` simply absent from the dropdown. Confirm with
-`curl -s http://192.168.1.55/rpc/Shelly.GetDeviceInfo` (a Gen 1 returns 404 there).
+**Generation confirmed** (the one risk in this change — the `json_exporter` module is shared
+across all plugs, so a Gen 1 plug on `/status` / `.meters[0].power` would have returned no
+data rather than failing loudly):
+
+```
+$ curl -s http://192.168.1.55/rpc/Shelly.GetDeviceInfo
+{"name":null,"id":"shellyplugsg3-d885ac16f888","mac":"D885AC16F888","slot":0,
+ "model":"S3PL-00112EU","gen":3,"fw_id":"20260710-101146/2.0.0-g87fbfa4","ver":"2.0.0",
+ "app":"PlugSG3","auth_en":false,...}
+```
+
+`gen: 3`, `app: PlugSG3` — same family as the other two, so the shared module applies.
+
+Sync verified end to end:
+
+```
+$ oc -n openshift-gitops get application shelly-exporter -o jsonpath='{.status.sync.status} {.status.health.status} rev={.status.sync.revision}'
+Synced Healthy rev=ae7accc...
+
+$ oc -n shelly-exporter get servicemonitor shelly-exporter -o jsonpath='{range .spec.endpoints[*]}{.params.target[0]}{"\n"}{end}'
+http://192.168.1.50/rpc/Switch.GetStatus?id=0
+http://192.168.1.77/rpc/Switch.GetStatus?id=0
+http://192.168.1.55/rpc/Switch.GetStatus?id=0
+```
 
 **Two baselines worth capturing while the box is still empty**, because they answer a
 question the README's power section has been carrying as an assumption:
