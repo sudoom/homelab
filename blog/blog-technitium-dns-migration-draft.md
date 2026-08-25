@@ -528,3 +528,115 @@ each server, so that was simply wrong. Now a dict keyed by `inventory_hostname`,
 resolved in `group_vars/all.yml`, with an explicit assert giving a readable
 message instead of a Jinja KeyError when a key is missing. Still one vault file,
 so the operator types the vault password once.
+
+## 2026-08-25 (final) — going WITH the vendor Cluster feature
+
+Operator's call, having heard the trade-offs: use Technitium's native Cluster.
+Recording the full arc because most of the cost here was in getting the
+requirement and the API contract right, not in writing the tasks.
+
+### How I got the requirement wrong
+
+"Prepare the playbook for technitium cluster" → I read *cluster* as classic DNS
+primary/secondary and built AXFR/IXFR zone replication. The operator meant
+**Administration → Cluster**, a v14 feature that syncs the *server*, not zones.
+The screenshot of "Cluster Not Initialized" was what finally made it obvious.
+Lesson: a domain word that has a generic meaning ("cluster") and a
+product-specific meaning in the same tool is worth disambiguating up front,
+especially when a plausible implementation exists for the wrong reading.
+
+### How I got the API contract wrong, twice
+
+Worse than the requirement error, because it nearly drove the whole design.
+
+I fetched `APIDOCS.md`, searched it for `/api/cluster`, found nothing, and told
+the operator clustering **could not be automated** — making "it breaks your
+code-only rule" the centrepiece of a recommendation *against* it. A second
+targeted fetch agreed: endpoints "do not exist".
+
+Both were wrong, and both were the same failure: **`APIDOCS.md` is large enough
+that a summarising fetcher truncates before reaching the cluster section.** The
+tool even said so — *"the document excerpt provided does not continue far
+enough"* — which I should have read as **unknown**, not **absent**. A research
+subagent contradicted me; I did not take it at face value, which was right, but
+the resolution came from GitHub code search:
+
+```
+repo:TechnitiumSoftware/DnsServer initJoin
+→ APIDOCS.md, DnsServerCore/www/js/cluster.js, DnsServerCore/DnsWebService.cs
+```
+
+The endpoints live under `/api/admin/cluster/…`. A grep for `/api/cluster`
+misses them entirely.
+
+**Absence of evidence from a summarising tool is not evidence of absence.** When
+a fetcher hedges about truncation, treat its negative as no answer at all.
+
+### Where the contract actually came from
+
+Not from prose. From `DnsServerCore/www/js/cluster.js` — the UI code that calls
+these endpoints, so it cannot be out of date with them:
+
+```
+GET  api/admin/cluster/state[?includeServerIpAddresses=true][&node=]
+GET  api/admin/cluster/init?clusterDomain=&primaryNodeIpAddresses=
+POST api/admin/cluster/initJoin   (form body; the UI forces POST on this one alone)
+       secondaryNodeIpAddresses, primaryNodeUrl, primaryNodeIpAddress,
+       ignoreCertificateErrors, primaryNodeUsername, primaryNodePassword,
+       primaryNodeTotp
+```
+
+Reading the implementation also surfaced things no summary would have: the
+`cleanTextList()` helper that turns the newline textarea into a **comma
+separated** list (so that is the wire format for both IP-address params), the
+UI's own `clusterInitialized` pre-check before offering Initialize (proving
+neither call is idempotent), and the full set of recovery endpoints —
+`secondary/leave`, `secondary/promote`, `primary/delete`,
+`primary/removeSecondary`.
+
+### The design: two mechanisms, deliberately
+
+| | `technitium-cluster` | `technitium-replication` |
+|---|---|---|
+| Syncs | settings, Allowed/Blocked, Apps, Users/Groups, API tokens | the two authoritative zones |
+| Transport | HTTPS node-to-node, DANE-EE, self-signed, :53443 | DNS/53, IP-ACL restricted |
+
+They coexist without conflict for a specific reason: **under clustering, zones
+sync only if explicitly added to the auto-created `cluster-catalog` zone, and we
+do not add them.** So zone data stays on the classic mechanism (already verified
+working) and the cluster owns everything that is not a zone. The README carries
+the standing rule: if a zone is ever added to the cluster-catalog, remove it
+from `technitium_replicated_zones` in the same change.
+
+The earlier "don't use clustering" recommendation was therefore half right for
+the wrong reason. Its real objection — config source-of-truth moving from git to
+the primary's runtime state — turns out not to bite here, because
+`technitium-config` pushes *identical* values from git to both boxes, so the
+cluster re-syncing the secondary from the primary is a no-op on values that
+already match.
+
+### Implementation notes worth keeping
+
+- **Neither `init` nor `initJoin` is idempotent.** Both gate on
+  `clusterInitialized` from `state`.
+- **Ordering** is guaranteed by Ansible's default `linear` strategy: the
+  primary's init task finishes on all hosts before the secondary's join begins.
+  A secondary cannot join a cluster that does not exist.
+- **Init restarts the web service ~2 s after responding**, so the role waits
+  with `until`/`retries` instead of assuming the next call lands.
+- **The primary's URL is read from its own state**, not constructed — it embeds
+  the cluster domain and TLS port, and this session has already paid for one
+  guessed format too many.
+- **The join authenticates with the PRIMARY's credentials**, not the joining
+  node's.
+- **Clustering syncs Users/Groups**, so after a successful join both nodes share
+  the primary's admin password. The per-host `technitium_admin_passwords` dict
+  bootstraps each box *before* it joins; `dns-slave`'s entry must be updated to
+  match `dns-master`'s afterwards.
+- `technitium_cluster_domain` (`cluster.homelab.sudops.pl`) is **immutable** —
+  it becomes a real zone, Primary on one node and Secondary on the others, with
+  a TSIG key minted at init.
+
+Untested against the live pair as of writing: `dns-slave` has Technitium
+installed but the playbook has not completed a full run. First run is the first
+real test.

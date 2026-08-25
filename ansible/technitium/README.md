@@ -23,7 +23,8 @@ ansible/technitium/
 │   │   └── templates/10-ntp.conf.j2       # timesyncd drop-in — ALL servers in NTP=, never FallbackNTP=
 │   ├── technitium-install/                # idempotent Technitium install/upgrade via upstream installer
 │   ├── technitium-config/                 # zones + settings + blocklists via Technitium HTTP API
-│   └── technitium-replication/                # primary/slave zone replication (WRITTEN 2026-08-25; slave half idle until the RPi 3B+ lands)
+│   ├── technitium-cluster/                # Technitium NATIVE Cluster (v14+): settings/blocklists/apps/users sync
+│   └── technitium-replication/            # Classic AXFR/IXFR zone transfer for the authoritative zones
 └── .gitignore                             # vars/vault.yml stays out of Git
 ```
 
@@ -166,53 +167,79 @@ Common edits and the file they live in:
 - **End-to-end run against a live Technitium API** still needs to happen — the param names are pinned to the docs but haven't been validated against the running instance yet.
 - **Primary/slave replication** is implemented (`roles/technitium-replication`, 2026-08-25). The **primary half applies today**: it sets each replicated zone's transfer ACL and NOTIFY target to `technitium_slave_ip` (`192.168.1.13`). The **slave half is idle** until the RPi 3B+ arrives — uncomment the `dns-slave` block in `inventory.yml` and it runs.
 
-## Why we do NOT use Technitium's built-in Cluster feature
+## Two mechanisms, one job each
 
-Technitium v14 added **Administration → Cluster**. It is a genuine feature and it
-*is* automatable — `/api/admin/cluster/…` endpoints (`init`, `initJoin`) are
-documented in `APIDOCS.md`. We deliberately leave it uninitialized. "Cluster Not
-Initialized" is the intended end state here, not unfinished work.
+This topic uses **both** Technitium's native Cluster feature and classic DNS
+zone transfer, for different things. They do not fight, and the reason they
+don't is worth stating precisely.
 
-What it syncs: server settings, Allowed/Blocked lists, Apps, **Users/Groups/
-Permissions**, API tokens, and — opt-in, via an auto-created
-`cluster-catalog.<cluster-domain>` zone — selected zones. What it does not sync:
-zones by default, cache, logs, DHCP scopes.
+| | `roles/technitium-cluster` | `roles/technitium-replication` |
+|---|---|---|
+| What | Technitium's **native** Cluster (v14+) | Classic AXFR/IXFR zone transfer |
+| Syncs | settings, Allowed/Blocked, Apps, Users/Groups/Permissions, API tokens | the two authoritative zones' records |
+| Direction | Primary → Secondary | Primary → Slave |
+| Transport | HTTPS between nodes (DANE-EE, self-signed cert, port 53443) | DNS/53, TSIG-free, restricted by IP ACL |
 
-Five reasons it is the wrong fit for this repo:
+**Why no collision:** under clustering, zones sync *only if explicitly added* as
+members of the auto-created `cluster-catalog.<cluster-domain>` zone. We do not
+add them. Zone data therefore stays entirely on the classic mechanism, which was
+already verified working, and the cluster handles everything that is not a zone.
 
-1. **Source of truth moves from git to the primary's runtime state.** Today
-   `technitium-config` pushes settings and blocklists to BOTH boxes from the
-   repo, and each converges independently. Under clustering, the secondary's
-   config becomes a copy of whatever the primary currently holds — which is the
-   opposite of this repo's whole premise.
-2. **It would fight `technitium-config`, with undefined results.** Technitium
-   publishes no field-level list of which Settings keys are cluster-common vs
-   per-node, so `/api/settings/set` against a clustered secondary is either
-   silently overwritten on the next config refresh or in contention with the
-   primary. That is a drift generator.
-3. **Cluster state is unreproducible runtime data** — node IDs, the TSIG key
-   minted at init, the auto-generated self-signed cert, the cluster-catalog
-   zone. The documented bring-up path for these RPis is an SD-card rebuild,
-   which restores none of it; the cluster would have to be torn down and
-   re-formed. Everything else here survives a reimage.
-4. **It forces same-version lockstep upgrades**, which kills `upgrade.yml`'s
-   deliberate staggered design (slave first, verify, then primary, so DNS keeps
-   answering throughout).
-5. **It syncs Users/Groups**, so joining would overwrite dns-slave's local admin
-   account with dns-master's — breaking the per-host
-   `technitium_admin_passwords` this repo now relies on.
+If you ever add a zone to the cluster-catalog, **remove it from
+`technitium_replicated_zones` in the same change** — otherwise two mechanisms
+would be replicating the same zone.
 
-Clustering also auto-enables HTTPS with a self-signed cert, uses DANE-EE for
-node-to-node TLS, moves the admin panel to port 53443, and forbids terminating
-TLS at an HTTPS reverse proxy by design.
+### Cluster specifics
 
-**Revisit if** a third or fourth node appears, or if the Allowed/Blocked/Apps
-lists start changing faster than a playbook run. At two boxes driven from one
-repo, Ansible already delivers what clustering would, and reproducibly.
+- **`technitium_cluster_domain` is IMMUTABLE** (`cluster.homelab.sudops.pl`).
+  It becomes a real zone — Primary on the primary node, Secondary on each other
+  node. Changing it means deleting the cluster and re-forming it.
+- **Init auto-enables HTTPS** with a self-signed cert on port 53443 and restarts
+  the admin web service ~2 s after responding. The role waits this out with a
+  `retries`/`until` loop rather than assuming.
+- **Neither `init` nor `initJoin` is idempotent** — Technitium refuses with
+  "Cluster is already initialized". Both tasks gate on `clusterInitialized` from
+  `api/admin/cluster/state`.
+- **Ordering is guaranteed by Ansible's `linear` strategy**: the primary's init
+  task completes on all hosts before the secondary's join task starts. A
+  secondary cannot join a cluster that does not exist yet.
+- **The primary's URL is read from its own state**, not constructed. It embeds
+  the cluster domain and TLS port, and guessing that format is unnecessary risk.
+- **Passwords: the join uses the PRIMARY's admin credentials**, not the joining
+  node's. And because clustering syncs Users/Groups, **after a successful join
+  both nodes share the primary's admin password** — the per-host
+  `technitium_admin_passwords` dict is what bootstraps each box *before* it
+  joins. Update `dns-slave`'s entry to match `dns-master`'s once clustered, or
+  the next run's login will fail and fall through to the adopt path.
 
-Note the naming: `roles/technitium-replication` (renamed from
-`technitium-cluster`, 2026-08-25) does classic DNS zone replication. It is not
-related to the vendor's Cluster feature, and the old name implied otherwise.
+### Where the API contract came from
+
+`APIDOCS.md` is large enough that summarising fetchers truncate before reaching
+the cluster section — twice during this work a fetch reported the endpoints
+"do not exist", which was a truncation artifact, not absence. The endpoint paths
+and parameter names in this role were therefore read from the shipping UI source
+at `DnsServerCore/www/js/cluster.js`, which is what actually calls them.
+
+```
+GET  api/admin/cluster/state[?includeServerIpAddresses=true][&node=]
+GET  api/admin/cluster/init?clusterDomain=&primaryNodeIpAddresses=
+POST api/admin/cluster/initJoin   (form body)
+       secondaryNodeIpAddresses, primaryNodeUrl, primaryNodeIpAddress,
+       ignoreCertificateErrors, primaryNodeUsername, primaryNodePassword,
+       primaryNodeTotp
+     api/admin/cluster/secondary/resync?node=
+     api/admin/cluster/secondary/leave?forceLeave=&node=
+     api/admin/cluster/secondary/promote?forceDeletePrimary=&node=
+     api/admin/cluster/primary/delete?forceDelete=&node=
+     api/admin/cluster/primary/removeSecondary?secondaryNodeId=&node=
+     api/admin/cluster/primary/setOptions?heartbeatRefreshIntervalSeconds=&...
+     api/admin/cluster/updateIpAddress?ipAddresses=&node=
+```
+
+Only `state`, `init` and `initJoin` are used by the role. The rest are recorded
+because they are the recovery paths: `primary/delete` tears the cluster down,
+`secondary/leave` detaches a node, `secondary/promote` takes over when the
+primary is gone for good.
 
 ## Primary/slave replication
 

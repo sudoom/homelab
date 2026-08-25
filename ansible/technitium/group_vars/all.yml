@@ -137,3 +137,35 @@ technitium_slave_ip: 192.168.1.13
 # a cert on the primary; on a trusted LAN segment between two boxes we own,
 # TCP + an IP ACL is proportionate. Revisit if DNS ever crosses an untrusted hop.
 technitium_zone_transfer_protocol: Tcp
+
+# ---- Technitium native Cluster (roles/technitium-cluster) -----------------
+# The vendor's Administration -> Cluster feature (v14+). Distinct from
+# roles/technitium-replication, which does classic AXFR/IXFR zone transfer.
+# They coexist deliberately — see the README for the division of labour.
+#
+# Endpoints + parameter names below were read from the shipping UI source
+# (DnsServerCore/www/js/cluster.js), NOT from prose docs: APIDOCS.md is large
+# enough that summarising fetchers truncate before reaching the cluster section
+# and will confidently report the endpoints do not exist.
+technitium_cluster_enabled: true
+
+# Becomes a real DNS zone on the primary (Primary) and on each secondary
+# (Secondary), transferred by TSIG-authenticated AXFR/IXFR. Chosen under
+# homelab.sudops.pl — a zone we already own and serve LAN-only, so the cluster
+# domain never needs to resolve publicly.
+# IMMUTABLE after init: changing it means tearing the cluster down.
+technitium_cluster_domain: cluster.homelab.sudops.pl
+
+# Which inventory host is the cluster Primary. Config flows FROM here.
+technitium_cluster_primary_host: dns-master
+
+# Node addresses advertised to the other cluster members. Comma separated —
+# the UI's cleanTextList() turns its newline textarea into exactly this.
+technitium_cluster_node_ipaddresses:
+  dns-master: "192.168.1.12"
+  dns-slave: "192.168.1.13"
+
+# Cluster init auto-enables HTTPS with a SELF-SIGNED cert and uses DANE-EE for
+# node-to-node TLS, so the joining node cannot validate it against a public CA.
+# This is the vendor's own default path, not a shortcut.
+technitium_cluster_ignore_certificate_errors: true

@@ -1,0 +1,191 @@
+---
+# ---------------------------------------------------------------------------
+# technitium-cluster — Technitium's NATIVE Cluster feature (v14+)
+# ---------------------------------------------------------------------------
+# This is the vendor feature at Administration -> Cluster. It syncs server
+# settings, Allowed/Blocked lists, Apps, Users/Groups/Permissions and API
+# tokens from the Primary node to every Secondary.
+#
+# It is NOT roles/technitium-replication, which does classic AXFR/IXFR zone
+# transfer. Both are used here, deliberately:
+#   * Cluster  -> settings, blocklists, apps, users        (this role)
+#   * Replication -> the two authoritative zones            (that role)
+# They do not collide because zones only sync under clustering if explicitly
+# added as members of the auto-created cluster-catalog zone, and we do not add
+# them. Zone data therefore stays on the classic mechanism, which is already
+# verified working.
+#
+# ENDPOINTS AND PARAMETER NAMES were read from the shipping UI source at
+# DnsServerCore/www/js/cluster.js. They are deliberately NOT taken from prose:
+# APIDOCS.md is large enough that summarising fetchers truncate before the
+# cluster section and then report the endpoints "do not exist" — which happened
+# twice while researching this, and nearly landed the wrong design.
+#
+#   GET  api/admin/cluster/state[?includeServerIpAddresses=true][&node=]
+#   GET  api/admin/cluster/init?clusterDomain=&primaryNodeIpAddresses=
+#   POST api/admin/cluster/initJoin        (form body — the UI forces POST here)
+#          secondaryNodeIpAddresses, primaryNodeUrl, primaryNodeIpAddress,
+#          ignoreCertificateErrors, primaryNodeUsername, primaryNodePassword,
+#          primaryNodeTotp
+#
+# NEITHER init NOR initJoin IS IDEMPOTENT — the UI checks clusterInitialized
+# first and refuses with "Cluster is already initialized." Every mutating task
+# below is gated on that same flag.
+# ---------------------------------------------------------------------------
+
+- name: Read cluster state
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/admin/cluster/state"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      includeServerIpAddresses: "true"
+    status_code: 200
+    return_content: true
+  register: technitium_cluster_state
+  changed_when: false
+  check_mode: false
+  tags: [cluster]
+
+- name: Record whether this node is already in a cluster
+  ansible.builtin.set_fact:
+    technitium_cluster_initialized: >-
+      {{ (technitium_cluster_state.json.response.clusterInitialized | default(false)) | bool }}
+  tags: [cluster]
+
+# ===========================================================================
+# PRIMARY — create the cluster
+# ===========================================================================
+# Runs first in file order. With Ansible's default `linear` strategy every host
+# completes this task before any host starts the join task below, which is
+# exactly the ordering the join requires: a secondary cannot join a cluster
+# that does not exist yet.
+- name: "PRIMARY | Initialize the cluster"
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/admin/cluster/init"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      # IMMUTABLE. Becomes a real Primary zone here and a Secondary zone on each
+      # node, transferred with a TSIG key minted at this moment.
+      clusterDomain: "{{ technitium_cluster_domain }}"
+      primaryNodeIpAddresses: "{{ technitium_cluster_node_ipaddresses[inventory_hostname] }}"
+    status_code: 200
+    return_content: true
+  register: technitium_cluster_init
+  failed_when: (technitium_cluster_init.json.status | default('error')) != 'ok'
+  when:
+    - inventory_hostname == technitium_cluster_primary_host
+    - not technitium_cluster_initialized
+  tags: [cluster]
+
+# Init enables HTTPS and restarts the admin web service a couple of seconds
+# after responding, so an immediate follow-up call can hit a dead socket.
+- name: "PRIMARY | Wait for the web service to come back after init"
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/admin/cluster/state"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    status_code: 200
+    return_content: true
+  register: technitium_cluster_postinit
+  until: (technitium_cluster_postinit.json.response.clusterInitialized | default(false)) | bool
+  retries: 12
+  delay: 5
+  changed_when: false
+  when:
+    - inventory_hostname == technitium_cluster_primary_host
+  tags: [cluster]
+
+# The joining node needs the primary's URL. Read it from the primary rather
+# than constructing it: the URL embeds the cluster domain and TLS port, and
+# guessing that format is exactly the kind of assumption that has cost time here.
+- name: "PRIMARY | Publish this node's cluster URL for the secondaries"
+  ansible.builtin.set_fact:
+    technitium_cluster_primary_url: >-
+      {{ (technitium_cluster_postinit.json.response.clusterNodes
+          | selectattr('state', 'equalto', 'Self') | first).url }}
+  when:
+    - inventory_hostname == technitium_cluster_primary_host
+  tags: [cluster]
+
+# ===========================================================================
+# SECONDARY — join
+# ===========================================================================
+- name: "SECONDARY | Join the cluster"
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/admin/cluster/initJoin"
+    # POST is not a style choice: the UI sends this one as POST with a form
+    # body while every other cluster call goes on the query string.
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      secondaryNodeIpAddresses: "{{ technitium_cluster_node_ipaddresses[inventory_hostname] }}"
+      primaryNodeUrl: "{{ hostvars[technitium_cluster_primary_host].technitium_cluster_primary_url }}"
+      primaryNodeIpAddress: "{{ technitium_cluster_node_ipaddresses[technitium_cluster_primary_host] }}"
+      # The primary's cert is self-signed by design (DANE-EE handles node-to-node
+      # trust afterwards), so a joining node cannot chain-validate it.
+      ignoreCertificateErrors: "{{ technitium_cluster_ignore_certificate_errors | lower }}"
+      # Credentials of the PRIMARY's admin account, not this node's.
+      primaryNodeUsername: "{{ technitium_admin_user }}"
+      primaryNodePassword: "{{ technitium_admin_passwords[technitium_cluster_primary_host] }}"
+    status_code: 200
+    return_content: true
+    # The initial config transfer can be slow; the vendor has acknowledged a
+    # 30s client timeout being too tight for large app payloads.
+    timeout: 120
+  register: technitium_cluster_join
+  failed_when: (technitium_cluster_join.json.status | default('error')) != 'ok'
+  no_log: true
+  when:
+    - inventory_hostname != technitium_cluster_primary_host
+    - not technitium_cluster_initialized
+  tags: [cluster]
+
+# ===========================================================================
+# VERIFY
+# ===========================================================================
+- name: Re-read cluster state
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/admin/cluster/state"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    status_code: 200
+    return_content: true
+  register: technitium_cluster_final
+  changed_when: false
+  tags: [cluster]
+
+- name: Assert this node is in a cluster with every expected member
+  ansible.builtin.assert:
+    that:
+      - (technitium_cluster_final.json.response.clusterInitialized | default(false)) | bool
+      - (technitium_cluster_final.json.response.clusterNodes | default([]) | length) == (ansible_play_hosts | length)
+    fail_msg: >-
+      Cluster not healthy on {{ inventory_hostname }}. Expected
+      {{ ansible_play_hosts | length }} nodes, found
+      {{ technitium_cluster_final.json.response.clusterNodes | default([]) | length }}.
+      A Secondary that joined but cannot reach the Primary shows state
+      "Unreachable" rather than failing outright, so check the node table and
+      the Logs tab. Note the cluster domain is IMMUTABLE — recovering from a bad
+      one means deleting the cluster (primary/delete) and re-forming it.
+    success_msg: >-
+      {{ inventory_hostname }}:
+      {{ technitium_cluster_final.json.response.clusterNodes | default([]) | length }} nodes,
+      domain {{ technitium_cluster_final.json.response.clusterDomain | default('?') }}.
+  tags: [cluster]
+
+- name: Report cluster membership
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.name }} | type={{ item.type }} | state={{ item.state }}
+      | url={{ item.url }}
+  loop: "{{ technitium_cluster_final.json.response.clusterNodes | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [cluster]
