@@ -61,11 +61,21 @@ ansible/technitium/
    cd ansible/technitium
    ansible-vault create vars/vault.yml
    ```
-   Paste the template from `vars/vault.yml.example` and choose
-   `technitium_admin_password` — the role applies it to the box, so it does not
-   have to match anything pre-existing. `ansible_become_password` is no longer
-   needed: `roles/base` grants the ansible user passwordless sudo (validated
-   with `visudo -cf` before install).
+   Paste the template from `vars/vault.yml.example`. Passwords are **per host**
+   — Technitium accounts are local to each server, so the vault holds a dict
+   keyed by `inventory_hostname`:
+
+   ```yaml
+   technitium_admin_passwords:
+     dns-master: "..."
+     dns-slave:  "..."
+   ```
+
+   You choose these values; the role applies them, so they need not match
+   anything pre-existing. A missing key fails with an explicit message rather
+   than a Jinja error. `ansible_become_password` is no longer needed —
+   `roles/base` grants the ansible user passwordless sudo (validated with
+   `visudo -cf` before install).
 
 ## Day-2: apply config
 

@@ -5,7 +5,23 @@
 # ---- Technitium runtime ----
 technitium_install_url: "https://download.technitium.com/dns/install.sh"
 technitium_admin_user: admin
-# technitium_admin_password defined in vars/vault.yml (vault-encrypted)
+
+# PER-HOST admin passwords. Each box has its own — Technitium accounts are local
+# to a server, so a single shared value was wrong (fixed 2026-08-25, after
+# dns-slave's first run failed to authenticate with dns-master's password).
+#
+# vars/vault.yml (vault-encrypted) defines the dict:
+#     technitium_admin_passwords:
+#       dns-master: "..."
+#       dns-slave:  "..."
+#
+# Resolved per host below, so every task in the roles keeps using the familiar
+# `technitium_admin_password` name. Kept as ONE vault file rather than per-host
+# host_vars so the operator still types the vault password exactly once.
+# A missing key is caught by an explicit assert at the top of
+# roles/technitium-config, which gives a readable message instead of a raw
+# Jinja KeyError.
+technitium_admin_password: "{{ technitium_admin_passwords[inventory_hostname] }}"
 technitium_api_base: "http://127.0.0.1:5380"   # always call the API on the local box
 
 # Web UI / API port (Technitium default 5380)

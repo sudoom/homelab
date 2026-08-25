@@ -4,13 +4,29 @@
 #   cd ansible/technitium
 #   ansible-vault create vars/vault.yml
 #
-# …and paste the contents below (with the actual admin password set on first
-# UI login at http://<technitium-ip>:5380). The example file (this one) is
-# committed as a template; the real vault.yml is in .gitignore.
+# The example file (this one) is committed as a template; the real vault.yml is
+# gitignored.
 
-# Technitium admin user's password — set this in the web UI on first install,
-# then store the same value here under Ansible Vault.
-technitium_admin_password: "REPLACE_ME"
+# ---- Technitium admin passwords, PER HOST ----------------------------------
+# Technitium user accounts are LOCAL to each server, so each box has its own
+# admin password. Keys must match `inventory_hostname` exactly.
+#
+# You do NOT have to pre-set these in the web UI. A freshly installed Technitium
+# carries the documented default (admin/admin), and roles/technitium-config
+# ADOPTS it: it tries the managed password, and on failure logs in with the
+# default, calls /api/user/changePassword, and continues. So whatever you write
+# here becomes the box's password on the next run.
+#
+# The one case that needs manual help: a box already set to some THIRD password
+# by hand. Neither the managed value nor the default works, and the role fails
+# with an explicit message. Reset that box rather than editing this file to
+# match it — the vault is the source of truth.
+technitium_admin_passwords:
+  dns-master: "REPLACE_ME"
+  dns-slave: "REPLACE_ME_DIFFERENT"
 
-# (optional) if non-default sudo password on the RPi
+# ---- (optional) sudo -------------------------------------------------------
+# No longer needed: roles/base grants the ansible user passwordless sudo, with
+# the sudoers file validated by `visudo -cf` before install. Kept documented in
+# case a box is ever bootstrapped before that task has run.
 # ansible_become_password: "REPLACE_ME"

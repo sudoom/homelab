@@ -19,6 +19,21 @@
 # Tagged `always` so authentication runs regardless of which --tags filter the
 # operator picks (e.g. --tags forwarders). Without this, narrow-scoped re-runs
 # fail with "technitium_auth_headers is undefined".
+- name: Assert this host has an admin password in the vault
+  ansible.builtin.assert:
+    that:
+      - technitium_admin_passwords is defined
+      - inventory_hostname in technitium_admin_passwords
+    fail_msg: >-
+      No Technitium admin password for '{{ inventory_hostname }}' in
+      vars/vault.yml. Expected key:
+      technitium_admin_passwords['{{ inventory_hostname }}'].
+      See vars/vault.yml.example. Changed 2026-08-25 from a single shared
+      `technitium_admin_password` — Technitium user accounts are LOCAL to each
+      server, so two boxes need two passwords.
+    quiet: true
+  tags: [config, always]
+
 # THE BODY-STATUS TRAP, applied to login itself. Technitium answers a WRONG
 # PASSWORD with HTTP 200 and {"status":"error","errorMessage":"..."} — so a
 # plain `status_code: 200` task reports `ok` on a failed login, and the failure
