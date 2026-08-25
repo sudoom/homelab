@@ -10,7 +10,7 @@ The box runs **outside** the OKD cluster. ArgoCD can't reach it, but more import
 
 ```
 ansible/technitium/
-├── inventory.yml                          # dns-master; dns-secondary commented out (not procured yet)
+├── inventory.yml                          # dns-master; dns-slave commented out (not procured yet)
 ├── playbook.yml                           # top-level entrypoint, applies all roles
 ├── group_vars/all.yml                     # shared config: zone records, blocklist policy, rate limits
 ├── vars/vault.yml.example                 # template for the (gitignored) vault file
@@ -23,7 +23,7 @@ ansible/technitium/
 │   │   └── templates/10-ntp.conf.j2       # timesyncd drop-in — ALL servers in NTP=, never FallbackNTP=
 │   ├── technitium-install/                # idempotent Technitium install/upgrade via upstream installer
 │   ├── technitium-config/                 # zones + settings + blocklists via Technitium HTTP API
-│   └── technitium-cluster/                # primary/secondary replication (placeholder until secondary lands)
+│   └── technitium-cluster/                # primary/slave zone replication (WRITTEN 2026-08-25; slave half idle until the RPi 3B+ lands)
 └── .gitignore                             # vars/vault.yml stays out of Git
 ```
 
@@ -137,6 +137,32 @@ Common edits and the file they live in:
 
 - **Operator-manual bootstrap steps 1-5** above (SD flash + Technitium install + admin password) — playbook expects an already-installed Technitium and a populated `vars/vault.yml`.
 - **End-to-end run against a live Technitium API** still needs to happen — the param names are pinned to the docs but haven't been validated against the running instance yet.
-- **Primary/secondary cluster role** is still a placeholder of `debug` tasks, pending the RPi 3B+.
+- **Primary/slave replication** is implemented (`roles/technitium-cluster`, 2026-08-25). The **primary half applies today**: it sets each replicated zone's transfer ACL and NOTIFY target to `technitium_slave_ip` (`192.168.1.13`). The **slave half is idle** until the RPi 3B+ arrives — uncomment the `dns-slave` block in `inventory.yml` and it runs.
+
+## Primary/slave replication
+
+Two boxes is **resilience, not HA**: stub resolvers try nameservers in order and only fail over after a timeout (seconds per query), so a dead primary degrades rather than disappears. A shared keepalived VIP is the only way to get clean failover, if that turns out to matter.
+
+| | Primary (`dns-master`, `.12`) | Slave (`dns-slave`, `.13`) |
+|---|---|---|
+| Zone type | `Primary` (created by `technitium-config`) | `Secondary` (created by `technitium-cluster`) |
+| Replicated zones | `technitium_replicated_zones` — `okd.sudops.pl`, `homelab.sudops.pl` | pulled by AXFR/IXFR from `technitium_primary_host` |
+| Zone transfer | `zoneTransfer=UseSpecifiedNetworkACL`, ACL = `technitium_slave_ip` | — |
+| Change propagation | `notify=SpecifiedNameServers` → slave pulls within seconds | `/api/zones/resync` forces an immediate pull on first run |
+| Blocked + forwarder zones | created locally | **created locally, NOT replicated** — config, not data |
+| Blocklists | applied locally | applied locally from the same `files/blocked.urls` |
+
+**Only record-bearing authoritative zones are replicated.** The blocked zones (`cluster.local`, `svc.cluster.local.okd.sudops.pl`) and the conditional forwarders (`home.lab`, `homelab.net`) are configuration; each box creates its own, so no transfer is involved.
+
+Because of that split, every task in `technitium-config` tagged `[config, zones]` is guarded on `technitium_role == 'primary'`. Without that guard the slave would create the authoritative zones as **Primary**, colliding with the `Secondary` zones this role creates.
+
+Verification is built in: creating a Secondary zone proves nothing, because a zone whose transfer the primary *refuses* still appears in the zone list — just empty. The role reads each zone back and asserts it carries records beyond `SOA`/`NS`. By hand:
+
+```bash
+dig @192.168.1.13 AXFR okd.sudops.pl
+dig @192.168.1.13 api.okd.sudops.pl +short     # expect 192.168.1.240
+```
+
+Terminology note: Technitium's zone **type** is `Secondary` (that string is the API value and must stay). The host and `technitium_role` are named `slave` per the operator's preference.
 
 See the open-items checklist in `blog/blog-technitium-dns-migration-draft.md` for the full punch list.

@@ -151,7 +151,7 @@ Mount the `homelab-wildcard-tls` Secret at `/tls`. Schedule: `0 3 * * *`
 - Public-facing services on `homelab.sudops.pl` (router exposure, port
   forwarding, etc.). The zone is LAN-only by design.
 - Per-host certs (vs wildcard). One wildcard simplifies renewal + delivery.
-- HA Technitium — separate ongoing TODO (RPi Zero 2W as `dns-secondary`).
+- HA Technitium — separate ongoing TODO (RPi Zero 2W as `dns-slave`).
   If `dns-master` goes down, `homelab.sudops.pl` resolution dies with it.
   Same exposure as today's `okd.sudops.pl`.
 

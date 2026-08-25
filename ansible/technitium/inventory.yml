@@ -5,7 +5,7 @@
 #   - dns-master    — primary, RPi 3B+ at 192.168.1.12 (the same physical box
 #                     currently running pi-hole; we'll rebuild it on a spare
 #                     SD card with Technitium, swap SD cards, keep the IP).
-#   - dns-secondary — RPi 3B+ (decided 2026-08-19; the Zero 2W was rejected —
+#   - dns-slave — RPi 3B+ (decided 2026-08-19; the Zero 2W was rejected —
 #                     no Ethernet at all, 512 MB, and a ~2026-12-04 ship date on
 #                     what is currently a single point of failure).
 #
@@ -22,12 +22,17 @@ all:
       ansible_python_interpreter: /usr/bin/python3
       technitium_role: primary
 
-    # dns-secondary:
+    # Uncommenting this block is the ONLY inventory change needed when the RPi
+    # 3B+ lands — roles/technitium-cluster is written and waiting for it.
+    # `technitium_role: slave` is what gates every slave-side task; the primary
+    # half of that role is gated on `primary` and already applies today (it sets
+    # the zone-transfer ACL + NOTIFY target from `technitium_slave_ip`).
+    # dns-slave:
     #   ansible_host: 192.168.1.13
     #   ansible_user: admin
     #   ansible_ssh_private_key_file: ~/.ssh/vadz_key
     #   ansible_python_interpreter: /usr/bin/python3
-    #   technitium_role: secondary
+    #   technitium_role: slave
     #   technitium_primary_host: 192.168.1.12
 
   vars:

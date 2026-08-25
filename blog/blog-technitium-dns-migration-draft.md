@@ -1,6 +1,6 @@
 # technitium: DNS migration from pi-hole — planning notes
 
-Working notes for replacing the home pi-hole (RPi 3B+ at `192.168.1.12`) with **Technitium DNS Server** on the same physical RPi 3B+, host name `dns-master` (matches the existing `pi-hole-master` convention). Later: add a secondary on an RPi Zero 2W for HA — `dns-secondary`, primary/secondary pair clustered via Technitium's built-in replication. Web UI reachable at `http://dns-master:5380` once the LAN resolves the new hostname. **Plan, not implementation.**
+Working notes for replacing the home pi-hole (RPi 3B+ at `192.168.1.12`) with **Technitium DNS Server** on the same physical RPi 3B+, host name `dns-master` (matches the existing `pi-hole-master` convention). Later: add a secondary on an RPi Zero 2W for HA — `dns-slave`, primary/secondary pair clustered via Technitium's built-in replication. Web UI reachable at `http://dns-master:5380` once the LAN resolves the new hostname. **Plan, not implementation.**
 
 ## Why we're doing this
 
@@ -19,7 +19,7 @@ Plus, pi-hole's conditional-forwarding chain for `okd.sudops.pl` is fundamentall
 | Hardware (secondary) | RPi Zero 2W | Future addition; small, low-power, sufficient for hot-standby DNS. |
 | Topology | Technitium primary/secondary cluster | Built-in feature of Technitium DNS Server; trivial to set up. |
 | Primary IP | `192.168.1.12` (same as pi-hole) | Transparent cutover. No DHCP option change. LAN clients keep working without reconfiguration. |
-| Secondary IP | **`192.168.1.13`, confirmed 2026-08-25** | Allocated to `dns-secondary`. Hardware is an **RPi 3B+** (decided 2026-08-19 — the Zero 2W was rejected: no Ethernet, 512 MB, ~2026-12-04 ship date on what is currently a SPOF). Needs a MikroTik DHCP reservation. |
+| Secondary IP | **`192.168.1.13`, confirmed 2026-08-25** | Allocated to `dns-slave`. Hardware is an **RPi 3B+** (decided 2026-08-19 — the Zero 2W was rejected: no Ethernet, 512 MB, ~2026-12-04 ship date on what is currently a SPOF). Needs a MikroTik DHCP reservation. |
 | Software | Technitium DNS Server | Authoritative + recursive + forwarding + split-horizon + clustering + web UI + ARM-supported. Native config in JSON files, can be Git-tracked. |
 | Upstream resolution | Recursive (built-in) with DNSSEC | Technitium's recursive resolver bypasses upstream dependence. Optional fallback forward to 1.1.1.1 via DoT for the cases where recursion is slow. |
 | Authoritative zones served | `okd.sudops.pl` (split-horizon, see below) | Eliminates the conditional-forwarding chain to gw.home.lab. |
@@ -185,7 +185,7 @@ Playbook responsibilities (sketch — refine when building):
 
 ```
 ansible/technitium/
-├── inventory.yml          # dns-master (RPi 3B+), dns-secondary (RPi Zero 2W, future)
+├── inventory.yml          # dns-master (RPi 3B+), dns-slave (RPi Zero 2W, future)
 ├── playbook.yml           # main entrypoint
 ├── roles/
 │   ├── base/              # RPi OS hardening: unattended-upgrades, fail2ban, ssh-key auth, timezone
@@ -198,7 +198,7 @@ ansible/technitium/
     └── allowed.exceptions             # allowlist overrides
 ```
 
-The playbook is **idempotent and pull-based** — running it against either node converges that node to the desired state. Primary and secondary differ only in role-level params (replication mode, peer address). The user runs `ansible-playbook -i inventory.yml playbook.yml --limit dns-master` (or `--limit dns-secondary`) from a workstation.
+The playbook is **idempotent and pull-based** — running it against either node converges that node to the desired state. Primary and secondary differ only in role-level params (replication mode, peer address). The user runs `ansible-playbook -i inventory.yml playbook.yml --limit dns-master` (or `--limit dns-slave`) from a workstation.
 
 Day-2 changes (new block list, new zone record, rate-limit tweak) → edit the files in `ansible/technitium/files/`, commit to Git, re-run the playbook. Same flow as everything else, just outside ArgoCD's purview.
 
@@ -292,7 +292,7 @@ Closed during 2026-05-12 session:
 - ✅ OS confirmed — RPi OS Lite aarch64 (kernel 6.12.75, Bookworm/Trixie-based).
 - ✅ Install method — native via Technitium installer (not Docker).
 - ✅ Config management — Ansible playbook under `ansible/technitium/`; manual run from workstation; not ArgoCD-managed.
-- ✅ Hostname / inventory key — `dns-master`; future secondary `dns-secondary`.
+- ✅ Hostname / inventory key — `dns-master`; future secondary `dns-slave`.
 - ✅ SSH shape — `ssh admin@192.168.1.12 -i ~/.ssh/vadz_key`, passwordless sudo.
 - ✅ Ansible scaffold — `playbook.yml`, `base-only.yml`, `upgrade.yml`; all `ansible.builtin.*` only.
 - ✅ Base role validated end-to-end (multiple runs through the day; idempotent).
@@ -312,4 +312,108 @@ Still open (queued for tomorrow / future):
 
 - [ ] **Cosmetic: MikroTik DHCP lease record + DNS static entries.** The lease still labels `192.168.1.12` as `pi-hole-master` — change the lease's "Host Name" field to `dns-master`. Also delete the now-X-disabled static DNS entries on the router (`api.okd.sudops.pl`, `api-int.okd.sudops.pl`, `apps.sno.home.lab`, and the `.*\.apps\.okd\.sudops\.pl` regex) — functionally already cleaned up (the X flag means they're not serving), just clutter in the table.
 - [ ] **Monitoring**: Technitium has a Prometheus exporter (community — pick one); scrape from the cluster's stack into a dashboard. Lower priority; defer.
-- [ ] **Procurement**: RPi Zero 2W for the `dns-secondary` secondary. Not blocking; primary works standalone.
+- [ ] **Procurement**: RPi Zero 2W for the `dns-slave` secondary. Not blocking; primary works standalone.
+
+## 2026-08-25 — primary/slave replication implemented
+
+`roles/technitium-cluster` was a skeleton of `debug` tasks since the migration.
+Written for real today, ahead of the RPi 3B+ arriving, so the box is a
+plug-in-and-run when it does.
+
+Naming: the operator's preference is **`dns-slave`** / `technitium_role: slave`.
+Technitium's zone **type** stays `Secondary` — that string is the API value.
+
+### The structural bug this exposed
+
+`playbook.yml` runs `hosts: all`, so `technitium-config` would have executed
+against the slave too — creating `okd.sudops.pl` and `homelab.sudops.pl` as
+**Primary** zones there, colliding head-on with the `Secondary` zones the cluster
+role needs. Nothing in the existing role guarded against it, and it would have
+looked like a working run right up until the transfer silently did nothing.
+
+Fixed by guarding all six tasks tagged `[config, zones]`:
+
+```yaml
+  when: technitium_role | default('primary') == 'primary'
+```
+
+The `default('primary')` matters: `dns-master` predates the `technitium_role`
+variable being load-bearing, so an unset role must keep behaving as primary.
+
+Deliberately **not** guarded: blocked zones, conditional forwarders, server
+settings and blocklists. Those are *configuration*, not replicated *data* —
+each box creates its own, and a transfer would buy nothing.
+
+### API parameters — verified, not remembered
+
+Checked against `APIDOCS.md` on master before writing anything, and one value I
+was about to use does not exist:
+
+```
+zoneTransfer valid options:
+  [Deny, Allow, AllowOnlyZoneNameServers, UseSpecifiedNetworkACL,
+   AllowZoneNameServersAndUseSpecifiedNetworkACL]
+```
+
+There is **no `AllowOnlySpecifiedNameServers`** — that is a legacy name still
+widely repeated in blog posts. Current Technitium pairs
+`zoneTransfer=UseSpecifiedNetworkACL` with **`zoneTransferNetworkACL`** (comma
+separated, `!` prefix to deny). The doc's own example URL still shows a
+`zoneTransferNameServers=` parameter that is defined nowhere — a documentation
+artifact. `notify=SpecifiedNameServers` + `notifyNameServers` are current.
+
+### What the role does
+
+**Primary** — one call per replicated zone:
+
+```
+POST /api/zones/options/set
+  zone=<zone>
+  zoneTransfer=UseSpecifiedNetworkACL
+  zoneTransferNetworkACL=192.168.1.13
+  notify=SpecifiedNameServers
+  notifyNameServers=192.168.1.13
+```
+
+ACL-restricted rather than `Allow`, because an unrestricted transfer lets
+anything on the LAN dump the entire internal zone — every node address, both
+VIPs, every appliance in `homelab.sudops.pl`. NOTIFY makes propagation
+event-driven instead of waiting out the SOA refresh.
+
+**Slave** — create the `Secondary` zones, then force the first pull:
+
+```
+POST /api/zones/create   zone=<zone> type=Secondary
+                         primaryNameServerAddresses=192.168.1.12
+                         zoneTransferProtocol=Tcp
+POST /api/zones/resync   zone=<zone>
+```
+
+`resync` is there so the playbook leaves behind zones that actually contain
+records, rather than empty shells that fill in whenever the refresh timer next
+fires. Transfer is plain TCP: `Tls`/`Quic` are supported but need a cert on the
+primary, and an IP ACL between two boxes we own on a trusted segment is
+proportionate.
+
+### Verification is part of the role, because creation proves nothing
+
+A Secondary zone whose transfer the primary **refuses** still appears in the zone
+list — just empty. So the role reads each zone back and asserts it carries
+records beyond `SOA`/`NS`, with a failure message that names the three likely
+causes in order (ACL missing the slave IP / wrong `technitium_primary_host` /
+zone accidentally created as Primary by an unguarded `technitium-config`).
+
+Same trap as everywhere else in this topic and worth restating: **Technitium
+returns HTTP 200 with `"status": "error"` in the body.** Every mutating call in
+the role carries `failed_when` on `json.status`, tolerating `'already exists'`
+as the idempotent re-run path.
+
+### State
+
+Primary half applies today and is safe to run — it only sets zone options on
+`dns-master`. Slave half is inert until the `dns-slave` block in `inventory.yml`
+is uncommented, which is the single change needed when the Pi arrives.
+
+Untested end-to-end: there is no second box yet. Both YAML and the API parameter
+names are verified, but the first real run is the first real test — treat any
+surprise as a role defect to fix and record, not something to work around by hand.

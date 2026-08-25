@@ -102,3 +102,22 @@ technitium_dnssec_validation: true
 # Add more lists there over time.
 # Technitium re-fetches from each URL every N hours; 24 is the upstream default.
 technitium_blocklist_update_interval_hours: 24
+
+# ---- Primary/slave replication (roles/technitium-cluster) ----
+# Only RECORD-BEARING authoritative zones are replicated. The blocked zones
+# (cluster.local, svc.cluster.local.okd.sudops.pl) and the conditional
+# forwarder zones are configuration rather than data — technitium-config
+# creates those independently on every box, so they need no transfer.
+technitium_replicated_zones:
+  - "{{ okd_zone_name }}"
+  - "{{ homelab_zone_name }}"
+
+# The slave's address, used on the PRIMARY to build the zone-transfer ACL and
+# the NOTIFY target list. Kept here (not in inventory) so the primary can be
+# configured before the slave box physically exists.
+technitium_slave_ip: 192.168.1.13
+
+# Zone transfer over plain TCP. Tls/Quic are supported by Technitium but need
+# a cert on the primary; on a trusted LAN segment between two boxes we own,
+# TCP + an IP ACL is proportionate. Revisit if DNS ever crosses an untrusted hop.
+technitium_zone_transfer_protocol: Tcp

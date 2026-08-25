@@ -1,37 +1,151 @@
 ---
-# Configure primary/secondary replication.
+# ---------------------------------------------------------------------------
+# technitium-cluster — primary/slave zone replication
+# ---------------------------------------------------------------------------
+# Runs on BOTH boxes; each half is guarded on `technitium_role` from inventory.
+# Every call goes to the LOCAL API (technitium_api_base = 127.0.0.1:5380), so
+# the primary half configures the primary and the slave half configures the
+# slave — neither reaches across the network to the other.
 #
-# Only fires when the host has a `technitium_role` set in inventory (primary
-# or secondary). Until the secondary exists (RPi 3B+, decided 2026-08-19), this role is a
-# placeholder — running the playbook against just the primary is a no-op here.
+# Depends on `technitium_auth_headers`, set by roles/technitium-config. That
+# login task is tagged `always`, so it runs even under `--tags cluster`.
 #
-# Technitium supports zone-level replication via its "Secondary" zone type:
-#   - On the primary: nothing special; primary just hosts the authoritative
-#     zone with NOTIFY enabled.
-#   - On the secondary: create a Secondary zone pointing at the primary's IP;
-#     the secondary pulls via AXFR/IXFR and tracks NOTIFY for updates.
+# THE BODY-STATUS TRAP (bitten twice already in this topic): Technitium returns
+# HTTP 200 with `"status": "error"` in the JSON body for most failures. A task
+# without `failed_when` on json.status therefore SUCCEEDS on real errors. Every
+# mutating call below checks the body, not the HTTP code.
 #
-# Skeleton below — wire up when the secondary lands.
+# API parameter names verified 2026-08-25 against APIDOCS.md on master:
+# https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md
+# Note `zoneTransfer` has NO `AllowOnlySpecifiedNameServers` value — that is a
+# legacy name still floating around in old blog posts. Current Technitium uses
+# `UseSpecifiedNetworkACL` plus `zoneTransferNetworkACL`.
+# ---------------------------------------------------------------------------
 
-- name: Cluster role tasks for primary
-  ansible.builtin.debug:
-    msg: |
-      Primary node — no cluster-specific tasks at this stage.
-      When the secondary lands, this role will:
-        - Enable NOTIFY on the okd.sudops.pl zone, listing the secondary's IP
-        - Optionally configure DNSSEC zone signing here so secondaries inherit
+# ===========================================================================
+# PRIMARY — allow the slave to transfer, and notify it on change
+# ===========================================================================
+- name: "PRIMARY | Allow zone transfer to the slave + enable NOTIFY"
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/options/set"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item }}"
+      # Restricted to the slave's IP. `Allow` (unrestricted) would let anything
+      # on the LAN dump the full internal zone, including every node address.
+      zoneTransfer: UseSpecifiedNetworkACL
+      zoneTransferNetworkACL: "{{ technitium_slave_ip }}"
+      # NOTIFY makes replication event-driven: the slave pulls within seconds of
+      # a change instead of waiting out the SOA refresh interval.
+      notify: SpecifiedNameServers
+      notifyNameServers: "{{ technitium_slave_ip }}"
+    status_code: 200
+    return_content: true
+  register: technitium_zone_opts
+  failed_when: technitium_zone_opts.json.status != "ok"
+  loop: "{{ technitium_replicated_zones }}"
+  loop_control:
+    label: "{{ item }} -> ACL+NOTIFY {{ technitium_slave_ip }}"
   when: technitium_role | default('') == 'primary'
   tags: [cluster]
 
-- name: Cluster role tasks for secondary
-  ansible.builtin.debug:
-    msg: |
-      TODO when secondary lands (RPi 3B+):
-        - Create a Secondary zone for okd.sudops.pl pointing at
-          {{ technitium_primary_host | default('192.168.1.12') }}
-        - Sync blocklist URLs from the primary (or apply the same list
-          independently — both work)
-        - Same server settings as primary (recursion, DNSSEC, rate limit)
-        - Verify zone transfer with `dig @<secondary> AXFR okd.sudops.pl`
-  when: technitium_role | default('') == 'secondary'
+# ===========================================================================
+# SLAVE — create the Secondary zones that pull from the primary
+# ===========================================================================
+- name: "SLAVE | Ensure Secondary zones exist, pulling from the primary"
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/create"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item }}"
+      type: Secondary
+      primaryNameServerAddresses: "{{ technitium_primary_host }}"
+      zoneTransferProtocol: "{{ technitium_zone_transfer_protocol }}"
+    status_code: 200
+    return_content: true
+  register: technitium_secondary_zone
+  # 'already exists' is the idempotent re-run path, not a failure.
+  failed_when:
+    - technitium_secondary_zone.json.status != "ok"
+    - "'already exists' not in (technitium_secondary_zone.json.errorMessage | default(''))"
+  loop: "{{ technitium_replicated_zones }}"
+  loop_control:
+    label: "{{ item }} <- {{ technitium_primary_host | default('UNSET') }}"
+  when: technitium_role | default('') == 'slave'
+  tags: [cluster]
+
+# A freshly created Secondary zone does not transfer until its refresh timer
+# fires or a NOTIFY arrives. Forcing it here means the playbook leaves behind a
+# zone with actual records in it, so the verification below is meaningful on the
+# first run rather than only on the second.
+- name: "SLAVE | Force an immediate zone transfer"
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/resync"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item }}"
+    status_code: 200
+    return_content: true
+  register: technitium_resync
+  failed_when: technitium_resync.json.status != "ok"
+  changed_when: false          # a pull is not a config change
+  loop: "{{ technitium_replicated_zones }}"
+  loop_control:
+    label: "resync {{ item }}"
+  when: technitium_role | default('') == 'slave'
+  tags: [cluster]
+
+# ===========================================================================
+# SLAVE — verify the transfer actually happened
+# ===========================================================================
+# Creating the zone proves nothing: a Secondary whose transfer is refused by the
+# primary's ACL still shows up in the zone list, just empty. The check that
+# matters is whether records arrived.
+- name: "SLAVE | Read back the replicated zones"
+  ansible.builtin.uri:
+    url: "{{ technitium_api_base }}/api/zones/records/get"
+    method: POST
+    headers: "{{ technitium_auth_headers }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item }}"
+      domain: "{{ item }}"
+      listZone: "true"
+    status_code: 200
+    return_content: true
+  register: technitium_slave_records
+  changed_when: false
+  loop: "{{ technitium_replicated_zones }}"
+  loop_control:
+    label: "{{ item }}"
+  when: technitium_role | default('') == 'slave'
+  tags: [cluster]
+
+- name: "SLAVE | Assert each replicated zone carries more than just its SOA/NS"
+  ansible.builtin.assert:
+    that:
+      - (item.json.response.records | default([]) | rejectattr('type', 'in', ['SOA', 'NS']) | list | length) > 0
+    fail_msg: >-
+      Zone '{{ item.item }}' exists on the slave but contains no records beyond
+      SOA/NS — the transfer did not deliver data. Usual causes, in order of
+      likelihood: (1) the primary's zoneTransferNetworkACL does not include this
+      slave's IP, (2) technitium_primary_host is wrong or unreachable on 53/tcp,
+      (3) the zone was created as Primary here by technitium-config -- check that
+      its zone tasks are guarded on technitium_role. Confirm by hand with:
+      dig @{{ ansible_host | default('localhost') }} AXFR {{ item.item }}
+    success_msg: >-
+      {{ item.item }}: {{ item.json.response.records | default([]) | length }} records replicated.
+  loop: "{{ technitium_slave_records.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('?') }}"
+  when:
+    - technitium_role | default('') == 'slave'
+    - technitium_slave_records is defined
+    - not (item.skipped | default(false))
   tags: [cluster]

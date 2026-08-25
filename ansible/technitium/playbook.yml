@@ -7,7 +7,7 @@
 #     --ask-vault-pass \
 #     --limit dns-master
 #
-# (or --limit dns-secondary when that lands)
+# (or --limit dns-slave when that lands)
 #
 # Roles run in order; each is idempotent — re-running converges state.
 

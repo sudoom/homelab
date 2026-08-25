@@ -806,9 +806,9 @@ which returned `null` (success) throughout.
 
 ### Address allocation — and a collision I proposed and did not catch
 
-`192.168.1.13` is **allocated to `dns-secondary`**, confirmed by the operator
+`192.168.1.13` is **allocated to `dns-slave`**, confirmed by the operator
 2026-08-25. It has been earmarked there since the Technitium migration:
-`ansible/technitium/inventory.yml` carries a commented `dns-secondary` stub with
+`ansible/technitium/inventory.yml` carries a commented `dns-slave` stub with
 `ansible_host: 192.168.1.13`, and `blog-technitium-dns-migration-draft.md`
 references it in three places.
 
@@ -831,7 +831,7 @@ Frontnet allocations as they actually stand:
 | .7–.9 | node4/5/6 |
 | .10–.11 | reserved, future node7-8 |
 | .12 | dns-master (Technitium primary) |
-| **.13** | **dns-secondary** — RPi 3B+, not yet built |
+| **.13** | **dns-slave** — RPi 3B+, not yet built |
 | **.25** | **truenas** — MikroTik DHCP reservation |
 
 Two doc-drift items fixed in `blog-technitium-dns-migration-draft.md` while
@@ -842,5 +842,5 @@ Ethernet at all, 512 MB, and a ~2026-12-04 ship date on what is currently a
 single point of failure).
 
 Naming note: the operator called it `dns-slave`; the repo consistently uses
-`dns-secondary`, which is both the modern DNS term and what Technitium's own UI
-calls the zone type. Keeping `dns-secondary` in code unless told otherwise.
+`dns-slave`, which is both the modern DNS term and what Technitium's own UI
+calls the zone type. Keeping `dns-slave` in code unless told otherwise.
