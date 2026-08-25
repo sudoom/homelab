@@ -296,3 +296,113 @@ not the pool** — with used pulls that is the entire point.
 
 The UPS shipping window is the right time to spend on this: it is the one multi-day job on
 the critical path that costs nothing but wall-clock.
+
+## 2026-08-25 (evening) — network decision reversed, and a chart drift caught on the way
+
+### NFS goes on the Ceph backnet, not a dedicated VLAN
+
+The 2026-06-22 plan said NFS traffic would go on a **new dedicated VLAN** on the nodes' spare
+10G port `enp1s0f1np1`, "explicitly NOT the Ceph backnet (VLAN 10), to preserve the backnet's
+'no other hosts' invariant". **Reversed today, deliberately.**
+
+I had drafted a VLAN 15 / `192.168.15.0/24` proposal (VLAN 20 was unavailable — it is IoT in
+the vault's VLAN plan). The operator pushed back: use the backnet for the 10G SFP+ and
+frontnet for management. That is the better call, for a reason I had under-weighted:
+
+- **It eliminates the most dangerous step in the migration.** A dedicated VLAN needs
+  `enp1s0f1np1` brought up on all three nodes — an nmstate enactment, which is precisely the
+  `br-ex.forwarding` cascade trigger documented in CLAUDE.md's network pre-flight. On the
+  backnet the nodes **already** hold `192.168.10.2/3/4` on `enp1s0f0np0`, so the mount is
+  on-link. **No NNCP change at all.**
+- **The bandwidth objection does not survive contact with the numbers.** The bulk migration
+  reads from the Synology, which is **1G-attached** — capped ~118 MB/s, under 10 % of a 10G
+  backnet. Ceph replication and, more importantly, OSD heartbeats keep ample headroom. The
+  "no other hosts" invariant was guarding against congestion the source link makes impossible.
+
+Settled addressing:
+
+| | |
+|---|---|
+| TrueNAS NFS | `192.168.10.5` — clear of nodes (`.2-.4`), `ceph-shim` (`.16-.18`), and **outside the `192.168.10.128/25` Multus pod range** |
+| TrueNAS mgmt | `192.168.1.13` on onboard 1G, VLAN 5 (frontnet). `.3-.12` are allocated; `.12` is dns-master |
+| MTU | **9000**, and raise that CRS317 port's L2MTU to 9214 to match the three node-storage ports. TCP MSS negotiation would hide a 1500/9000 mismatch — it would "work" while silently losing jumbo on the one link that most benefits |
+| Pool | `tank` |
+
+**Accepted costs, recorded so they are not rediscovered as surprises:**
+
+1. **Ceph and the NAS now share a failure domain.** A backnet incident takes out both at once.
+   Two in the last two months: node6's NIC came back `DOWN` after a reboot (2026-07-25), and
+   the 10G switch firmware upgrade flapped every node's link (2026-08-07). During those, the
+   NAS stops being an independent fallback.
+2. **TrueNAS holds an interface on frontnet *and* backnet**, bridging two otherwise-isolated
+   segments. It does not route by default — do not enable `ip_forward` on it.
+3. The spare `enp1s0f1np1` on each node stays unused. That is fine; it remains runway.
+
+### Shipped: additive TrueNAS StorageClasses, gated off
+
+`components/storage/nfs-csi/` now renders `nfs-truenas-media` and `nfs-truenas-immich`
+alongside the existing `nfs-csi`, behind `truenas.enabled` (default `false`) — the same
+inert-until-enabled gating precedent as the CNPG R2 work.
+
+**Additive, not a mutation of `nfs-csi`.** StorageClass `parameters` and `reclaimPolicy` are
+immutable, and a PVC's `storageClassName` is immutable too — so a backend migration is a
+delete+recreate of both, never an edit. Keeping both classes live for the whole overlap means
+rollback is "point the PVC back", not "re-edit a class". `reclaimPolicy: Retain` matches
+`nfs-csi` and `cephfs-hdd`: deleting a PVC must never destroy data.
+
+### Caught on the way in: csi-driver-nfs version drift
+
+CLAUDE.md warns about exactly this shape and it was live here:
+
+```
+Chart.yaml   → csi-driver-nfs 4.13.4
+Chart.lock   → 4.11.0        (gitignored, so not reviewable)
+charts/*.tgz → 4.11.0        (stale vendored tarball)
+```
+
+So a local `helm template` rendered **4.11.0** while ArgoCD, which runs `helm dependency
+update` fresh at sync time, deployed **4.13.4**. Confirmed against the cluster:
+
+```
+$ oc -n nfs-csi get pods -o jsonpath='…{.image}…' | sort -u
+registry.k8s.io/sig-storage/nfsplugin:v4.13.4
+```
+
+Harmless in itself — 4.13.4 is what `Chart.yaml` asked for and it is Synced + Healthy. But it
+means **every local diff review of this chart was reviewing fiction**, which is not acceptable
+now that media and Immich are about to depend on it. That is the same mechanism as the
+2026-06-12 Rook v1.20 CSI outage: an unreviewed subchart version reaching the cluster because
+the local render disagreed with the deployed one.
+
+Fixed the same way Rook was: `helm dependency update` (pulls the real 4.13.4 tarball,
+regenerates the lock), then un-gitignore `components/storage/nfs-csi/Chart.lock` so the
+deployed subchart version is pinned and reviewable. Local render now matches live.
+
+```
+$ helm template nfs-csi components/storage/nfs-csi/ --set truenas.enabled=true | grep nfsplugin
+          image: "registry.k8s.io/sig-storage/nfsplugin:v4.13.4"
+$ … | kubeconform -strict -ignore-missing-schemas …   # exit 0
+```
+
+Net cluster change: **zero**. ArgoCD was already running 4.13.4; the repo now says so.
+
+### Burn-in: tmux does not work in the TrueNAS web shell
+
+`tmux new -s burnin` exited instantly and leaked terminal capability responses into zsh
+(`1;2c`, `0;276;0c`, `10;rgb:ffff/ffff/ffff` → `zsh: command not found: 1`). Those are DA1 and
+OSC-11 *replies* — the signature of tmux querying a terminal that cannot answer, i.e. the
+web-UI shell rather than a real SSH pty.
+
+TrueNAS SCALE is systemd-based, so transient units are the better tool anyway — no TTY
+needed, survives disconnect, real exit status afterwards:
+
+```bash
+for d in sda sdb sdc sdd sde sdf; do
+  systemd-run --unit=burnin-$d \
+    badblocks -wsv -b 4096 -c 32768 -t random -o /root/bb-$d.log /dev/$d
+done
+systemctl list-units 'burnin-*'
+journalctl -u burnin-sda -f
+```
+
+`--collect` deliberately omitted so failed units persist for inspection.

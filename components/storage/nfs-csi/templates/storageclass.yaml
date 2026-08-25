@@ -11,3 +11,29 @@ volumeBindingMode: Immediate
 mountOptions:
   - nfsvers=4.1
   - hard
+{{- if .Values.truenas.enabled }}
+{{- range .Values.truenas.classes }}
+---
+# TrueNAS-backed class. Parameters (server/share) and reclaimPolicy are
+# IMMUTABLE on a StorageClass, and a PVC's storageClassName is immutable too --
+# so migrating a volume between backends is a delete+recreate of BOTH, never an
+# in-place edit. That is why these are ADDITIVE classes alongside nfs-csi
+# rather than a mutation of it: both NASes stay addressable for the whole
+# overlap, and rollback is "point the PVC back", not "re-edit a class".
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-truenas-{{ .name }}
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: {{ $.Values.truenas.server }}
+  share: {{ .share }}
+# Retain matches nfs-csi and cephfs-hdd: deleting a PVC must never destroy the
+# data. Costs a manual PV + on-NAS directory cleanup; that is the intended trade.
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
+  - hard
+{{- end }}
+{{- end }}

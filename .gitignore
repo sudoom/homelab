@@ -10,6 +10,14 @@ Chart.lock
 !components/operators/rook-ceph/Chart.lock
 !components/storage/rook-ceph-cluster/Chart.lock
 
+# AND the nfs-csi lock — same reasoning as Rook. Found drifted 2026-08-25:
+# Chart.yaml asked for 4.13.4 while the vendored tgz + lock were 4.11.0, so a
+# local `helm template` rendered 4.11.0 while ArgoCD deployed 4.13.4 (live
+# nfsplugin:v4.13.4 confirmed). Harmless that time, but it means any local diff
+# review of this chart was reviewing fiction — unacceptable now that media +
+# immich are about to depend on it.
+!components/storage/nfs-csi/Chart.lock
+
 # AND the sealed-secrets chart is VENDORED (tgz + lock committed) so a fresh
 # bootstrap never depends on a remote Helm repo — it's bootstrap-critical (it
 # decrypts the Cloudflare token) and the old chart repo URL 404'd after the

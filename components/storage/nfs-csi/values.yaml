@@ -15,6 +15,40 @@ csi-driver-nfs:
     tolerations:
       - operator: Exists
 
+# ---- Synology DS418 (being replaced; keep live until it is sold) ----
 nfs:
   server: 192.168.1.2
   share: /volume1/kubenfs
+
+# ---- TrueNAS (replacing the Synology) ----
+# Reachable on the CEPH BACKNET (VLAN 10, 192.168.10.0/24) rather than a
+# dedicated NFS VLAN. This reverses the 2026-06-22 migration plan's "explicitly
+# NOT the backnet" line, deliberately (2026-08-25):
+#
+#   * The nodes ALREADY hold 192.168.10.2/3/4 on enp1s0f0np0, so the mount is
+#     on-link and needs NO NNCP change. Bringing up the spare enp1s0f1np1 for a
+#     dedicated VLAN would have been an nmstate enactment = the br-ex.forwarding
+#     cascade trigger (see CLAUDE.md network pre-flight). Avoiding that is worth
+#     more than the segment isolation.
+#   * The bandwidth objection does not hold: the bulk migration READS from the
+#     1G-attached Synology, so it caps at ~118 MB/s -- under 10% of the 10G
+#     backnet. OSD replication and heartbeats keep ample headroom.
+#
+# .5 is chosen to stay clear of the nodes (.2-.4), the ceph-shim macvlans
+# (.16-.18) and -- importantly -- the 192.168.10.128/25 Multus pod range.
+# ACCEPTED COST: Ceph and the NAS now share a failure domain. A backnet
+# incident (2026-07-25 node6 NIC down, 2026-08-07 switch firmware reboot)
+# takes out both at once.
+#
+# Inert until `enabled: true` -- same gating precedent as the CNPG R2 work.
+truenas:
+  enabled: false
+  server: 192.168.10.5
+  # One StorageClass per dataset, rendered as nfs-truenas-<name>. Separate
+  # classes (not one shared class) so each consumer gets its own ZFS dataset
+  # with its own recordsize, quota and snapshot policy.
+  classes:
+    - name: media
+      share: /mnt/tank/media
+    - name: immich
+      share: /mnt/tank/immich
