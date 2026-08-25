@@ -1,0 +1,50 @@
+---
+# Read-only assertion of the box's current state. NO VAULT REQUIRED, and it
+# mutates nothing -- safe to run at any time, including against a live box
+# mid-migration, and runnable by anyone (including Claude) without the
+# interactive vault password.
+#
+#   cd ansible/truenas
+#   ansible-playbook -i inventory.yml check.yml
+#
+# Mirrors the role technitium's base-only.yml plays: a scoped subset that
+# validates connectivity + sudo + the read path end-to-end without secrets.
+
+- name: Inspect TrueNAS state (read-only)
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: TrueNAS version
+      ansible.builtin.command:
+        argv: [midclt, call, system.version]
+      register: v
+      changed_when: false
+
+    - name: Pool status
+      ansible.builtin.command:
+        argv: [midclt, call, pool.query, '[["name","=","{{ truenas_pool }}"]]']
+      register: p
+      changed_when: false
+
+    - name: Datasets
+      ansible.builtin.command:
+        argv: [midclt, call, pool.dataset.query, '[["pool","=","{{ truenas_pool }}"]]']
+      register: d
+      changed_when: false
+
+    - name: NFS exports
+      ansible.builtin.command:
+        argv: [midclt, call, sharing.nfs.query]
+      register: n
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          version={{ v.stdout | trim }}
+          pool={{ (p.stdout | from_json | length) > 0 | ternary('PRESENT', 'ABSENT') }}
+          {% if (p.stdout | from_json | length) > 0 %}health={{ (p.stdout | from_json | first).healthy | ternary('healthy','DEGRADED') }}{% endif %}
+          datasets={{ d.stdout | from_json | map(attribute='id') | list | join(',') }}
+          nfs_exports={{ n.stdout | from_json | map(attribute='path') | list | join(',') }}

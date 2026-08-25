@@ -1,0 +1,20 @@
+---
+# Template for vars/vault.yml — the REAL file is vault-encrypted and gitignored.
+#
+#   cd ansible/truenas
+#   ansible-vault create vars/vault.yml
+#
+# Note there is NO api key here. This topic drives the box through `midclt`
+# over SSH, which authenticates as root on the box itself — SSH access IS the
+# credential. See group_vars/all.yml for why REST (and therefore an API key)
+# was deliberately not used.
+
+# SMTP for alert email. A drive-failure alert you never configured is worthless
+# (setup runbook, golden rule 5) — and on a 5-year-old drive cohort it is the
+# single highest-value thing in this file.
+truenas_smtp_server: smtp.example.com
+truenas_smtp_port: 587
+truenas_smtp_security: TLS
+truenas_smtp_user: alerts@example.com
+truenas_smtp_password: CHANGEME
+truenas_alert_to: you@example.com

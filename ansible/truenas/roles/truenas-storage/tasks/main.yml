@@ -1,0 +1,109 @@
+---
+# ---------------------------------------------------------------------------
+# truenas-storage — assert the pool, converge the datasets
+# ---------------------------------------------------------------------------
+# Every call goes through `midclt`, the middleware's local CLI, via
+# ansible.builtin.command. See group_vars/all.yml for why not REST.
+#
+# The TrueNAS middleware is a CRUD API, not a declarative one. Two shapes:
+#   * SINGLETONS   — <ns>.config + <ns>.update. Naturally idempotent.
+#   * COLLECTIONS  — <ns>.query + .create/.update/.delete. Need query-compare-act.
+# Datasets are a collection, so everything below queries first.
+# ---------------------------------------------------------------------------
+
+# ---- Pool: ASSERT ONLY, never create --------------------------------------
+# pool.create is the single most dangerous method on the box. Two independent
+# hazards: re-running against an existing name errors out, and re-running
+# against wiped disks would silently build a NEW EMPTY pool where the old one
+# was. Neither belongs in something an operator might run twice by reflex.
+# Pool creation is a deliberate, supervised, documented manual step.
+- name: Query the pool
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.query
+      - '[["name","=","{{ truenas_pool }}"]]'
+  register: truenas_pool_q
+  changed_when: false
+  check_mode: false
+
+- name: Assert the pool exists (this playbook never creates one)
+  ansible.builtin.assert:
+    that:
+      - (truenas_pool_q.stdout | from_json | length) > 0
+    fail_msg: >-
+      Pool '{{ truenas_pool }}' does not exist on this box, and this playbook
+      deliberately will NOT create it. `pool.create` is a one-shot destructive
+      job: run twice it either errors or silently builds a new empty pool over
+      the old one. Create the pool by hand (see ansible/truenas/README.md),
+      confirm `zpool status -v` is clean, then re-run this playbook.
+    success_msg: "Pool '{{ truenas_pool }}' present."
+
+# ---- Datasets: query -> create missing -> reconcile drifted ---------------
+- name: Query existing datasets in the pool
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.dataset.query
+      - '[["pool","=","{{ truenas_pool }}"]]'
+  register: truenas_ds_q
+  changed_when: false
+  check_mode: false
+
+- name: Index existing datasets by id
+  ansible.builtin.set_fact:
+    truenas_ds_ids: "{{ truenas_ds_q.stdout | from_json | map(attribute='id') | list }}"
+    truenas_ds_recordsize: >-
+      {{ dict(
+           (truenas_ds_q.stdout | from_json | map(attribute='id') | list)
+           | zip(truenas_ds_q.stdout | from_json | map(attribute='recordsize.value', default='') | list)
+         ) }}
+
+# recordsize applies to NEW WRITES ONLY. Creating the dataset with the right
+# value up front is the only way to get it right for the data that lands next --
+# which is why this runs before any migration step.
+- name: Create missing datasets
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.dataset.create
+      - "{{ _ds_payload | to_json }}"
+  vars:
+    _ds_payload: >-
+      {{
+        {
+          'name': truenas_pool ~ '/' ~ item.name,
+          'type': 'FILESYSTEM',
+          'recordsize': item.recordsize,
+          'atime': 'OFF',
+          'comments': item.comments | default('')
+        }
+        | combine({'compression': item.compression} if item.compression is defined else {})
+        | combine({'quota': item.quota} if (item.quota | default(0)) | int > 0 else {})
+      }}
+  loop: "{{ truenas_datasets }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.name }}"
+  when: (truenas_pool ~ '/' ~ item.name) not in truenas_ds_ids
+
+# Only fires on genuine drift, so a converged box reports ok, not changed.
+# recordsize IS updatable on a live dataset (it governs subsequent writes),
+# so this is safe to reconcile -- unlike ashift, which is create-time-only on
+# the vdev and is therefore not represented anywhere in this role.
+- name: Reconcile recordsize on datasets that drifted
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.dataset.update
+      - "{{ truenas_pool }}/{{ item.name }}"
+      - "{{ {'recordsize': item.recordsize} | to_json }}"
+  loop: "{{ truenas_datasets }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.name }}"
+  when:
+    - (truenas_pool ~ '/' ~ item.name) in truenas_ds_ids
+    - truenas_ds_recordsize[truenas_pool ~ '/' ~ item.name] | default('') != item.recordsize

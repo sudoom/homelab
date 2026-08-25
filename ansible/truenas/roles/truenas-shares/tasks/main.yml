@@ -1,0 +1,75 @@
+---
+# ---------------------------------------------------------------------------
+# truenas-shares — NFS exports for the OKD cluster
+# ---------------------------------------------------------------------------
+# NFS shares are a COLLECTION whose identity is an integer `id` assigned by the
+# middleware. There is NO natural key, so nothing structurally prevents creating
+# a duplicate export for the same path -- a blind re-run would happily stack
+# them. Everything below therefore matches on the export PATH, which we treat
+# as the natural key, and creates only when absent.
+#
+# SMB shares for humans (personal/work/timemachine) are deliberately NOT here
+# yet -- they need SMB users, groups and dataset ACLs, which is its own decision
+# set. Declared out of scope in README.md rather than half-done.
+# ---------------------------------------------------------------------------
+
+- name: Query existing NFS shares
+  ansible.builtin.command:
+    argv: [midclt, call, sharing.nfs.query]
+  register: truenas_nfs_q
+  changed_when: false
+  check_mode: false
+
+- name: Index existing NFS exports by path
+  ansible.builtin.set_fact:
+    truenas_nfs_paths: "{{ truenas_nfs_q.stdout | from_json | map(attribute='path') | list }}"
+
+- name: Create missing NFS exports
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - sharing.nfs.create
+      - "{{ _nfs_payload | to_json }}"
+  vars:
+    _nfs_payload:
+      path: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+      comment: "{{ item.dataset }} -> OKD cluster (managed by ansible/truenas)"
+      # Restricted to the three node backnet addresses. An unrestricted export
+      # on a segment that also carries Ceph replication is not acceptable.
+      hosts: "{{ truenas_nfs_clients }}"
+      enabled: true
+  loop: "{{ truenas_nfs_exports }}"
+  loop_control:
+    label: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+  when: ("/mnt/" ~ truenas_pool ~ "/" ~ item.dataset) not in truenas_nfs_paths
+
+# Share writes trigger an NFS *reload*, not a restart, so re-asserting an export
+# does not drop live client mounts. That is what makes this role safe to run
+# against a NAS the cluster is actively mounting.
+
+- name: Query NFS service state
+  ansible.builtin.command:
+    argv: [midclt, call, service.query, '[["service","=","nfs"]]']
+  register: truenas_nfs_state
+  changed_when: false
+  check_mode: false
+
+# Queried first rather than blind-updated so a converged box reports ok, not
+# changed. `service.update` returns the record id regardless of whether anything
+# moved, so an unconditional call plus changed_when:false would be quietly
+# dishonest -- it would report ok even when it HAD changed something.
+- name: Enable the NFS service at boot
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - service.update
+      - nfs
+      - '{"enable": true}'
+  when: not (truenas_nfs_state.stdout | from_json | first).enable
+
+- name: Start the NFS service if it is not running
+  ansible.builtin.command:
+    argv: [midclt, call, service.start, nfs]
+  when: (truenas_nfs_state.stdout | from_json | first).state != "RUNNING"

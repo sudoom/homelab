@@ -1,0 +1,24 @@
+---
+# Inventory for the TrueNAS SCALE box.
+#
+# Replaces the Synology DS418 (192.168.1.2). Both stay live through the whole
+# migration overlap; the Synology is not decommissioned until both restore-test
+# gates pass. See blog/blog-truenas-migration-draft.md.
+#
+# NOTE ON THE ADMIN USER: TrueNAS 25.10 ships root login DISABLED by default and
+# creates a `truenas_admin` account at install time. That account has sudo. Do
+# NOT re-enable root SSH to make automation easier — the runbook's hardening
+# phase explicitly forbids it, and `become` works fine from truenas_admin.
+
+all:
+  hosts:
+    truenas:
+      ansible_host: 192.168.1.13                       # frontnet/VLAN 5 mgmt address (onboard 1G)
+      ansible_user: truenas_admin                      # install-time admin account; root SSH stays disabled
+      ansible_ssh_private_key_file: ~/.ssh/vadz_key    # workstation-side key path; not committed
+      ansible_python_interpreter: /usr/bin/python3
+
+  vars:
+    # Every midclt call needs root. TrueNAS ships sudo for the admin account.
+    ansible_become: true
+    ansible_become_method: sudo

@@ -1,0 +1,105 @@
+---
+# ---------------------------------------------------------------------------
+# truenas-tasks — scrub, SMART tests, periodic snapshots
+# ---------------------------------------------------------------------------
+# All three are COLLECTIONS. Matched on a natural key we choose (pool name for
+# scrub, dataset for snapshots) because the middleware identity is an integer id.
+#
+# Golden rule 2 from the setup runbook, restated where it matters: these
+# snapshots live on the SAME POOL and are NOT a backup. The off-box replication
+# target is the backup. On a wear-matched 5-year drive cohort (all six between
+# 43,360 and 43,746 power-on hours) that distinction is the whole ballgame.
+# ---------------------------------------------------------------------------
+
+- name: Query existing scrub tasks
+  ansible.builtin.command:
+    argv: [midclt, call, pool.scrub.query]
+  register: truenas_scrub_q
+  changed_when: false
+  check_mode: false
+
+- name: Index scrub tasks by pool id
+  ansible.builtin.set_fact:
+    truenas_scrub_pools: "{{ truenas_scrub_q.stdout | from_json | map(attribute='pool') | list }}"
+    truenas_pool_id: "{{ (truenas_pool_q.stdout | from_json | first).id }}"
+
+# Monthly scrub. This is what detects bit rot; RAIDZ2 then self-heals from parity.
+- name: Create the monthly scrub task
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.scrub.create
+      - "{{ _scrub | to_json }}"
+  vars:
+    _scrub:
+      pool: "{{ truenas_pool_id | int }}"
+      threshold: 35
+      description: "Monthly scrub (managed by ansible/truenas)"
+      schedule: { minute: "0", hour: "3", dom: "{{ truenas_scrub_day_of_month }}", month: "*", dow: "*" }
+      enabled: true
+  when: (truenas_pool_id | int) not in truenas_scrub_pools
+
+- name: Query existing periodic snapshot tasks
+  ansible.builtin.command:
+    argv: [midclt, call, pool.snapshottask.query]
+  register: truenas_snap_q
+  changed_when: false
+  check_mode: false
+
+- name: Index snapshot tasks by dataset
+  ansible.builtin.set_fact:
+    truenas_snap_datasets: "{{ truenas_snap_q.stdout | from_json | map(attribute='dataset') | list }}"
+
+- name: Create missing periodic snapshot tasks
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.snapshottask.create
+      - "{{ _snap | to_json }}"
+  vars:
+    _snap:
+      dataset: "{{ truenas_pool }}/{{ item.dataset }}"
+      recursive: "{{ item.recursive }}"
+      lifetime_value: "{{ item.lifetime_value | int }}"
+      lifetime_unit: "{{ item.lifetime_unit }}"
+      naming_schema: "auto-%Y%m%d-%H%M"
+      schedule: "{{ item.schedule }}"
+      enabled: true
+  loop: "{{ truenas_snapshot_tasks }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.dataset }}"
+  when: (truenas_pool ~ '/' ~ item.dataset) not in truenas_snap_datasets
+
+- name: Query existing SMART test tasks
+  ansible.builtin.command:
+    argv: [midclt, call, smart.test.query]
+  register: truenas_smart_q
+  changed_when: false
+  check_mode: false
+
+- name: Index SMART tasks by type
+  ansible.builtin.set_fact:
+    truenas_smart_types: "{{ truenas_smart_q.stdout | from_json | map(attribute='type') | list }}"
+
+# all_disks: true so a drive swap is automatically covered -- on a 5-year cohort,
+# forgetting to add a replacement disk to the test schedule is a realistic way to
+# go blind on the one drive most likely to be young and unproven.
+- name: Create the weekly SHORT SMART test
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - smart.test.create
+      - "{{ {'all_disks': true, 'type': 'SHORT', 'desc': 'Weekly short (managed by ansible/truenas)', 'schedule': {'hour': '3', 'dom': '*', 'month': '*', 'dow': '7'}} | to_json }}"
+  when: "'SHORT' not in truenas_smart_types"
+
+- name: Create the monthly LONG SMART test
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - smart.test.create
+      - "{{ {'all_disks': true, 'type': 'LONG', 'desc': 'Monthly long (managed by ansible/truenas)', 'schedule': {'hour': '4', 'dom': '1', 'month': '*', 'dow': '*'}} | to_json }}"
+  when: "'LONG' not in truenas_smart_types"

@@ -406,3 +406,159 @@ journalctl -u burnin-sda -f
 ```
 
 `--collect` deliberately omitted so failed units persist for inspection.
+
+## 2026-08-25 (late) — config-as-code: why `midclt`, not REST, not Terraform
+
+Burn-in is running (all six drives, full 4-pattern `badblocks`, ~70 h), so the
+useful work is the configuration layer. The question was simply "Ansible or
+Terraform?" and the answer turned on one fact neither option advertises.
+
+### The finding that decided it
+
+TrueNAS has two management APIs, and the older one is on a clock:
+
+| API | Status on 25.10 | Reachable from `ansible.builtin.uri`? |
+|---|---|---|
+| REST `/api/v2.0/` | **Deprecated in 25.04, REMOVED in TrueNAS 26** | Yes |
+| JSON-RPC 2.0 over WebSocket | Current | **No** — `uri` is HTTP-only |
+
+Verified empirically on the box before designing anything:
+
+```
+$ curl -sk -o /dev/null -w 'v2.0  -> %{http_code}\n' https://localhost/api/v2.0/system/info
+v2.0  -> 401
+$ curl -sk -o /dev/null -w 'current -> %{http_code}\n' https://localhost/api/current/system/info
+current -> 404
+```
+
+`401` means present-but-unauthenticated; `404` means the path shape is not used.
+So REST **works today**. But iX's own docs say *"The TrueNAS REST API was
+deprecated in TrueNAS 25.04. Full removal of the REST API is planned for
+TrueNAS 26"*, TrueNAS 26 is already at **BETA.3**, and from 25.10.1 the box
+raises a **daily alert** every time REST is used. Its 25.10 coverage is also
+already incomplete — the OpenAPI spec has no ZFS snapshot endpoints at all.
+
+That kills the obvious approach. Copying `roles/technitium-config` verbatim —
+`ansible.builtin.uri` against a documented REST surface — would have been a
+half-hour job, and would have been a scheduled rewrite at the next major
+upgrade, on a box that is about to become a hard dependency for live Immich and
+Jellyfin.
+
+### What was chosen: `midclt` over SSH
+
+`midclt` is the middleware's local CLI, talking to the same method surface over
+a UNIX socket — it is what the web UI drives. Properties that matter here:
+
+- **Indifferent to the HTTP→WebSocket transition.** Code written now still works
+  after the 26 upgrade.
+- **Stays inside the all-builtin invariant.** Verified: the entire topic uses
+  only `ansible.builtin.{command,assert,set_fact,debug}`.
+- **No API key at all.** It authenticates as root on the box, so **SSH access is
+  the credential**. The vault shrinks to SMTP settings only.
+- **Honest change reporting**, which the technitium precedent does not have:
+  `ansible.builtin.uri` hardcodes `changed = False` unless `dest:` is used, so
+  every API task in `technitium-config` reports `ok` forever whether or not it
+  mutated anything. `command` + explicit conditionals gives a real play recap,
+  which is what makes drift visible under a code-only culture.
+
+Rejected, with reasons:
+
+- **`ansible.builtin.uri` + REST** — the tempting copy-paste. Expiry date.
+- **Terraform** — the field is eight single-maintainer providers with no iX
+  involvement. The most capable (`PjSalty/truenas`, the only one covering
+  NUT) is a 4-month-old repo modelling pool creation as an opaque
+  `topology_json` blob that names disks as raw `sda`/`sdb` — on a box whose boot
+  device is also SATA, against a repo rule of never `/dev/sdX`, always by-id.
+  The most-downloaded (`dariusbakunas`, 44k) is archived and REST-only. And it
+  would add a state file to a repo with no Terraform, i.e. a second place for
+  drift to live next to a NAS whose live state `midclt` can just read.
+- **`arensb.truenas` collection** — fails the all-builtin invariant first, but
+  fails on merit too: no pool module, no replication module, and open 25.10
+  breakage. Mechanically it is a wrapper around `midclt` on the target — so this
+  approach is the same transport minus the broken wrappers.
+- **`config.save` as the source of truth** — that is DR, not IaC. A SQLite DB in
+  a tar: not diffable, not reviewable, not partially applicable, and restoring
+  reboots the box. With `secretseed: true` it decrypts every stored credential
+  and can never live in this repo; without it, every password silently resets.
+  It also does not carry the pool. Scheduled off-box artifact, not source of truth.
+
+### Shipped: `ansible/truenas/`
+
+Mirrors `ansible/technitium/` in shape — same three-playbook split, same
+per-topic `.gitignore` + `vars/vault.yml.example`, same README structure.
+
+```
+ansible/truenas/
+├── inventory.yml            # host truenas @ 192.168.1.13, truenas_admin + sudo
+├── group_vars/all.yml       # ALL declarative inputs
+├── vars/vault.yml.example   # SMTP only — no api key exists in this topic
+├── playbook.yml             # full convergence (needs vault)
+├── check.yml                # read-only state report (NO vault)
+└── roles/
+    ├── truenas-storage/     # assert pool, converge datasets
+    ├── truenas-system/      # timezone, NTP, alert email
+    ├── truenas-shares/      # NFS exports + service
+    └── truenas-tasks/       # scrub, SMART, periodic snapshots
+```
+
+The middleware is a **CRUD API, not a declarative one**, which dictated the
+task shapes. Two namespace shapes exist: *singletons* (`<ns>.config` +
+`<ns>.update`) that genuinely no-op on re-assert, and *collections*
+(`<ns>.query` + `.create`/`.update`/`.delete`) whose identity is an integer id
+with no natural key — so a blind re-run would happily stack duplicate NFS
+exports. Every collection task therefore queries first and matches on a natural
+key we choose (dataset path, export path, pool id).
+
+**The pool is asserted, never created.** `pool.create` is the most dangerous
+method on the box: re-run against an existing name it errors, and re-run against
+wiped disks it would silently build a new empty pool where the old one was. The
+storage role fails loudly if `tank` is absent and tells the operator to create
+it by hand. Deliberately not automated even behind a guard — the research could
+not confirm that `pool.create`'s name-collision validator fires *before*
+`format_disks`, and "probably validates first" is not a bet worth taking with
+six drives of data behind it.
+
+`ashift` appears nowhere in the role: it is a per-vdev, create-time-only ZFS
+value that cannot be changed afterwards under any circumstance. Representing it
+as desired state would be a lie. It is recorded in the README as a property of
+the creation event instead.
+
+### Gaps recorded rather than papered over
+
+- **NFS exports ship without `maproot`/`mapall`.** The two current consumers
+  write with different UID shapes — Immich under OpenShift's injected random
+  namespace UID, the servarr apps as PUID/PGID 0 — and both work against DSM
+  today. Reproducing both needs deliberate mapping plus dataset ACLs, which
+  depends on users/groups converging first (the middleware resolves `maproot`
+  via `user.get_user_obj` at validation time). Users are out of scope for now,
+  so **each write shape must be tested before a cutover window, not inside one.**
+- **`keepers` was initially missed** from the dataset list despite being a live
+  50 Gi NFS consumer (`keepers/keepers-data-pvc`). Added.
+- **`tank/backups` vs `tank/backup`** resolved by having no `backups` at all —
+  the two source notes used names one keystroke apart for different purposes
+  (machine-backup targets vs the offsite-replicated tree), and a machine-backup
+  tree inheriting the offsite policy is a borg repo that quietly is not the size
+  you think.
+- **`tank/apps` added** — the NUT tooling has to live on the pool because
+  `/root` and `/etc` do not survive TrueNAS updates. Neither source dataset
+  layout had it.
+- **Network config is out of scope.** Automating the network of a box you reach
+  *over* that network is how you lock yourself out, and TrueNAS's
+  commit-then-confirm rollback does not survive an Ansible run whose connection
+  has already dropped.
+- **SSH hardening is out of scope.** `ssh.update` restarts sshd — the transport
+  the run depends on. 25.10 also has no `rootlogin` parameter (stale blog posts
+  still cite one); root login is per-user via `user.update`. `check.yml` reports
+  the state instead of enforcing it.
+
+Validation:
+
+```
+$ ansible-playbook -i inventory.yml playbook.yml --syntax-check   # clean
+$ ansible-playbook -i inventory.yml check.yml    --syntax-check   # clean
+$ grep -rhoE "[a-z_]+\.[a-z_]+\.[a-z_]+:" ansible/truenas/ | grep -v '^ansible\.builtin\.'
+(empty — all-builtin invariant holds)
+```
+
+Nothing has been run against the box yet: the pool does not exist until burn-in
+finishes, and `truenas-storage` will correctly refuse to proceed until it does.

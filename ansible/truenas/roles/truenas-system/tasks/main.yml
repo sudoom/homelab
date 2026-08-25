@@ -1,0 +1,92 @@
+---
+# ---------------------------------------------------------------------------
+# truenas-system — hostname, timezone, NTP, alert email
+# ---------------------------------------------------------------------------
+# Mostly SINGLETONS (<ns>.config + <ns>.update), which are naturally idempotent:
+# the middleware applies a partial patch and returns the merged config, so
+# re-asserting the same values is a genuine no-op. NTP servers are the one
+# collection here.
+#
+# NOT IN SCOPE, deliberately:
+#   * Network interfaces / IP / MTU. Automating the network config of a box you
+#     reach OVER that network is how you lock yourself out, and TrueNAS's
+#     commit-then-confirm rollback does not survive an Ansible run that has
+#     already dropped its connection. Manual, documented in README.md.
+#   * SSH root-login disable / 2FA. 25.10 already ships root login disabled and
+#     an admin account; re-asserting it risks locking out the very account this
+#     playbook connects as. Verified in check.yml instead of enforced here.
+# ---------------------------------------------------------------------------
+
+- name: Read current system general config
+  ansible.builtin.command:
+    argv: [midclt, call, system.general.config]
+  register: truenas_sysgen
+  changed_when: false
+  check_mode: false
+
+- name: Set timezone
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - system.general.update
+      - "{{ {'timezone': truenas_timezone} | to_json }}"
+  when: (truenas_sysgen.stdout | from_json).timezone != truenas_timezone
+
+# Clock correctness is not cosmetic here. Scrub schedules, snapshot retention
+# and every log timestamp depend on it -- and this homelab has already had one
+# NTP-rooted outage (2026-07-25): dns-master's clock drifted, DNSSEC signatures
+# fell outside their validity window, and DNS deadlocked. NTP servers are IPs,
+# never hostnames, so time resolution can never depend on name resolution.
+- name: Query configured NTP servers
+  ansible.builtin.command:
+    argv: [midclt, call, system.ntpserver.query]
+  register: truenas_ntp_q
+  changed_when: false
+  check_mode: false
+
+- name: Index NTP servers by address
+  ansible.builtin.set_fact:
+    truenas_ntp_current: "{{ truenas_ntp_q.stdout | from_json | map(attribute='address') | list }}"
+
+- name: Add missing NTP servers
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - system.ntpserver.create
+      - "{{ {'address': item, 'burst': false, 'iburst': true, 'prefer': false, 'force': true} | to_json }}"
+  loop: "{{ truenas_ntp_servers }}"
+  when: item not in truenas_ntp_current
+
+# The setup runbook's golden rule 5: a drive-failure email you never configured
+# is worthless. On a wear-matched 5-year drive cohort this is the highest-value
+# task in the whole topic -- it is the difference between "one drive failed" and
+# "two drives failed and nobody noticed until the second one".
+- name: Read current mail config
+  ansible.builtin.command:
+    argv: [midclt, call, mail.config]
+  register: truenas_mail
+  changed_when: false
+  check_mode: false
+
+- name: Configure alert email
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - mail.update
+      - "{{ _mail | to_json }}"
+  vars:
+    _mail:
+      fromemail: "{{ truenas_smtp_user }}"
+      outgoingserver: "{{ truenas_smtp_server }}"
+      port: "{{ truenas_smtp_port | int }}"
+      security: "{{ truenas_smtp_security }}"
+      smtp: true
+      user: "{{ truenas_smtp_user }}"
+      pass: "{{ truenas_smtp_password }}"
+  when:
+    - truenas_smtp_server is defined
+    - (truenas_mail.stdout | from_json).outgoingserver != truenas_smtp_server
+  no_log: true

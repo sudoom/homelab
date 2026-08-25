@@ -1,0 +1,6 @@
+# Vault-encrypted secret file is NOT committed.
+# The vars/vault.yml.example template IS committed (shows the structure).
+vars/vault.yml
+
+# Ansible artifacts
+*.retry

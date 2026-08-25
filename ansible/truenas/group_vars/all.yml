@@ -1,0 +1,136 @@
+---
+# ---------------------------------------------------------------------------
+# TrueNAS SCALE configuration — declarative inputs
+# ---------------------------------------------------------------------------
+# Applied via `midclt` over SSH, NOT the REST API. Reason, recorded once here
+# because it is the single most consequential design decision in this topic:
+#
+#   The TrueNAS REST API (/api/v2.0/) was DEPRECATED in 25.04 and is REMOVED in
+#   TrueNAS 26 (already at BETA.3 as of 2026-08-25). It still answers on our
+#   25.10.6 (verified: GET /api/v2.0/system/info -> 401, i.e. present but
+#   unauthenticated; /api/current -> 404), and from 25.10.1 the box raises a
+#   DAILY ALERT every time REST is used. Its replacement is JSON-RPC 2.0 over
+#   WebSocket, which `ansible.builtin.uri` CANNOT speak (it is HTTP-only).
+#
+#   `midclt` talks to the middleware over its local UNIX socket, so it is
+#   indifferent to that whole transition — it is the same interface the web UI
+#   drives. It keeps us inside the all-builtin invariant via
+#   ansible.builtin.command, and it does not need an API key at all.
+#
+# CONSEQUENCE: no `truenas_api_key` anywhere in this topic. SSH access IS the
+# credential. Do not add a REST fallback "just in case" — it has an expiry date.
+# ---------------------------------------------------------------------------
+
+# ---- Pool -----------------------------------------------------------------
+# NOT created by this playbook. `pool.create` is a one-shot destructive job:
+# re-running it against an existing name errors, and against wiped disks it
+# would silently build a NEW empty pool over the old one. The storage role
+# ASSERTS the pool exists and fails loudly if it does not.
+# Pool creation is a documented manual step — see README.md.
+truenas_pool: tank
+
+# ---- Datasets -------------------------------------------------------------
+# recordsize applies to NEW WRITES ONLY, so it must be right before data lands.
+# This is the one chance to get it right per dataset.
+#
+# NAMING NOTE: the vault's two source notes disagreed — the setup runbook had
+# `tank/backups` ("targets for other machines' backups", no offsite policy) and
+# the migration plan had `tank/backup` (128k/zstd/frequent snapshots, offsite
+# YES). One keystroke apart, different purposes; a machine-backup tree that
+# accidentally inherits the offsite policy is a borg repo that quietly is not
+# the size you think. Resolved by having NO `backups`: `tank/backup` is the
+# offsite-replicated tree, and per-machine targets get explicit names.
+truenas_datasets:
+  - name: media
+    recordsize: 1M
+    comments: "Bulk media library + servarr /data. Re-downloadable; no offsite."
+    quota: 0                        # 0 = no quota; the pool-level 80% ceiling governs
+  - name: immich
+    recordsize: 1M
+    comments: "Immich photo library (NFS to the cluster). Light snapshots."
+    quota: 0
+  - name: keepers
+    recordsize: 1M
+    comments: "keepers bulk download volume (RWX to the cluster). Per-app config/state stays on ceph-nvme-block."
+    quota: 0
+  - name: backup
+    recordsize: 128K
+    compression: ZSTD
+    comments: "pg_dumps, Immich DB dump, configs, docs. OFFSITE = YES."
+    quota: 0
+  - name: apps
+    recordsize: 128K
+    comments: "On-pool tooling that must survive TrueNAS updates (NUT script, oc binary, kubeconfig). /root and /etc do NOT survive updates."
+    quota: 0
+  - name: personal
+    recordsize: 128K
+    comments: "SMB share for humans (personal side of the personal/work split)."
+    quota: 0
+  - name: work
+    recordsize: 128K
+    comments: "SMB share for humans (work side of the personal/work split)."
+    quota: 0
+  - name: timemachine
+    recordsize: 128K
+    comments: "Dedicated Time Machine SMB target. QUOTA IS MANDATORY - Time Machine will otherwise consume the pool."
+    quota: 1099511627776            # 1 TiB, in bytes
+
+# ---- NFS exports ----------------------------------------------------------
+# Restricted to the three OKD node addresses on the CEPH BACKNET (VLAN 10).
+# The nodes already hold .2/.3/.4 on enp1s0f0np0, so the mount is on-link and
+# needs NO NNCP change — which is what makes this design avoid the
+# br-ex.forwarding cascade entirely. See the blog draft for the full reasoning.
+truenas_nfs_clients:
+  - 192.168.10.2                    # node4
+  - 192.168.10.3                    # node5
+  - 192.168.10.4                    # node6
+
+# KNOWN GAP: no maproot/mapall set yet. The two current NFS consumers write with
+# different UID shapes -- Immich under OpenShift's injected random namespace UID,
+# the servarr apps as PUID/PGID 0 -- and both work against the DSM export today.
+# Reproducing both against TrueNAS needs deliberate maproot/mapall plus dataset
+# ACLs, which depends on users/groups converging first (the middleware resolves
+# maproot via user.get_user_obj at validation time). Users are out of scope for
+# now, so these exports ship WITHOUT mapping and each write shape must be tested
+# before a cutover window, not inside one.
+truenas_nfs_exports:
+  - dataset: media
+  - dataset: immich
+  - dataset: keepers
+
+# ---- System ---------------------------------------------------------------
+truenas_hostname: truenas
+truenas_domain: homelab.sudops.pl
+truenas_timezone: Europe/Warsaw
+
+# NTP as IPs, never hostnames. Direct lesson from the 2026-07-25 DNS outage:
+# a box whose clock is wrong cannot validate DNSSEC, and a box that needs DNS
+# to find its time source cannot recover on its own. Same list as dns-master.
+truenas_ntp_servers:
+  - 192.168.1.1                     # MikroTik CCR2004
+  - 194.146.251.100                 # tempus1.gum.gov.pl
+  - 162.159.200.123                 # time.cloudflare.com (anycast, independent operator)
+
+# ---- Data protection ------------------------------------------------------
+truenas_scrub_day_of_month: "1"     # monthly
+truenas_smart_short_cron: "0 3 * * 0"   # weekly, Sunday 03:00
+truenas_smart_long_cron:  "0 4 1 * *"   # monthly, 1st 04:00
+
+# Snapshot retention, per dataset. media is deliberately minimal (re-downloadable);
+# backup is frequent (it is the tree that matters).
+truenas_snapshot_tasks:
+  - dataset: media
+    recursive: true
+    lifetime_value: 14
+    lifetime_unit: DAY
+    schedule: { minute: "0", hour: "2", dom: "*", month: "*", dow: "*" }
+  - dataset: immich
+    recursive: true
+    lifetime_value: 30
+    lifetime_unit: DAY
+    schedule: { minute: "0", hour: "2", dom: "*", month: "*", dow: "*" }
+  - dataset: backup
+    recursive: true
+    lifetime_value: 90
+    lifetime_unit: DAY
+    schedule: { minute: "0", hour: "*/6", dom: "*", month: "*", dow: "*" }

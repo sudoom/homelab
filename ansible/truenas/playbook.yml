@@ -1,0 +1,25 @@
+---
+# Top-level playbook for the TrueNAS SCALE box.
+#
+# Usage from a workstation with this repo cloned:
+#   cd ansible/truenas
+#   ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass
+#
+# Roles run in order; each is idempotent -- re-running converges state.
+# The pool is ASSERTED, never created. See README.md.
+
+- name: Configure TrueNAS SCALE
+  hosts: all
+  gather_facts: true
+  become: true
+
+  vars_files:
+    # Vault-encrypted: SMTP credentials for alert email. There is NO api key --
+    # this topic drives the box through midclt over SSH.
+    - vars/vault.yml
+
+  roles:
+    - role: truenas-storage   # assert pool, converge datasets  (run FIRST: everything else needs paths)
+    - role: truenas-system    # hostname/timezone/NTP/alert email
+    - role: truenas-shares    # NFS exports to the OKD nodes
+    - role: truenas-tasks     # scrub, SMART, periodic snapshots
