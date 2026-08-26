@@ -111,8 +111,14 @@
           includeInfo: "false"
         status_code: 200
         return_content: true
-      register: technitium_login
-      failed_when: (technitium_login.json.status | default('error')) != 'ok'
+      # DIFFERENT register name on purpose. Ansible OVERWRITES a registered
+      # variable when its task is SKIPPED — so reusing `technitium_login` here
+      # meant that on the normal path (first login fine, block skipped) the
+      # skip result clobbered the real login result, leaving no `.json` and a
+      # confusing "status ok but no token". Caught on the first two-host run,
+      # 2026-08-26.
+      register: technitium_relogin
+      failed_when: (technitium_relogin.json.status | default('error')) != 'ok'
       no_log: true
 
   rescue:
@@ -129,18 +135,33 @@
           this by changing the vault to match the box: the vault is the source
           of truth for BOTH boxes, and they must share one password.
 
+# Whichever login actually ran wins. If the adopt block was skipped,
+# `technitium_relogin` exists but is the skip result and has no `.json`, so the
+# default() falls back to the first login. If the block DID run, the re-login is
+# the only one holding a valid token (the first one failed by definition).
+- name: Resolve the session token
+  ansible.builtin.set_fact:
+    technitium_session_token: >-
+      {{ technitium_relogin.json.token
+         | default(technitium_login.json.token | default('')) }}
+  no_log: true
+  tags: [config, always]
+
 - name: Assert we actually hold a session token
   ansible.builtin.assert:
     that:
-      - technitium_login.json.token is defined
-    fail_msg: "Login returned no token — see the task above."
+      - technitium_session_token | length > 0
+    fail_msg: >-
+      No session token for {{ inventory_hostname }}. Both the managed password
+      (technitium_admin_passwords['{{ inventory_hostname }}']) and the installer
+      default were rejected, or the login response had no token field.
     quiet: true
   tags: [config, always]
 
-- name: Extract session token + build Bearer auth header
+- name: Build Bearer auth header
   ansible.builtin.set_fact:
     technitium_auth_headers:
-      Authorization: "Bearer {{ technitium_login.json.token }}"
+      Authorization: "Bearer {{ technitium_session_token }}"
   no_log: true
   tags: [config, always]
 
