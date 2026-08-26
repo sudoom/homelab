@@ -844,3 +844,55 @@ single point of failure).
 Naming note: the operator called it `dns-slave`; the repo consistently uses
 `dns-slave`, which is both the modern DNS term and what Technitium's own UI
 calls the zone type. Keeping `dns-slave` in code unless told otherwise.
+
+## 2026-08-26 — burn-in at ~19 h: the ZCAV curve says the drives are fine
+
+TrueNAS's per-disk I/O graph for `sda` (HUS726040ALA610, serial K7GE89HL) over
+the first 19 hours:
+
+| Pass | Window | Duration |
+|---|---|---|
+| Pattern 1 write | 17:45 → 01:30 | ~7.75 h |
+| Pattern 1 read | 01:30 → 09:00 | ~7.5 h |
+| Pattern 2 write | 09:00 → in progress | — |
+
+Each pass starts at **191 MiB/s** and declines smoothly to **~100 MiB/s**. That
+is the **ZCAV** curve — zoned constant angular velocity. Outer tracks hold more
+sectors per revolution than inner ones, so sequential throughput falls roughly
+by half as the head walks inward. It is the expected shape for a healthy
+spinning disk, and 191 MiB/s is at spec for a 4 TB 7200 rpm SATA drive.
+
+**What matters is what is NOT in the trace.** On a drive with latent defects you
+see sawtooth dips where reads are retried, sudden cliffs, or plateaus where the
+drive stalls. There are none. The write and read passes trace the *same* curve,
+so there is no asymmetric weakness either — a drive that writes fine and reads
+badly (or vice versa) shows two different shapes.
+
+For a 5-year-old datacenter pull at 43,361 power-on hours, that is about as good
+as the mechanics can look.
+
+### Revised ETA, measured rather than estimated
+
+One full pattern (write + read) ≈ **15.25 h**. `badblocks -w` runs four patterns
+(`0xaa`, `0x55`, `0xff`, `0x00`), so 8 half-passes ≈ **61 h** total — close to
+the ~70 h originally guessed, now measured from the machine instead. Started
+2026-08-25 17:45, so it completes **early Friday 28 Aug**. At the time of the
+graph it was ~19 h in, on half-pass 3 of 8: **~31 % done**.
+
+All six units confirmed `active`:
+
+```
+$ systemctl list-units 'burnin-*'
+sda active | sdb active | sdc active | sdd active | sde active | sdf active
+```
+
+Note the progress percentages badblocks writes to stderr land in journald, which
+`truenas_admin` cannot read without sudo — so the TrueNAS disk graph is actually
+the better instrument here, and it shows pass boundaries the text output would
+not make obvious at a glance.
+
+**Still to do when it finishes:** SMART long test on all six, then diff against
+the baselines captured before the run (`/root/smart-baseline-*.txt`). Any growth
+in `Reallocated_Sector_Ct`, `Current_Pending_Sector` or `Offline_Uncorrectable`
+against the zeros recorded on 2026-08-25 means that drive does not go in the
+pool. Only then is `truenas-storage`'s pool assert satisfiable.
