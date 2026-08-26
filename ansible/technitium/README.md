@@ -224,11 +224,19 @@ would be replicating the same zone.
 - **The primary's URL is read from its own state**, not constructed. It embeds
   the cluster domain and TLS port, and guessing that format is unnecessary risk.
 - **Passwords: the join uses the PRIMARY's admin credentials**, not the joining
-  node's. And because clustering syncs Users/Groups, **after a successful join
-  both nodes share the primary's admin password** — the per-host
-  `technitium_admin_passwords` dict is what bootstraps each box *before* it
-  joins. Update `dns-slave`'s entry to match `dns-master`'s once clustered, or
-  the next run's login will fail and fall through to the adopt path.
+  node's. Because clustering syncs Users/Groups, **after a successful join both
+  nodes share the primary's admin password**. As of 2026-08-26 both entries in
+  `technitium_admin_passwords` therefore hold `dns-master`'s value.
+
+  The dict is still per-host rather than a single shared value, and that is not
+  redundant — it is what makes a **rebuild** work. On a fresh SD card the slave
+  comes up at the installer default (`admin`/`admin`), the adopt path in
+  `technitium-config` sets it to its dict entry, and only then does it join the
+  cluster and receive the primary's users. Because the entry already holds the
+  primary's password, the value it is set to and the value it then inherits are
+  identical — so the sequence converges whether the box is fresh, already
+  joined, or rebuilt. A single shared variable would work today and lose the
+  ability to give a not-yet-joined node a different bootstrap password.
 
 ### Where the API contract came from
 
