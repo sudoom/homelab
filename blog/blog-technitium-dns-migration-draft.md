@@ -736,3 +736,116 @@ cluster, so this is the moment the choice is cheap.
 
 No collision with the existing `home.lab` / `homelab.net` conditional-forwarder
 zones.
+
+## 2026-08-26 — both mechanisms live, DNS is no longer a single point of failure
+
+`failed=0` on both hosts. `dns-master ok=45`, `dns-slave ok=41`.
+
+```
+TASK [technitium-cluster : Assert this node is in a cluster with every expected member]
+ok: [dns-master] => "dns-master: 2 nodes, domain home."
+ok: [dns-slave]  => "dns-slave: 2 nodes, domain home."
+
+TASK [technitium-cluster : Report cluster membership]
+dns-master.home | type=Primary   | state=Self      | url=https://dns-master.home:53443/
+dns-slave.home  | type=Secondary | state=Connected | url=https://dns-slave.home:53443/
+
+TASK [technitium-replication : SLAVE | Assert each replicated zone carries more than just its SOA/NS]
+ok: okd.sudops.pl: 8 records replicated.
+ok: homelab.sudops.pl: 4 records replicated.
+```
+
+Verified at the DNS layer, which is what actually matters — the API reporting
+records is not the same as the resolver answering with them:
+
+```
+$ dig +short @192.168.1.13 api.okd.sudops.pl      -> 192.168.1.240
+$ dig +short @192.168.1.13 nas.homelab.sudops.pl  -> 192.168.1.2
+$ dig +short @192.168.1.13 dns-slave.home         -> 192.168.1.13
+```
+
+Twelve hours earlier the same queries against `.13` returned **Cloudflare
+addresses** (`172.67.173.34`, `104.21.72.4`) because the box held no zones and
+was recursing to the public internet. Those are correct *public* answers and
+completely wrong for LAN use — `api.okd.sudops.pl` pointing anywhere but
+`192.168.1.240` is the shape that broke kubelet discovery on 2026-05-12.
+
+### What init created on its own
+
+The zone list on the primary now shows what clustering built without being asked:
+
+| Zone | Type | Note |
+|---|---|---|
+| `cluster-catalog.home` | Catalog | auto-created; the opt-in mechanism for zone sync |
+| `home` | Primary | **DNSSEC-signed**, and a member of `cluster-catalog.home` |
+
+So the cluster domain zone is signed and catalog-managed automatically. Neither
+`okd.sudops.pl` nor `homelab.sudops.pl` is a catalog member — which is exactly
+the design: they stay on classic AXFR/IXFR via `technitium-replication`, and the
+cluster owns everything that is not a zone. **One zone, one mechanism**, holding.
+
+### The failure model, now that there is one
+
+Worth writing down precisely, because "we have a second DNS server" invites
+wrong assumptions.
+
+| `dns-master` down for | Result |
+|---|---|
+| minutes–hours | Slave serves zones, blocklists and recursion. Clients stall one resolver timeout per query before failing over. **Resilience, not HA.** |
+| days | Still resolving. But cluster config is **primary-only** — secondaries are read-only — so no settings/blocklist/zone changes, and Ansible runs fail. |
+| **> 7 days** | **Zones expire on the slave.** |
+
+That last row comes from the SOA, not from guesswork:
+
+```
+$ dig @192.168.1.13 okd.sudops.pl SOA
+okd.sudops.pl. 900 IN SOA dns-master.home. hostadmin.okd.sudops.pl. 59 900 300 604800 900
+                                                                       ^^^ ^^^ ^^^^^^
+                                                              refresh 15m  retry 5m  EXPIRE 1w
+```
+
+A Secondary that cannot reach its primary for `expire` seconds stops being
+authoritative and falls back to recursion — at which point `api.okd.sudops.pl`
+resolves to Cloudflare again and the cluster breaks in the documented way. The
+7-day window is generous, but it is a cliff, not a slope.
+
+For a permanent primary loss the recovery is **Promote To Primary** on the
+secondary (`api/admin/cluster/secondary/promote`), which converts it and evicts
+the old primary. Deliberate manual action; there is no automatic failover, and a
+shared keepalived VIP remains the only route to one.
+
+### Still to do
+
+`.13` is not yet in DHCP, so **none of the above is reachable by clients** —
+turning off the primary today still takes the LAN's DNS with it.
+
+```
+/ip/dhcp-server/network/set [find] dns-server=192.168.1.12,192.168.1.13
+```
+
+And: because clustering syncs Users/Groups, `dns-slave`'s admin password is now
+`dns-master`'s. The per-host `technitium_admin_passwords` dict bootstrapped each
+box before it joined; both entries must now hold the primary's value or the next
+run's login falls through to the adopt path and fails.
+
+### Bugs found on the way to a clean run
+
+Three, all mine, all introduced while adding the adopt/cluster paths:
+
+1. **`register:` on a skipped task clobbers the variable.** The adopt block's
+   final re-login reused `register: technitium_login`, so on the normal path
+   (first login fine → block skips) the skip result overwrote the real login,
+   producing the contradictory "status ok, but no token".
+2. **The logout was in the wrong role.** `technitium-config` runs third of five
+   and ended by logging out, invalidating the session that `technitium-cluster`
+   and `technitium-replication` both depend on. First cluster call returned
+   HTTP 200 with `{"status":"invalid-token"}`. Moved to `playbook.yml`
+   `post_tasks`, which runs after every role rather than after one.
+3. **A cascading failure with a useless message.** When the primary's init
+   failed, the secondary died on a raw Jinja error about `HostVarsVars` having
+   no `technitium_cluster_primary_url` — saying nothing about the real cause
+   being upstream. Now an explicit assert: "fix the PRIMARY first".
+
+Each was invisible to `--syntax-check` and to YAML validation. The pattern
+across all three: **role-to-role state coupling is where this breaks**, not
+inside any single role.
