@@ -1,0 +1,7 @@
+apiVersion: v2
+name: node-dhcp
+description: >
+  Switch the OKD nodes' frontnet interface from a static address to DHCP, so the
+  DNS server list becomes DHCP-managed and future changes need no MachineConfig
+  reroll. SHIPPED DISABLED — see README.md before enabling.
+version: 0.1.0

@@ -1,0 +1,17 @@
+# MachineConfig name. 99- prefix sorts after the installer's own configs,
+# matching the existing 99-master-nm-strip-okd-search.
+machineConfigName: 99-master-frontnet-dhcp
+
+# Role selector. All three nodes are control-plane+worker on this compact
+# cluster and live in the MASTER pool — same as nm-search-strip.
+role: master
+
+# Path being replaced. configure-ovs.sh reads THIS file at boot and copies its
+# ipv4 settings onto the runtime ovs-if-br-ex connection, so this is the real
+# source of truth for node addressing — not anything visible in `nmcli` at
+# runtime.
+profilePath: /etc/NetworkManager/system-connections/enp0s31f6.nmconnection
+
+# base64 of the DHCP profile. Regenerate with:
+#   base64 < enp0s31f6.nmconnection | tr -d '\n'
+profileB64: "W2Nvbm5lY3Rpb25dCmF1dG9jb25uZWN0PXRydWUKYXV0b2Nvbm5lY3Qtc2xhdmVzPS0xCmlkPWVucDBzMzFmNgppbnRlcmZhY2UtbmFtZT1lbnAwczMxZjYKdHlwZT04MDItMy1ldGhlcm5ldAp1dWlkPTMxZTNkM2UxLTI5MjYtNWEyNC1hMDczLTYzMWFiMGUzMDViNwphdXRvY29ubmVjdC1wcmlvcml0eT0xCgpbaXB2NF0KbWV0aG9kPWF1dG8KZGhjcC10aW1lb3V0PTIxNDc0ODM2NDcKZG5zLXByaW9yaXR5PTQwCgpbaXB2Nl0KYWRkci1nZW4tbW9kZT0wCmRoY3AtdGltZW91dD0yMTQ3NDgzNjQ3Cm1ldGhvZD1kaXNhYmxlZAoKW2V0aGVybmV0XQpjbG9uZWQtbWFjLWFkZHJlc3M9cGVybWFuZW50Cg=="

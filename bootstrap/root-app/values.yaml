@@ -18,6 +18,26 @@ applications:
     namespace: default
     syncWave: "0"
 
+  # Frontnet static -> DHCP on all three nodes.
+  #
+  # SHIPPED DISABLED ON PURPOSE. Enabling this IS the change: it reboots every
+  # node serially on a 3-node compact cluster with no drain headroom and no
+  # remote console (consumer SFF desktops — recovery means carrying a monitor
+  # to the rack). Do not flip it as part of unrelated work.
+  #
+  # HARD PRECONDITION: MikroTik DHCP reservations must already pin
+  #   d0:8e:79:05:37:0a -> .7 (node4), d0:8e:79:19:19:bf -> .8 (node5),
+  #   d0:8e:79:06:f1:0f -> .9 (node6). The IPs must not change — etcd and
+  #   kubelet serving certs carry them as SANs.
+  #
+  # Full runbook, abort criteria and rollback:
+  #   components/cluster-config/node-dhcp/README.md
+  node-dhcp:
+    enabled: false
+    path: components/cluster-config/node-dhcp
+    namespace: openshift-machine-config-operator
+    syncWave: "0"
+
   nm-search-strip:
     enabled: true
     path: components/cluster-config/nm-search-strip

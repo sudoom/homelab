@@ -1,0 +1,74 @@
+# Frontnet: static -> DHCP on all three nodes.
+#
+# ============================ READ README.md FIRST ============================
+# This reboots every node serially on a 3-node compact cluster with NO drain
+# headroom and NO remote console. It is shipped `enabled: false` in
+# bootstrap/root-app/values.yaml. Enabling it IS the change.
+# ==============================================================================
+#
+# WHY: the nodes' nameserver list is frozen in an install-time (Apr 3) static
+# profile. Adding dns-slave (192.168.1.13) meant a MachineConfig reroll; under
+# DHCP the list comes from the MikroTik and future changes need none.
+#
+# WHAT configure-ovs.sh DOES WITH THIS FILE: at every boot it builds the OVS
+# bridge and copies THIS profile's ipv4 settings onto the runtime `ovs-if-br-ex`
+# connection. That runtime connection is not on disk, so this file is the actual
+# source of truth for node addressing — `nmcli` at runtime only shows the copy.
+#
+# DELIBERATE CHOICES, each of which would be a bug if changed casually:
+#
+#   cloned-mac-address=permanent
+#     The live per-node files each hardcode that node's own MAC. A single
+#     MachineConfig cannot carry three different values, and shipping one node's
+#     MAC to all three would put DUPLICATE MACs on the LAN — which on a cluster
+#     whose etcd peers address each other by IP is a spectacular failure. The
+#     `permanent` keyword means "use the NIC's burned-in address", making the
+#     file node-agnostic while preserving current behaviour exactly.
+#
+#   dhcp-timeout=2147483647   (carried over from the static profile)
+#     Effectively infinite. A node that cannot get a lease KEEPS ASKING instead
+#     of giving up and activating with no address. On this cluster, a node stuck
+#     retrying is recoverable; a node that is Ready-but-address-less is not.
+#
+#   no dns-search
+#     The static profile sets dns-search=okd.sudops.pl, which
+#     components/cluster-config/nm-search-strip then STRIPS from resolv.conf —
+#     because with ndots:5 it makes every short-name lookup try
+#     <name>.okd.sudops.pl first and stall ~5 s (measured 2026-05-08: FQDN
+#     connect 6003 ms vs 0.3 ms short-name). Adding it back here would recreate
+#     the problem that chart exists to solve. If the MikroTik hands out a domain
+#     option, nm-search-strip removes it anyway.
+#
+#   no route0
+#     DHCP supplies the default route via the gateway option.
+#
+#   uuid unchanged
+#     All three nodes already share uuid 31e3d3e1-... (NM derives it from the
+#     interface name). Keeping it means NM updates the existing profile rather
+#     than creating a second, competing one for the same interface.
+#
+# PRECONDITION, NON-NEGOTIABLE: MikroTik reservations must already pin
+#   d0:8e:79:05:37:0a -> 192.168.1.7   node4
+#   d0:8e:79:19:19:bf -> 192.168.1.8   node5
+#   d0:8e:79:06:f1:0f -> 192.168.1.9   node6
+# The IPs MUST NOT change: etcd peer/serving and kubelet serving certs carry
+# them as SANs. Verified 2026-08-26 that br-ex inherits the physical NIC's MAC
+# on all three nodes, so reservations keyed on these MACs match whether the DHCP
+# client runs on the NIC or on the bridge.
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: {{ .Values.machineConfigName }}
+  labels:
+    machineconfiguration.openshift.io/role: {{ .Values.role }}
+spec:
+  config:
+    ignition:
+      version: 3.4.0
+    storage:
+      files:
+        - path: {{ .Values.profilePath }}
+          mode: 0600
+          overwrite: true
+          contents:
+            source: "data:text/plain;charset=utf-8;base64,{{ .Values.profileB64 }}"
