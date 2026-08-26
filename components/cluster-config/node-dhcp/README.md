@@ -54,8 +54,29 @@ means:
       `/ip/dhcp-server/network/print detail` → `gateway=192.168.1.1`,
       `dns-server=192.168.1.12,192.168.1.13` on `192.168.1.0/24`.
 
+- [ ] **Reservations were created MANUALLY with the client-id field EMPTY.**
+      RouterOS matches static leases on `mac-address`, but a lease created via
+      "make static" from a dynamically-learned one **copies the learned
+      client-id**, and a client presenting a different or absent client-id then
+      fails to match. The profile pins `dhcp-client-id=mac` so the identity is
+      deterministic and identical before and after the bridge takes over.
+
+- [ ] **`.7`, `.8`, `.9`, `.240` and `.241` are OUTSIDE the MikroTik dynamic
+      pool range.** `.240` is the API VIP and `.241` the ingress VIP
+      (keepalived-managed, confirmed on `infrastructure/cluster`). If the pool
+      can hand a VIP or a node IP to an unrelated device, that is a cluster-down
+      event unrelated to this change.
+
+- [ ] **DHCP option 3 (router) = 192.168.1.1 on that pool.** The static
+      profile's `route0=0.0.0.0/0,192.168.1.1,0` is **dropped** under DHCP —
+      `configure-ovs.sh` does not propagate `ipv4.routes`/`ipv4.gateway` at all.
+      Without option 3 the node has no egress.
+
 - [ ] **A monitor and keyboard are physically to hand**, and you know which box
-      is which. This is the whole recovery plan.
+      is which. **SSH is not a recovery path** — the nodes' authorized key is
+      `root@node4.okd.sudops.pl`, generated on the node at install, and it is
+      not on the workstation. Once a node is off the network, `oc exec` and SSH
+      are both gone. Physical console is the whole plan.
 
 - [ ] **Cluster is healthy first**: 3/3 nodes Ready, etcd 3/3, Ceph HEALTH_OK
       (or only the known BlueStore latch), no MCP already updating.
@@ -64,77 +85,83 @@ means:
 
 ---
 
-## Execution
+## Execution — CANARY FIRST, MachineConfig second
+
+**Do not enable the chart as the first move.** Verified 2026-08-26: this profile
+is **not delivered by any MachineConfig**, and there is no
+`/etc/machine-config-daemon/orig/...` backup — the MCD has never managed it. It
+is an install-time assisted-installer artifact.
+
+That is a gift. It means **one node can be converted by editing a file and
+rebooting that node alone** — no MachineConfigPool, no MCD Degraded state to
+unwind, and a rollback that is one `cp` and a reboot. Take the canary. Ship the
+MachineConfig only once all three nodes are proven, to make the state
+declarative and survive future reprovisioning.
+
+Cost: 4 reboots instead of 3. Benefit: the irreversible-looking step becomes a
+local, reversible file edit.
+
+### Mechanism: MCD chroot, not SSH
+
+**SSH to the nodes does not work from the workstation.** The authorized key is
+`root@node4.okd.sudops.pl` (ed25519, generated on the node at install); neither
+`id_rsa` nor `vadz_key` matches. So the edit goes through the machine-config-daemon
+pod, which already has a host chroot:
 
 ```bash
-# 1. Baseline — you are comparing against this afterwards
-oc get nodes -o wide
-oc -n openshift-etcd exec $(oc -n openshift-etcd get pods -l app=etcd -o name | head -1 | cut -d/ -f2) \
-   -c etcdctl -- etcdctl endpoint health --cluster
-oc get mcp master
-
-# 2. Have the EMERGENCY BRAKE in a second terminal, ready to paste:
-#    oc patch mcp master --type merge -p '{"spec":{"paused":true}}'
-#    Pausing stops the pool moving to the NEXT node. It does not un-reboot the
-#    current one.
-
-# 3. Enable it
-#    edit bootstrap/root-app/values.yaml: node-dhcp.enabled: true
-#    commit + push; ArgoCD creates the Application and applies the MachineConfig
-
-# 4. Watch. The master pool rolls ONE node at a time and waits for Ready.
-oc get mcp master -w
+node=node4.okd.sudops.pl        # ONE node. Start with the one holding NEITHER VIP.
+mcd=$(oc -n openshift-machine-config-operator get pods -l k8s-app=machine-config-daemon \
+      --field-selector spec.nodeName=$node -o jsonpath='{.items[0].metadata.name}')
 ```
 
-**After the FIRST node comes back, pause and verify before letting it continue.**
-MCO gates on `Ready`, but a node can be Ready and still subtly wrong.
+Check which node is safest to go first — pick one holding neither VIP:
+
+```bash
+for p in $(oc -n openshift-machine-config-operator get pods -l k8s-app=machine-config-daemon -o name); do
+  oc -n openshift-machine-config-operator exec ${p#pod/} -c machine-config-daemon -- chroot /rootfs sh -c \
+    'printf "%-8s %s\n" "$(hostname -s)" "$(ip -4 -br a show br-ex | tr -s " ")"'
+done
+```
+
+`192.168.1.240` (API VIP) and `192.168.1.241` (ingress VIP) are keepalived-managed
+and float. Rebooting the node holding one just moves it, but starting with the
+node holding neither removes a variable.
+
+### Canary steps
+
+```bash
+# 1. BACK THE FILE UP OFF-NODE. This is your only guaranteed rollback source.
+oc -n openshift-machine-config-operator exec $mcd -c machine-config-daemon -- chroot /rootfs \
+  cat /etc/NetworkManager/system-connections/enp0s31f6.nmconnection > ~/enp0s31f6-$node.static.bak
+cat ~/enp0s31f6-$node.static.bak      # sanity-check it is not empty
+
+# 2. Write the DHCP profile (content: helm template the chart and decode the base64)
+helm template node-dhcp components/cluster-config/node-dhcp/ \
+  | grep -o 'base64,[A-Za-z0-9+/=]*' | cut -d, -f2 | base64 -d > /tmp/dhcp.nmconnection
+cat /tmp/dhcp.nmconnection            # confirm before pushing it
+
+oc -n openshift-machine-config-operator exec -i $mcd -c machine-config-daemon -- chroot /rootfs \
+  sh -c 'cat > /etc/NetworkManager/system-connections/enp0s31f6.nmconnection && chmod 600 /etc/NetworkManager/system-connections/enp0s31f6.nmconnection' < /tmp/dhcp.nmconnection
+
+# 3. Reboot ONLY this node
+oc -n openshift-machine-config-operator exec $mcd -c machine-config-daemon -- chroot /rootfs systemctl reboot
+```
+
+Then verify per the checks below. **If it comes back correct, repeat on the
+other two, one at a time.** Only after all three are proven, enable the chart —
+at that point the MachineConfig matches what is already on disk, so the reroll
+is a no-op adoption rather than a change.
+
+### If you skip the canary and enable the chart directly
+
+The pool rolls one node at a time and waits for Ready. Keep the emergency brake
+in a second terminal, ready to paste:
 
 ```bash
 oc patch mcp master --type merge -p '{"spec":{"paused":true}}'
 ```
 
-Per-node verification (substitute the node that just rebooted):
-
-```bash
-mcd=$(oc -n openshift-machine-config-operator get pods -l k8s-app=machine-config-daemon \
-      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}')
-for p in $mcd; do
-  oc -n openshift-machine-config-operator exec $p -c machine-config-daemon -- chroot /rootfs sh -c '
-    echo "== $(hostname -s)"
-    ip -br a show br-ex | head -1
-    nmcli -g ipv4.method connection show ovs-if-br-ex
-    grep nameserver /etc/resolv.conf
-    ip route | grep default
-  '
-done
-```
-
-Want, on the rebooted node: `br-ex` holding **its original IP**, `ipv4.method`
-`auto`, **both** `192.168.1.12` and `192.168.1.13` in resolv.conf, and a default
-route via `192.168.1.1`.
-
-Then the post-reboot checks this cluster always needs:
-
-```bash
-# br-ex.forwarding — 0 means BROKEN pod egress. Restart ALL 3 ovnkube-node.
-for p in $(oc -n openshift-ovn-kubernetes get pods -l app=ovnkube-node \
-    -o jsonpath='{range .items[*]}{.metadata.name}:{.spec.nodeName}{"\n"}{end}'); do
-  echo "${p##*:} $(oc -n openshift-ovn-kubernetes exec ${p%%:*} -c ovnkube-controller -- \
-    sysctl -n net.ipv4.conf.br-ex.forwarding 2>/dev/null)"
-done
-
-# Ceph backnet NIC — can come back DOWN after a reboot (node6, 2026-07-25)
-oc -n openshift-machine-config-operator exec <mcd-on-that-node> -c machine-config-daemon \
-  -- chroot /rootfs ip -br a show enp1s0f0np0
-
-# Stuck VolumeAttachments
-oc get volumeattachment | awk '$5=="true"'
-```
-
-Satisfied → `oc patch mcp master --type merge -p '{"spec":{"paused":false}}'` and
-repeat for nodes 2 and 3.
-
----
+It stops the pool moving to the **next** node. It does not un-reboot the current one.
 
 ## Abort criteria — stop immediately if ANY of these
 
