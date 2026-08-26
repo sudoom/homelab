@@ -416,11 +416,10 @@
   tags: [config, blocklist]
 
 # ---- Logout ---------------------------------------------------------------
-- name: Logout from Technitium API
-  ansible.builtin.uri:
-    url: "{{ technitium_api_base }}/api/user/logout"
-    method: POST
-    headers: "{{ technitium_auth_headers }}"
-    status_code: [200, 401]
-  no_log: true
-  tags: [config]
+# NOTE: the logout used to live HERE, and it broke every later role.
+# technitium-config runs THIRD of five; technitium-cluster and
+# technitium-replication both reuse `technitium_auth_headers` from it. Logging
+# out at the end of this role invalidated that session, so the very next role
+# got HTTP 200 with {"status":"invalid-token"} on its first call (2026-08-26).
+# The logout now lives in playbook.yml `post_tasks`, which is guaranteed to run
+# after EVERY role rather than after this one.

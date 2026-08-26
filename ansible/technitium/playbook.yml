@@ -21,6 +21,20 @@
     # Create with: ansible-vault create vars/vault.yml
     - vars/vault.yml
 
+  # Ends the API session ONCE, after every role that needs it. Deliberately not
+  # inside technitium-config: that role runs third of five, and logging out
+  # there invalidated the token the cluster and replication roles depend on.
+  post_tasks:
+    - name: Logout from Technitium API
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/user/logout"
+        method: POST
+        headers: "{{ technitium_auth_headers }}"
+        status_code: [200, 401]
+      when: technitium_auth_headers is defined
+      no_log: true
+      tags: [always]
+
   roles:
     - role: base                  # OS hardening: unattended-upgrades, timezone, ssh-key auth, fail2ban
     - role: technitium-install    # Install (or upgrade in place) Technitium DNS Server

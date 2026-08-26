@@ -115,6 +115,26 @@
 # ===========================================================================
 # SECONDARY — join
 # ===========================================================================
+# Without this, a primary that failed to initialize leaves the secondary
+# raising a raw templating error ("object of type 'HostVarsVars' has no
+# attribute 'technitium_cluster_primary_url'") that says nothing about the real
+# cause, which is always upstream on the primary. Seen 2026-08-26.
+- name: "SECONDARY | Assert the primary published a cluster URL"
+  ansible.builtin.assert:
+    that:
+      - hostvars[technitium_cluster_primary_host].technitium_cluster_primary_url is defined
+      - (hostvars[technitium_cluster_primary_host].technitium_cluster_primary_url | length) > 0
+    fail_msg: >-
+      {{ technitium_cluster_primary_host }} never published a cluster URL, so it
+      did not successfully initialize the cluster. Fix the PRIMARY first — this
+      secondary cannot join a cluster that does not exist. Check the
+      "PRIMARY | Initialize the cluster" task above for the real error.
+    quiet: true
+  when:
+    - inventory_hostname != technitium_cluster_primary_host
+    - not technitium_cluster_initialized
+  tags: [cluster]
+
 - name: "SECONDARY | Join the cluster"
   ansible.builtin.uri:
     url: "{{ technitium_api_base }}/api/admin/cluster/initJoin"
