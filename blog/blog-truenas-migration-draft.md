@@ -407,6 +407,12 @@ journalctl -u burnin-sda -f
 
 `--collect` deliberately omitted so failed units persist for inspection.
 
+> **Correction (2026-08-27):** `-t random` did **not** survive into the running
+> process — see the 08-27 entry below. What actually ran is the block above
+> minus `-t random`, i.e. the 4-pattern default. The ~61 h ETA computed on
+> 08-26 is correct *because of* that; had `-t random` applied, it would have
+> been one pattern and ~15 h.
+
 ## 2026-08-25 (late) — config-as-code: why `midclt`, not REST, not Terraform
 
 Burn-in is running (all six drives, full 4-pattern `badblocks`, ~70 h), so the
@@ -896,3 +902,92 @@ the baselines captured before the run (`/root/smart-baseline-*.txt`). Any growth
 in `Reallocated_Sector_Ct`, `Current_Pending_Sector` or `Offline_Uncorrectable`
 against the zeros recorded on 2026-08-25 means that drive does not go in the
 pool. Only then is `truenas-storage`'s pool assert satisfiable.
+
+## 2026-08-27 — measuring badblocks progress without root, and a dropped flag
+
+At ~40 h in, the `sda` disk graph showed **six** completed sawteeth and a seventh
+starting — alternating write (magenta) and read (blue), each tracing the same
+191 → 100 MiB/s ZCAV curve as on day one. Still no dips, cliffs or plateaus on
+any pass.
+
+Six sawteeth is the interesting number. A single-pattern run (`-t random`) is
+**two** half-passes. Six means the flag was not in effect.
+
+### Confirming it
+
+`systemctl status` prints the real cgroup command line, and that needs no
+privilege:
+
+```
+$ systemctl status burnin-sda --no-pager -l | tail -3
+     CGroup: /system.slice/burnin-sda.service
+             └─10144 /sbin/badblocks -wsv -b 4096 -c 32768 -o /root/bb-sda.log /dev/sda
+```
+
+No `-t random`. **`systemd-run` did not eat it** — that was my first theory and
+it is wrong: `-w`, `-s`, `-v`, `-b`, `-c` and `-o` all survived, and if
+`systemd-run` were permuting options past the command name it would have
+rejected `-w` outright (it has no such option). systemd's `getopt_long` optstring
+carries a leading `+`, which disables permutation precisely so a wrapped
+command's own flags pass through untouched. The flag was therefore lost in the
+shell, before `systemd-run` was invoked — most plausibly while fixing the
+missing `;` before `done` in the original paste.
+
+**Consequence: the drives get a better burn-in than specified.** Four
+solid/alternating patterns (`0xaa`, `0x55`, `0xff`, `0x00`) exercise every bit
+cell in both states; one random pattern does not. The cost is wall-clock only,
+~58 h against ~15 h, and it was 78 % spent by the time anyone noticed. Nothing
+to decide.
+
+### The measurement that actually answers "how far along?"
+
+Everything badblocks emits about progress on this box is root-only: the `-o`
+logfile lands in `/root`, the stderr percentages go to journald (`truenas_admin`
+is in neither `adm` nor `systemd-journal`), and `/proc/<pid>/io` belongs to root.
+`sudo` wants a password, and the box is Ansible-managed code-only, so
+interactive escalation is not the move.
+
+But `/proc/diskstats` and `/sys/block/<d>/size` are both world-readable, and
+their ratio is an exact pass count:
+
+```bash
+SZ=$(cat /sys/block/sda/size)
+for d in sda sdb sdc sdd sde sdf; do
+  awk -v d=$d -v sz=$SZ '$3==d {printf "%s rd=%.2f wr=%.2f\n", d, $6/sz, $10/sz}' /proc/diskstats
+done
+```
+
+`$6` is sectors read, `$10` sectors written, both in 512 B units — the same unit
+as `/sys/block/*/size`, so the division is unitless and needs no scaling. On a
+raw unpooled disk badblocks is the only writer, so the counters are clean.
+
+```
+dev  rd_pass  wr_pass
+sda  3.00  3.19      sdd  3.00  3.15
+sdb  3.00  3.43      sde  3.00  3.23
+sdc  3.00  3.25      sdf  3.00  3.27
+```
+
+Exactly three read passes everywhere and a fraction over three writes: the run
+is inside **W4**, the final write pass, with only **R4** after it. `rd_pass`
+being 3.00 on all six — not 2.97, not 3.04 — is itself a small proof that
+nothing is being retried.
+
+### Final ETA, integrating the curve instead of averaging it
+
+Averaging the ZCAV curve flatters the remainder, because the 81 % of W4 still
+outstanding is the *slow* inner-LBA part. With throughput linear in LBA,
+`v(x) = 190 − 90x` MiB/s, pass time is `S·∫dx/v(x)`:
+
+- full pass: `S·(1/90)·ln(190/100)` = 7.56 h (measured: 7.29 h — close enough)
+- rest of W4 (x = 0.19 → 1): 6.4 h
+- R4 in full: 7.6 h
+
+**≈ 14.0 h remaining**, so all six complete **Friday 28 Aug, ~02:45–03:15**
+(sdd trailing, sdb leading). Unchanged from the 08-26 estimate, now confirmed
+from the kernel's own counters rather than read off a graph.
+
+**Lesson worth keeping:** when a long-running job's own progress output is
+locked behind privilege you have deliberately not granted yourself, look for a
+kernel counter that is world-readable instead. `/proc/diskstats` answered a
+question the process's logfile, journal and `/proc/<pid>/io` all refused to.
