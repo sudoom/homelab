@@ -107,12 +107,12 @@ truenas:
         enabled: true
         share: /mnt/tank/keepers
         # 2Ti, not the 500Gi originally shipped: keepers-data-pvc was MEASURED at
-        # 1.7 TiB on 2026-08-29 (the old 50Gi PVC request was never enforced --
+        # 1.7 TiB on 2026-08-28 (the old 50Gi PVC request was never enforced --
         # csi-driver-nfs just makes a subdirectory and `df` reports the whole
         # Synology volume). NFS does not enforce this number either, but it is
         # what `oc get pv` prints, and a figure 3.4x under reality is exactly the
         # sort of thing that misleads someone at 2 a.m. (Briefly set to 1Gi on
-        # 2026-08-29 and restored: capacity is fiction for NFS, but it is NOT
+        # 2026-08-28 and restored: capacity is fiction for NFS, but it is NOT
         # inert -- the binding controller checks PV.capacity >= PVC.request even
         # when the PVC pins volumeName, so an undersized label leaves the PVC
         # Pending on a VolumeMismatch event rather than binding.)

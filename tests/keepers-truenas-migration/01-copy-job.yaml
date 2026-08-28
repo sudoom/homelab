@@ -14,7 +14,7 @@
 #
 # Runs as root deliberately: -a preserves ownership, which needs root on the
 # writing side, and the TrueNAS export sets maproot_user=root (verified
-# 2026-08-29) so root is not squashed. The keepers `default` SA already holds
+# 2026-08-28) so root is not squashed. The keepers `default` SA already holds
 # the privileged SCC via components/apps/keepers/templates/scc-rbac.yaml.
 apiVersion: batch/v1
 kind: Job

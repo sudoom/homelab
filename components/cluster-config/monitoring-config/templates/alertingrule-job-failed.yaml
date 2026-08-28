@@ -37,14 +37,14 @@ spec:
         # built-in rule excludes. Keeping it as a negative match means a new
         # namespace is covered the day it is created, with nothing to remember.
         - alert: UserNamespaceJobFailed
-          # RECENCY BOUND (added 2026-08-29). `kube_job_failed > 0` is true for as
+          # RECENCY BOUND (added 2026-08-28). `kube_job_failed > 0` is true for as
           # long as the failed Job OBJECT exists, so how long a FIXED problem
           # keeps alerting is decided by garbage-collection timing rather than
           # by this rule.
           #
           # Observed: synology-cert-sync was repaired 2026-08-26 and its three
           # most recent runs were Complete, yet this rule was still firing 3x on
-          # 2026-08-29 against Job objects from before the fix. Those objects
+          # 2026-08-28 against Job objects from before the fix. Those objects
           # were then reaped mid-session and the alert cleared on its own -- so
           # it is NOT a permanent latch, and an earlier draft of this comment
           # claiming that was wrong. What it IS: an alert whose duration is
@@ -84,7 +84,7 @@ spec:
         # Job is the shape that actually hurt: the failures were visible in
         # `oc get jobs` the whole time and nobody was looking.
         #
-        # CORRECTED 2026-08-29 -- this rule did NOT do what its name says.
+        # CORRECTED 2026-08-28 -- this rule did NOT do what its name says.
         # It was written against `kube_cronjob_status_last_schedule_time`, which
         # updates on every scheduled run REGARDLESS OF OUTCOME. A CronJob that
         # fires nightly and fails nightly keeps that timestamp perpetually

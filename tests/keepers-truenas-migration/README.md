@@ -5,7 +5,7 @@ DS418 and onto the TrueNAS box. First of three bulk migrations; the other two
 (`media`, `immich`) follow the same shape but are **not** interchangeable —
 see "Why keepers first".
 
-## What we are moving (measured 2026-08-29, not estimated)
+## What we are moving (measured 2026-08-28, not estimated)
 
 | | |
 |---|---|
@@ -42,7 +42,7 @@ being 1 G-capped with no hardlinks to constrain multi-stream copying.
 
 ## Prerequisites — both are blocking
 
-**1. Remove the orphan rehearsal directory.** ✅ **DONE 2026-08-29.**
+**1. Remove the orphan rehearsal directory.** ✅ **DONE 2026-08-28.**
 `/mnt/tank/keepers/pvc-342353d7-…` (≈19 MB, left by the 2026-08-28 OADP
 rehearsal) sat *inside* the dataset the static PV hands to the PVC **as its
 root** — left in place it would have appeared as a stray entry in
@@ -61,7 +61,7 @@ NFS export               enabled, maproot_user=root,
 host restriction is why the copy Job must run on a cluster node rather than
 anywhere else — the export is not reachable from the frontnet at all.
 
-**2. Confirm the Synology's offsite job.** ✅ **RESOLVED 2026-08-29 — there is
+**2. Confirm the Synology's offsite job.** ✅ **RESOLVED 2026-08-28 — there is
 no Hyper Backup over `/volume1/kubenfs`.** So this migration loses no coverage,
 because there is none to lose. Nothing blocks keepers.
 

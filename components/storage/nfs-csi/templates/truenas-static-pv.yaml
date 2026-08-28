@@ -15,7 +15,7 @@
 #  3. These are known singletons, not a fleet. Dynamic provisioning solves
 #     "I don't know how many volumes I'll need", which is not the problem here.
 #
-# PER-VOLUME GATE (added 2026-08-29): each entry carries its own `enabled`, so a
+# PER-VOLUME GATE (added 2026-08-28): each entry carries its own `enabled`, so a
 # volume is published only once ITS dataset has been staged. The parent
 # `staticVolumes.enabled` remains the master switch. Without the per-volume gate
 # the three migrations could not be sequenced -- flipping the parent would

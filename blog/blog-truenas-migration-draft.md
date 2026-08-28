@@ -2176,7 +2176,7 @@ The three dynamic classes stay shipped — they cost nothing, they are what the
 rehearsal proved, and they remain the right answer for any future consumer that
 genuinely is a fleet.
 
-## 2026-08-29 — measuring the whole migration before moving a byte
+## 2026-08-28 — measuring the whole migration before moving a byte
 
 Yesterday's session ended with an open decision (OADP vs direct copy) resting on
 two numbers I had not actually measured. Today I measured them, and both changed
