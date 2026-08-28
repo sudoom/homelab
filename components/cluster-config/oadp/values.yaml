@@ -60,11 +60,12 @@ garageBsl:
   # the first pod-network client to try. Pod -> frontnet IS proven
   # (synology-cert-sync reaches 192.168.1.2 nightly).
   #
-  # COST: Velero's S3 traffic takes 1G, not 10G. Irrelevant for the rehearsal
-  # (~20 MB) and for config backups. It DOES matter for a 3.21 TiB bulk move --
-  # CephFS HDD read runs ~200 MB/s (1.6 Gbps), so 1G becomes the bottleneck and
-  # roughly doubles the transfer. Note a direct PVC->PVC copy has no such
-  # problem: NFS is kernel-mounted by hostNetwork CSI pods and stays on 10G.
+  # COST: Velero's S3 traffic takes 1G, not 10G -- but that is probably NOT the
+  # binding constraint. cephfs-hdd measured 2026-06-12 at read 76.6 MB/s /
+  # write 22.1 MB/s one-client-one-stream (blog-hdd-tier-rollout-draft.md
+  # Phase 5) = 0.61 Gbps read, under 1 Gbps. CephFS read is the bottleneck, not
+  # the link. Verify with the benchmark before planning around either number --
+  # a parallel copier may exceed the single-stream figure.
   s3Url: http://192.168.1.25:30188
   credentialSecret: garage-credentials
   # Sealed 2026-08-28 against sealed-secrets-pub.pem (valid to 2036). Strict

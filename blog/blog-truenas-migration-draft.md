@@ -1827,9 +1827,34 @@ credential decrypting correctly, path-style addressing, *and* the
 ### The cost, stated plainly
 
 Velero's S3 traffic now takes **1G frontnet instead of 10G backnet**. Irrelevant
-for the ~20 MB rehearsal and for config backups. It matters for a 3.21 TiB bulk
-move: CephFS HDD read runs ~200 MB/s (1.6 Gbps), so 1G becomes the bottleneck
-and roughly doubles the transfer.
+for the ~20 MB rehearsal and for config backups.
+
+**CORRECTION (same day).** I first wrote that this "roughly doubles" a 3.21 TiB
+move because "CephFS HDD read runs ~200 MB/s (1.6 Gbps)". That number was
+invented — I never measured it — and the real one was already in this repo:
+
+```
+blog/blog-hdd-tier-rollout-draft.md, Phase 5, 2026-06-12
+  test RWX PVC on cephfs-hdd, IO from a pod (direct):
+    write 200 MiB @ 22.1 MB/s
+    read           @ 76.6 MB/s
+  "Expect ~80-100 MB/s (one client, one stream, HDD OSD primary)."
+```
+
+76.6 MB/s is **0.61 Gbps** — under 1 Gbps. So the 1G link is *not* the
+bottleneck; **CephFS read is**, and the frontnet penalty is close to zero. My
+figure was 2.6× too high and it inverted the conclusion it supported.
+
+The process failure is the interesting part: CLAUDE.md carries an explicit
+grep-before-asserting rule, written after a previous incident of exactly this
+shape, and the correct measurement sat in the draft documenting the very tier I
+was reasoning about. An unmeasured estimate stated with a unit and a decimal
+point reads exactly like a measurement — which is why it survived several
+messages unchallenged until the operator asked "r u sure???".
+
+Revised: 3.21 TiB at 76.6 MB/s is **~12 h single-stream**, not the ~4.7 h I also
+quoted off the same bad number. A copier that parallelises across files should
+beat that, which is precisely what the benchmark needs to establish.
 
 Worth noting what is *not* affected: NFS is kernel-mounted by hostNetwork CSI
 pods, so media/immich/keepers data still rides the 10G backnet. A direct
