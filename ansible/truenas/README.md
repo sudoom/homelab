@@ -59,8 +59,11 @@ not fight, and anything **added** here must never again be changed in the UI.
   twice it either errors, or — against wiped disks — silently builds a new
   empty pool where the old one was. The storage role **asserts** the pool
   exists and fails loudly if not. See bootstrap below.
-- **`ashift`.** Create-time-only per vdev, cannot be changed afterwards under
-  any circumstance. Not representable as desired state; set it at creation.
+- **`ashift`.** Create-time-only per vdev and immutable afterwards. Note it is
+  **not a `pool.create` parameter at all** — the middleware derives it from the
+  disks' reported sector size, so it can only be *verified* after creation, not
+  requested. 12 is correct for these 512e drives; 9 would mean rebuilding the
+  pool is the only fix.
 - **Network interfaces, IP, MTU.** Automating the network config of a box you
   reach *over* that network is how you lock yourself out, and TrueNAS's
   commit-then-confirm rollback does not survive an Ansible run whose connection
@@ -97,16 +100,21 @@ not fight, and anything **added** here must never again be changed in the UI.
    datacenter pulls also confirm no DDF firmware-RAID superblocks first
    (`wipefs -n /dev/sdX`, expect empty).
 
-2. **Create the pool by hand** — Storage → Create Pool in the UI. One 6-wide
-   **RAIDZ2** vdev named `tank`, leaving 2 bays free as `zfs send | recv`
-   runway (a RAIDZ vdev's width can never shrink). Confirm **`ashift=12`** at
-   creation; it is immutable. Select disks by **serial**, not `sdX` —
-   enumeration is not stable across reboots and the boot SSD is also SATA.
-   Then verify:
+2. **Create the pool** — one 6-wide **RAIDZ2** vdev named `tank`, leaving 2
+   bays free as `zfs send | recv` runway (a RAIDZ vdev's width can never
+   shrink). Use the committed script, not the UI and not a pasted disk list:
+
    ```bash
-   zpool status -v tank
-   zpool get ashift tank
+   cd ansible/truenas
+   ./bootstrap-pool.sh            # dry run: prints the gate result + payload
+   ./bootstrap-pool.sh --create   # apply, then verify
    ```
+
+   The member set is re-derived **at execution time** and gated on model, count,
+   "not already in a pool", and "not in `boot.get_disks`" — because SATA
+   enumeration is not stable across reboots and the boot device is also SATA, so
+   a disk list captured today can name the boot disk tomorrow. Any mismatch
+   aborts with exit 1 before `pool.create` is reached.
 
 3. **Create the vault file** with SMTP credentials for alert email:
    ```bash
@@ -160,6 +168,7 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `roles/truenas-system/` | Timezone, NTP, alert email |
 | `roles/truenas-shares/` | NFS exports + service enablement |
 | `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots |
+| `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
 
 Full chronology, decisions and the gaps found in the original plan:
 `blog/blog-truenas-migration-draft.md`.
