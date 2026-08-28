@@ -1209,3 +1209,92 @@ implied it was settable there. It is immutable *and* not requestable: the only
 option is to verify afterwards, and a wrong value means rebuilding the pool is
 the sole remedy. Corrected, and `bootstrap-pool.sh` runs `zpool get ashift` as
 part of its post-create verification for exactly that reason.
+
+## 2026-08-28 (cont.) — why RAIDZ2 and not dRAID2
+
+Asked at the only moment it can be asked: vdev geometry is immutable, and the
+pool had not been created yet.
+
+Prior art first — **`draid` appears nowhere** in this repo or the vault, zero
+grep hits. So this was a genuinely open question rather than a re-litigation.
+
+### Taking the dRAID case seriously
+
+The chassis is **non-hot-swap with no backplane**: any drive swap is a full
+power-down. dRAID's distributed spare rebuilds automatically, with no human
+present and no hardware touched. That is a direct answer to a real operational
+pain here, and it deserved better than a reflex "dRAID is for big arrays".
+
+It fails on its own arithmetic.
+
+dRAID distributes rebuild across **redundancy groups**, so the speedup is
+roughly children / group width:
+
+| children | group (D+P) | groups | speedup |
+|---|---|---|---|
+| **6** | **5** | **1.00** | **1.00×** |
+| 12 | 10 | 1.10 | 1.10× |
+| 30 | 10 | 2.80 | 2.80× |
+| 90 | 10 | 8.60 | 8.60× |
+
+At 6 children with a 5-wide group there is **exactly one group**. There is
+nothing to distribute across, so the distributed spare — the entire feature —
+returns nothing. The non-hot-swap argument was the whole case for dRAID, and it
+evaluates to 1.00×.
+
+### What it would have cost to find that out later
+
+| | raidz2 6-wide | draid2:3d:6c:1s |
+|---|---|---|
+| Usable | **16.00 TB** / 14.55 TiB | 12.00 TB / 10.91 TiB |
+| At 80% ceiling | **11.64 TiB** | 8.73 TiB |
+| Parity overhead | 33.3% | 40.0% |
+| Rebuild speedup | 1× | 1.00× |
+| 4 KiB block on disk | 12 KiB | 20 KiB |
+| 128 KiB block | 192 KiB (×1.50) | 220 KiB (×1.72) |
+| Expandable later | **yes** | no |
+
+- **The 25% capacity loss is two effects stacking.** A distributed spare drops
+  effective children 6→5 *and* narrows the data stripe 4→3, so parity overhead
+  climbs 33.3%→40.0% at the same time. `media` alone holds a 4 TiB quota today;
+  8.73 TiB at the 80% ceiling is tight before immich/backup/keepers land.
+- **The padding is real I/O, not bookkeeping.** From `module/zfs/vdev_draid.c`:
+  *"dRAID always allocates a full stripe width. Any extra sectors due this
+  padding are zero filled and written to disk."* Contrast `vdev_raidz.c`, where
+  skip sectors are issued `ZIO_FLAG_NODATA | ZIO_FLAG_OPTIONAL`. TrueNAS
+  accordingly floors dRAID datasets at 128 K recordsize — exactly where
+  `backup`, `apps`, `personal` and `work` sit. Zero headroom.
+- **It would waste the two free bays.** OpenZFS 2.3 added RAIDZ expansion, and
+  `raidz_expansion` is live on this box (`zfs-2.3.4-1`, confirmed via
+  `zpool upgrade -v`). `zpool-attach(8)` documents it for RAID-Z only and never
+  mentions draid. RAIDZ2 can grow 6→7→8 in place; dRAID cannot, ever. The bays
+  were reserved as `zfs send | recv` runway — expansion gives them a second,
+  cheaper use.
+- **Vendor guidance is unanimous and we are far under it.** TrueNAS: "fewer than
+  10 disks … RAIDZ is strongly recommended". Klara: "<20 spindles … limited
+  benefits". The TrueNAS dRAID primer targets arrays ">100" disks.
+
+### The consistency check that settles it
+
+dRAID's distributed spare is the same bet as a hot spare — and that was already
+rejected, deliberately, on 2026-05-29: *"NOT a hot spare — hot spare burns a bay
+and idle power for marginal benefit when RAIDZ2 already tolerates 2 failures."*
+dRAID prices the identical bet worse: 25% of the pool instead of one bay.
+Adopting it would have silently reversed a decision that had already been made
+with its reasons written down.
+
+`draid2:4d:6c:0s` (dRAID, no spare) was checked too and is strictly dominated:
+identical capacity and fault tolerance to raidz2, minus variable stripe width,
+minus the expansion path, plus the padding tax. Worth noting only because it is
+what a bare `zpool create tank draid2 <6 disks>` produces by default — the
+`data` parameter defaults to `N-P-S`.
+
+**Verdict: RAIDZ2 6-wide stands. `bootstrap-pool.sh` needs no change.**
+
+### Doc hygiene found on the way
+
+The vault's `wiki/concepts/RAIDZ2.md` still described the **dead 4-wide layout**
+("4× HGST 4 TB in RAIDZ2 = 8 TB usable"), superseded by the 6-wide re-scope on
+2026-06-22 and never updated in the two months since. Corrected, with the dRAID
+reasoning added, plus a decision note at
+`_memory/chats/homelab/2026-08-28-raidz2-vs-draid2.md`.
