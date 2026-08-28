@@ -35,7 +35,7 @@ sharedData:
     # Step 1 - publish keepers-data-nfs (binds the static PV truenas-keepers-data,
     # which must be enabled first in components/storage/nfs-csi). Both PVCs then
     # coexist; nothing is consuming the new one yet. Safe to leave here for days.
-    stagePvc: false
+    stagePvc: true      # step 2, 2026-08-29
     # Step 2 - repoint transmission's /data at the new PVC. Requires stagePvc.
     cutover: false
 
