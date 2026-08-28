@@ -47,7 +47,7 @@ Rejected alternatives:
 | Datasets + `recordsize` | `truenas-storage` | query → create missing → reconcile drift |
 | Timezone, NTP, alert email | `truenas-system` | singletons (`.config`/`.update`) |
 | NFS exports to the OKD nodes | `truenas-shares` | matched on export path |
-| Scrub, SMART, periodic snapshots | `truenas-tasks` | matched on pool/dataset |
+| Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
 
 ## What it deliberately does NOT manage
 
@@ -82,6 +82,13 @@ not fight, and anything **added** here must never again be changed in the UI.
   TrueNAS updates, so it has to live on the pool.
 
 ## Bootstrap (one-time)
+
+0. **SMART is not a TrueNAS feature any more.** 25.10 "Goldeye" removed smartd,
+   the `smart.*` API and the test scheduler. A fresh install tests nothing and
+   reads nothing. `truenas-tasks` therefore creates three **cron jobs** (short
+   weekly, long monthly, and a daily reader that mails only on trouble) — see
+   `truenas_smart_cronjobs` in `group_vars/all.yml`. Do not go looking for the
+   SMART page in the UI; it is gone.
 
 1. **Burn in every drive before trusting it.** SMART baseline → destructive
    `badblocks -wsv -b 4096` → SMART long → diff against the baseline. Any growth
@@ -152,7 +159,7 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `roles/truenas-storage/` | Assert pool, converge datasets |
 | `roles/truenas-system/` | Timezone, NTP, alert email |
 | `roles/truenas-shares/` | NFS exports + service enablement |
-| `roles/truenas-tasks/` | Scrub, SMART, periodic snapshots |
+| `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots |
 
 Full chronology, decisions and the gaps found in the original plan:
 `blog/blog-truenas-migration-draft.md`.

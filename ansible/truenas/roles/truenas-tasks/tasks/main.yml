@@ -72,34 +72,62 @@
     label: "{{ truenas_pool }}/{{ item.dataset }}"
   when: (truenas_pool ~ '/' ~ item.dataset) not in truenas_snap_datasets
 
-- name: Query existing SMART test tasks
+# ---------------------------------------------------------------------------
+# SMART -- TrueNAS 25.10 "Goldeye" removed the smart.* middleware namespace,
+# the smartd service and the SMART test scheduler outright. Verified on this
+# box (25.10.6), not assumed:
+#
+#   midclt call smart.test.query   -> "Method does not exist"
+#   systemctl list-units "*smart*" -> empty
+#   disk.query                     -> no SMART-related fields
+#
+# smartmontools itself is still installed (smartctl 7.4), and upstream's own
+# upgrade path rewrites existing SMART schedules as cron tasks -- so cron is
+# the sanctioned replacement here, not a hack around a missing feature.
+#
+# The consequence is worth stating plainly: on a FRESH 25.10 install nothing
+# tests the drives and nothing reads the results. There is no default to fall
+# back on. On six drives that are five years old and wear-matched to within
+# 400 power-on hours, going blind is the one outcome to design against.
+# ---------------------------------------------------------------------------
+
+- name: Query existing cron jobs
   ansible.builtin.command:
-    argv: [midclt, call, smart.test.query]
-  register: truenas_smart_q
+    argv: [midclt, call, cronjob.query]
+  register: truenas_cron_q
   changed_when: false
   check_mode: false
 
-- name: Index SMART tasks by type
+- name: Index cron jobs by description
   ansible.builtin.set_fact:
-    truenas_smart_types: "{{ truenas_smart_q.stdout | from_json | map(attribute='type') | list }}"
+    truenas_cron_descs: "{{ truenas_cron_q.stdout | from_json | map(attribute='description') | list }}"
 
-# all_disks: true so a drive swap is automatically covered -- on a 5-year cohort,
-# forgetting to add a replacement disk to the test schedule is a realistic way to
-# go blind on the one drive most likely to be young and unproven.
-- name: Create the weekly SHORT SMART test
+- name: Create the SMART cron jobs
   ansible.builtin.command:
     argv:
       - midclt
       - call
-      - smart.test.create
-      - "{{ {'all_disks': true, 'type': 'SHORT', 'desc': 'Weekly short (managed by ansible/truenas)', 'schedule': {'hour': '3', 'dom': '*', 'month': '*', 'dow': '7'}} | to_json }}"
-  when: "'SHORT' not in truenas_smart_types"
-
-- name: Create the monthly LONG SMART test
-  ansible.builtin.command:
-    argv:
-      - midclt
-      - call
-      - smart.test.create
-      - "{{ {'all_disks': true, 'type': 'LONG', 'desc': 'Monthly long (managed by ansible/truenas)', 'schedule': {'hour': '4', 'dom': '1', 'month': '*', 'dow': '*'}} | to_json }}"
-  when: "'LONG' not in truenas_smart_types"
+      - cronjob.create
+      - "{{ _job | to_json }}"
+  vars:
+    _f: "{{ item.cron.split() }}"
+    _job:
+      user: root
+      command: "{{ item.command }}"
+      description: "{{ item.description }}"
+      schedule:
+        minute: "{{ _f[0] }}"
+        hour: "{{ _f[1] }}"
+        dom: "{{ _f[2] }}"
+        month: "{{ _f[3] }}"
+        dow: "{{ _f[4] }}"
+      enabled: true
+      # stdout/stderr are HIDE flags. The two "-t" jobs would otherwise mail
+      # "Testing has begun" six times a week; the health job must mail, so it
+      # hides nothing. stderr is never hidden -- a broken job has to be loud.
+      stdout: "{{ item.hide_stdout }}"
+      stderr: false
+  loop: "{{ truenas_smart_cronjobs }}"
+  loop_control:
+    label: "{{ item.description }}"
+  when: item.description not in truenas_cron_descs

@@ -991,3 +991,139 @@ from the kernel's own counters rather than read off a graph.
 locked behind privilege you have deliberately not granted yourself, look for a
 kernel counter that is world-readable instead. `/proc/diskstats` answered a
 question the process's logfile, journal and `/proc/<pid>/io` all refused to.
+
+## 2026-08-28 — burn-in done; and TrueNAS 25.10 deleted SMART out from under the role
+
+Eight sawteeth, then flat. All four `badblocks` patterns complete.
+
+```
+$ systemctl list-units 'burnin-*' --all
+(empty)
+
+dev  rd_pass  wr_pass
+sda  4.00  4.00      sdd  4.00  4.00
+sdb  4.00  4.00      sde  4.00  4.00
+sdc  4.00  4.00      sdf  4.00  4.00
+```
+
+Two independent confirmations. `--collect` was deliberately omitted when the
+units were created, so a **failed** transient unit would still be sitting there
+in `failed` state — an empty list is the success signal, not an absence of
+information. And `rd=4.00 wr=4.00` exactly, on all six: four write passes, four
+read passes, no fractional overshoot from retried I/O.
+
+48 full-surface traversals across six 4 TB drives. ~87 TB written and verified,
+zero anomalies in the throughput trace.
+
+One thing I am **not** claiming: that this proves a clean surface. I am not
+certain `badblocks` exits non-zero merely for *finding* bad blocks (as opposed
+to failing to run), so "no failed units" is weaker evidence than it looks. The
+bad-block lists in `/root/bb-*.log` are root-only. SMART is the real verdict.
+
+### Which is where the day went sideways
+
+The plan said "SMART long test on all six, diff against the baselines". That
+step does not exist on this platform any more.
+
+```
+$ midclt call smart.test.query
+Method does not exist
+$ midclt call core.get_methods | grep -i smart
+(nothing)
+$ systemctl list-units '*smart*' --all
+(empty)
+$ midclt call disk.query | jq '.[0] | keys' | grep -i smart
+(nothing)
+$ smartctl -H /dev/sda
+Smartctl open device: /dev/sda failed: Permission denied
+```
+
+No `smart.*` namespace, no smartd unit, no smartd process, no SMART fields on
+the disk record. Not a permissions artefact either — `disk.wipe` *is* in the
+method list, so this account is not being filtered down.
+
+That is a big claim (a whole subsystem removed), and I had already been wrong
+once this week by trusting a truncated source, so I checked upstream rather
+than my own probing. It holds: **TrueNAS 25.10 "Goldeye" removed SMART test
+scheduling — UI and API both.** smartmontools stays installed, existing
+schedules are rewritten as **cron tasks** on upgrade, and the suggested
+replacements are user-managed cron or the Scrutiny app.
+
+**We are a fresh install, so nothing was migrated. Nothing tests these drives
+and nothing reads the results. There is no default.**
+
+### What this broke in code I had already written
+
+`roles/truenas-tasks/` called `smart.test.query` and `smart.test.create`. It
+would have hard-failed the first time the operator ran `playbook.yml` — caught
+here only because the burn-in finishing sent me looking for the SMART step.
+
+Worse, `group_vars/all.yml` already had:
+
+```yaml
+truenas_smart_short_cron: "0 3 * * 0"
+truenas_smart_long_cron:  "0 4 1 * *"
+```
+
+…as **cron strings**, which the role never read — it built `schedule:` dicts
+instead. So the variables were dead *and* the code was dead, in opposite
+directions, and neither `--syntax-check` nor a lint pass can see either.
+
+### The replacement
+
+Three `cronjob.create` entries, which is the same mechanism upstream migrates
+to. Idempotency key is `description`, because middleware identity is an integer
+id.
+
+| Job | Schedule | stdout | Purpose |
+|---|---|---|---|
+| SMART short, all disks | Sun 03:00 | hidden | quick weekly check |
+| SMART long, all disks | 1st 04:00 | hidden | full surface monthly |
+| SMART health report | daily 07:00 | **mailed** | reads results, mails only on trouble |
+
+The third job is the one that matters. `smartctl -t` only *starts* a test; the
+result lands hours later, and with smartd gone nothing would ever look at it.
+Scheduling tests without scheduling a reader is how you get a drive that has
+been failing its self-test for a month in silence.
+
+It stays quiet by design — TrueNAS only mails a cron job whose stdout is
+non-empty, so healthy runs produce no mail at all:
+
+```sh
+for d in $(smartctl --scan | cut -d" " -f1); do
+  smartctl -H -l selftest "$d" >/dev/null 2>&1; rc=$?
+  [ $((rc & 152)) -ne 0 ] && echo "SMART ALERT $d rc=$rc"
+done; true
+```
+
+**Why 152 and not "any non-zero".** smartctl's exit status is a bitmask. 152 =
+8 (disk failing now) + 16 (prefail attribute below threshold now) + 128 (a
+self-test logged an error). Deliberately excluded: 32 ("attribute was below
+threshold **in the past**") and 64 ("errors present in the ATA error log").
+These are 43,000-hour datacenter pulls — both bits are plausibly set from a
+previous life, and a daily mail that always fires is a daily mail you learn to
+delete unread. Alert fatigue is the failure mode being designed against, not
+disk failure.
+
+Verified by substituting a fake `smartctl`:
+
+```
+FAKE_RC=0   -> (silent)
+FAKE_RC=64  -> (silent)      # historical log noise, correctly ignored
+FAKE_RC=8   -> SMART ALERT /dev/sda rc=8
+               SMART ALERT /dev/sdb rc=8
+```
+
+`cut -d" " -f1` rather than `awk '{print $1}'` is not stylistic: the command is
+a single-quoted YAML scalar that gets JSON-encoded into a `midclt` argv, and
+keeping single quotes out of it removes an entire class of escaping bug. Same
+lesson as the `synology-cert-sync` f-string earlier this week, applied before
+it bit rather than after. All three commands are `sh -n` clean.
+
+### Still operator-run
+
+`smartctl` needs root; `truenas_admin`'s sudo wants a password; the box is
+code-only. So the post-burn-in verification — long test on all six, then diff
+against `/root/smart-baseline-*.txt` — is the operator's to run. The cron jobs
+above make it the *last* time that is true: from then on the schedule and the
+reader are both in git.

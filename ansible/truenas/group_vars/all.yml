@@ -113,8 +113,47 @@ truenas_ntp_servers:
 
 # ---- Data protection ------------------------------------------------------
 truenas_scrub_day_of_month: "1"     # monthly
-truenas_smart_short_cron: "0 3 * * 0"   # weekly, Sunday 03:00
-truenas_smart_long_cron:  "0 4 1 * *"   # monthly, 1st 04:00
+truenas_smart_short_cron:  "0 3 * * 0"   # weekly, Sunday 03:00
+truenas_smart_long_cron:   "0 4 1 * *"   # monthly, 1st 04:00
+truenas_smart_health_cron: "0 7 * * *"   # daily 07:00 -- reads results, emails only on trouble
+
+# TrueNAS 25.10 "Goldeye" REMOVED smartd, the smart.* API and the SMART test
+# scheduler (verified on 25.10.6). smartmontools is still installed, and
+# upstream's own upgrade path converts existing SMART schedules into cron
+# tasks -- so cron is the sanctioned replacement, not a workaround.
+#
+# `description` is the idempotency key (middleware identity is an integer id).
+# Editing a description creates a SECOND job rather than updating the first.
+#
+# Commands deliberately contain NO single quotes: they are single-quoted YAML
+# scalars that get JSON-encoded into a midclt argv. `cut -d" " -f1` instead of
+# `awk "{print $1}"` keeps that true.
+truenas_smart_cronjobs:
+  - description: "SMART short test, all disks (managed by ansible/truenas)"
+    cron: "{{ truenas_smart_short_cron }}"
+    hide_stdout: true
+    command: 'for d in $(smartctl --scan | cut -d" " -f1); do smartctl -t short "$d"; done'
+
+  - description: "SMART long test, all disks (managed by ansible/truenas)"
+    cron: "{{ truenas_smart_long_cron }}"
+    hide_stdout: true
+    command: 'for d in $(smartctl --scan | cut -d" " -f1); do smartctl -t long "$d"; done'
+
+  # `smartctl -t` only STARTS a test; the result lands hours later. Without
+  # smartd nothing ever reads it, so this job is the part that actually closes
+  # the monitoring gap. Silent when healthy -- TrueNAS only mails a cron job
+  # whose stdout is non-empty, so no output means no mail.
+  #
+  # Exit status is a bitmask. We alert on 8 (disk failing now), 16 (prefail
+  # attribute below threshold now) and 128 (a self-test logged an error) = 152.
+  # Deliberately EXCLUDED: 32 ("attribute was below threshold in the past") and
+  # 64 ("errors present in the ATA error log") -- on 43k-hour datacenter pulls
+  # both are likely set from a previous life and would mail every single day
+  # forever, which trains you to ignore the one mail that matters.
+  - description: "SMART health report, mail on trouble only (managed by ansible/truenas)"
+    cron: "{{ truenas_smart_health_cron }}"
+    hide_stdout: false
+    command: 'for d in $(smartctl --scan | cut -d" " -f1); do smartctl -H -l selftest "$d" >/dev/null 2>&1; rc=$?; [ $((rc & 152)) -ne 0 ] && echo "SMART ALERT $d rc=$rc"; done; true'
 
 # Snapshot retention, per dataset. media is deliberately minimal (re-downloadable);
 # backup is frequent (it is the tree that matters).
