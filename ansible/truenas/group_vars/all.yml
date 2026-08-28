@@ -133,6 +133,35 @@ truenas_ntp_servers:
   - 194.146.251.100                 # tempus1.gum.gov.pl
   - 162.159.200.123                 # time.cloudflare.com (anycast, independent operator)
 
+# ---- garage S3 (Velero BackupStorageLocation) ------------------------------
+# Bound to the STORAGE BACKNET only. `app.ip_choices` on this box offers exactly
+# {0.0.0.0, ::, 192.168.10.10} -- the mgmt address is not bindable -- and the
+# backnet is precisely where the OKD nodes reach it, so this is both the safe
+# and the only sensible choice. Nothing here is secret: admin_token, rpc_secret
+# and web_ui_password are generated ON the box at create time and never leave it.
+truenas_garage:
+  app_name: garage
+  train: community
+  version: "1.2.5"          # the only version the catalog offers today
+  region: garage
+  replication_factor: 1     # single node; this is a backup target, not a cluster
+  web_ui_username: admin
+  run_as_uid: 568           # the TrueNAS apps account
+  run_as_gid: 568
+  cpus: 2
+  memory_mb: 4096
+  bind_ip: 192.168.10.10
+  ports:
+    web: 30186
+    rpc: 30187
+    s3: 30188
+    s3_web: 30189
+    admin: 30190
+  paths:
+    config: /mnt/tank/s3/config
+    metadata: /mnt/tank/s3/meta
+    data: /mnt/tank/s3/data
+
 # ---- Data protection ------------------------------------------------------
 truenas_scrub_day_of_month: "1"     # monthly
 truenas_scrub_threshold: 35         # days; skip a scheduled scrub if scrubbed more recently

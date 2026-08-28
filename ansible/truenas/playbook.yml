@@ -29,6 +29,7 @@
     - role: truenas-system    # hostname/timezone/NTP/alert email
     - role: truenas-shares    # NFS exports to the OKD nodes
     - role: truenas-tasks     # scrub, SMART, periodic snapshots
+    - role: truenas-apps      # garage S3 server backing the Velero BSL
 
   # -------------------------------------------------------------------------
   # WHY THIS EXISTS: `--check` is structurally BLIND for this playbook.

@@ -1,0 +1,122 @@
+---
+# ---------------------------------------------------------------------------
+# truenas-apps — the garage S3 server that backs the Velero BackupStorageLocation
+#
+# WHY AN S3 SERVER ON THE NAS AT ALL: Velero file-system backup writes to object
+# storage and nothing else ("Velero FSB supports object storage as the backup
+# storage only" -- velero.io). The cluster's only S3 today is Ceph RGW, whose
+# data pool is replicated x3 on the same three HDD OSDs a migration would be
+# draining -- backing up the 3.21 TiB media PVC there needs 9.63 TiB raw against
+# 6.66 TiB available. It does not fit. A BSL on the NAS moves backup data off
+# Ceph entirely, which is also what the 2026-06-08 incident asked for (the daily
+# Schedule snapshotted Loki's WAL PVCs into the Ceph it was protecting and took
+# the cluster to 97% full; the Schedule has been `paused: true` ever since).
+#
+# WHY garage AND NOT seaweedfs: seaweedfs is in the supported stable train but
+# deploys master+volume+filer+admin+worker across ~14 ports and five storage
+# volumes, and exposes no S3 config in its schema at all. garage is a single
+# binary with replication_factor 1, three storage paths and one S3 port. For a
+# rebuild-in-minutes backup target, less surface wins.
+# ---------------------------------------------------------------------------
+
+- name: Query installed apps
+  ansible.builtin.command:
+    argv: [midclt, call, app.query]
+  register: truenas_app_q
+  changed_when: false
+  check_mode: false
+
+- name: Index apps by name
+  ansible.builtin.set_fact:
+    truenas_app_names: "{{ truenas_app_q.stdout | from_json | map(attribute='name') | list }}"
+
+# garage runs as uid/gid 568 (the apps account) but a freshly created dataset is
+# root:root 0755, so the container cannot write. Checked per path and chowned
+# only when it is actually wrong, so this stays idempotent.
+- name: Stat the garage storage paths
+  ansible.builtin.command:
+    argv: [midclt, call, filesystem.stat, "{{ item.value }}"]
+  register: truenas_garage_stat
+  changed_when: false
+  check_mode: false
+  loop: "{{ truenas_garage.paths | dict2items }}"
+  loop_control:
+    label: "{{ item.value }}"
+
+- name: Chown the garage storage paths to the apps account
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - filesystem.chown
+      - "{{ {'path': item.item.value, 'uid': truenas_garage.run_as_uid, 'gid': truenas_garage.run_as_gid, 'options': {'recursive': true, 'traverse': false}} | to_json }}"
+  loop: "{{ truenas_garage_stat.results }}"
+  loop_control:
+    label: "{{ item.item.value }}"
+  when: (item.stdout | from_json).uid != truenas_garage.run_as_uid
+
+# Secrets are generated ON THE BOX and never leave it: no vault entry, nothing in
+# git. They are only needed at create time -- on a re-run the app already exists,
+# this task is skipped, and the live values are left untouched.
+- name: Generate garage secrets (only when the app is absent)
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, "32"]
+  register: truenas_garage_secrets
+  changed_when: false
+  loop: [admin_token, rpc_secret, web_ui_password]
+  loop_control:
+    label: "{{ item }}"
+  when: truenas_garage.app_name not in truenas_app_names
+  no_log: true
+
+- name: Deploy the garage S3 app
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job          # app.create IS a job method -- without this the call returns
+      - app.create     # a job id immediately and any check after it races the deploy
+      - "{{ _app | to_json }}"
+  vars:
+    _sec: "{{ truenas_garage_secrets.results | default([]) | map(attribute='stdout') | list }}"
+    _port: "{{ truenas_garage.ports }}"
+    _bind: "{{ [truenas_garage.bind_ip] }}"
+    _app:
+      app_name: "{{ truenas_garage.app_name }}"
+      catalog_app: garage
+      train: "{{ truenas_garage.train }}"
+      version: "{{ truenas_garage.version }}"
+      values:
+        TZ: "{{ truenas_timezone }}"
+        garage:
+          admin_token: "{{ _sec[0] | default('') }}"
+          rpc_secret: "{{ _sec[1] | default('') }}"
+          web_ui_password: "{{ _sec[2] | default('') }}"
+          web_ui_username: "{{ truenas_garage.web_ui_username }}"
+          enable_web_ui_auth: true
+          region: "{{ truenas_garage.region }}"
+          replication_factor: "{{ truenas_garage.replication_factor | int }}"
+        run_as:
+          user: "{{ truenas_garage.run_as_uid | int }}"
+          group: "{{ truenas_garage.run_as_gid | int }}"
+        network:
+          web_port: { bind_mode: published, port_number: "{{ _port.web | int }}", host_ips: "{{ _bind }}" }
+          rpc_port: { bind_mode: published, port_number: "{{ _port.rpc | int }}", host_ips: "{{ _bind }}" }
+          s3_port: { bind_mode: published, port_number: "{{ _port.s3 | int }}", host_ips: "{{ _bind }}" }
+          s3_web_port: { bind_mode: published, port_number: "{{ _port.s3_web | int }}", host_ips: "{{ _bind }}" }
+          admin_port: { bind_mode: published, port_number: "{{ _port.admin | int }}", host_ips: "{{ _bind }}" }
+        storage:
+          config: { type: host_path, host_path_config: { path: "{{ truenas_garage.paths.config }}" } }
+          metadata: { type: host_path, host_path_config: { path: "{{ truenas_garage.paths.metadata }}" } }
+          data: { type: host_path, host_path_config: { path: "{{ truenas_garage.paths.data }}" } }
+        resources:
+          limits:
+            cpus: "{{ truenas_garage.cpus | int }}"
+            memory: "{{ truenas_garage.memory_mb | int }}"
+  when: truenas_garage.app_name not in truenas_app_names
+  no_log: true       # the payload carries the generated secrets
+
+- name: Report garage app state
+  ansible.builtin.debug:
+    msg: "garage {{ 'already present' if truenas_garage.app_name in truenas_app_names else 'DEPLOYED — bootstrap (layout/key/bucket) is the next step' }}"
