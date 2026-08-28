@@ -90,20 +90,29 @@ truenas:
     enabled: false
     volumes:
       - name: media-data
+        enabled: false
         share: /mnt/tank/media
         capacity: 8Ti          # ceiling only; the real limit is the ZFS dataset
         claim:
           namespace: media
           name: media-data-nfs-pvc
       - name: immich-library
+        enabled: false
         share: /mnt/tank/immich
         capacity: 2Ti
         claim:
           namespace: immich
           name: immich-library-nfs
       - name: keepers-data
+        enabled: false
         share: /mnt/tank/keepers
-        capacity: 500Gi
+        # 2Ti, not the 500Gi originally shipped: keepers-data-pvc was MEASURED at
+        # 1.7 TiB on 2026-08-29 (the old 50Gi PVC request was never enforced --
+        # csi-driver-nfs just makes a subdirectory and `df` reports the whole
+        # Synology volume). NFS does not enforce this number either, but it is
+        # what `oc get pv` prints, and a figure 3.4x under reality is exactly the
+        # sort of thing that misleads someone at 2 a.m.
+        capacity: 2Ti
         claim:
           namespace: keepers
           name: keepers-data-nfs

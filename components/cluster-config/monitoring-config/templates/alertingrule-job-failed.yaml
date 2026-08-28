@@ -37,9 +37,32 @@ spec:
         # built-in rule excludes. Keeping it as a negative match means a new
         # namespace is covered the day it is created, with nothing to remember.
         - alert: UserNamespaceJobFailed
+          # RECENCY BOUND (added 2026-08-29). `kube_job_failed > 0` is true for as
+          # long as the failed Job OBJECT exists, so how long a FIXED problem
+          # keeps alerting is decided by garbage-collection timing rather than
+          # by this rule.
+          #
+          # Observed: synology-cert-sync was repaired 2026-08-26 and its three
+          # most recent runs were Complete, yet this rule was still firing 3x on
+          # 2026-08-29 against Job objects from before the fix. Those objects
+          # were then reaped mid-session and the alert cleared on its own -- so
+          # it is NOT a permanent latch, and an earlier draft of this comment
+          # claiming that was wrong. What it IS: an alert whose duration is
+          # `failedJobsHistoryLimit` x schedule-interval, which for an hourly
+          # CronJob is hours and for a weekly one is weeks, plus indefinite for
+          # any hand-created Job that no controller owns.
+          #
+          # 48h means a genuine failure alerts for two days and then ages out --
+          # but a CronJob that KEEPS failing mints new Job objects, so it keeps
+          # firing. Durable "this has not worked in a long time" is the job of
+          # UserNamespaceCronJobNotSucceeding below, which is the right shape
+          # for it. Two rules, two questions: "did something just break" and
+          # "is something still broken".
           expr: |
             kube_job_failed{job="kube-state-metrics",
                             namespace!~"(openshift-.*|kube-.*|default)"} > 0
+            and on (namespace, job_name)
+            (time() - kube_job_status_start_time{job="kube-state-metrics"} < 172800)
           # 15m rather than firing instantly: a Job that fails once and succeeds
           # on retry is noise. A CronJob that is genuinely broken stays failed.
           for: 15m
@@ -60,10 +83,33 @@ spec:
         # A CronJob whose most recent scheduled run never produced a successful
         # Job is the shape that actually hurt: the failures were visible in
         # `oc get jobs` the whole time and nobody was looking.
+        #
+        # CORRECTED 2026-08-29 -- this rule did NOT do what its name says.
+        # It was written against `kube_cronjob_status_last_schedule_time`, which
+        # updates on every scheduled run REGARDLESS OF OUTCOME. A CronJob that
+        # fires nightly and fails nightly keeps that timestamp perpetually
+        # fresh, so the rule could never fire -- and that is precisely the
+        # synology-cert-sync failure mode it was written to catch. The rule
+        # detected "not scheduled", never "not succeeding".
+        #
+        # `kube_cronjob_status_last_successful_time` is the metric that actually
+        # implements the name (verified present on this cluster: 6 series).
+        # Kept as a `>` on an absolute age rather than an absent() check so a
+        # CronJob that has NEVER succeeded also trips it -- the series is absent
+        # in that case, hence the `or` arm.
         - alert: UserNamespaceCronJobNotSucceeding
           expr: |
-            (time() - max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{job="kube-state-metrics",
-                                                    namespace!~"(openshift-.*|kube-.*|default)"})) > 172800
+            (
+              time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{job="kube-state-metrics",
+                                                     namespace!~"(openshift-.*|kube-.*|default)"})
+            ) > 172800
+            or
+            (
+              max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{job="kube-state-metrics",
+                                            namespace!~"(openshift-.*|kube-.*|default)"})
+              unless on (namespace, cronjob)
+              max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{job="kube-state-metrics"})
+            ) * 0 + 1
           # 48h covers a daily CronJob missing two consecutive runs, without
           # firing on weekly/monthly schedules.
           for: 1h
@@ -75,4 +121,6 @@ spec:
             description: >-
               CronJob {{ `{{ $labels.namespace }}/{{ $labels.cronjob }}` }} has no
               successful schedule in the last 48 hours. Either it is suspended,
-              or its schedule is not firing.
+              or every run since then has FAILED, or it has never succeeded at
+              all. Note this is deliberately about SUCCESS, not scheduling -- a
+              CronJob failing nightly still updates its last-schedule time.

@@ -1,0 +1,30 @@
+{{- if .Values.sharedData.truenasMigration.stagePvc }}
+# Second data PVC for the Synology -> TrueNAS migration.
+#
+# storageClassName: "" (empty, NOT absent) is load-bearing. Empty string means
+# "no class", which is what stops the default StorageClass from dynamically
+# provisioning something instead of binding the static PV. The matching PV
+# (truenas-keepers-data, in components/storage/nfs-csi) sets the same and
+# pre-binds to this exact namespace/name via claimRef, so the two find each
+# other and nothing else can claim either side.
+#
+# The PV's capacity (2Ti) is a label only -- NFS enforces nothing; the real
+# limit is the ZFS dataset. Request must be <= the PV's capacity to bind.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keepers-data-nfs
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # This PVC is the migration target. Never let a stray manifest change prune
+    # the object out from under a running copy or a live transmission.
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: ""
+  volumeName: truenas-keepers-data
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 2Ti
+{{- end }}

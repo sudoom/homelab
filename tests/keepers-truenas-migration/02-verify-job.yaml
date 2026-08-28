@@ -1,0 +1,67 @@
+# keepers migration verification. Read-only on BOTH volumes.
+#
+# What this proves and what it does not:
+#   - rsync -n --itemize-changes re-stats every file on both sides and reports
+#     ANY difference in size, mtime, ownership or mode. Clean output = the trees
+#     are metadata-identical. This is cheap (4,493 stat calls).
+#   - It does NOT prove the bytes are identical -- rsync trusts size+mtime by
+#     default. A full content check means re-reading 1.7 TiB twice over a 1 Gbit
+#     link (~8h), which is not proportionate for re-downloadable torrent data.
+#     Instead we checksum a random sample of 20 files.
+#   - Stated plainly so nobody later mistakes this for a full verification.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keepers-nfs-verify
+  namespace: keepers
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+        - name: verify
+          image: docker.io/alpine:3.22
+          securityContext:
+            runAsUser: 0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              apk add --no-cache rsync coreutils findutils >/dev/null
+              echo "=== 1. counts ==="
+              printf "src files: "; find /src -type f | wc -l
+              printf "dst files: "; find /dst -type f | wc -l
+              printf "src dirs:  "; find /src -type d | wc -l
+              printf "dst dirs:  "; find /dst -type d | wc -l
+              echo "=== 2. apparent bytes ==="
+              printf "src: "; du -sb /src | cut -f1
+              printf "dst: "; du -sb /dst | cut -f1
+              echo "=== 3. metadata diff (EMPTY == identical) ==="
+              rsync -naHX --numeric-ids --itemize-changes /src/ /dst/ | head -50
+              echo "=== 3b. difference count ==="
+              rsync -naHX --numeric-ids --itemize-changes /src/ /dst/ | wc -l
+              echo "=== 4. sampled content checksums (20 files) ==="
+              find /src -type f | sort | awk 'NR%224==1' | head -20 > /tmp/s
+              rc=0
+              while IFS= read -r f; do
+                r=${f#/src/}
+                a=$(sha256sum "$f" | cut -d" " -f1)
+                b=$(sha256sum "/dst/$r" 2>/dev/null | cut -d" " -f1 || echo MISSING)
+                if [ "$a" = "$b" ]; then echo "  OK   $r"
+                else echo "  FAIL $r"; echo "       src=$a dst=$b"; rc=1; fi
+              done < /tmp/s
+              echo "=== sample result: $([ $rc -eq 0 ] && echo PASS || echo FAIL) ==="
+              exit $rc
+          volumeMounts:
+            - {name: src, mountPath: /src, readOnly: true}
+            - {name: dst, mountPath: /dst, readOnly: true}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits:   {memory: 1Gi}
+      volumes:
+        - name: src
+          persistentVolumeClaim: {claimName: keepers-data-pvc, readOnly: true}
+        - name: dst
+          persistentVolumeClaim: {claimName: keepers-data-nfs, readOnly: true}

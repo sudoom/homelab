@@ -1,5 +1,6 @@
 {{- if and .Values.truenas.enabled .Values.truenas.staticVolumes.enabled }}
 {{- range .Values.truenas.staticVolumes.volumes }}
+{{- if .enabled }}
 ---
 # Statically-defined TrueNAS volume — deliberately NOT dynamically provisioned.
 #
@@ -13,6 +14,14 @@
 #     the old path. A static PV's path is fixed and survives PVC recreation.
 #  3. These are known singletons, not a fleet. Dynamic provisioning solves
 #     "I don't know how many volumes I'll need", which is not the problem here.
+#
+# PER-VOLUME GATE (added 2026-08-29): each entry carries its own `enabled`, so a
+# volume is published only once ITS dataset has been staged. The parent
+# `staticVolumes.enabled` remains the master switch. Without the per-volume gate
+# the three migrations could not be sequenced -- flipping the parent would
+# publish PVs for media and immich pointing at datasets holding nothing, which
+# then sit pre-bound to PVCs that do not exist. Harmless but misleading, and
+# `oc get pv` is exactly where you look when a migration has gone wrong.
 #
 # BINDING: `claimRef` pre-binds this PV to exactly one PVC, so it cannot be
 # claimed by anything else even before that PVC exists. Both sides must set
@@ -46,5 +55,6 @@ spec:
     volumeAttributes:
       server: {{ $.Values.truenas.server | quote }}
       share: {{ .share | quote }}
+{{- end }}
 {{- end }}
 {{- end }}

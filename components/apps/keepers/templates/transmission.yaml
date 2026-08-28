@@ -97,7 +97,18 @@ spec:
             claimName: transmission-config-pvc
         - name: data
           persistentVolumeClaim:
+            {{- if .Values.sharedData.truenasMigration.cutover }}
+            {{- if not .Values.sharedData.truenasMigration.stagePvc }}
+            {{- fail "sharedData.truenasMigration.cutover requires stagePvc=true -- the target PVC would not exist" }}
+            {{- end }}
+            # CUT OVER to TrueNAS. mountPath stays /data and the directory layout
+            # is preserved by the copy, so transmission's torrent paths are
+            # unchanged and it does not need to re-verify. Rollback = set cutover
+            # back to false; keepers-data-pvc still holds the data (PV is Retain).
+            claimName: keepers-data-nfs
+            {{- else }}
             claimName: keepers-data-pvc
+            {{- end }}
 ---
 apiVersion: v1
 kind: Service

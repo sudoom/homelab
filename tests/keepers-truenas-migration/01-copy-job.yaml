@@ -1,0 +1,84 @@
+# keepers: Synology NFS -> TrueNAS NFS bulk copy.
+#
+# MANUAL APPLY ONLY. Not registered in bootstrap/root-app -- ArgoCD must never
+# own this, or a selfHeal could restart a copy mid-flight.
+#
+# Re-running this Job IS the resume mechanism. rsync skips files whose size and
+# mtime already match, so a run interrupted by a node reboot, an OVN egress
+# break or a stale mount costs only the re-scan of 4,493 files (seconds), not
+# the 1.7 TiB. Delete the completed/failed Job object, then re-apply.
+#
+#   oc -n keepers delete job keepers-nfs-copy --ignore-not-found
+#   oc -n keepers apply -f 01-copy-job.yaml
+#   oc -n keepers logs -f job/keepers-nfs-copy
+#
+# Runs as root deliberately: -a preserves ownership, which needs root on the
+# writing side, and the TrueNAS export sets maproot_user=root (verified
+# 2026-08-29) so root is not squashed. The keepers `default` SA already holds
+# the privileged SCC via components/apps/keepers/templates/scc-rbac.yaml.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keepers-nfs-copy
+  namespace: keepers
+spec:
+  backoffLimit: 0            # no silent retry -- re-apply deliberately (see above)
+  activeDeadlineSeconds: 43200   # 12h ceiling; measured expectation is 4-6h
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+        - name: rsync
+          image: docker.io/alpine:3.22
+          # If this image will not pull, any image with rsync works -- the Job is
+          # otherwise image-agnostic. Pod egress to the internet is known good
+          # (cert-manager reaches Let's Encrypt from the pod network).
+          securityContext:
+            runAsUser: 0
+          env:
+            # Extra flags per phase. Bulk/catch-up passes: leave empty.
+            # FINAL quiesced pass: "--delete" (dry-run it first, see README).
+            - name: EXTRA
+              value: ""
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              apk add --no-cache rsync >/dev/null
+              echo "=== source ==="; df -h /src | tail -1
+              echo "=== target ==="; df -h /dst | tail -1
+              # -a  archive (perms, times, ownership, symlinks)
+              # -H  preserve hardlinks. A NO-OP for keepers (measured: 0 hardlinked
+              #     files) but kept so this command is byte-identical to the media
+              #     run, where it is load-bearing (1,478 of 2,203 files).
+              # -X  xattrs.  -A (ACLs) is DELIBERATELY OMITTED: the Synology tree
+              #     carries POSIX ACLs (`drwxrwxrwx+`), the effective mode is
+              #     already 0777, and the sole consumer is one privileged
+              #     container -- so copying them buys nothing and risks the
+              #     transfer erroring on an ACL the ZFS acltype will not accept.
+              # --numeric-ids  do NOT remap uid/gid through name lookups that
+              #     differ between the two boxes. uid 1026 must stay uid 1026.
+              # --partial  keep partially-transferred files so a resumed run
+              #     continues them instead of restarting each from zero.
+              time rsync -aHX --numeric-ids --partial \
+                   --info=progress2,stats2 --human-readable \
+                   $EXTRA /src/ /dst/
+              echo "=== target after ==="; df -h /dst | tail -1
+          volumeMounts:
+            - name: src
+              mountPath: /src
+              readOnly: true      # the old volume is the rollback; never write it
+            - name: dst
+              mountPath: /dst
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits:   {memory: 1Gi}
+      volumes:
+        - name: src
+          persistentVolumeClaim:
+            claimName: keepers-data-pvc      # Synology 192.168.1.2:/volume1/kubenfs
+            readOnly: true
+        - name: dst
+          persistentVolumeClaim:
+            claimName: keepers-data-nfs      # TrueNAS 192.168.10.10:/mnt/tank/keepers
