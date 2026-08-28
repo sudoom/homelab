@@ -1298,3 +1298,77 @@ The vault's `wiki/concepts/RAIDZ2.md` still described the **dead 4-wide layout**
 2026-06-22 and never updated in the two months since. Corrected, with the dRAID
 reasoning added, plus a decision note at
 `_memory/chats/homelab/2026-08-28-raidz2-vs-draid2.md`.
+
+## 2026-08-28 (cont.) — `tank` is up, and a `midclt` job-method trap
+
+```
+>>> creating pool 'tank' (destructive, one-shot)
+8180
+
+>>> verifying
+cannot open 'tank': no such pool
+```
+
+That `8180` is not an error code — it is a **job id**, and it is the whole bug.
+
+`pool.create` is a **job method**. A plain `midclt call pool.create …` enqueues
+the job, prints its id and returns *immediately*; the pool is then built
+asynchronously. My verification block ran microseconds later and correctly
+reported that no pool existed yet. The run looked like a failure while actually
+succeeding.
+
+```
+$ midclt call core.get_jobs '[["id","=",8180]]'
+method   : pool.create
+state    : SUCCESS
+progress : 100  Setting pool options
+$ midclt call pool.query
+[('tank', 'ONLINE')]
+```
+
+Fix is one flag — `midclt call -job pool.create …` blocks until the job reaches
+SUCCESS/FAILED and propagates a real exit status. Worth internalising as a
+general `midclt` rule: **anything long-running is a job method, and job methods
+need `-job` or every check you write afterwards races them.** The failure mode
+is nasty precisely because it is silent-and-inverted — it reports failure on
+success, which invites exactly the wrong follow-up action (re-running a
+destructive create).
+
+The gate is what made that safe. On the re-run it refuses:
+
+```
+$ ./bootstrap-pool.sh ; echo $?
+GATE FAILED:
+  a pool already exists: ['tank']
+1
+```
+
+A destructive one-shot cannot be idempotent by re-execution, so it is idempotent
+by *refusal* — which is the property that mattered in the one situation where a
+confusing error message tempted a second run.
+
+### Final state
+
+```
+  pool: tank
+ state: ONLINE
+	NAME          STATE     READ WRITE CKSUM
+	tank          ONLINE       0     0     0
+	  raidz2-0    ONLINE       0     0     0
+	    41e7a725-…  ONLINE     0     0     0     (x6)
+errors: No known data errors
+
+$ zpool get -H -o value ashift tank
+12
+$ zfs list -o name,used,avail tank
+tank  1.92G  14.4T
+```
+
+**`ashift=12`** — the immutable one, correct. **14.4 TiB available**, against the
+14.55 TiB predicted from `(N−P)×X`; the delta is ZFS's ~1% reserved slop.
+
+One nice detail: `zpool status` lists members as **GPT partition UUIDs**, not
+`sdX`. TrueNAS partitions each disk and references the partition UUID, so the
+enumeration instability that justified the whole gate does not apply to the pool
+once it exists — only to the moment of creation, which is exactly where the gate
+sits.
