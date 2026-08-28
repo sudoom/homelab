@@ -22,6 +22,34 @@
   ansible.builtin.set_fact:
     truenas_scrub_pools: "{{ truenas_scrub_q.stdout | from_json | map(attribute='pool') | list }}"
     truenas_pool_id: "{{ (truenas_pool_q.stdout | from_json | first).id }}"
+    truenas_scrub_existing: "{{ truenas_scrub_q.stdout | from_json }}"
+
+# TrueNAS AUTO-CREATES a scrub task as part of pool.create -- observed on the
+# 2026-08-28 build: id=1, threshold=35, schedule Sunday 00:00 (dow 7), empty
+# description. So a plain create-if-missing task skips forever and the schedule
+# declared here NEVER lands. That is silent drift: git says 03:00 on the 1st,
+# the box does Sunday midnight, and nothing reports the difference.
+#
+# Hence create-OR-update. `_scrub_drift` is the declared-vs-live comparison; it
+# is deliberately narrow (schedule + threshold + enabled) because those are the
+# fields we assert. Description is included so the task is identifiable as
+# ansible-managed rather than a leftover default.
+- name: Identify the pool's existing scrub task (if any)
+  ansible.builtin.set_fact:
+    truenas_scrub_current: "{{ (truenas_scrub_existing | selectattr('pool', 'equalto', truenas_pool_id | int) | list | first) | default({}, true) }}"
+
+# TrueNAS stores cron fields ZERO-PADDED ("00", not "0") -- the auto-created task
+# came back as {"minute":"00","hour":"00",...}. Comparing that against a declared
+# "0"/"3" would report drift on every run and re-issue the update forever, so both
+# sides are normalized (strip leading zeros only when a digit follows, leaving "*"
+# and "7" untouched) before comparison.
+- name: Build comparable scrub schedule signatures
+  ansible.builtin.set_fact:
+    _scrub_want_sig: "{{ _k | map('extract', truenas_scrub_schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list }}"
+    _scrub_live_sig: "{{ _k | map('extract', truenas_scrub_current.schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list }}"
+  vars:
+    _k: ['minute', 'hour', 'dom', 'month', 'dow']
+  when: truenas_scrub_current | length > 0
 
 # Monthly scrub. This is what detects bit rot; RAIDZ2 then self-heals from parity.
 - name: Create the monthly scrub task
@@ -34,11 +62,33 @@
   vars:
     _scrub:
       pool: "{{ truenas_pool_id | int }}"
-      threshold: 35
-      description: "Monthly scrub (managed by ansible/truenas)"
-      schedule: { minute: "0", hour: "3", dom: "{{ truenas_scrub_day_of_month }}", month: "*", dow: "*" }
+      threshold: "{{ truenas_scrub_threshold | int }}"
+      description: "{{ truenas_scrub_description }}"
+      schedule: "{{ truenas_scrub_schedule }}"
       enabled: true
-  when: (truenas_pool_id | int) not in truenas_scrub_pools
+  when: not truenas_scrub_current
+
+# Reconcile an existing task -- including the one TrueNAS created for us.
+- name: Reconcile the scrub task if it drifted from the declared schedule
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.scrub.update
+      - "{{ truenas_scrub_current.id | string }}"
+      - "{{ _scrub | to_json }}"
+  vars:
+    _scrub:
+      threshold: "{{ truenas_scrub_threshold | int }}"
+      description: "{{ truenas_scrub_description }}"
+      schedule: "{{ truenas_scrub_schedule }}"
+      enabled: true
+  when:
+    - truenas_scrub_current | length > 0
+    - _scrub_live_sig != _scrub_want_sig
+      or (truenas_scrub_current.threshold | default(0) | int) != (truenas_scrub_threshold | int)
+      or (truenas_scrub_current.description | default('')) != truenas_scrub_description
+      or not (truenas_scrub_current.enabled | default(false))
 
 - name: Query existing periodic snapshot tasks
   ansible.builtin.command:

@@ -1372,3 +1372,95 @@ One nice detail: `zpool status` lists members as **GPT partition UUIDs**, not
 enumeration instability that justified the whole gate does not apply to the pool
 once it exists — only to the moment of creation, which is exactly where the gate
 sits.
+
+## 2026-08-28 (cont.) — two bugs that a green `--check` was hiding
+
+First real run was `ansible-playbook … --check`. Recap: `ok=18 changed=0
+skipped=11`. Everything skipped, nothing to do, looks converged.
+
+It was not converged. The box at that moment had **one** dataset (`tank` itself),
+zero NFS shares, zero cron jobs and zero snapshot tasks.
+
+### Bug 1 — `--check` is structurally blind here
+
+`ansible.builtin.command` **does not support check mode**. Every mutation in this
+playbook is a `midclt` command call, so under `--check` Ansible skips all of them
+*regardless of their `when:`*. The query tasks ran only because they carry
+`check_mode: false`.
+
+The trap is that **a when-false skip and a check-mode skip render identically**:
+
+```
+skipping: [truenas] => (item=tank/media)
+```
+
+There is no way to tell "already exists" from "cannot evaluate" by reading it.
+`changed=0` did not mean converged; it meant *unanswerable*. Confirmed against
+the box rather than inferred:
+
+```
+datasets    : 1 ['tank']
+nfs shares  : 0 []
+cron jobs   : 0 []
+snap tasks  : 0 []
+```
+
+17 missing objects, reported as zero.
+
+Fix: a `post_tasks` drift report. The *query* facts are trustworthy under
+`--check`, and `debug` does support check mode, so the block turns those facts
+into the answer `--check` should have produced — identical output in both modes:
+
+```yaml
+datasets_missing:       [tank/media, tank/immich, tank/keepers, ...]   # 8
+nfs_exports_missing:    [/mnt/tank/media, /mnt/tank/immich, ...]       # 3
+snapshot_tasks_missing: [tank/media, tank/immich, tank/backup]         # 3
+cron_jobs_missing:      [SMART short…, SMART long…, SMART health…]     # 3
+scrub_schedule_drift:   true
+```
+
+### Bug 2 — TrueNAS creates its own scrub task, so ours never applied
+
+The one row that was *not* empty:
+
+```
+scrub tasks : 1 [1]
+id=1 pool=1 threshold=35 enabled=True desc=''
+  schedule: {"minute":"00","hour":"00","dom":"*","month":"*","dow":"7"}
+```
+
+**`pool.create` auto-creates a scrub task** — weekly Sunday 00:00, empty
+description. The role's condition was `when: pool_id not in existing_scrub_pools`,
+and pool 1 was in that list, so it would skip **forever**. The monthly-03:00
+schedule declared in `group_vars` was never going to land. Git says one thing,
+the box does another, and nothing reports the gap.
+
+That is the same failure class as the dead `truenas_smart_*_cron` variables and
+the removed `smart.*` API, three for three this week: **declared intent that
+never executes.** Create-if-missing is not idempotence when something else also
+creates the object.
+
+Fixed by making it create-**or**-update (`pool.scrub.update` on drift).
+
+**The padding trap inside the fix.** TrueNAS stores cron fields zero-padded —
+`"00"`, not `"0"`. Comparing that against a declared `"0"`/`"3"` would report
+drift on every run and re-issue the update forever: idempotence lost in the
+opposite direction. Both sides are normalized with
+`regex_replace('^0+(?=[0-9])', '')`, which strips leading zeros only when a digit
+follows, leaving `*` and `7` alone. Verified across all three shapes:
+
+```
+live = TrueNAS default (Sun 00:00)      -> DRIFT=True    (converges)
+live = after update, padded  "03"/"01"  -> DRIFT=False   (quiet)
+live = after update, unpadded "3"/"1"   -> DRIFT=False   (quiet)
+```
+
+Converges once, then stays silent whichever way TrueNAS chooses to store it.
+
+### The pattern
+
+Three bugs in this topic now, all the same shape: **configuration declared in git
+that never reaches the box**, each invisible to `--syntax-check`, `helm lint`, and
+— as of today — to `--check` as well. The lesson is not "test more"; it is that
+*absence of a reported change is not evidence of convergence* unless the tool can
+actually evaluate the thing. Verify against the box.

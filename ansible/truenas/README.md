@@ -55,6 +55,14 @@ Declared explicitly, because once a box is under Ansible the "code-only" rule
 applies — anything not listed here is a manual action that the playbook will
 not fight, and anything **added** here must never again be changed in the UI.
 
+- **`--check` is BLIND on `playbook.yml` — do not trust `changed=0`.** Every
+  mutation here is an `ansible.builtin.command` (midclt) call, and the command
+  module does not support check mode, so `--check` skips all of them regardless
+  of their `when:`. A when-false skip and a check-mode skip render identically.
+  Verified 2026-08-28: `--check` reported `changed=0` against a fresh pool that
+  was missing 8 datasets, 3 NFS exports, 3 cron jobs and 3 snapshot tasks. The
+  play's `post_tasks` drift report is the answer `--check` should have given —
+  read that block, not the recap.
 - **Pool / vdev creation.** `pool.create` is a one-shot destructive job: run
   twice it either errors, or — against wiped disks — silently builds a new
   empty pool where the old one was. The storage role **asserts** the pool

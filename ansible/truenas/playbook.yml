@@ -23,3 +23,34 @@
     - role: truenas-system    # hostname/timezone/NTP/alert email
     - role: truenas-shares    # NFS exports to the OKD nodes
     - role: truenas-tasks     # scrub, SMART, periodic snapshots
+
+  # -------------------------------------------------------------------------
+  # WHY THIS EXISTS: `--check` is structurally BLIND for this playbook.
+  #
+  # Every mutation here is an `ansible.builtin.command` (midclt) call, and the
+  # command module does NOT support check mode -- so in `--check` Ansible skips
+  # all of them regardless of their `when:`, and the recap reads `changed=0`.
+  # Verified 2026-08-28: a --check run reported changed=0 on a freshly created
+  # pool that was missing 8 datasets, 3 NFS exports, 3 cron jobs and 3 snapshot
+  # tasks. A when-false skip and a check-mode skip render IDENTICALLY, so the
+  # output cannot distinguish "converged" from "cannot evaluate".
+  #
+  # The query tasks DO run under --check (they carry `check_mode: false`), so
+  # their facts are trustworthy. This block turns those facts into the answer
+  # --check should have given. `debug` supports check mode, so it reports the
+  # same thing in both modes.
+  # -------------------------------------------------------------------------
+  post_tasks:
+    - name: Report declared-vs-live drift
+      ansible.builtin.debug:
+        msg:
+          datasets_missing: "{{ _want_ds | difference(truenas_existing_datasets | default([])) }}"
+          nfs_exports_missing: "{{ _want_nfs | difference(truenas_nfs_paths | default([])) }}"
+          snapshot_tasks_missing: "{{ _want_snap | difference(truenas_snap_datasets | default([])) }}"
+          cron_jobs_missing: "{{ _want_cron | difference(truenas_cron_descs | default([])) }}"
+          scrub_schedule_drift: "{{ (_scrub_live_sig | default([])) != (_scrub_want_sig | default([])) }}"
+      vars:
+        _want_ds: "{{ truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list }}"
+        _want_nfs: "{{ truenas_nfs_exports | map(attribute='dataset') | map('regex_replace', '^', '/mnt/' ~ truenas_pool ~ '/') | list }}"
+        _want_snap: "{{ truenas_snapshot_tasks | map(attribute='dataset') | map('regex_replace', '^', truenas_pool ~ '/') | list }}"
+        _want_cron: "{{ truenas_smart_cronjobs | map(attribute='description') | list }}"

@@ -113,6 +113,17 @@ truenas_ntp_servers:
 
 # ---- Data protection ------------------------------------------------------
 truenas_scrub_day_of_month: "1"     # monthly
+truenas_scrub_threshold: 35         # days; skip a scheduled scrub if scrubbed more recently
+truenas_scrub_description: "Monthly scrub (managed by ansible/truenas)"
+# NOTE: pool.create makes its OWN scrub task (weekly Sun 00:00, empty description).
+# truenas-tasks RECONCILES it to this rather than skipping, or the declaration
+# below would never take effect. Keep fields unpadded; the role normalizes.
+truenas_scrub_schedule:
+  minute: "0"
+  hour: "3"
+  dom: "{{ truenas_scrub_day_of_month }}"
+  month: "*"
+  dow: "*"
 truenas_smart_short_cron:  "0 3 * * 0"   # weekly, Sunday 03:00
 truenas_smart_long_cron:   "0 4 1 * *"   # monthly, 1st 04:00
 truenas_smart_health_cron: "0 7 * * *"   # daily 07:00 -- reads results, emails only on trouble
