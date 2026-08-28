@@ -61,11 +61,17 @@ NFS export               enabled, maproot_user=root,
 host restriction is why the copy Job must run on a cluster node rather than
 anywhere else — the export is not reachable from the frontnet at all.
 
-**2. Confirm the Synology's offsite job.** If the DS418 runs Hyper Backup /
-Cloud Sync over `/volume1/kubenfs`, migrating off it **silently drops keepers
-out of that job**. Decide before cutover whether that matters for this dataset
-(re-downloadable, so probably not) — but the same check is *mandatory* before
-immich moves, and it is cheaper to learn the answer now.
+**2. Confirm the Synology's offsite job.** ✅ **RESOLVED 2026-08-29 — there is
+no Hyper Backup over `/volume1/kubenfs`.** So this migration loses no coverage,
+because there is none to lose. Nothing blocks keepers.
+
+It did surface something worse, recorded as a README TODO: **the immich photo
+originals (114 GiB) have no backup of any kind.** No Hyper Backup, the Velero
+`daily` Schedule is paused with an 81-day-old last backup, and nothing else
+references the library. Immich's *database* is genuinely offsite (barman → R2,
+`ContinuousArchiving=True`) — the photos are not. That gates the immich move,
+not this one, but it is why the question was worth asking before touching
+anything.
 
 ## Sequence
 
