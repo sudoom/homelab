@@ -1,0 +1,24 @@
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: scmigrate-1
+  namespace: openshift-adp
+spec:
+  includedNamespaces: [scmigrate-src]
+  # storageLocation is the POINT of this rehearsal: exercise the garage BSL on
+  # TrueNAS, not the default RGW one. A ~20 MB test fits in RGW trivially, so
+  # rehearsing there would pass and prove nothing about the path the real
+  # migration takes.
+  storageLocation: truenas-garage
+  # snapshotVolumes MUST be false. defaultPlugins includes `csi`, and there is
+  # NO VolumeSnapshotClass for rook-ceph.cephfs.csi.ceph.com on this cluster
+  # (only ceph-rbd-snapshot). Leaving this at default attempts a CSI snapshot of
+  # a CephFS volume and ends PartiallyFailed.
+  snapshotVolumes: false
+  # FSB is the only working path here AND the only one that produces the
+  # behaviour change-storage-class needs. Do not "upgrade" this to
+  # snapshotMoveData: true to match the daily Schedule -- it will fail on the
+  # missing snapshot class, and if a class is later added, the Retain branch
+  # below becomes reachable again.
+  defaultVolumesToFsBackup: true
+  ttl: 72h0m0s

@@ -1,0 +1,21 @@
+# The change-storage-class RestoreItemAction is configured ENTIRELY by this
+# ConfigMap -- there is no CLI flag and no field on the Restore CR.
+#
+# The plugin finds it by LABEL, not by name, and it must live in the Velero
+# server namespace (openshift-adp under OADP). Both labels are required:
+#   velero.io/plugin-config: ""                        <- marks it a plugin config
+#   velero.io/change-storage-class: RestoreItemAction  <- key = plugin, value = kind
+# data is a flat map of <old-storage-class>: <new-storage-class>.
+#
+# DELETE THIS IMMEDIATELY AFTER THE RESTORE. It is cluster-wide and unscoped:
+# while it exists, EVERY restore rewrites cephfs-hdd -> nfs-truenas-keepers.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: change-storage-class-config
+  namespace: openshift-adp
+  labels:
+    velero.io/plugin-config: ""
+    velero.io/change-storage-class: RestoreItemAction
+data:
+  cephfs-hdd: nfs-truenas-keepers

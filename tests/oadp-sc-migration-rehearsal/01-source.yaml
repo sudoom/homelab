@@ -1,0 +1,54 @@
+# Source: a small PVC on cephfs-hdd plus a pod to write into it.
+#
+# Target class is nfs-truenas-KEEPERS, not -media: media is the 3.21 TiB
+# production dataset this whole exercise exists to migrate, and a stray
+# pvc-<uuid>/ subdirectory in it during a bulk pre-stage is avoidable noise.
+# keepers is empty and is the repo's designated rehearsal vehicle. Same code
+# path, same plugin, same proof.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scmigrate-src
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scmigrate-data
+  namespace: scmigrate-src
+spec:
+  storageClassName: cephfs-hdd
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: writer
+  namespace: scmigrate-src
+  annotations:
+    # FSB is OPT-IN by default. This names the POD VOLUME (`data`), not the PVC
+    # (`scmigrate-data`) -- naming the PVC is a silent no-op that produces a
+    # green backup containing zero bytes.
+    backup.velero.io/backup-volumes: data
+spec:
+  # No special SCC: restricted-v2 is sufficient and is what the real media pods
+  # (except jellyfin) run under. Asking for more would test a different
+  # ownership path than the one that matters.
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: writer
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      command: ["sleep", "infinity"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+      volumeMounts:
+        - { name: data, mountPath: /data }
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: scmigrate-data

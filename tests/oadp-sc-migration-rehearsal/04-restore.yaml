@@ -1,0 +1,25 @@
+# namespaceMapping is what makes this rehearsal non-destructive.
+#
+# Velero restores a PVC under its ORIGINAL NAME and is non-destructive by
+# default: restoring in place would hit the existing scmigrate-data, SKIP it
+# with a warning, and report success having changed nothing. Restoring into a
+# DIFFERENT namespace sidesteps that entirely -- the source PVC is never
+# touched, and change-storage-class still applies.
+#
+# DO NOT pre-create scmigrate-dst. Velero recreates the namespace from the
+# backup, carrying its openshift.io/sa.scc.uid-range annotation. kopia preserves
+# uid/gid, so restored files carry the SOURCE namespace's UIDs -- if the
+# destination namespace already exists with a different range, OpenShift assigns
+# a different UID and the files may be unreadable. nfs.csi.k8s.io does not apply
+# fsGroup to RWX volumes, so kubelet cannot chown its way out. Delete
+# scmigrate-dst between re-runs.
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: scmigrate-1-to-nfs
+  namespace: openshift-adp
+spec:
+  backupName: scmigrate-1
+  namespaceMapping:
+    scmigrate-src: scmigrate-dst
+  restorePVs: true
