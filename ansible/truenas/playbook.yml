@@ -13,10 +13,16 @@
   gather_facts: true
   become: false          # midclt works unprivileged — see inventory.yml
 
-  vars_files:
-    # Vault-encrypted: SMTP credentials for alert email. There is NO api key --
-    # this topic drives the box through midclt over SSH.
-    - vars/vault.yml
+  # NOTE: vars/vault.yml is loaded OPTIONALLY in pre_tasks below, not via
+  # vars_files. Everything this topic manages except the SMTP credentials is
+  # non-sensitive, so the playbook must run without a vault -- otherwise every
+  # dataset/share/task change is gated on an interactive password prompt.
+
+  pre_tasks:
+    - name: Load vault vars when the vault file exists
+      ansible.builtin.include_vars: "{{ item }}"
+      loop: "{{ query('ansible.builtin.first_found', ['vars/vault.yml'], errors='ignore') }}"
+      no_log: true
 
   roles:
     - role: truenas-storage   # assert pool, converge datasets  (run FIRST: everything else needs paths)
@@ -64,6 +70,7 @@
         - { key: snap,     method: pool.snapshottask.query, attr: dataset }
         - { key: cron,     method: cronjob.query,      attr: description }
         - { key: scrub,    method: pool.scrub.query,   attr: id }
+        - { key: mail,     method: mail.config,        attr: outgoingserver }
       loop_control:
         label: "{{ item.method }}"
 
@@ -84,11 +91,19 @@
           # to get silently wrong here. Compared as sorted "id:value" pairs so
           # one `difference` covers all datasets at once.
           recordsize_drift: "{{ _want_rs | difference(_live_rs) }}"
+          # NOT part of the convergence assert -- it is a known pending item, not
+          # a failed apply. But it must be VISIBLE every run: without SMTP the
+          # three SMART cron jobs mail root, root's mail goes nowhere, and a
+          # dying drive in a 5-year cohort is discovered by noticing the array
+          # is degraded. Same detection-without-delivery shape that let the
+          # Synology wildcard cert expire unseen for a month.
+          alerting_unconfigured: "{{ not (_mail_live.smtp | default(false)) or (_mail_live.outgoingserver | default('')) == '' }}"
       vars:
         _k: ['minute', 'hour', 'dom', 'month', 'dow']
         _cur: "{{ (_live.scrub | selectattr('pool', 'equalto', truenas_pool_id | int) | list | first) | default({}, true) }}"
         _now_sig: "{{ (_k | map('extract', _cur.schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list) if (_cur.schedule is defined) else [] }}"
         _want_sig: "{{ _k | map('extract', truenas_scrub_schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list }}"
+        _mail_live: "{{ _live.mail | default({}, true) }}"
         _child: "{{ _live.datasets | rejectattr('id', 'equalto', truenas_pool) | list }}"
         _want_rs: "{{ (truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list) | zip(truenas_datasets | map(attribute='recordsize') | list) | map('join', ':') | sort | list }}"
         _live_rs: "{{ (_child | map(attribute='id') | list) | zip(_child | map(attribute='recordsize') | map(attribute='value') | list) | map('join', ':') | sort | list }}"
