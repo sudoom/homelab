@@ -18,9 +18,24 @@ see "Why keepers first".
 | Target | static PV `truenas-keepers-data` → `192.168.10.10:/mnt/tank/keepers` (backnet, **10 G**) |
 | Both PVs | `reclaimPolicy: Retain` |
 
-**Expected wall clock: 4–6 h.** The constraint is the Synology's 1 Gbit
-frontnet link (~118 MB/s ceiling), not either disk system. The write side goes
-out over the 10 G backnet and is not the bottleneck.
+**Expected wall clock: ~10 h** (measured 2026-08-28 during the real run:
+**52.2 MB/s sustained**, 4.37 GiB over a 90 s window, from a 21:10 start → ~07:00).
+
+An earlier version of this line said 4–6 h, derived from the Synology's 1 Gbit
+link (~118 MB/s ceiling). That was wrong, and wrong in an instructive way:
+**52 MB/s is 416 Mbps, so the link is not the bottleneck — the DS418 itself is**
+(4-bay Realtek ARM box; its disks and NFS stack). Two lessons worth carrying to
+the media and immich moves:
+
+- A link rate is a ceiling, not a prediction. Do not plan against one.
+- rsync's `--info=progress2` prints *instantaneous per-file* rates; during a
+  large file it briefly showed 119 MB/s, which is what produced the bad estimate.
+  The sustained figure is bytes-on-target over wall-clock, and the honest way to
+  get it is two `zfs list -Hp -o used` samples 90 s apart.
+
+**This also largely answers the queued Synology LACP item, negatively:** bonding
+two 1 Gbit links cannot help a workload that does not saturate one. LACP may
+still help *concurrent* clients — it cannot help this.
 
 ## Why keepers first
 
