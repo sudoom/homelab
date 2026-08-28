@@ -44,7 +44,10 @@ nfs:
 #
 # Inert until `enabled: true` -- same gating precedent as the CNPG R2 work.
 truenas:
-  enabled: false
+  # Enabled 2026-08-28: the pool, datasets and NFS exports are live, maproot is
+  # set, and backnet reachability + jumbo 9000 verified to all 3 nodes. The
+  # classes are additive -- nothing consumes them until a PVC names one.
+  enabled: true
   server: 192.168.10.10
   # One StorageClass per dataset, rendered as nfs-truenas-<name>. Separate
   # classes (not one shared class) so each consumer gets its own ZFS dataset

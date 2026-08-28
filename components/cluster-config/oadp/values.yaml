@@ -14,6 +14,43 @@ secretTranslator:
 # In-cluster S3 endpoint — bypasses Route + edge TLS, faster + reliable.
 s3Url: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
 
+# ---------------------------------------------------------------------------
+# Second BackupStorageLocation: garage S3 running on the TrueNAS box.
+#
+# WHY: Velero file-system backup writes to object storage and nothing else
+# ("Velero FSB supports object storage as the backup storage only"). The default
+# BSL above is Ceph RGW, whose data pool is replicated x3 on the same three HDD
+# OSDs a media migration drains -- backing up the 3.21 TiB media PVC there needs
+# 9.63 TiB raw against 6.66 TiB available (measured 2026-08-28). It does not fit.
+# It is also the shape of the 2026-06-08 incident, where the daily Schedule
+# backed Loki's WAL PVCs into the Ceph it was protecting and hit 97% full.
+#
+# ENABLE ONLY AFTER the credential SealedSecret exists. Mint it with:
+#
+#   # 1. read the garage secret (it is stored only in garage, never in git):
+#   ssh truenas_admin@192.168.1.25 'TOK=$(midclt call app.config garage \
+#     | python3 -c "import sys,json;print(json.load(sys.stdin)[\"garage\"][\"admin_token\"])"); \
+#     curl -s -H "Authorization: Bearer $TOK" \
+#     "http://192.168.10.10:30190/v2/GetKeyInfo?id=GK61534ef79a2526b9f47be8fb&showSecretKey=true"'
+#
+#   # 2. build the AWS shared-credentials INI and seal it:
+#   printf "[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n" "$AKID" "$SECRET" > /tmp/creds
+#   oc create secret generic garage-credentials -n openshift-adp \
+#     --from-file=cloud=/tmp/creds --dry-run=client -o yaml \
+#     | kubeseal --format yaml --cert components/operators/sealed-secrets/sealed-secrets-pub.pem
+#   shred -u /tmp/creds
+#
+# Paste the resulting encryptedData.cloud into sealedCloud below.
+garageBsl:
+  enabled: false
+  name: truenas-garage
+  bucket: velero
+  prefix: velero
+  region: garage                       # garage's configured region name
+  s3Url: http://192.168.10.10:30188    # backnet; jumbo-verified to all 3 nodes
+  credentialSecret: garage-credentials
+  sealedCloud: ""                      # <- kubeseal output goes here
+
 dpa:
   defaultPlugins:
     - aws

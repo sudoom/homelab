@@ -31,3 +31,28 @@ spec:
         credential:
           name: {{ .Values.secretTranslator.destinationSecretName }}
           key: cloud
+{{- if .Values.garageBsl.enabled }}
+    - name: {{ .Values.garageBsl.name }}
+      velero:
+        provider: aws
+        default: false
+        objectStorage:
+          bucket: {{ .Values.garageBsl.bucket }}
+          prefix: {{ .Values.garageBsl.prefix }}
+        config:
+          region: {{ .Values.garageBsl.region }}
+          profile: default
+          s3ForcePathStyle: "true"
+          s3Url: {{ .Values.garageBsl.s3Url }}
+          # Explicit "" is deliberate. Upstream velero-plugin-for-aws defaults
+          # checksumAlgorithm to "CRC32", which strict S3-compatible servers
+          # reject (x-amz-checksum / trailer headers) -- the same class of bug
+          # as the CNPG->R2 InvalidPart trap. OADP's DPA reconciler injects ""
+          # for provider aws today, so this is belt-and-braces: it keeps the
+          # intent explicit if that behaviour changes or the BSL is ever
+          # applied outside the DPA, where the CRC32 default WOULD apply.
+          checksumAlgorithm: ""
+        credential:
+          name: {{ .Values.garageBsl.credentialSecret }}
+          key: cloud
+{{- end }}
