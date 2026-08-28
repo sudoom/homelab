@@ -1911,3 +1911,67 @@ Two things follow for the migration:
   not currently binding. It would only start to matter if a parallel copier
   pushed past ~118 MB/s — which is now a concrete question for the benchmark
   rather than a guess.
+
+### Data-path diagram
+
+The thing that keeps tripping people up (me included, twice in one day) is that
+"which link does this use?" is decided by **whether the traffic originates in a
+pod's network namespace or in the host kernel** — not by which pod it belongs to.
+
+```
+                    ┌──────────────────── OKD NODE  (×3: node4/5/6) ────────────────────┐
+                    │                                                                   │
+  POD NETWORK       │   ┌─────────────────┐        ┌──────────────────────────────┐     │
+  10.128.0.0/14 ────┼──▶│ velero          │        │ media pods: jellyfin, *arr,  │     │
+                    │   │ (S3 client)     │        │ transmission, bazarr ...     │     │
+                    │   │ 10.130.1.157    │        └──────────────┬───────────────┘     │
+                    │   └────────┬────────┘                      │                      │
+                    │            │ pod egress                    │ read()/write()       │
+                    │            │ via ovn-k8s-mp0               │ on /data             │
+                    │            │ + masquerade                  │ (NO pod networking)  │
+                    │            ▼                               ▼                      │
+                    │      ┌───────────┐              ┌──────────────────────────┐      │
+                    │      │  br-ex    │              │  KERNEL MOUNTS           │      │
+                    │      └─────┬─────┘              │  cephfs:// and nfs://    │      │
+                    │            │                    │  set up by hostNetwork   │      │
+                    │            │                    │  CSI nodeplugins         │      │
+                    │            │                    └────────────┬─────────────┘      │
+                    │      enp0s31f6                        enp1s0f0np0                 │
+                    │        1 GbE                             10 GbE                   │
+                    └────────────┼───────────────────────────────┼────────────────────-─┘
+                                 │                               │
+                 VLAN 5 ─────────┘                               └───────── VLAN 10
+              192.168.1.0/24                                          192.168.10.0/24
+                     │                                                       │
+        ┌────────────┴────────────┐                        ┌─────────────────┴─────────────────┐
+        │                         │                        │                                   │
+   ┌────▼─────┐            ┌──────▼──────┐          ┌──────▼──────┐                  ┌─────────▼────────┐
+   │ ceph MON │            │  TrueNAS    │          │ ceph OSD    │                  │    TrueNAS       │
+   │ .1.7/8/9 │            │  .1.25      │          │ x6          │                  │   .10.10         │
+   │          │            │  garage S3  │          │ .10.2/3/4   │                  │   NFS exports    │
+   │ OSDMap   │            │  :30188     │          │ public+     │                  │  /mnt/tank/...   │
+   │ only     │            │             │          │ cluster     │                  │                  │
+   └──────────┘            └─────────────┘          └─────────────┘                  └──────────────────┘
+```
+
+Reading it as flows:
+
+```
+ [1] media I/O today          media pod ─syscall→ kernel cephfs ─▶ OSDs .10.2/3/4      10G  ✅
+ [2] media I/O after cutover  media pod ─syscall→ kernel nfs    ─▶ TrueNAS .10.10      10G  ✅
+ [3] ceph control plane       kernel client ──────────────────▶ mons .1.7/8/9          1G   ✅ (KBs)
+ [4] velero → garage S3       velero pod ─OVN─▶ br-ex ─────────▶ TrueNAS .1.25         1G   ✅
+ [5] velero → garage backnet  velero pod ─OVN─▶ ??? ────────────▶ .10.10               ✗ BLOCKED
+```
+
+**[1] and [2] are the ones that carry the 3.21 TiB, and both are already 10G.**
+The media pods have no network involvement at all — they issue `read()`/`write()`
+against a mount the *kernel* owns, and the kernel talks to the backnet.
+
+**[5] is the only thing that does not work**, and it is why the Velero BSL had to
+be pointed at `192.168.1.25`. It affects Velero's S3 staging traffic and nothing
+else. A direct PVC→PVC copy is flows [1]+[2] exclusively — 10G end to end, no
+pod-network involvement, nothing to fix first.
+
+**[3] is why the mon addresses look wrong and are not.** Control plane on the
+frontnet, data on the backnet.
