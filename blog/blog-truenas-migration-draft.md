@@ -1860,3 +1860,54 @@ Worth noting what is *not* affected: NFS is kernel-mounted by hostNetwork CSI
 pods, so media/immich/keepers data still rides the 10G backnet. A direct
 PVC→PVC copy therefore has no 1G leg at all — which sharpens the earlier
 tool comparison rather than changing it.
+
+### Follow-up: is Ceph client traffic actually on the 10G backnet?
+
+The 76.6 MB/s read figure prompted a fair challenge — three 7200 rpm spindles
+that individually sustain 100-190 MB/s should do better than 0.61 Gbps, and
+`CLAUDE.md` records that a frontnet-bound Ceph "caps throughput at ~118 MB/s".
+Suspiciously close.
+
+The mon endpoints looked like the smoking gun:
+
+```
+rook-ceph-mon-endpoints : a=192.168.1.7:6789, b=192.168.1.9:6789, c=192.168.1.8:6789
+CephCluster addressRanges : public + cluster = 192.168.10.0/24
+```
+
+Frontnet mons against a backnet `addressRanges` is exactly what a failed-to-apply
+`addressRanges` would look like — and this repo already documents two reasons it
+could happen (Rook does not auto-roll daemons on a network-only change; the
+`managedFields: []` SSA gotcha keeps stale values in the live spec).
+
+It was a false alarm, and the check settles it cleanly:
+
+```
+$ ceph config get mon public_network      -> 192.168.10.0/24
+$ ceph config get osd cluster_network     -> 192.168.10.0/24
+$ ceph mon dump | grep '^[0-9]:'
+0: [v2:192.168.1.7:3300/0,v1:192.168.1.7:6789/0] mon.a          <- frontnet
+$ ceph osd dump | grep '^osd\.'
+osd.0 ... [v2:192.168.10.2:6810,...] [v2:192.168.10.2:6812,...]  <- backnet, BOTH addrs
+osd.3 ... [v2:192.168.10.2:6802,...] [v2:192.168.10.2:6804,...]
+```
+
+All six OSDs carry `192.168.10.x` on **both** public and cluster addresses. The
+mon is control plane only: a client fetches the OSDMap over the frontnet once,
+then every byte of data IO goes straight to the OSDs on the 10G backnet.
+
+**So 76.6 MB/s is not a network cap.** It is what EC 2+1 across three spinning
+disks delivers to a single stream, and 22.1 MB/s write is EC amplification. No
+1G bottleneck to hunt for — which is worth writing down precisely because the
+mon/OSD address split makes it look like there is one.
+
+Two things follow for the migration:
+
+- **The data path already uses the 10G**, today, with no changes. CephFS is
+  kernel-mounted by a `hostNetwork` nodeplugin talking to backnet OSDs; NFS is
+  kernel-mounted by a `hostNetwork` csi-nfs-node talking to 192.168.10.10. A
+  direct PVC→PVC copy never touches the pod network at all.
+- **Only Velero's S3 leg is on 1G**, and at 0.61 Gbps single-stream reads that is
+  not currently binding. It would only start to matter if a parallel copier
+  pushed past ~118 MB/s — which is now a concrete question for the benchmark
+  rather than a guess.
