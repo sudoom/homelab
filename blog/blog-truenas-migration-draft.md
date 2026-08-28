@@ -1553,3 +1553,64 @@ Replaced with an inline conditional, which is lazy and has no precedence trap:
 `grep -c ternary` across the topic now returns zero. Worth making a standing
 rule here: **no `ternary` in this repo's Ansible** — the lazy `if/else`
 expression is never worse and removes both failure modes at once.
+
+## 2026-08-28 (cont.) — idempotent, and the assert extended to recordsize
+
+Re-run: `ok=25 changed=0 skipped=12 failed=0`, all five deltas empty,
+`Converged: every declared dataset, export, snapshot task, cron job and the
+scrub schedule are live.`
+
+That is the *meaningful* `changed=0` — the one backed by a post-apply re-read of
+the box, as opposed to this morning's, which was produced by a tool that could
+not evaluate anything.
+
+### The gap in the assert
+
+It covered datasets, exports, snapshot tasks, cron jobs and the scrub schedule.
+It did **not** cover NTP, timezone, mail, NFS service state, or **recordsize**.
+
+recordsize is the one that mattered. From `group_vars`: *"recordsize applies to
+NEW WRITES ONLY, so it must be right before data lands. This is the one chance
+to get it right per dataset."* An unverified one-shot property, on a pool that
+is about to receive several TiB, is exactly the shape of thing this week kept
+punishing. Checked live:
+
+```
+tank/apps        recordsize=128K  compression=LZ4
+tank/backup      recordsize=128K  compression=ZSTD
+tank/immich      recordsize=1M    compression=LZ4
+tank/keepers     recordsize=1M    compression=LZ4
+tank/media       recordsize=1M    compression=LZ4
+tank/personal    recordsize=128K  compression=LZ4
+tank/timemachine recordsize=128K  compression=LZ4
+tank/work        recordsize=128K  compression=LZ4
+```
+
+All eight match the declaration, and `backup` correctly picked up ZSTD.
+
+### Closing it cheaply
+
+The earlier formulations needed awkward nested-attribute gymnastics. Comparing
+sorted `"id:value"` strings collapses the whole thing into one `difference`:
+
+```yaml
+_want_rs: "{{ (truenas_datasets | map(attribute='name') | map('regex_replace','^', truenas_pool ~ '/') | list)
+              | zip(truenas_datasets | map(attribute='recordsize') | list) | map('join', ':') | sort | list }}"
+_live_rs: "{{ (_child | map(attribute='id') | list)
+              | zip(_child | map(attribute='recordsize') | map(attribute='value') | list) | map('join', ':') | sort | list }}"
+recordsize_drift: "{{ _want_rs | difference(_live_rs) }}"
+```
+
+Verified in **both** directions, which is the part worth insisting on — an
+assert that only ever passes is indistinguishable from one that cannot fail:
+
+```
+real state              -> DRIFT=[]
+negative control        -> DRIFT=['tank/media:128K']   (wrong value IS caught)
+```
+
+**Still not asserted:** NTP servers, timezone, mail config, NFS service state.
+Those are all reconciled by their roles and all showed `skipped` on the re-run
+(i.e. converged), but they are enforced-without-verification. Lower stakes than
+recordsize — none is a one-way door — so left as a known gap rather than
+speculative work.
