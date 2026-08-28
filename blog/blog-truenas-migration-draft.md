@@ -1975,3 +1975,113 @@ pod-network involvement, nothing to fix first.
 
 **[3] is why the mon addresses look wrong and are not.** Control plane on the
 frontnet, data on the backnet.
+
+## 2026-08-28 (cont.) — the rehearsal: PASSED
+
+`cephfs-hdd` → `nfs-truenas-keepers`, via Velero `change-storage-class`, staged
+through the garage BSL on TrueNAS. ~19 MB instead of 3.21 TiB. This is the first
+backup **and** the first restore this cluster's OADP install has ever performed
+in 91 days.
+
+### Ground truth in
+
+```
+files=301   bytes=19,686,283
+manifest_digest=051b5137e678e750751d23fe16e72c60441e9c8fa876893ee7c5fd91626876f2
+uid_of_files=1000990000
+```
+
+### Backup
+
+```
+phase=Completed  errors=  warnings=  location=truenas-garage  items=31/31
+PodVolumeBackup  scmigrate-1-h27tm  Completed  19,685,978 bytes
+```
+
+The PVB gate is the one that matters: a backup with **zero** PodVolumeBackups is
+green and empty. One PVB, Completed, non-zero bytes.
+
+Verified on the NAS that bytes really landed, rather than trusting Velero:
+
+```
+tank/s3/data  21.3M
+GetBucketInfo velero -> objects: 23  bytes: 20,075,161  unfinishedUploads: 0
+```
+
+### Restore — `namespaceMapping`, nothing deleted
+
+`Completed` in ~40 s, 0 errors, 7 warnings. ConfigMap deleted immediately after.
+The source PVC was never touched.
+
+### Four layers of verification
+
+**1 — backend identity.** The check that separates "the SC field got rewritten"
+from "the bytes are on the NAS":
+
+```
+PVC  scmigrate-data -> nfs-truenas-keepers, Bound
+PV   pvc-342353d7...   (NEW; source was pvc-6c3914a7...)
+     driver = nfs.csi.k8s.io         <- not rook-ceph.cephfs.csi.ceph.com
+     server = 192.168.10.10          <- the 10G BACKNET
+     share  = /mnt/tank/keepers
+```
+
+That `server` value is quietly the best result of the day: **the restored volume
+mounts over the backnet at 10G**, even though Velero's S3 staging went over the
+1G frontnet — exactly as the data-path diagram predicts, because the mount is
+made by a hostNetwork CSI nodeplugin, not by a pod.
+
+**2 — checksum replay.** `ok=301`, and `manifest_digest` byte-identical to the
+source, which is what proves the manifest was not regenerated against a degraded
+tree. `uid_of_files=1000990000` matched too — the destination namespace inherited
+the source's `openshift.io/sa.scc.uid-range` because Velero created it. Had the
+namespace been pre-created, OpenShift would have assigned a different range and
+the restored files would have been owned by a UID the pod does not have.
+
+**3 — byte reconciliation.** `PodVolumeRestore Completed, 19,685,978` — exactly
+the PVB figure.
+
+**4 — ZFS ground truth.** `/mnt/tank/keepers/pvc-342353d7.../` with 300 files
+under `tree/a`, `tank/keepers` = 19.2M.
+
+`files=302` in the restored volume vs 301 at source is **not** a discrepancy:
+`.velero/3ba7fafe-...` is a 0-byte sentinel the `restore-wait` init container
+polls for.
+
+### Third reason for `maproot_user: root`, now confirmed empirically
+
+Restored files are owned `1000990000:1000990000`, directories `root:1000990000`.
+The node-agent restores **as root and preserves uid/gid**, so under root squash
+the restore fails on chown even after provisioning succeeded. The role's comment
+block listed two reasons for `maproot_user: root` (csi-driver-nfs creating
+per-PV subdirs; jellyfin running `runAsUser: 0`); this is the third, and it is
+the one that would have bitten *this* workflow.
+
+### Two operational gotchas
+
+**`oc get backup` is ambiguous.** It resolves to CNPG's
+`backups.postgresql.cnpg.io`, so a status query returns
+`Error from server (NotFound)` while the Velero backup runs fine, and a wait
+loop never matches. Use `backups.velero.io` / `restores.velero.io` explicitly.
+
+**Teardown is where the real risk lives.** Both SCs are `Retain`, so the run left
+two Released PVs (expected, deleted) plus data on both backends. Purging the
+CephFS orphan means running `ceph fs subvolume rm` in a namespace that also
+contains the subvolume backing the live 3.21 TiB media library. Identified three
+ways before touching it:
+
+```
+media PV names its own subvolume  -> csi-vol-271e7ed8...
+only one CephFS PV cluster-wide   -> everything else is orphaned
+subvolume info bytes_used         -> 19,685,978 (orphan) vs 3,529,630,407,490 (media)
+```
+
+Post-purge: one subvolume left, `media-data-pvc` still `Bound 4Ti`, all media
+pods Running.
+
+### What this establishes
+
+The design in the operator's original sketch — *"SC for ceph, new SC for truenas
+NFS, move via OADP, repoint the deployment"* — **works end to end, exactly as
+drawn.** What remains for the real migration is scale, not mechanism: 3.21 TiB
+instead of 19 MB, and the app-downtime question that FSB's restore path forces.

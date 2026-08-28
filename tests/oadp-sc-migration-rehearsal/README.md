@@ -87,6 +87,34 @@ oc -n openshift-adp get podvolumerestores -l velero.io/restore-name=scmigrate-1-
 ssh truenas_admin@192.168.1.25 "ls -la /mnt/tank/keepers/$PV/"
 ```
 
+## Executed 2026-08-28 — PASSED
+
+All four verification layers passed. Results in
+`blog/blog-truenas-migration-draft.md`. Two things the run taught that are now
+folded into the commands above:
+
+**`oc get backup` is AMBIGUOUS on this cluster.** It resolves to CNPG's
+`backups.postgresql.cnpg.io`, not Velero's. Every status query must name the
+kind explicitly — `backups.velero.io` / `restores.velero.io` — or you get
+`Error from server (NotFound)` on a backup that is running perfectly and a wait
+loop that never matches.
+
+**Teardown of the NFS orphan needs root ON THE NAS.** Restored files are owned
+by the source namespace's SCC uid (kopia preserves uid/gid), so
+`truenas_admin` cannot remove them:
+```
+rm: cannot remove '.../SENTINEL': Permission denied
+```
+Use `ssh truenas_admin@192.168.1.25 'sudo rm -rf /mnt/tank/keepers/<pv>'`.
+
+**Purging the CephFS orphan is the dangerous step — identify positively.**
+`ceph fs subvolume ls cephfs csi` lists the rehearsal subvolume *next to the one
+backing the live 3.21 TiB media library*. Confirm three ways before removing
+anything: the media PV names its own subvolume
+(`oc get pv <media-pv> -o jsonpath='{.spec.csi.volumeAttributes.subvolumeName}'`),
+only one CephFS PV exists cluster-wide, and `ceph fs subvolume info` shows
+`bytes_used` ~19 MB for the orphan versus ~3.5 TB for media.
+
 ## Failure modes worth knowing
 
 The two **silent** ones are more dangerous than the loud ones.
