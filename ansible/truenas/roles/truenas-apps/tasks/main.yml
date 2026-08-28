@@ -19,6 +19,33 @@
 # rebuild-in-minutes backup target, less surface wins.
 # ---------------------------------------------------------------------------
 
+# PREREQUISITE: TrueNAS apps run on Docker, and Docker needs a pool assigned
+# before ANY app.create will work -- a fresh install has `pool: null` and every
+# deploy fails with "[EFAULT] No pool configured for Docker". Assigning it
+# creates the `ix-apps` dataset on that pool.
+#
+# NOTE on Docker's default address_pools (172.17.0.0/12): that range covers
+# 172.16-172.31, which OVERLAPS the cluster's 172.30.0.0/16 service CIDR. It is
+# harmless here because traffic is one-way -- the nodes reach TrueNAS at
+# 192.168.10.10 and nothing on TrueNAS dials a cluster ClusterIP -- but do not
+# "fix" connectivity later by bridging the two without revisiting this.
+- name: Read the Docker/apps pool config
+  ansible.builtin.command:
+    argv: [midclt, call, docker.config]
+  register: truenas_docker_cfg
+  changed_when: false
+  check_mode: false
+
+- name: Assign the apps pool (one-time; every app.create fails without it)
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - docker.update
+      - "{{ {'pool': truenas_pool} | to_json }}"
+  when: (truenas_docker_cfg.stdout | from_json).pool != truenas_pool
+
 - name: Query installed apps
   ansible.builtin.command:
     argv: [midclt, call, app.query]
@@ -116,6 +143,24 @@
             memory: "{{ truenas_garage.memory_mb | int }}"
   when: truenas_garage.app_name not in truenas_app_names
   no_log: true       # the payload carries the generated secrets
+  register: truenas_garage_deploy
+  failed_when: false
+
+# no_log hides the FAILURE as well as the payload, which on the first run meant
+# an opaque "Module failed" and a round trip to dig the reason out by hand. The
+# job record carries the real error without exposing the arguments, so surface
+# that instead of leaving the operator blind.
+- name: Read the app.create job record if the deploy failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.create"]]']
+  register: truenas_garage_job
+  changed_when: false
+  when: (truenas_garage_deploy.rc | default(0)) != 0
+
+- name: Fail with the real reason (payload stays hidden)
+  ansible.builtin.fail:
+    msg: "app.create failed: {{ (truenas_garage_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_garage_deploy.rc | default(0)) != 0
 
 - name: Report garage app state
   ansible.builtin.debug:
