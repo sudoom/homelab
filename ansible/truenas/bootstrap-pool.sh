@@ -74,12 +74,14 @@ if [ "${1:-}" != "--create" ]; then
 fi
 
 echo ">>> creating pool '$POOL' (destructive, one-shot)"
-# `-job` is REQUIRED. pool.create is a JOB method: a plain `midclt call` returns
+# `--job` is REQUIRED (the flag is `-j`/`--job`; `-job` is an argparse
+# usage error, verified 2026-08-28 -- a single dash swallows it as `-j` plus
+# unknown short opts and midclt prints usage instead of running anything). pool.create is a JOB method: a plain `midclt call` returns
 # a job id immediately and the pool is built asynchronously, so any verification
 # that follows races the job and reports "no such pool" on a run that is actually
-# succeeding. `-job` blocks until the job reaches SUCCESS/FAILED and propagates
+# succeeding. `--job` blocks until the job reaches SUCCESS/FAILED and propagates
 # a real exit status. (Learned the hard way on the first run, 2026-08-28.)
-ssh -o ConnectTimeout=10 "$HOST" midclt call -job pool.create "'$PAYLOAD'"
+ssh -o ConnectTimeout=10 "$HOST" midclt call --job pool.create "'$PAYLOAD'"
 
 echo
 echo ">>> verifying"
