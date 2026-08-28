@@ -1730,3 +1730,108 @@ The generated `admin_token` / `rpc_secret` / `web_ui_password` are created with
 vault entry. The S3 secret is likewise never persisted here — garage holds it and
 it can be re-read with `GetKeyInfo?showSecretKey=true` when the cluster-side
 SealedSecret is minted.
+
+## 2026-08-28 (cont.) — the BSL that could not reach the NAS
+
+Sealed the garage credential, enabled the second BSL, waited for ArgoCD:
+
+```
+NAME             PHASE         LAST VALIDATED   AGE
+default          Available     2s               91d
+truenas-garage   Unavailable   2s               93s
+
+msg=... operation error S3: ListObjectsV2, exceeded maximum number of attempts, 3,
+    ... dial tcp 192.168.10.10:30188: i/o timeout
+```
+
+**`i/o timeout`, not `connection refused`.** Packets leave and nothing comes
+back — a routing symptom, not a missing listener. garage was confirmed up and
+answering (`ss` showed all five ports bound; `curl` from the NAS returned 403,
+i.e. S3 responding unauthenticated).
+
+### Finding out which half was broken
+
+TrueNAS's own routing table pointed at a plausible culprit:
+
+```
+$ ip route get 10.130.1.157
+10.130.1.157 via 192.168.1.1 dev eno1 src 192.168.1.25
+```
+
+A pod IP routes out the **frontnet default gateway**. If Velero's packets
+arrived un-masqueraded, the reply would go to the MikroTik, which has no route
+to the pod CIDR — classic asymmetric drop.
+
+Plausible, and wrong. A 90-second socket watch on the NAS across two BSL
+validation cycles:
+
+```
+$ ss -tan '( sport = :30188 )' | grep -v LISTEN
+(nothing)
+```
+
+**Zero inbound SYNs.** The packets never arrive at all, so the reply path never
+comes into play. The drop is upstream of the NAS.
+
+### The actual finding
+
+**Pod-network → storage-backnet egress does not work on this cluster, and never
+has.** Everything that touches `192.168.10.0/24` today does so from the *host*
+stack:
+
+| consumer | network |
+|---|---|
+| Ceph mons/OSDs/RGW | `network.provider: host` |
+| `csi-nfs-node`, `csi-nfs-controller` | `hostNetwork: true` |
+| **velero** | **pod network** (`podIP 10.130.1.157`) |
+
+Velero is the first pod-network client that has ever tried to reach the backnet.
+Nothing was broken by today's work — this path simply never existed, and it took
+a new kind of client to reveal it.
+
+Pod → *frontnet* is fine: `synology-cert-sync` reaches `192.168.1.2` nightly.
+
+### Fix
+
+Rebind garage from backnet-only to `0.0.0.0` and point the BSL at
+`192.168.1.25`. `app.ip_choices` offers only `{0.0.0.0, ::, 192.168.10.10}` —
+the mgmt address is not individually bindable — so `0.0.0.0` is the only way to
+listen on both.
+
+That exposed a create-only gap in the role: `truenas-apps` deployed the app but
+had no update path, so a changed binding would have been declared-and-never-
+applied — the same trap as the auto-created scrub task. Added a
+`Reconcile the garage port bindings` task comparing live `host_ips` against
+desired and calling `app.update` (also a job method).
+
+```
+TASK [truenas-apps : Reconcile the garage port bindings]
+changed: [truenas]
+
+$ ss -lntp | grep 3018
+0.0.0.0:30188   0.0.0.0:30189   0.0.0.0:30190   [::]:...
+$ curl -o /dev/null -w '%{http_code}' http://192.168.1.25:30188/
+403
+```
+
+```
+NAME             PHASE       LAST VALIDATED   AGE
+truenas-garage   Available   9s               12m
+```
+
+**`Available` is a strong signal, not a weak one.** Velero validates by actually
+issuing `ListObjectsV2`, so one green phase proves TCP reachability, the sealed
+credential decrypting correctly, path-style addressing, *and* the
+`checksumAlgorithm: ""` setting all at once.
+
+### The cost, stated plainly
+
+Velero's S3 traffic now takes **1G frontnet instead of 10G backnet**. Irrelevant
+for the ~20 MB rehearsal and for config backups. It matters for a 3.21 TiB bulk
+move: CephFS HDD read runs ~200 MB/s (1.6 Gbps), so 1G becomes the bottleneck
+and roughly doubles the transfer.
+
+Worth noting what is *not* affected: NFS is kernel-mounted by hostNetwork CSI
+pods, so media/immich/keepers data still rides the 10G backnet. A direct
+PVC→PVC copy therefore has no 1G leg at all — which sharpens the earlier
+tool comparison rather than changing it.
