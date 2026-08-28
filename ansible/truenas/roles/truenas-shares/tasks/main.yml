@@ -38,11 +38,47 @@
       # Restricted to the three node backnet addresses. An unrestricted export
       # on a segment that also carries Ceph replication is not acceptable.
       hosts: "{{ truenas_nfs_clients }}"
+      # maproot_user REQUIRED -- do not "harden" this to squash root.
+      #
+      # Two independent reasons, both verified on this cluster 2026-08-28:
+      #  1. csi-driver-nfs provisions by mounting the share and creating one
+      #     SUBDIRECTORY per PV, as root. Under the default root squash (root ->
+      #     nobody) every CreateVolume fails with permission denied.
+      #  2. media/jellyfin runs `runAsUser: 0` outright, so its writes arrive as
+      #     uid 0. Squashed, the whole media library becomes unwritable.
+      # The export is already restricted to the three node backnet IPs, which is
+      # where the actual access control lives.
+      maproot_user: "{{ item.maproot_user | default('root') }}"
+      maproot_group: "{{ item.maproot_group | default('root') }}"
       enabled: true
   loop: "{{ truenas_nfs_exports }}"
   loop_control:
     label: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
   when: ("/mnt/" ~ truenas_pool ~ "/" ~ item.dataset) not in truenas_nfs_paths
+
+# Existing exports need reconciling too: the three created on 2026-08-28 predate
+# the maproot fix above, and create-if-missing would leave them squashed forever
+# -- the same "declared but never applied" trap as the auto-created scrub task.
+- name: Reconcile maproot on existing NFS exports
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - sharing.nfs.update
+      - "{{ (_live_share.id) | string }}"
+      - "{{ {'maproot_user': _want_root, 'maproot_group': _want_group} | to_json }}"
+  vars:
+    _path: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+    _want_root: "{{ item.maproot_user | default('root') }}"
+    _want_group: "{{ item.maproot_group | default('root') }}"
+    _live_share: "{{ (truenas_nfs_q.stdout | from_json | selectattr('path', 'equalto', _path) | list | first) | default({}, true) }}"
+  loop: "{{ truenas_nfs_exports }}"
+  loop_control:
+    label: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+  when:
+    - _live_share | length > 0
+    - (_live_share.maproot_user | default(none)) != _want_root
+      or (_live_share.maproot_group | default(none)) != _want_group
 
 # Share writes trigger an NFS *reload*, not a restart, so re-asserting an export
 # does not drop live client mounts. That is what makes this role safe to run

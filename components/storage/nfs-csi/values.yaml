@@ -54,3 +54,9 @@ truenas:
       share: /mnt/tank/media
     - name: immich
       share: /mnt/tank/immich
+    # keepers is the CUTOVER REHEARSAL (README): smallest consumer, fully
+    # re-downloadable, so a botched migration costs nothing but time. It is
+    # exported by ansible/truenas but had no StorageClass until 2026-08-28,
+    # which would have made the rehearsal unrunnable.
+    - name: keepers
+      share: /mnt/tank/keepers
