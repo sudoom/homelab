@@ -42,14 +42,17 @@ s3Url: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
 #
 # Paste the resulting encryptedData.cloud into sealedCloud below.
 garageBsl:
-  enabled: false
+  enabled: true
   name: truenas-garage
   bucket: velero
   prefix: velero
   region: garage                       # garage's configured region name
   s3Url: http://192.168.10.10:30188    # backnet; jumbo-verified to all 3 nodes
   credentialSecret: garage-credentials
-  sealedCloud: ""                      # <- kubeseal output goes here
+  # Sealed 2026-08-28 against sealed-secrets-pub.pem (valid to 2036). Strict
+  # scope: bound to name garage-credentials in ns openshift-adp -- renaming
+  # either requires a re-seal.
+  sealedCloud: "AgBXgsSAHIO1ZnScmokMIrcc2TdTSydSIc2ZamXaF6+l+yGiL9EbHs8yVV6NcvM58NGk78ll5+Cs8RIBjOSm/z1IE0uK4MzhEw8GOGX+GwRy2Za6x0sZFowItGw7APDmhEGQDVlzDzI2sdqDxXZnQZF65I4n5ckumkjs7uE+vFpUkFpqfrx8aEodazhJBUWB/dX9PcMhEqK8qnWjR5Wy0fZl0G00iuZcv11SHwFSCX5BHABWkkmtVxVXDEKCh2U+vYhzDko21PNv8WfEE5xXMmFbnKCVnKBJ83fkxjDcEZsCJfv5NZR77X9M+oA9OH4yZSVmAC68l/wyCxLwEVT376kgDFa2sxfe11jVc2B8txHfw0jEXDPChgBKzf9Z4/N9kP3E9wunPkKQHV30aHZohiJc/JeGCZeSs8gXK/nTQ7Nu9vAQA56+N2wyU2/xLcFq9qgVquJn+2TfOHw0kMb/pLohlMaQuq5bJjHs/OSi2NSDDw3vAp0azSSPxIL8Nzbc4TB9HF9Fq5ha02S52hxdIfR9pyRJ8UVEltP8ww/wDT4sY/yg7o38QgmX8WuQwwcO2uxJyDiYgcX3VQyX7nKYkAK20asPk3hCiR7dYeYH6RvH5Xl6F+8miEQ3/W9vsxFuoo0/4T5MdgclfBRjGPMxl2lGdj9/NG4Vf+mX9qrOEqCPNafjMR5aX81EjfR+aiChZNUzf7+LXFtllwrbycGVB5UrPTxwOGh4/L/+iyNTaLIOKvafj6cpSKbKMrJU9a5W7xA/0yHGj/hCwSFMpuRMlselLiAqHYD63t/atyd01LVDB7uev7IqUKt4JTztxq3ZShr+A9RGczdmLBo+5DcLVsj0KOjzJ/YZO+Jrr63UzDYB22fcLq1MLmOJAJNcC2et"
 
 dpa:
   defaultPlugins:
