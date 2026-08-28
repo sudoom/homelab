@@ -127,6 +127,15 @@ Torrent data does not change once complete, so a live copy is safe; only
 in-flight downloads will differ, and Step 4 reconciles them. Transmission keeps
 seeding throughout.
 
+**Expected non-clean exits.** The Job classifies rsync's exit code rather than
+trusting `set -e`:
+- `0` — clean.
+- `24` — some source files vanished mid-copy. **Expected on the bulk pass**,
+  because transmission is live and removes files as torrents are managed. The
+  Job treats this as success; step 4's quiesced delta pass reconciles it.
+- anything else — stop and investigate before step 4. `23` means per-file
+  errors (this is what a stray `-X` produced), `12` protocol, `30` timeout.
+
 **If it is interrupted** (node reboot, OVN egress break, stale mount — all have
 happened on this cluster), just re-run it. rsync skips files whose size and
 mtime already match, so a resumed run costs a 4,493-file re-scan, not 1.7 TiB:

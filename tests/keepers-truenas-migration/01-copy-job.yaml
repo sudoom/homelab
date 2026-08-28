@@ -41,30 +41,63 @@ spec:
             # FINAL quiesced pass: "--delete" (dry-run it first, see README).
             - name: EXTRA
               value: ""
+          # NOTE: keep this script free of inline comments -- the whole block
+          # becomes one `sh -c` argv entry, so anything here shows up in `ps`
+          # and makes the process table unreadable. Rationale lives in the YAML
+          # comments above instead.
+          #
+          # -a   archive (perms, times, ownership, symlinks)
+          # -H   preserve hardlinks. A NO-OP for keepers (measured: 0 hardlinked
+          #      files) but kept so this command is byte-identical to the media
+          #      run, where it is load-bearing (1,478 of 2,203 files).
+          # NO -X. Dropped 2026-08-28 after it failed on every single path with
+          #      lsetxattr(..., "security.selinux") -> Not supported (95). That
+          #      xattr is not source data: the Synology stores nothing: the
+          #      MOUNTING NODE's kernel synthesises a generic
+          #      system_u:object_r:nfs_t:s0 label, identical on every file, and
+          #      ZFS-over-NFS cannot hold it. Verified there are ZERO user.*
+          #      xattrs anywhere in the tree, so -X preserved nothing while
+          #      emitting one error per path and, fatally, leaving rsync with
+          #      exit 23 -- which `set -e` turns into a FAILED Job on a copy
+          #      that actually succeeded.
+          # NO -A either, and for a different reason: the Synology tree does
+          #      carry real POSIX ACLs (drwxrwxrwx+), but the effective mode is
+          #      already 0777 and the sole consumer is one privileged container.
+          # --numeric-ids  do NOT remap uid/gid through name lookups that differ
+          #      between the two boxes. uid 1026 must stay uid 1026.
+          # --partial      keep partial files so a resumed run continues them.
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -eu
               apk add --no-cache rsync >/dev/null
-              echo "=== source ==="; df -h /src | tail -1
-              echo "=== target ==="; df -h /dst | tail -1
-              # -a  archive (perms, times, ownership, symlinks)
-              # -H  preserve hardlinks. A NO-OP for keepers (measured: 0 hardlinked
-              #     files) but kept so this command is byte-identical to the media
-              #     run, where it is load-bearing (1,478 of 2,203 files).
-              # -X  xattrs.  -A (ACLs) is DELIBERATELY OMITTED: the Synology tree
-              #     carries POSIX ACLs (`drwxrwxrwx+`), the effective mode is
-              #     already 0777, and the sole consumer is one privileged
-              #     container -- so copying them buys nothing and risks the
-              #     transfer erroring on an ACL the ZFS acltype will not accept.
-              # --numeric-ids  do NOT remap uid/gid through name lookups that
-              #     differ between the two boxes. uid 1026 must stay uid 1026.
-              # --partial  keep partially-transferred files so a resumed run
-              #     continues them instead of restarting each from zero.
-              time rsync -aHX --numeric-ids --partial \
+              echo "=== MOUNTS (this is the go/no-go) ==="
+              grep -E " /src | /dst " /proc/mounts | awk '{print "  " $2 "  <- " $1 "  (" $3 ")"}'
+              echo "=== space ==="
+              df -h /src /dst
+              echo "=== rsync starting: $(date -u +%H:%M:%SZ) ==="
+              rc=0
+              time rsync -aH --numeric-ids --partial \
                    --info=progress2,stats2 --human-readable \
-                   $EXTRA /src/ /dst/
-              echo "=== target after ==="; df -h /dst | tail -1
+                   $EXTRA /src/ /dst/ || rc=$?
+              echo "=== rsync exit $rc ==="
+              case "$rc" in
+                0)
+                  echo "clean." ;;
+                24)
+                  echo "exit 24 = some source files VANISHED mid-copy."
+                  echo "Expected on the bulk pass: transmission is live and"
+                  echo "removes files as torrents are managed. The quiesced"
+                  echo "delta pass in step 4 reconciles this. NOT a failure."
+                  rc=0 ;;
+                *)
+                  echo "UNEXPECTED rsync exit $rc -- investigate before step 4."
+                  echo "23 = partial transfer due to error (per-file failures)."
+                  echo "12 = protocol/stream error.  30 = timeout." ;;
+              esac
+              echo "=== target after ==="
+              df -h /dst
+              exit "$rc"
           volumeMounts:
             - name: src
               mountPath: /src
