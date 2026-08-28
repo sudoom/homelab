@@ -75,6 +75,37 @@ truenas:
   # silently orphans the old data, and (b) this pool is also browsed over SMB.
   # The catch: Velero's change-storage-class maps StorageClass NAMES, so the OADP
   # migration path requires a dynamic class. A direct PVC->PVC copy does not.
+  # Statically-defined volumes for the known singleton consumers. Each gives the
+  # dataset root directly to one named PVC -- no pvc-<uuid> layer. See the
+  # template for the full rationale. Disabled until the data is actually staged;
+  # a PV is harmless on its own but the matching PVC changes are not.
+  #
+  # NOTE the server is 192.168.10.10 (10G BACKNET) and that is correct here even
+  # though the Velero BSL had to use the frontnet: NFS is kernel-mounted by the
+  # hostNetwork csi-nfs-node, which reaches the backnet fine. Only pod-network
+  # clients cannot. See CLAUDE.md.
+  staticVolumes:
+    enabled: false
+    volumes:
+      - name: media-data
+        share: /mnt/tank/media
+        capacity: 8Ti          # ceiling only; the real limit is the ZFS dataset
+        claim:
+          namespace: media
+          name: media-data-nfs-pvc
+      - name: immich-library
+        share: /mnt/tank/immich
+        capacity: 2Ti
+        claim:
+          namespace: immich
+          name: immich-library-nfs
+      - name: keepers-data
+        share: /mnt/tank/keepers
+        capacity: 500Gi
+        claim:
+          namespace: keepers
+          name: keepers-data-nfs
+
   classes:
     - name: media
       share: /mnt/tank/media

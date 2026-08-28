@@ -1,0 +1,50 @@
+{{- if .Values.truenas.staticVolumes.enabled }}
+{{- range .Values.truenas.staticVolumes.volumes }}
+---
+# Statically-defined TrueNAS volume — deliberately NOT dynamically provisioned.
+#
+# WHY STATIC for these three:
+#  1. The dataset root IS the data root. /mnt/tank/media/Movies, not
+#     /mnt/tank/media/pvc-<uuid>/Movies. This pool is browsed over SMB
+#     (personal/work shares), and a ZFS snapshot of tank/media then captures
+#     exactly the media data with no indirection.
+#  2. Dynamic + Retain is a data-loss trap: delete and recreate the PVC and the
+#     provisioner mints a NEW uuid directory, silently orphaning the old data at
+#     the old path. A static PV's path is fixed and survives PVC recreation.
+#  3. These are known singletons, not a fleet. Dynamic provisioning solves
+#     "I don't know how many volumes I'll need", which is not the problem here.
+#
+# BINDING: `claimRef` pre-binds this PV to exactly one PVC, so it cannot be
+# claimed by anything else even before that PVC exists. Both sides must set
+# `storageClassName: ""` — empty string means "no class", which is what stops
+# the default StorageClass from trying to dynamically provision instead.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: truenas-{{ .name }}
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  capacity:
+    storage: {{ .capacity }}
+  accessModes:
+    - ReadWriteMany
+  # Retain everywhere in this repo: deleting a PVC must never destroy data.
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: {{ .claim.namespace }}
+    name: {{ .claim.name }}
+  mountOptions:
+    - nfsvers=4.1
+    - hard
+  csi:
+    driver: nfs.csi.k8s.io
+    # volumeHandle must be unique per PV. server#share#name is stable and
+    # self-describing; it is never parsed by the driver for a static PV.
+    volumeHandle: {{ $.Values.truenas.server }}#{{ trimPrefix "/" .share | replace "/" "-" }}#{{ .name }}
+    volumeAttributes:
+      server: {{ $.Values.truenas.server | quote }}
+      share: {{ .share | quote }}
+{{- end }}
+{{- end }}

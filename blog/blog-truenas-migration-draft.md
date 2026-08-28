@@ -2085,3 +2085,93 @@ The design in the operator's original sketch — *"SC for ceph, new SC for truen
 NFS, move via OADP, repoint the deployment"* — **works end to end, exactly as
 drawn.** What remains for the real migration is scale, not mechanism: 3.21 TiB
 instead of 19 MB, and the app-downtime question that FSB's restore path forces.
+
+## 2026-08-28 (cont.) — static PVs, not dynamic classes
+
+Question from the operator: *"why do we need 3 SCs for truenas? can we use just
+1 and choose folders in the pvc?"* — which turned out to expose a sloppy comment
+of mine and then a better design.
+
+**Answer to the literal question: no.** csi-driver-nfs's `share` is a
+**StorageClass-level** parameter and cannot vary per-PVC (verified in the
+driver's `driver-parameters.md`). One class == one share == one dataset. The
+class count is downstream of the dataset count, not a choice.
+
+**And my justification for the dataset count was wrong.** The values comment
+claimed each class exists so its consumer gets "its own recordsize, quota and
+snapshot policy". Checked:
+
+```
+media     recordsize=1M  compression=LZ4(inherit)  quota=0
+immich    recordsize=1M  compression=LZ4(inherit)  quota=0
+keepers   recordsize=1M  compression=LZ4(inherit)  quota=0
+```
+
+Identical. Two of the three stated differentiators do not exist.
+
+The datasets should still be separate, but for the reason actually written in
+`group_vars`: **policy, not properties.** media and immich have periodic
+snapshot tasks and keepers does not; media is "re-downloadable, no offsite"
+while immich is the irreplaceable photo library. Share a dataset and you cannot
+snapshot the photos on their own schedule, nor `zfs send` them offsite without
+dragging 3.21 TiB of media along.
+
+**Rejected: one class + `subDir` templating.** The driver does support
+`subDir: ${pvc.metadata.namespace}/${pvc.metadata.name}`, which gives pleasant
+paths — but every PVC then lands in ONE dataset, destroying exactly the
+granularity above. Prettier paths are not worth the snapshot/offsite split.
+
+### What we are doing instead: static PVs
+
+```yaml
+kind: PersistentVolume
+metadata: { name: truenas-media-data }
+spec:
+  storageClassName: ""          # no class -> no dynamic provisioning
+  claimRef: { namespace: media, name: media-data-nfs-pvc }
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: nfs.csi.k8s.io
+    volumeHandle: 192.168.10.10#mnt-tank-media#media-data
+    volumeAttributes: { server: "192.168.10.10", share: "/mnt/tank/media" }
+```
+
+Three reasons, in increasing order of how much they would have cost later:
+
+1. **The dataset root becomes the data root.** `/mnt/tank/media/Movies`, not
+   `/mnt/tank/media/pvc-342353d7-.../Movies`. This pool is also browsed over SMB
+   (personal/work shares), and a ZFS snapshot of `tank/media` then captures
+   exactly the media data with no indirection.
+2. **These are known singletons.** Dynamic provisioning answers "I don't know how
+   many volumes I will need". That is not the question here — there is one media
+   volume, one Immich library, one keepers volume, forever.
+3. **Dynamic + `Retain` is a latent data-loss trap.** Delete and recreate the PVC
+   and the provisioner mints a NEW `pvc-<uuid>` directory; the old data is
+   silently orphaned at the old path with the app looking at an empty volume.
+   The class is `Retain` precisely so data survives PVC deletion — and dynamic
+   naming quietly undermines that. A static PV's path is fixed.
+
+`claimRef` pre-binds each PV to exactly one PVC, so it cannot be claimed by
+anything else even before that PVC exists. Both sides need `storageClassName: ""`
+— empty string means "no class", which is what stops the default StorageClass
+from dynamically provisioning instead of binding.
+
+Note the server is `192.168.10.10`, the **10G backnet** — correct here even
+though the Velero BSL had to fall back to the frontnet, because NFS is
+kernel-mounted by the hostNetwork `csi-nfs-node`. Only pod-network clients are
+excluded from the backnet.
+
+### The coupling nobody would guess
+
+**Velero's `change-storage-class` maps StorageClass NAMES.** A static PV has no
+class, so the OADP migration route structurally requires a dynamic class — and
+therefore delivers the `pvc-<uuid>` layout. A direct PVC→PVC copy has no such
+constraint: it writes into `/mnt/tank/media/` and the static PV points at it.
+
+So "what layout do I want on the NAS" and "which migration tool" are the same
+decision. Choosing the clean layout chooses the direct copy. Worth settling
+before 3.21 TiB lands, not after.
+
+The three dynamic classes stay shipped — they cost nothing, they are what the
+rehearsal proved, and they remain the right answer for any future consumer that
+genuinely is a fleet.
