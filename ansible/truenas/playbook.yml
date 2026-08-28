@@ -41,16 +41,65 @@
   # same thing in both modes.
   # -------------------------------------------------------------------------
   post_tasks:
+    # -----------------------------------------------------------------------
+    # These queries RE-READ the box after the roles have run. That matters:
+    # the roles' own query facts were captured BEFORE their create tasks, so
+    # reporting from them showed "everything missing" immediately after a
+    # successful apply (observed 2026-08-28 — alarming and wrong). Re-querying
+    # makes this block mean the right thing in both modes:
+    #   --check : nothing was applied, so this is the to-do list.
+    #   apply   : everything was applied, so this is a CONVERGENCE PROOF and
+    #             every list must be empty.
+    # `check_mode: false` so they run under --check too; they are pure reads.
+    # -----------------------------------------------------------------------
+    - name: Re-read live state for the convergence check
+      ansible.builtin.command:
+        argv: [midclt, call, "{{ item.method }}"]
+      register: _post_q
+      changed_when: false
+      check_mode: false
+      loop:
+        - { key: datasets, method: pool.dataset.query, attr: id }
+        - { key: nfs,      method: sharing.nfs.query,  attr: path }
+        - { key: snap,     method: pool.snapshottask.query, attr: dataset }
+        - { key: cron,     method: cronjob.query,      attr: description }
+        - { key: scrub,    method: pool.scrub.query,   attr: id }
+      loop_control:
+        label: "{{ item.method }}"
+
+    - name: Index the re-read state
+      ansible.builtin.set_fact:
+        _live: "{{ dict(_post_q.results | map(attribute='item.key') | zip(_post_q.results | map(attribute='stdout') | map('from_json') | list)) }}"
+
+    - name: Compute the declared-vs-live delta
+      ansible.builtin.set_fact:
+        _drift:
+          datasets_missing: "{{ (truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list) | difference(_live.datasets | map(attribute='id') | list) }}"
+          nfs_exports_missing: "{{ (truenas_nfs_exports | map(attribute='dataset') | map('regex_replace', '^', '/mnt/' ~ truenas_pool ~ '/') | list) | difference(_live.nfs | map(attribute='path') | list) }}"
+          snapshot_tasks_missing: "{{ (truenas_snapshot_tasks | map(attribute='dataset') | map('regex_replace', '^', truenas_pool ~ '/') | list) | difference(_live.snap | map(attribute='dataset') | list) }}"
+          cron_jobs_missing: "{{ (truenas_smart_cronjobs | map(attribute='description') | list) | difference(_live.cron | map(attribute='description') | list) }}"
+          scrub_schedule_drift: "{{ _now_sig != _want_sig }}"
+      vars:
+        _k: ['minute', 'hour', 'dom', 'month', 'dow']
+        _cur: "{{ (_live.scrub | selectattr('pool', 'equalto', truenas_pool_id | int) | list | first) | default({}, true) }}"
+        _now_sig: "{{ (_k | map('extract', _cur.schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list) if (_cur.schedule is defined) else [] }}"
+        _want_sig: "{{ _k | map('extract', truenas_scrub_schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list }}"
+
     - name: Report declared-vs-live drift
       ansible.builtin.debug:
-        msg:
-          datasets_missing: "{{ _want_ds | difference(truenas_existing_datasets | default([])) }}"
-          nfs_exports_missing: "{{ _want_nfs | difference(truenas_nfs_paths | default([])) }}"
-          snapshot_tasks_missing: "{{ _want_snap | difference(truenas_snap_datasets | default([])) }}"
-          cron_jobs_missing: "{{ _want_cron | difference(truenas_cron_descs | default([])) }}"
-          scrub_schedule_drift: "{{ (_scrub_live_sig | default([])) != (_scrub_want_sig | default([])) }}"
-      vars:
-        _want_ds: "{{ truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list }}"
-        _want_nfs: "{{ truenas_nfs_exports | map(attribute='dataset') | map('regex_replace', '^', '/mnt/' ~ truenas_pool ~ '/') | list }}"
-        _want_snap: "{{ truenas_snapshot_tasks | map(attribute='dataset') | map('regex_replace', '^', truenas_pool ~ '/') | list }}"
-        _want_cron: "{{ truenas_smart_cronjobs | map(attribute='description') | list }}"
+        msg: "{{ _drift }}"
+
+    # After an apply run there is no legitimate reason for anything to remain
+    # missing. A silent partial apply is exactly what this topic keeps producing
+    # (three "declared but never executed" bugs this week), so fail loudly.
+    - name: Assert the box converged
+      ansible.builtin.assert:
+        that:
+          - _drift.datasets_missing | length == 0
+          - _drift.nfs_exports_missing | length == 0
+          - _drift.snapshot_tasks_missing | length == 0
+          - _drift.cron_jobs_missing | length == 0
+          - not _drift.scrub_schedule_drift
+        fail_msg: "Apply finished but the box did not converge -- see the drift report above."
+        success_msg: "Converged: every declared dataset, export, snapshot task, cron job and the scrub schedule are live."
+      when: not ansible_check_mode

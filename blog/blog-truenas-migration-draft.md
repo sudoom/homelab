@@ -1464,3 +1464,92 @@ that never reaches the box**, each invisible to `--syntax-check`, `helm lint`, a
 — as of today — to `--check` as well. The lesson is not "test more"; it is that
 *absence of a reported change is not evidence of convergence* unless the tool can
 actually evaluate the thing. Verify against the box.
+
+## 2026-08-28 (cont.) — the apply landed; the drift report cried wolf
+
+Full apply: 8 datasets, 3 NTP servers, 3 NFS exports, NFS enabled+started, the
+scrub reconcile, 3 snapshot tasks, 3 SMART cron jobs. `changed=8, failed=0`.
+
+Verified independently on the box rather than trusting the recap:
+
+```
+datasets   : 9  (tank + 8 children)
+nfs shares : 3      cron jobs : 3      snap tasks : 3
+scrub      : hour=3 dom=1 dow=*  desc='Monthly scrub (managed by ansible/truenas)'
+nfs service: state=RUNNING enable=True
+```
+
+The scrub reconcile worked — TrueNAS's weekly Sunday-midnight default is now the
+declared monthly 03:00. Note it stored the fields **unpadded** (`"0"`,`"3"`,`"1"`),
+one of the three shapes the normalizer was tested against, so the next run
+compares equal and stays quiet.
+
+### But the drift report said everything was still missing
+
+```
+datasets_missing:    [tank/apps, tank/media, tank/work, ...]   # all 8
+nfs_exports_missing: [/mnt/tank/media, ...]                    # all 3
+scrub_schedule_drift: true
+```
+
+…printed immediately after successfully creating all of it.
+
+The report consumed the facts captured by the roles' **query** tasks — which run
+*before* their create tasks. So it reported pre-run state. Correct under
+`--check` (nothing changes, so pre-state == current state), badly wrong after an
+apply.
+
+Ironic failure: the block added *this morning* to fix a misleading `--check` was
+itself misleading in the opposite direction. Yesterday's fix, today's bug. The
+common root is the same one all week — **reporting state that was never
+re-verified against the box.**
+
+### Fixed by re-reading, which makes it worth more than before
+
+The post_tasks now re-query the five collections after the roles have run, and
+the block means the right thing in both modes:
+
+- `--check` → nothing was applied, so it is the **to-do list**.
+- apply → everything was applied, so it is a **convergence proof**, and every
+  list must be empty.
+
+And since it is now a post-condition rather than a preview, it can assert:
+
+```yaml
+- name: Assert the box converged
+  ansible.builtin.assert:
+    that:
+      - _drift.datasets_missing | length == 0
+      # … and the rest
+    fail_msg: "Apply finished but the box did not converge."
+  when: not ansible_check_mode
+```
+
+A silent partial apply is precisely what this topic keeps producing, so it now
+fails loudly instead. Validated against the live post-apply state: all five
+deltas empty, `CONVERGED`.
+
+### One more Jinja trap, caught before it ran
+
+The first draft of the scrub signature was:
+
+```jinja
+{{ _cur.schedule is defined | ternary(<build sig>, []) }}
+```
+
+Two bugs in nine tokens, both already hit earlier this week:
+
+1. **Precedence** — `|` binds tighter than `is`, so this parses as
+   `_cur.schedule is (defined | ternary(...))`, which is not the test intended.
+2. **Eagerness** — `ternary` evaluates *both* branches, so the sig-building
+   branch would run even when `schedule` is undefined.
+
+Replaced with an inline conditional, which is lazy and has no precedence trap:
+
+```jinja
+{{ (<build sig>) if (_cur.schedule is defined) else [] }}
+```
+
+`grep -c ternary` across the topic now returns zero. Worth making a standing
+rule here: **no `ternary` in this repo's Ansible** — the lazy `if/else`
+expression is never worse and removes both failure modes at once.
