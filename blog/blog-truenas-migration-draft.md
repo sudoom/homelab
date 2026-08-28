@@ -2175,3 +2175,150 @@ before 3.21 TiB lands, not after.
 The three dynamic classes stay shipped — they cost nothing, they are what the
 rehearsal proved, and they remain the right answer for any future consumer that
 genuinely is a fleet.
+
+## 2026-08-29 — measuring the whole migration before moving a byte
+
+Yesterday's session ended with an open decision (OADP vs direct copy) resting on
+two numbers I had not actually measured. Today I measured them, and both changed
+the answer.
+
+### The complete inventory
+
+Three bulk volumes move; everything else stays on Ceph NVMe.
+
+| Volume | Source | Size | Files | Hardlinked | Re-acquirable |
+|---|---|---|---|---|---|
+| `immich/immich-library` | Synology NFS `192.168.1.2` | 137 GiB | 6,183 | 0 | **no** — photos |
+| `keepers/keepers-data-pvc` | Synology NFS `192.168.1.2` | 1.7 TiB | 4,493 | 0 | yes |
+| `media/media-data-pvc` | `cephfs-hdd` | **3.2155 TiB** | 2,203 | **1,478** | yes |
+
+Total ≈ 5.1 TiB against 14.4 TiB free on `tank`. The other 29 PVCs are all
+`ceph-nvme-block` RWO — configs, both CNPG clusters, Loki, Prometheus, zot —
+and none of them should move.
+
+`media-data-pvc` exact usage, from the kubelet rather than a rounded `df`:
+
+```
+usedBytes      3535487893504   # 3.2155 TiB
+capacityBytes  4398046511104   # the 4Ti quota
+availableBytes  862558617600
+```
+
+Cross-checked against Ceph: `ceph_pool_stored{pool_id="17"}` = 3,535,497,592,832 B
+— agreement to within 9.7 MB. Raw is 5,303,246,520,320 B, exactly 1.500× stored,
+which is EC 2+1 behaving as specified.
+
+**That agreement is itself a finding: `media-data-pvc` is the *sole* consumer of
+the EC data pool.** When it leaves, `cephfs-bulk-hdd` is empty.
+
+### Hardlinks: confirmed, and they decide the tool
+
+The structural preconditions were obvious (single flat `/data` mount, no
+`subPath`, downloads and library on one filesystem, `TRANSMISSION_INCOMPLETE_DIR_ENABLED=false`),
+but the *arr settings live in Postgres, not git, so the repo could not answer it.
+Measured directly:
+
+```
+find /data -type f            -> 2203
+find /data -type f -links +1  -> 1478
+du -sh /data/downloads        -> 2.8T
+du -sh /data/media            -> 2.8T
+du -sch /data/downloads /data/media -> 3.3T   (single pass, inode-deduped)
+```
+
+2.8 + 2.8 = 5.6 T apparent against 3.3 T actual, so **~2.3 TiB exists once under
+two paths**. A copy without `-H` writes 5.6 TiB instead of 3.2 TiB *and*
+decouples every imported file from the torrent still seeding it.
+
+**This is what settles OADP.** Velero's file-system backup does not preserve
+hardlinks — so the capacity arithmetic from yesterday (9.63 TiB raw needed
+against 6.66 TiB available on the RGW path) was never the binding constraint.
+Even with infinite object storage, the restore would land 5.6 TiB and break
+seeding. The rehearsal was still worth running: it proved the restore path at
+~20 MB. It is simply not the tool for this job.
+
+The file count is the good news. **2,203 files averaging ~1.5 GiB.** An
+`rsync -H` inode map for 2,203 entries is kilobytes, so every concern about
+hardlink-preserving copies at scale evaporates. (Ceph object accounting predicted
+this independently: 843,743 objects at a 4,190,254 B mean = 99.9% of the 4 MiB
+object size, i.e. few-and-large.)
+
+### Throughput: the documented figure was stale by 1.6×
+
+Phase 5 validation on 2026-06-12 recorded read 76.6 MB/s / write 22.1 MB/s, and
+that number has been quoted ever since — including by me, earlier today, to
+produce a "~12 h" estimate. Re-measured from a pod on the live mount:
+
+```
+single stream, 2 GiB    ->  124 MB/s
+3 parallel, 2 GiB each  ->  170 MiB/s aggregate
+```
+
+So single-stream is ~1.6× the June figure and parallelism buys a further ~1.4×
+(sublinear, as three spindles under EC 2+1 should be). Revised wall-clock for
+3.2 TiB: **6–8 h**, not 12.
+
+The June measurement was taken days after the HDD-tier rebalance, which is the
+most likely explanation for the gap. Lesson recorded rather than the number
+merely corrected: *a measurement has a date, and a date is part of the value.*
+
+**Bonus confirmation:** 170 MiB/s is 1.43 Gbps — above a 1 Gbps line rate. The
+read path therefore cannot be traversing the frontnet, which independently
+confirms the "OSDs advertise backnet, clients contact mons on frontnet only for
+the OSDMap" claim in CLAUDE.md.
+
+### A read-only route worth remembering
+
+The readonly SA cannot `exec`, and CLAUDE.md says to fall back to the CephCluster
+CR status. That works for overall health but is far too coarse for per-pool
+capacity. Both of these return 200 under `~/.kube/config-readonly`:
+
+```bash
+oc get --raw "/api/v1/nodes/<node>/proxy/stats/summary"                        # per-PVC used/capacity
+oc get --raw "/api/v1/namespaces/rook-ceph/services/http:rook-ceph-mgr:9283/proxy/metrics"   # per-pool stored/raw/avail
+```
+
+No toolbox, no exec, no break-glass. This is the right way to answer "how full is
+that pool" going forward.
+
+### Consequences to decide before the last hop
+
+**The HDD tier loses its only consumer.** With `media-data-pvc` gone,
+`cephfs-bulk-hdd` is empty and the three HDD OSDs serve only the RGW data pool
+(Loki chunks + OADP). Moving Loki chunks to garage — already queued, precondition
+now cleared — empties that too. The terminus is a 3-HDD tier with no purpose:
+retiring it frees one 3.5" bay per node, ~15–20 W, and makes `CephPGImbalance`
+disappear on its own, since that false positive exists *only* because two device
+classes are averaged together.
+
+**Offsite coverage may not follow the data.** Immich's DB backup is documented as
+`pg_dumpall` → `<library>/backups/` on the Synology NFS library → NAS offsite.
+If the Synology runs a backup job over `/volume1/kubenfs`, migrating immich and
+keepers off it silently drops them from that job — and lands the DB dumps on the
+same single box as the photos they protect. Confirm before immich moves.
+
+**Availability goes down, deliberately.** Media today survives losing a whole node
+(EC 2+1 across three hosts). On TrueNAS it survives two disk failures but sits in
+one chassis, already sharing the backnet failure domain with Ceph. Capacity and
+simplicity for host redundancy — defensible, but it is a trade, not a lateral move.
+
+### Order
+
+Not smallest-first — **cheapest-to-lose first**: keepers (1.7 TiB, no hardlinks,
+one consumer, re-downloadable) → media (3.2 TiB, hardlinks, six consumers) →
+immich (137 GiB, but the only irreplaceable payload, so it goes last when the
+runbook is boring).
+
+Keepers is also the natural test vehicle for the queued Synology LACP work: its
+source is the 1 G frontnet, so it is link-capped at ~118 MB/s, and with zero
+hardlinks multi-stream copy is trivially safe there in a way it is not for media.
+
+### Two prerequisites for the keepers hop
+
+1. **The orphan rehearsal directory is no longer cosmetic.**
+   `/mnt/tank/keepers/pvc-342353d7-…` sits *inside* the dataset the static PV
+   hands to the PVC **as its root**, so post-cutover it would appear as a stray
+   entry in transmission's `/data`. Must be removed before staging.
+2. **The static PV capacity label is wrong.** `keepers-data` declares
+   `capacity: 500Gi` against 1.7 TiB of data. NFS does not enforce it, so nothing
+   breaks — but `oc get pv` would report a number off by 3.4×. Wants ≥ 2Ti.

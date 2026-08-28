@@ -558,6 +558,11 @@ CephFilesystem stuck in `Failure` can block CSI provisioning even when `ceph fs 
 FS active — don't dismiss it as cosmetic.
 
 **Phase 5 — validated 2026-06-12.** Test RWX PVC on `cephfs-hdd`: **Bound** in ~5s
+> **SUPERSEDED 2026-08-29** — re-measured on the live mount: single-stream read **124 MB/s**, 3 parallel
+> streams **170 MiB/s** aggregate. The figures below are the 2026-06-12 Phase 5 numbers, taken days after the
+> HDD-tier rebalance; they were quoted forward for ~2.5 months and were stale by ~1.6×. See
+> `blog/blog-truenas-migration-draft.md` 2026-08-29.
+
 (`ReadWriteMany`). IO from a pod: write 200 MiB @ **22.1 MB/s** + read @ **76.6 MB/s** (both
 `direct`; write is EC-2+1-on-HDD-amplified, fine for a bulk/cold tier). Clean teardown — PVC
 delete → CSI removed the subvolume + PV, **no orphan PV/Released, `ceph fs subvolume ls = []`**.
