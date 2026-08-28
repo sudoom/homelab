@@ -49,9 +49,32 @@ truenas:
   # classes are additive -- nothing consumes them until a PVC names one.
   enabled: true
   server: 192.168.10.10
-  # One StorageClass per dataset, rendered as nfs-truenas-<name>. Separate
-  # classes (not one shared class) so each consumer gets its own ZFS dataset
-  # with its own recordsize, quota and snapshot policy.
+  # One StorageClass per dataset, rendered as nfs-truenas-<name>.
+  #
+  # WHY ONE CLASS PER DATASET (corrected 2026-08-28 -- an earlier version of this
+  # comment claimed the classes differ by recordsize and quota; they do NOT.
+  # media/immich/keepers are all recordsize 1M, LZ4, quota 0):
+  #
+  # csi-driver-nfs's `share` is a STORAGECLASS-level parameter and cannot vary
+  # per-PVC (verified against the driver's driver-parameters.md). So one class
+  # == one share == one ZFS dataset. The classes are plural because the DATASETS
+  # must be, and the datasets must be because their POLICIES differ:
+  #   - media + immich have periodic snapshot tasks; keepers has none
+  #   - media is "re-downloadable, no offsite"; immich is the irreplaceable one
+  # Sharing a dataset would mean you cannot snapshot the photo library often
+  # without also snapshotting 3.21 TiB of re-downloadable media, and cannot
+  # `zfs send` immich offsite without dragging media with it.
+  #
+  # REJECTED ALTERNATIVE: one class + `subDir: ${pvc.metadata.namespace}/...`
+  # (the driver does support that templating). It gives nicer paths but lands
+  # every PVC in ONE dataset, destroying exactly the granularity above.
+  #
+  # OPEN: static PVs (no StorageClass) would make /mnt/tank/media itself the data
+  # root instead of /mnt/tank/media/pvc-<uuid>/ -- worth it because (a) under a
+  # Retain class, deleting and recreating a PVC yields a NEW uuid directory and
+  # silently orphans the old data, and (b) this pool is also browsed over SMB.
+  # The catch: Velero's change-storage-class maps StorageClass NAMES, so the OADP
+  # migration path requires a dynamic class. A direct PVC->PVC copy does not.
   classes:
     - name: media
       share: /mnt/tank/media
