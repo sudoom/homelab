@@ -180,6 +180,43 @@
 # while /v1/status, /v0/status and /status all return 400.
 # ---------------------------------------------------------------------------
 
+# The deploy task above only CREATES. Port bindings are the one field that has
+# had to change post-deploy (backnet-only -> 0.0.0.0, see group_vars), and a
+# create-only role would silently leave the live app on the old binding -- the
+# same "declared but never applied" trap as the auto-created scrub task.
+- name: Read the current garage app config
+  ansible.builtin.command:
+    argv: [midclt, call, app.config, "{{ truenas_garage.app_name }}"]
+  register: truenas_garage_live
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Reconcile the garage port bindings
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.update
+      - "{{ truenas_garage.app_name }}"
+      - "{{ {'values': {'network': _net}} | to_json }}"
+  vars:
+    # host_ips [] means "all interfaces" -- that is the schema default and the
+    # only way to also listen on the mgmt address, which app.ip_choices does not
+    # offer individually.
+    _want_ips: "{{ [] if truenas_garage.bind_ip == '0.0.0.0' else [truenas_garage.bind_ip] }}"
+    _net:
+      web_port: { bind_mode: published, port_number: "{{ truenas_garage.ports.web | int }}", host_ips: "{{ _want_ips }}" }
+      rpc_port: { bind_mode: published, port_number: "{{ truenas_garage.ports.rpc | int }}", host_ips: "{{ _want_ips }}" }
+      s3_port: { bind_mode: published, port_number: "{{ truenas_garage.ports.s3 | int }}", host_ips: "{{ _want_ips }}" }
+      s3_web_port: { bind_mode: published, port_number: "{{ truenas_garage.ports.s3_web | int }}", host_ips: "{{ _want_ips }}" }
+      admin_port: { bind_mode: published, port_number: "{{ truenas_garage.ports.admin | int }}", host_ips: "{{ _want_ips }}" }
+  when: >-
+    ((truenas_garage_live.stdout | from_json).network.s3_port.host_ips | default([]))
+    != ([] if truenas_garage.bind_ip == '0.0.0.0' else [truenas_garage.bind_ip])
+  no_log: true
+
 - name: Read the garage admin token
   ansible.builtin.command:
     argv: [midclt, call, app.config, "{{ truenas_garage.app_name }}"]

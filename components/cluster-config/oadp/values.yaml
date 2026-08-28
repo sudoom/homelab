@@ -47,7 +47,25 @@ garageBsl:
   bucket: velero
   prefix: velero
   region: garage                       # garage's configured region name
-  s3Url: http://192.168.10.10:30188    # backnet; jumbo-verified to all 3 nodes
+  # FRONTNET, deliberately -- not the 10G backnet.
+  #
+  # 192.168.10.10:30188 was tried first and failed: BSL Unavailable with
+  # `dial tcp 192.168.10.10:30188: i/o timeout`, and a 90 s socket watch on the
+  # NAS saw ZERO inbound SYNs -- the packets never arrived.
+  #
+  # **Pod-network -> storage-backnet egress does not work on this cluster.**
+  # Everything that reaches 192.168.10.0/24 today does so from the HOST stack:
+  # Ceph is `network.provider: host`, and csi-nfs-{node,controller} are both
+  # `hostNetwork: true`. Velero runs on the pod network (podIP 10.130.x) and is
+  # the first pod-network client to try. Pod -> frontnet IS proven
+  # (synology-cert-sync reaches 192.168.1.2 nightly).
+  #
+  # COST: Velero's S3 traffic takes 1G, not 10G. Irrelevant for the rehearsal
+  # (~20 MB) and for config backups. It DOES matter for a 3.21 TiB bulk move --
+  # CephFS HDD read runs ~200 MB/s (1.6 Gbps), so 1G becomes the bottleneck and
+  # roughly doubles the transfer. Note a direct PVC->PVC copy has no such
+  # problem: NFS is kernel-mounted by hostNetwork CSI pods and stays on 10G.
+  s3Url: http://192.168.1.25:30188
   credentialSecret: garage-credentials
   # Sealed 2026-08-28 against sealed-secrets-pub.pem (valid to 2036). Strict
   # scope: bound to name garage-credentials in ns openshift-adp -- renaming

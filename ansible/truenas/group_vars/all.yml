@@ -134,10 +134,27 @@ truenas_ntp_servers:
   - 162.159.200.123                 # time.cloudflare.com (anycast, independent operator)
 
 # ---- garage S3 (Velero BackupStorageLocation) ------------------------------
-# Bound to the STORAGE BACKNET only. `app.ip_choices` on this box offers exactly
-# {0.0.0.0, ::, 192.168.10.10} -- the mgmt address is not bindable -- and the
-# backnet is precisely where the OKD nodes reach it, so this is both the safe
-# and the only sensible choice. Nothing here is secret: admin_token, rpc_secret
+# Bound to 0.0.0.0, NOT the backnet only. This was 192.168.10.10 until
+# 2026-08-28, when the Velero BSL failed with `dial tcp 192.168.10.10:30188:
+# i/o timeout` and a 90 s socket watch on the NAS saw ZERO inbound SYNs.
+#
+# Root cause: **pod-network -> storage-backnet egress does not work on this
+# cluster, and never has.** Everything that touches 192.168.10.0/24 today does
+# so from the HOST stack -- Ceph runs `network.provider: host`, and both
+# csi-nfs-node and csi-nfs-controller are `hostNetwork: true`. Velero is the
+# first POD-network client to try, and its packets never leave for the backnet.
+#
+# `app.ip_choices` offers only {0.0.0.0, ::, 192.168.10.10} -- the mgmt address
+# is not individually bindable -- so 0.0.0.0 is the only way to also listen on
+# 192.168.1.25, which IS a proven pod-egress path (synology-cert-sync reaches
+# 192.168.1.2 nightly from a pod).
+#
+# ACCEPTED COST: garage is now reachable on the frontnet LAN as well. It is
+# authenticated by S3 key and holds only backup staging, so this is acceptable
+# -- but it is a real widening, so do not extend it further without revisiting.
+# NOTE the data path is unaffected: NFS is kernel-mounted by hostNetwork CSI
+# pods, so media traffic still rides the 10G backnet. Only Velero's S3 client
+# takes the 1G frontnet. Nothing here is secret: admin_token, rpc_secret
 # and web_ui_password are generated ON the box at create time and never leave it.
 truenas_garage:
   app_name: garage
@@ -150,7 +167,9 @@ truenas_garage:
   run_as_gid: 568
   cpus: 2
   memory_mb: 4096
-  bind_ip: 192.168.10.10
+  bind_ip: 0.0.0.0
+  # Address the CLUSTER uses to reach garage (pod-network path -> frontnet).
+  s3_client_ip: 192.168.1.25
   ports:
     web: 30186
     rpc: 30187
