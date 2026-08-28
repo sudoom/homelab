@@ -1127,3 +1127,85 @@ code-only. So the post-burn-in verification — long test on all six, then diff
 against `/root/smart-baseline-*.txt` — is the operator's to run. The cron jobs
 above make it the *last* time that is true: from then on the schedule and the
 reader are both in git.
+
+### The verdict: six for six
+
+```
+== sda .. sdf  (identical on all six)
+  5 Reallocated_Sector_Ct   0x0033   100   100   005    Pre-fail  Always  -  0
+197 Current_Pending_Sector  0x0022   100   100   000    Old_age   Always  -  0
+198 Offline_Uncorrectable   0x0008   100   100   000    Old_age   Offline -  0
+```
+
+Zero, zero, zero — on every drive. `WORST` is 100 as well, so none of these ever
+dipped even transiently.
+
+**The baseline diff turned out to be unnecessary, and provably so.**
+`Reallocated_Sector_Ct` is a *monotonic* counter: it only grows. Reading 0 today
+mathematically requires it to have been 0 on 2026-08-25. Zero is the floor, so
+there is nothing a diff could reveal. Worth remembering as a general shortcut —
+for a monotonic counter, a current reading at the floor makes the baseline
+comparison redundant.
+
+The other two are *not* monotonic (pending sectors can clear), so in principle
+one could have spiked and resolved mid-run. But any sector permanently remapped
+would appear in `Reallocated`, and that is 0; and a weak sector *recovered* by
+being rewritten is exactly what a destructive write test is for. Conclusion
+either way: **no sector on any of the six was remapped across ~87 TB of
+writes**, on 43,000-hour datacenter pulls. Better than I expected.
+
+## 2026-08-28 (cont.) — the pool gate
+
+`truenas-storage` asserts the pool and never creates it, so the genesis event is
+a manual step. The README said "Storage → Create Pool in the UI". Replaced with
+a committed script, for a reason that only became visible while writing it.
+
+`disk.query` gives a clean picture:
+
+```
+sda..sdf  HUS726040ALA610     4001 GB  pool=None
+sdg       INTEL_SSDSC2BB480G6  480 GB  pool=None
+$ midclt call boot.get_disks
+["sdg"]
+```
+
+**The boot device is also SATA.** So the obvious move — read the disk list once,
+paste `["sda"..."sdf"]` into a `pool.create` payload — is a latent trap: SATA
+enumeration is not stable across reboots, and a list captured today can name the
+boot disk tomorrow. That is the same hazard the root `CLAUDE.md` documents for
+HDD bay installs, where the new drive took `sda` on node4 but `sdb` on node5/6.
+
+So `bootstrap-pool.sh` re-derives the member set **at execution time** and
+gates, fail-closed, on: model matches, disk not already in a pool, disk not in
+`boot.get_disks`, count is exactly 6, and no pool exists yet. Verified in both
+directions — the happy path prints the payload and changes nothing without
+`--create`, and forcing a mismatch aborts with exit 1:
+
+```
+$ TRUENAS_DISK_COUNT=7 ./bootstrap-pool.sh ; echo $?
+GATE FAILED:
+  expected 7 disks, matched 6: ['sda', ..., 'sdf']
+1
+
+$ TRUENAS_DISK_MODEL=INTEL_SSDSC2BB480G6 TRUENAS_DISK_COUNT=1 ./bootstrap-pool.sh
+GATE FAILED:
+  expected 1 disks, matched 0: []
+```
+
+That second case is the useful one: aiming the gate directly at the **boot
+SSD's own model** yields zero candidates, because `boot.get_disks` removed it
+before the count check ever ran. The layers are independent, which is the point
+of having more than one.
+
+### A schema correction
+
+Reading `pool.create`'s schema rather than assuming its shape turned up that
+**`ashift` is not a parameter**. Accepted keys are `name`, `encryption`,
+`topology`, `allow_duplicate_serials` and the dedup/checksum/encryption options
+— nothing else. ZFS derives ashift from the disks' reported sector size.
+
+The README had said "Confirm `ashift=12` at creation; it is immutable", which
+implied it was settable there. It is immutable *and* not requestable: the only
+option is to verify afterwards, and a wrong value means rebuilding the pool is
+the sole remedy. Corrected, and `bootstrap-pool.sh` runs `zpool get ashift` as
+part of its post-create verification for exactly that reason.
