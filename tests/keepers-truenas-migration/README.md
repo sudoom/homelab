@@ -167,50 +167,99 @@ Optionally re-run once more while still live to shrink the Step 4 delta.
 ```bash
 oc -n keepers scale deploy/transmission --replicas=0
 oc -n keepers wait --for=delete pod -l app=transmission --timeout=120s
-
-# dry-run the deleting pass FIRST and read what it intends to remove
-oc -n keepers delete job keepers-nfs-copy --ignore-not-found
-# edit 01-copy-job.yaml: EXTRA = "--delete --dry-run"   -> apply, read the log
-# then:                  EXTRA = "--delete"             -> apply, let it run
 ```
 
-Minutes, not hours — only files that changed since Step 3. `--delete` is used
-**only here**, after the dry run, so files transmission removed during the live
-copy do not linger on the target.
+**A Job's pod template is immutable, so you must DELETE before EACH apply** —
+a second `apply` over a live Job object is rejected, it does not re-run it.
+
+```bash
+# --- dry run: see exactly WHAT it intends to remove ---
+oc -n keepers delete job keepers-nfs-copy --ignore-not-found
+#   edit 01-copy-job.yaml:  EXTRA = "--delete --dry-run --info=del"
+oc -n keepers apply -f tests/keepers-truenas-migration/01-copy-job.yaml
+oc -n keepers logs -f job/keepers-nfs-copy | grep -E "^deleting |Number of deleted"
+```
+
+`--info=del` is **required** and was missing from an earlier version of this
+runbook. rsync only emits per-path `deleting <path>` lines at verbosity ≥ 1
+(`INFO_DEL`); with just `--info=progress2,stats2` the dry run printed a bare
+count and nothing else — so the step told you to "read what it intends to
+remove" while running a command that could not show you.
+
+Read every line. Expect only files transmission removed during the live copy.
+If you see anything you do not recognise, **stop**.
+
+```bash
+# --- the real pass ---
+oc -n keepers delete job keepers-nfs-copy
+#   edit 01-copy-job.yaml:  EXTRA = "--delete"
+oc -n keepers apply -f tests/keepers-truenas-migration/01-copy-job.yaml
+oc -n keepers logs -f job/keepers-nfs-copy
+```
+
+Minutes, not hours. The Job self-arms three guards whenever `--delete` is in
+`EXTRA` — both paths must be NFS mounts and `/src` must be non-empty — so a
+`--delete` against an unmounted or empty source aborts instead of wiping 1.7 TiB.
+
+**`rc=24` means something different on this pass.** On the bulk pass it is
+expected (transmission is live, files come and go). Here nothing should be
+writing to `/src`, so files vanishing means **the quiesce failed** — the Job
+says so and does *not* swallow it. Confirm `replicas=0` and re-run.
+
+**Afterwards, put `EXTRA` back to `""`.** It is a checked-in file; leaving it
+armed means the next person to apply this Job runs a destructive pass.
 
 ### Step 5 — verify *before* cutting over
 
 ```bash
+oc -n keepers delete job keepers-nfs-verify --ignore-not-found
 oc -n keepers apply -f tests/keepers-truenas-migration/02-verify-job.yaml
 oc -n keepers logs -f job/keepers-nfs-verify
 ```
 
-Accept only if **all** of:
-- file and directory counts match Step 0,
-- apparent bytes match,
-- the itemize-changes difference count is **0**,
-- the 20-file checksum sample reports `PASS`.
+The Job now computes its own verdict and **exits non-zero if any check fails** —
+you no longer eyeball five numbers against notes from Step 0. It prints
+`ALL CHECKS PASSED` or `DO NOT CUT OVER`. What it gates on:
 
-This is metadata-complete plus a content *sample* — not a full content
-verification. A full one means re-reading 1.7 TiB twice over 1 Gbit (~8 h),
-which is not proportionate for re-downloadable data. Said plainly so nobody
-later believes more was proven than was.
+| check | why |
+|---|---|
+| `src files == dst files` and `src dirs == dst dirs` | self-contained; no Step 0 notes needed |
+| metadata diff count `== 0` | every file matches on size, mtime, mode, ownership |
+| **dst-only entries `== 0`** | section 3 has no `--delete`, so it proves src ⊆ dst, **not** equality. Without this, extra files on the target are invisible |
+| 20-file checksum sample | actual bytes, on a `shuf` sample |
+
+Two failure modes an earlier version had, both now closed: it piped rsync into
+`wc -l`, so **a failed rsync printed `0` — the exact PASS value**; and it kept
+the `-X` the copy Job had dropped, which would have produced ~4,493 spurious
+differences against a "count must be 0" criterion.
+
+Still metadata-complete plus a content *sample*, not a full byte check. A full
+one re-reads 1.7 TiB twice at ~52 MB/s (~19 h) and is not proportionate for
+re-downloadable data. Said plainly so nobody believes more was proven.
 
 ### Step 6 — cut over  *(git)*
 
 `components/apps/keepers/values.yaml` → `sharedData.truenasMigration.cutover: true`
 
+**Wait for ArgoCD before scaling up.** There is no webhook; the controller polls
+(~3 min). Scaling up first gets you transmission back on the *Synology*, looking
+like a successful cutover:
+
 ```bash
+until [ "$(oc -n keepers get deploy transmission \
+  -o jsonpath='{.spec.template.spec.volumes[?(@.name=="data")].persistentVolumeClaim.claimName}')" \
+  = "keepers-data-nfs" ]; do echo "waiting for ArgoCD..."; sleep 20; done
+echo "claim repointed"
+
 oc -n keepers scale deploy/transmission --replicas=1
-oc -n keepers get pod -l app=transmission -w
-oc -n keepers exec deploy/transmission -- sh -c 'mount | grep /data; ls /data'
+oc -n keepers exec deploy/transmission -- sh -c 'grep " /data " /proc/mounts; ls /data'
 # expect 192.168.10.10:/mnt/tank/keepers  and  1812  983
 ```
 
 `mountPath` stays `/data` and the layout is preserved, so transmission's torrent
-paths are unchanged — **it should not re-verify anything.** Confirm in the UI
-that torrents are seeding, not re-checking. Mass re-verification means the paths
-moved and something is wrong; roll back rather than let it run.
+paths are unchanged — **it should not re-verify.** Confirm in the UI that
+torrents are seeding, not re-checking. Mass re-verification means paths moved;
+roll back rather than let it run.
 
 ### Step 7 — soak, then reclaim
 
@@ -229,9 +278,9 @@ Only then remove the PVC template + `sharedData.storageClassName` from the chart
 
 | Stage reached | How to get back |
 |---|---|
-| Steps 1–3 | Nothing is consuming the new PVC. Set both flags false; delete the Job. |
+| Steps 1–3 | Nothing consumes the new PVC — sitting here is harmless. To actually unwind: `oc -n keepers delete job keepers-nfs-copy`, then delete `pvc/keepers-data-nfs` and `pv/truenas-keepers-data` **by hand** — both carry `Prune=false`, so flipping the flags back leaves the objects behind. |
 | Step 4 (quiesced) | `--replicas=1`. Still pointed at the Synology. |
-| Step 6 (cut over) | `cutover: false`, bounce the pod. Old PVC still Bound, data untouched. |
+| Step 6 (cut over) | `cutover: false`, bounce the pod. Recovers the **pre-migration** payload only: `keepers-data-pvc` is still Bound and was never written (the copy Job mounts it `readOnly`). Anything downloaded *after* cutover lives on TrueNAS alone — not lost (`keepers-data-nfs` stays Bound, PV is Retain) but not visible on the Synology. Re-copy that delta before rolling back if it matters. |
 | After Step 7 | Only path is re-copying from the Retained PV, or re-downloading. **Do not run Step 7 early.** |
 
 The old volume is mounted `readOnly: true` in the copy Job specifically so no
