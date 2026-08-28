@@ -157,6 +157,10 @@ truenas_garage:
     s3: 30188
     s3_web: 30189
     admin: 30190
+  zone: truenas
+  capacity_bytes: 8000000000000     # 8 TB advertised; ~7.3 TiB effective at replication_factor 1
+  s3_key_name: velero
+  s3_bucket: velero
   paths:
     config: /mnt/tank/s3/config
     metadata: /mnt/tank/s3/meta

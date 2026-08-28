@@ -165,3 +165,113 @@
 - name: Report garage app state
   ansible.builtin.debug:
     msg: "garage {{ 'already present' if truenas_garage.app_name in truenas_app_names else 'DEPLOYED — bootstrap (layout/key/bucket) is the next step' }}"
+
+# ---------------------------------------------------------------------------
+# garage bootstrap — layout, key, bucket.
+#
+# A freshly deployed garage is RUNNING but useless: layoutVersion 0, no node
+# role, /health returns 503. It needs a one-time layout assign+apply before it
+# will serve S3 at all. Doing that by hand would leave the single most important
+# part of this component outside git, so it is converged here like everything
+# else. `ansible.builtin.uri` runs ON the TrueNAS host, which is how it reaches
+# the backnet-bound admin port.
+#
+# API is v2 (garage 2.x) — verified by probe: /v2/GetClusterStatus returns 200
+# while /v1/status, /v0/status and /status all return 400.
+# ---------------------------------------------------------------------------
+
+- name: Read the garage admin token
+  ansible.builtin.command:
+    argv: [midclt, call, app.config, "{{ truenas_garage.app_name }}"]
+  register: truenas_garage_cfg
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Set the garage admin API facts
+  ansible.builtin.set_fact:
+    _garage_api: "http://{{ truenas_garage.bind_ip }}:{{ truenas_garage.ports.admin }}"
+    _garage_hdr:
+      Authorization: "Bearer {{ (truenas_garage_cfg.stdout | from_json).garage.admin_token }}"
+  no_log: true
+
+- name: Read the garage cluster status
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/GetClusterStatus"
+    headers: "{{ _garage_hdr }}"
+    return_content: true
+  register: truenas_garage_status
+  retries: 12
+  delay: 5
+  until: truenas_garage_status.status == 200
+  no_log: true
+
+- name: Stage the cluster layout (only while unassigned)
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/UpdateClusterLayout"
+    method: POST
+    headers: "{{ _garage_hdr }}"
+    body_format: json
+    body:
+      roles:
+        - id: "{{ truenas_garage_status.json.nodes[0].id }}"
+          zone: "{{ truenas_garage.zone }}"
+          capacity: "{{ truenas_garage.capacity_bytes | int }}"
+          tags: []
+  when: (truenas_garage_status.json.layoutVersion | int) == 0
+  no_log: true
+
+- name: Apply the cluster layout
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/ApplyClusterLayout"
+    method: POST
+    headers: "{{ _garage_hdr }}"
+    body_format: json
+    body:
+      version: "{{ (truenas_garage_status.json.layoutVersion | int) + 1 }}"
+  when: (truenas_garage_status.json.layoutVersion | int) == 0
+  no_log: true
+
+- name: List garage access keys
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/ListKeys"
+    headers: "{{ _garage_hdr }}"
+  register: truenas_garage_keys
+  no_log: true
+
+# The response carries secretAccessKey, hence no_log. The secret is never
+# persisted here -- garage keeps it and it can be re-read on demand with
+# GetKeyInfo?showSecretKey=true when the cluster-side SealedSecret is minted.
+- name: Create the velero access key
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/CreateKey"
+    method: POST
+    headers: "{{ _garage_hdr }}"
+    body_format: json
+    body: { name: "{{ truenas_garage.s3_key_name }}" }
+  when: truenas_garage.s3_key_name not in (truenas_garage_keys.json | map(attribute='name') | list)
+  no_log: true
+
+- name: List garage buckets
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/ListBuckets"
+    headers: "{{ _garage_hdr }}"
+  register: truenas_garage_buckets
+  no_log: true
+
+- name: Create the velero bucket
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/CreateBucket"
+    method: POST
+    headers: "{{ _garage_hdr }}"
+    body_format: json
+    body: { globalAlias: "{{ truenas_garage.s3_bucket }}" }
+  when: truenas_garage.s3_bucket not in (truenas_garage_buckets.json | map(attribute='globalAliases') | flatten | list)
+  no_log: true
+
+- name: Report the garage S3 endpoint
+  ansible.builtin.debug:
+    msg: >-
+      garage S3 endpoint http://{{ truenas_garage.bind_ip }}:{{ truenas_garage.ports.s3 }}
+      bucket={{ truenas_garage.s3_bucket }} key={{ truenas_garage.s3_key_name }}
+      layoutVersion={{ truenas_garage_status.json.layoutVersion }}

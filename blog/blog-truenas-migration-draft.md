@@ -1614,3 +1614,119 @@ Those are all reconciled by their roles and all showed `skipped` on the re-run
 (i.e. converged), but they are enforced-without-verification. Lower stakes than
 recordsize — none is a one-way door — so left as a known gap rather than
 speculative work.
+
+## 2026-08-28 (cont.) — garage on TrueNAS: an S3 target that is not on Ceph
+
+The migration plan asked for OADP, and OADP's shape is right — Velero's
+`change-storage-class` RestoreItemAction does exactly "restore this PVC onto a
+different StorageClass". What did not work was the *BackupStorageLocation*.
+
+Velero file-system backup writes to object storage and nothing else — verbatim
+from the docs, *"Velero FSB supports object storage as the backup storage
+only"*. The cluster's only S3 is Ceph RGW, whose data pool is replicated ×3 on
+the same three HDD OSDs a media migration would be draining:
+
+```
+backup of media-data-pvc  3.21 TiB x 3 = 9.63 TiB raw
+cluster raw available                    6.66 TiB
+```
+
+It does not fit, and no compression closes that on an already-compressed media
+library. But that is a property of *where the BSL points*, not of OADP — and
+`backupLocations` is a list. So: a second BSL, on the NAS.
+
+This also retires an older problem. The daily OADP `Schedule` has been
+`paused: true` since 2026-06-08, when it snapshotted Loki's WAL PVCs into the
+same Ceph it was protecting and drove the cluster to 97 % full. The committed
+comment says to unpause "when HDDs land and there's space". A BSL that is not on
+Ceph at all is a better answer than more space.
+
+### garage, not seaweedfs
+
+Both are in the TrueNAS catalog. Pulled both schemas rather than guessing:
+
+| | seaweedfs (stable train) | garage (community train) |
+|---|---|---|
+| components | master + volume + filer + admin + worker | one binary |
+| ports in schema | ~14 | 5 |
+| storage volumes | 5 | 3 |
+| S3 config in schema | **none** — needs `additional_flags` | native |
+
+seaweedfs is the *supported* one, which is a real argument. But for a backup
+target that can be rebuilt from scratch in minutes, less surface won. garage at
+`replication_factor: 1` is a single-node object store, which is exactly the job.
+
+### Four things checked instead of assumed
+
+1. **`app.create` is a job method.** Caught by reading `core.get_methods` before
+   writing the task, so it used `--job` from the start rather than repeating the
+   `pool.create` race from earlier the same day.
+2. **`--job`, not `-job`.** Checking that flag turned up a live bug in
+   `bootstrap-pool.sh`: `midclt call -job …` is an argparse error (single dash
+   swallows it as `-j` plus unknown short opts) and prints usage instead of
+   running. Verified against a nonexistent method so nothing executed:
+   ```
+   -job   -> usage: midclt [-h] ...       # runs NOTHING
+   -j     -> Method does not exist
+   --job  -> Method does not exist
+   ```
+   It would have silently failed the next pool build.
+3. **Only the backnet IP is bindable.** `app.ip_choices` returns exactly
+   `{0.0.0.0, ::, 192.168.10.10}` — the mgmt address is not offered. Convenient:
+   the backnet is where the nodes reach it. All five ports carry
+   `host_ips: [192.168.10.10]`, confirmed by `ss -lntp` showing no `0.0.0.0`
+   bind on any of them.
+4. **garage runs as uid 568; fresh datasets are `root:root 0755`.** It could not
+   have written a byte. The role stats each path and chowns only when wrong.
+
+### Two failures worth recording
+
+**"No pool configured for Docker."** TrueNAS apps run on Docker, and Docker needs
+a pool assigned before *any* `app.create` succeeds. A fresh install has
+`pool: null`. Now a guarded prerequisite in the role.
+
+**`no_log: true` hid the reason.** The deploy task carries generated secrets, so
+it is `no_log` — which also hid the failure, leaving only `Module failed` and a
+manual round trip to dig the cause out of `core.get_jobs`. Fixed properly: the
+task now registers with `failed_when: false`, and a follow-up reads the job
+record and fails with the real message. The payload stays hidden; the error does
+not. **Secret-hiding should never mean error-hiding.**
+
+### Bootstrap belongs in git, not in shell history
+
+A deployed garage is RUNNING but useless — `layoutVersion: 0`, no node role,
+`/health` returns 503. It needs a one-time layout assign + apply before it
+serves S3 at all.
+
+I did that first with ad-hoc `curl`, which is precisely what this repo's
+code-only rule exists to prevent, so it was converged into the role:
+`GetClusterStatus` → stage + apply layout when `layoutVersion == 0` →
+`CreateKey` when absent → `CreateBucket` when absent. `ansible.builtin.uri` runs
+on the TrueNAS host, which is how it reaches the backnet-bound admin port.
+
+API version was probed, not assumed — this is garage 2.x:
+
+```
+/v2/GetClusterStatus -> 200
+/v1/status           -> 400
+/v0/status           -> 400
+```
+
+Re-run proves idempotence — every bootstrap task skips:
+
+```
+Stage the cluster layout   skipping     (layoutVersion == 1)
+Apply the cluster layout   skipping
+Create the velero key      skipping
+Create the velero bucket   skipping
+garage S3 endpoint http://192.168.10.10:30188 bucket=velero key=velero layoutVersion=1
+```
+
+Effective capacity 7.3 TiB at replication factor 1 — comfortable for a 3.21 TiB
+staging copy.
+
+The generated `admin_token` / `rpc_secret` / `web_ui_password` are created with
+`openssl rand -hex 32` **on the box** and never leave it: nothing in git, no
+vault entry. The S3 secret is likewise never persisted here — garage holds it and
+it can be re-read with `GetKeyInfo?showSecretKey=true` when the cluster-side
+SealedSecret is minted.
