@@ -42,16 +42,24 @@ being 1 G-capped with no hardlinks to constrain multi-stream copying.
 
 ## Prerequisites — both are blocking
 
-**1. Remove the orphan rehearsal directory.** `/mnt/tank/keepers/pvc-342353d7-…`
-(≈19 MB, left by the 2026-08-28 OADP rehearsal) sits *inside* the dataset the
-static PV hands to the PVC **as its root**. Left in place it appears as a stray
-entry in transmission's `/data` after cutover.
+**1. Remove the orphan rehearsal directory.** ✅ **DONE 2026-08-29.**
+`/mnt/tank/keepers/pvc-342353d7-…` (≈19 MB, left by the 2026-08-28 OADP
+rehearsal) sat *inside* the dataset the static PV hands to the PVC **as its
+root** — left in place it would have appeared as a stray entry in
+transmission's `/data` after cutover. Removed by the operator; verified empty.
 
-```bash
-ssh truenas_admin@192.168.1.25 'ls -la /mnt/tank/keepers/'      # confirm first
-ssh truenas_admin@192.168.1.25 'sudo rm -rf /mnt/tank/keepers/pvc-342353d7-8d62-4c22-b4a5-2aa5114391e2'
-ssh truenas_admin@192.168.1.25 'ls -la /mnt/tank/keepers/'      # expect empty
+Target state confirmed the same day:
+
 ```
+/mnt/tank/keepers        empty (192K, directory only)
+tank/keepers             14.4T avail, recordsize 1M
+NFS export               enabled, maproot_user=root,
+                         hosts=[192.168.10.2, .3, .4]   (node backnet only)
+```
+
+`recordsize: 1M` matches the workload (4,493 files averaging ~400 MiB), and the
+host restriction is why the copy Job must run on a cluster node rather than
+anywhere else — the export is not reachable from the frontnet at all.
 
 **2. Confirm the Synology's offsite job.** If the DS418 runs Hyper Backup /
 Cloud Sync over `/volume1/kubenfs`, migrating off it **silently drops keepers
