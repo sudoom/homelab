@@ -1,4 +1,4 @@
-{{- if .Values.truenas.staticVolumes.enabled }}
+{{- if and .Values.truenas.enabled .Values.truenas.staticVolumes.enabled }}
 {{- range .Values.truenas.staticVolumes.volumes }}
 ---
 # Statically-defined TrueNAS volume — deliberately NOT dynamically provisioned.

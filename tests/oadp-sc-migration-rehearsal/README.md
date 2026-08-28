@@ -9,7 +9,7 @@ operator-run: every step is a cluster mutation.
 
 ## Why rehearse at all
 
-OADP 1.5 has been installed for 91 days and has taken **zero backups** — the
+At the time this was written, OADP 1.5 had been installed for 91 days and had taken **zero backups** — the
 daily `Schedule` is `paused: true` since the 2026-06-08 incident. The restore
 path is completely unproven. A migration is a bad first exercise of an untested
 restore.
@@ -138,7 +138,20 @@ oc delete ns scmigrate-src scmigrate-dst
 # BOTH cephfs-hdd and nfs-truenas-* are reclaimPolicy: Retain -> two orphan PVs
 oc get pv | grep Released
 oc delete pv <cephfs-pv> <nfs-pv>
-oc -n openshift-adp delete backup scmigrate-1 restore scmigrate-1-to-nfs
+# NOT `oc delete backup ...` -- bare kinds resolve to CNPG (see above), AND a
+# plain CR delete is WRONG even fully-qualified: it removes the CR but leaves the
+# kopia data in the bucket, and Velero's backup-sync controller RECREATES the CR
+# from the BSL within minutes. Observed 2026-08-28: deleted at teardown, back
+# 4 h later. Use a DeleteBackupRequest, which removes CR *and* object-store data.
+cat <<'YAML' | oc apply -f -
+apiVersion: velero.io/v1
+kind: DeleteBackupRequest
+metadata: { name: scmigrate-1-purge, namespace: openshift-adp }
+spec: { backupName: scmigrate-1 }
+YAML
+oc -n openshift-adp delete restores.velero.io scmigrate-1-to-nfs
+# the kopia BackupRepository CR is not reaped by the above:
+oc -n openshift-adp delete backuprepository scmigrate-src-truenas-garage-kopia
 oc -n openshift-adp get cm change-storage-class-config    # MUST be NotFound
 # purge what Retain left behind: the CephFS subvolume (toolbox) and
 # /mnt/tank/keepers/<pv>/ on the NAS

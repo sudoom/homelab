@@ -2,7 +2,7 @@
 
 **Upstream:** https://github.com/rook/rook
 **Component:** `pkg/operator/ceph/csi/` (CSI Driver CR reconciliation / OperatorConfig → Driver CR translation)
-**Affected version:** Rook v1.19.5 (latest at time of writing) on Ceph Squid 19.2.3 (deployed via OKD 4.20 / Kube 1.31)
+**Affected version:** Rook v1.19.5 (latest at time of writing) on Ceph Squid 19.2.3 (deployed via OKD 4.20 / Kube 1.33)
 **Severity:** Functional — on clusters with `network.provider: host` + `network.addressRanges` pinning Ceph daemons to a non-K8s-default subnet, CSI ctrlplugin pods land on the pod network and cannot reach OSDs across nodes. Every `CreateVolume` hangs.
 
 ## Summary

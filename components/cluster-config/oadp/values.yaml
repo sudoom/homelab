@@ -83,8 +83,21 @@ dpa:
     uploaderType: kopia
 
 schedule:
-  # PAUSED by default — the cluster's only Ceph pool is at ~83% post-2026-06-08
-  # incident, no headroom for backup snapshots until the HDD tier ships.
+  # PAUSED. The ORIGINAL reason (single Ceph pool at ~83%, "no headroom until the
+  # HDD tier ships") is STALE — the HDD tier landed 2026-06-12 and there are now
+  # several pools. It did NOT unblock this, because the RGW data pool is x3 on
+  # the same three HDD OSDs, so a Ceph-backed backup into RGW is still circular:
+  # the 2026-06-08 incident was the daily Schedule snapshotting Loki's WAL PVCs
+  # into the Ceph it was protecting, driving the cluster to 97% full.
+  #
+  # The REAL remaining gates, as of 2026-08-28:
+  #   1. an explicit excludedNamespaces scope (see README.md TODO), so this does
+  #      not re-backup PVCs that CNPG already handles, and
+  #   2. deciding which BSL each Schedule targets. `truenas-garage` (added
+  #      2026-08-28) is the non-circular destination; `default` is RGW and must
+  #      not receive backups of Ceph-backed volumes.
+  # The restore path itself is no longer unproven — the 2026-08-28 rehearsal
+  # exercised backup+restore end to end against truenas-garage.
   # OADP infrastructure (operator, DPA, Schedule CR) stays in place so the
   # storage path is exercised and ready, but no actual backups fire.
   #

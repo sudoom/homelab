@@ -2,7 +2,7 @@
 
 **Upstream:** https://github.com/rook/rook
 **Component:** `pkg/operator/ceph/client/` (CSI keyring provisioning)
-**Affected version:** Rook v1.19.5 (latest at time of writing) on Ceph Squid 19.2.3 (deployed via OKD 4.20 / Kube 1.31)
+**Affected version:** Rook v1.19.5 (latest at time of writing) on Ceph Squid 19.2.3 (deployed via OKD 4.20 / Kube 1.33)
 **Severity:** Functional — every RBD `CreateVolume` hangs on a freshly-bootstrapped cluster until the cap is manually added. CSI is the only block-storage path on the cluster; every new PVC stays `Pending` indefinitely.
 
 ## Summary

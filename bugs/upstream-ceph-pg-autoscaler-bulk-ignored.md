@@ -2,7 +2,7 @@
 
 **Upstream:** https://github.com/ceph/ceph
 **Component:** `mgr/pg_autoscaler`
-**Affected version:** Ceph Squid 19.2.3 (deployed via Rook v1.18 on OKD 4.20 / Kube 1.31)
+**Affected version:** Ceph Squid 19.2.3 (deployed via Rook v1.18 on OKD 4.20 / Kube 1.33)
 **Severity:** Functional — autoscaler is silently inert; pools stay at `pg_num: 1` indefinitely until manually bumped.
 
 ## Summary

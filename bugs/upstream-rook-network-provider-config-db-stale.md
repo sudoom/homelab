@@ -2,7 +2,7 @@
 
 **Upstream:** https://github.com/rook/rook
 **Component:** `cluster-controller` / network reconciliation
-**Affected version:** Rook v1.18 with Ceph Squid 19.2.3 (deployed on OKD 4.20 / Kube 1.31)
+**Affected version:** Rook v1.18 with Ceph Squid 19.2.3 (deployed on OKD 4.20 / Kube 1.33)
 **Severity:** Functional — first OSD rolled to the new network shape crashloops indefinitely until manual cleanup of the Ceph config DB. On a low-OSD-count cluster (3 OSDs, `min_size: 2`), this creates a chicken-and-egg deadlock with Rook's own safety check; recovery requires bypassing the operator with a manual `oc patch`.
 
 ## Summary

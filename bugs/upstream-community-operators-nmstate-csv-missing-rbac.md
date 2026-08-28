@@ -115,6 +115,6 @@ Both shipped 2026-05-11 alongside an NNCP roll that triggered the issue.
 
 ## Local context
 
-- OKD 4.20 (Kube 1.31), 3-node bare-metal cluster.
-- `nmstate` namespace, `OperatorGroup` with `targetNamespaces: [nmstate]`.
+- OKD 4.20 (Kube 1.33), 3-node bare-metal cluster.
+- `nmstate` namespace, `OperatorGroup` with `spec: {}` (AllNamespaces); operator installed into `openshift-nmstate`, operand lands in `nmstate`.
 - `community-operators` `CatalogSource` (the okderators-built `kubernetes-nmstate-operator` has a separate ImageStream bug — see `nmstate-imagestream-bug.md` in the same repo).

@@ -69,7 +69,9 @@ truenas:
   # (the driver does support that templating). It gives nicer paths but lands
   # every PVC in ONE dataset, destroying exactly the granularity above.
   #
-  # OPEN: static PVs (no StorageClass) would make /mnt/tank/media itself the data
+  #
+  # DECIDED 2026-08-28 — static PVs SHIPPED (behind `staticVolumes.enabled: false`).
+  # They make /mnt/tank/media itself the data
   # root instead of /mnt/tank/media/pvc-<uuid>/ -- worth it because (a) under a
   # Retain class, deleting and recreating a PVC yields a NEW uuid directory and
   # silently orphans the old data, and (b) this pool is also browsed over SMB.

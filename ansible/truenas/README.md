@@ -48,6 +48,7 @@ Rejected alternatives:
 | Timezone, NTP, alert email | `truenas-system` | singletons (`.config`/`.update`) |
 | NFS exports to the OKD nodes | `truenas-shares` | matched on export path |
 | Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
+| garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
 
 ## What it deliberately does NOT manage
 
@@ -170,12 +171,13 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `group_vars/all.yml` | All declarative inputs: pool name, datasets, NFS clients, NTP, schedules |
 | `vars/vault.yml.example` | Committed template (no secrets) |
 | `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials only |
-| `playbook.yml` | Full convergence (needs vault) |
+| `playbook.yml` | Full convergence (vault OPTIONAL since 2026-08-28 — only the SMTP alert-email vars need it) |
 | `check.yml` | Read-only state report (no vault) |
 | `roles/truenas-storage/` | Assert pool, converge datasets |
 | `roles/truenas-system/` | Timezone, NTP, alert email |
 | `roles/truenas-shares/` | NFS exports + service enablement |
 | `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots |
+| `roles/truenas-apps/` | garage S3 server (Velero BSL): app deploy/update + layout/key/bucket bootstrap |
 | `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
 
 Full chronology, decisions and the gaps found in the original plan:
