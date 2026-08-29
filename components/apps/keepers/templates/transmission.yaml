@@ -38,13 +38,26 @@ metadata:
   namespace: {{ .Values.namespace }}
 spec:
   revisionHistoryLimit: 3
-  # Declarative, because `oc scale` loses to ArgoCD. This Application runs
-  # automated selfHeal, so an out-of-band scale to 0 is drift that the
-  # controller reverts within ~3 min -- which would restart transmission in the
-  # middle of the migration's quiesced delta sync, exactly when nothing may
-  # write to the source. Quiesce by setting `quiesced: true` in values and
-  # letting ArgoCD apply it, never with `oc scale`.
-  replicas: {{ if .Values.apps.transmission.quiesced }}0{{ else }}1{{ end }}
+  # replicas is deliberately NOT git-driven, and that is not an oversight.
+  #
+  # root-app renders `ignoreDifferences: {group: apps, kind: Deployment,
+  # jqPathExpressions: ['.spec.replicas']}` onto EVERY Application (44 of 45 on
+  # 2026-08-29), so ArgoCD never reconciles a Deployment's replica count here.
+  # It exists for HPA-managed Deployments, and root-app's own comment calls it
+  # "a no-op" for apps without an HPA. That is true only until someone wants git
+  # to CHANGE a replica count -- then the ignore silently prevents it.
+  #
+  # Measured the hard way during the 2026-08-29 keepers migration: a
+  # `quiesced` flag rendering replicas 0/1 was added on the theory that selfHeal
+  # would revert an out-of-band `oc scale`. It does not -- and because ArgoCD
+  # ignores the field, flipping the flag back could not scale transmission UP
+  # again after the cutover. The Deployment sat at 0 while ArgoCD reported
+  # Synced/Healthy, and service was restored with the very `oc scale` the flag
+  # was meant to replace.
+  #
+  # So: quiesce and un-quiesce with `oc scale`. It is safe here precisely
+  # BECAUSE ArgoCD ignores the field -- there is nothing to fight.
+  replicas: 1
   selector:
     matchLabels:
       app: transmission

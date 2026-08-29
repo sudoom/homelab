@@ -54,7 +54,18 @@ spec:
     # HPA-managed Deployments (e.g. immich-server): let the HorizontalPodAutoscaler
     # own .spec.replicas — without this, selfHeal reverts it to the chart value and
     # fights the HPA. Apps without an HPA set replicas explicitly; nothing changes
-    # it, so this ignore is a no-op for them.
+    # it, so this ignore is a no-op for them -- WITH ONE TRAP, found 2026-08-29.
+    #
+    # It is a no-op only while nobody wants GIT to change a replica count. The
+    # moment a chart tries to (a maintenance-mode flag, a quiesce switch, scaling
+    # something to 0 declaratively), ArgoCD silently does not apply it and still
+    # reports Synced/Healthy -- there is no drift, because the field is not
+    # compared. The keepers migration lost a downtime window to exactly this:
+    # a `quiesced` flag rendered replicas 0/1, ArgoCD ignored it, and the
+    # Deployment could not be scaled back UP from git after the cutover.
+    #
+    # If a declarative replica change is ever needed, scope this ignore to the
+    # HPA-managed apps that actually need it instead of all 44.
     - group: apps
       kind: Deployment
       jqPathExpressions:
