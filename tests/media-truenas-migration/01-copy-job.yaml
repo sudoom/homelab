@@ -64,6 +64,17 @@ spec:
           # rather than leaving an apk error to be misread as a bad tag.
           securityContext:
             runAsUser: 0
+            # privileged IS REQUIRED HERE, and was NOT in the keepers harness.
+            # First attempt (runAsUser 0 only, exactly as keepers) failed with
+            #   rsync: [sender] change_dir "/src" failed: Permission denied (13)
+            # as ROOT, against a root-owned 0755 directory -- so not a file
+            # permission. CephFS cannot carry per-file SELinux labels, so a
+            # confined container gets an MCS category the mount cannot satisfy.
+            # Every media app that already reads this volume runs privileged
+            # (see components/apps/media/templates/apps.yaml) for the same
+            # reason; keepers never hit it because its source was NFS.
+            # The media namespace holds the privileged SCC for SA default.
+            privileged: true
           env:
             # Extra flags per phase:
             #   bulk / catch-up  : ""
