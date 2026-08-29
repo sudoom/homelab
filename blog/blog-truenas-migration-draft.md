@@ -2322,3 +2322,131 @@ hardlinks multi-stream copy is trivially safe there in a way it is not for media
 2. **The static PV capacity label is wrong.** `keepers-data` declares
    `capacity: 500Gi` against 1.7 TiB of data. NFS does not enforce it, so nothing
    breaks — but `oc get pv` would report a number off by 3.4×. Wants ≥ 2Ti.
+
+## 2026-08-29 — sequencing the remaining four moves
+
+keepers is done. Four left: repoint immich, move the family photos, move media off
+CephFS, and move Time Machine off the Synology and the Mac mini. Order was open.
+Planned them together rather than one at a time, because they contend for the same
+three read paths and one of them has a closing window nobody would have looked for.
+
+### The finding that set the order
+
+**`casesensitivity` is a ZFS create-time property and cannot be changed afterwards.**
+`zfs get -r casesensitivity tank` reports every dataset `sensitive` with source `-`,
+i.e. set at create, not inherited. TrueNAS's own preset for a pure-SMB dataset is
+INSENSITIVE + NFSV4 + RESTRICTED.
+
+`tank/timemachine`, `tank/personal` and `tank/work` are all `sensitive`, `acltype=posix`,
+and all still **192K empty**. Recreating them costs nothing today and is impossible once
+data lands. That belongs to Time Machine — the workstream everyone would naturally do
+last — so it gets pulled to the front on its own merits. Nothing else in the programme
+has a deadline.
+
+Refinement worth keeping: `share_type: SMB` gives INSENSITIVE, but `MULTIPROTOCOL`/`NFS`
+give SENSITIVE. A photo dataset that immich NFS-reads *and* humans SMB-browse is correctly
+SENSITIVE — which is what it already is — and needs only an `acltype` reconcile, which
+**is** updatable post-create. A child created with `share_type: SMB` under a sensitive
+parent gets INSENSITIVE regardless, so children are an escape hatch.
+
+### Capacity does not order anything
+
+| | |
+|---|---|
+| usable | 14.35 TiB (6-wide RAIDZ2, 21.8T raw) |
+| used | 1.65 TiB (keepers) |
+| media | 3.2155 TiB (measured two ways, 9.7 MB apart) |
+| immich | 0.134 TiB |
+| Time Machine | **≤ 1.00 TiB by construction** — `tank/timemachine` already carries `quota=1T` |
+| family photos | **< ~2.2 TiB**, bounded by the DS418's own 4.0T-used figure minus kubenfs |
+
+Worst case 8.21 TiB of 14.35 = **57%**, leaving 3.27 TiB of headroom below the 80% line.
+Capacity does not gate, order, or discriminate between any two sequences. Recorded so
+nobody re-derives it.
+
+Photos exceeding 2.2 TiB would *contradict* established figures — that is an audit
+problem, not a capacity one. And the cost that actually scales with the photo corpus is
+**offsite, not pool**: ~$7.50/mo at 500 GiB, ~$34/mo at 2.2 TiB. Measure before committing
+it to Leg A.
+
+### Three non-competing read paths
+
+Media reads CephFS (124 MB/s). Immich and photos both read the DS418 (52.2 MB/s) and must
+serialise **against each other**. Time Machine reads the Macs. So media is not before or
+after the Synology work — it runs *alongside* it. Combined write 124 + 52 = 176 MB/s into
+a 6-wide RAIDZ2 is not free but nowhere near binding.
+
+### Order: media → immich → photos → Time Machine
+
+The keepers run was ordered cheapest-to-lose-first. That reasoning was "prove an unproven
+mechanism on data you can afford to lose" — and the mechanism it proved (root `rsync -aH`,
+NFS→NFS, privileged namespace, byte-verified) is now proven. So the question becomes which
+**new wrinkle** to prove next:
+
+- media — hardlinks (1,478 of 2,203) + a six-deployment quiesce, on re-downloadable data
+- immich — a non-root copy in a baseline-PSA namespace, on an irreplaceable corpus
+- photos — a DSM-side export + an undecided ownership model, irreplaceable, unmeasured
+
+Cheapest-to-lose-first still says media. It is also the only one blocked by nothing, the
+only one that *frees* anything (4.823 TiB raw), and the only one that unblocks downstream
+work (Loki → garage → retiring the HDD OSDs).
+
+### immich: copy the library, keep Postgres
+
+The operator asked whether "repoint" could mean pointing at an empty dataset and resyncing
+from the phone. Answered from the live DB rather than by argument — 1,969 assets spanning
+2021-01-14 → 2026-07-03:
+
+**Lost and manual to recreate:** 8 named persons (of 21 face clusters — detection re-runs,
+the *naming* does not), 35 `isFavorite` flags, 1 album with 1,943 members.
+**Auto-regenerated, not lost:** 1,969 EXIF rows, 1,317 face vectors, 1,924 CLIP vectors,
+35 memories, 4,168 asset_file rows.
+**Zero exposure:** shared_link 0, stack 0, tag 0, partner 0, api_key 0.
+
+**And the unbounded one:** all 1,969 rows have `deletedAt` null, so the DB cannot tell us
+how many were deleted from the phone over 5.5 years and now exist *only* in immich. That
+count is unknowable, and it is exactly the set a phone resync destroys.
+
+Re-uploading also buys nothing back. The storage template was pinned before the bulk
+import and on-disk paths already conform (`/data/library/Vadzim/2024/2024-08-24/IMG_5372.dng`),
+and the DB's absolute paths survive the move because `mountPath` does not change — only
+which PVC backs it. Copy is ~47 min at 52.2 MB/s. Copy `encoded-video/` and `thumbs/` too:
+"regenerable" inverts the economics at 278 CPU transcodes and ~3,900 resizes.
+
+**Two blockers the keepers harness does not cover.** The immich namespace is PSA `baseline`
+with no privileged binding and the server image has no rsync, so the proven copy Job
+(`apk add rsync`, `runAsUser: 0`) cannot run there. A non-root copy is nonetheless
+sufficient — 11,788 of 11,789 entries are already `1000980000:1000980000`, the exception
+being `/data` itself, which rsync never recreates when copying contents. And the quiesce
+must set `hpa.enabled: false` in git *first*: ArgoCD ignores `.spec.replicas` cluster-wide,
+and a live HPA with `minReplicas: 1` reverts an imperative `oc scale` within ~30 s. The
+HPA object itself *is* reconciled.
+
+### Time Machine: start fresh
+
+Confirmed with the operator. What is lost is version *depth* only; current data lives on
+the Macs. Migrating sparsebundles means hundreds of thousands of 8 MiB band files over
+1 Gbit, plus volume-UUID and `com.apple.backupd` inheritance, and macOS frequently
+concludes "Time Machine must create a new backup" anyway — full cost, fresh start regardless.
+The DS418 is being sold, so the history dies either way.
+
+Build two child datasets with their own quotas rather than one share with
+`auto_dataset_creation`, because auto-created children get no quota and one Mac could eat
+the other's space.
+
+### Next action
+
+Fork `tests/keepers-truenas-migration/` into `tests/media-truenas-migration/` with three
+deltas: `activeDeadlineSeconds` 43200 → 86400 (the keepers Job's own comment already says
+12 h is not enough for media), the namespace/claim swaps, and — the one that is not a
+find-and-replace — two new gates in the verify Job's exit code:
+
+```
+find /src -type f -printf '%i\n' | sort -u | wc -l   ==   same on /dst
+du -sb /dst   ~= 3.3 TiB, NOT ~5.6 TiB
+```
+
+**Because the failure mode is silent.** If `-H` is defeated, rsync exits 0, file counts
+match, the existing byte check matches, every gate goes green — and you find out when
+tank/media reads 5.6 TiB or both transmissions start re-downloading 2.3 TiB. Same shape as
+the `quiesced` flag ArgoCD ignored while reporting Synced/Healthy.
