@@ -89,6 +89,48 @@
     label: "{{ truenas_pool }}/{{ item.name }}"
   when: (truenas_pool ~ '/' ~ item.name) not in truenas_ds_ids
 
+# Datasets consumed by an UNPRIVILEGED pod need their root chowned to that
+# pod's UID -- a root:root 0755 dataset root is unwritable by a restricted-v2
+# workload, and the failure surfaces only at first write after cutover.
+#
+# Read the current owner first and chown only on drift, so a converged box
+# reports ok rather than changed. filesystem.chown is a JOB method: the --job
+# flag is mandatory (without it midclt returns a job id immediately and any
+# check after it races the chown).
+- name: Read current ownership of datasets that declare one
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - filesystem.stat
+      - "/mnt/{{ truenas_pool }}/{{ item.name }}"
+  register: truenas_ds_stat
+  changed_when: false
+  failed_when: false
+  loop: "{{ truenas_datasets | selectattr('owner_uid', 'defined') | list }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.name }}"
+
+- name: Chown datasets whose ownership drifted
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - filesystem.chown
+      - >-
+        {"path": "/mnt/{{ truenas_pool }}/{{ item.item.name }}",
+         "uid": {{ item.item.owner_uid }},
+         "gid": {{ item.item.owner_gid | default(item.item.owner_uid) }},
+         "options": {"recursive": false}}
+  loop: "{{ truenas_ds_stat.results | default([]) }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.item.name }}"
+  when:
+    - item.rc | default(1) == 0
+    - (item.stdout | from_json).uid != item.item.owner_uid
+       or (item.stdout | from_json).gid != (item.item.owner_gid | default(item.item.owner_uid))
+
 # Only fires on genuine drift, so a converged box reports ok, not changed.
 # recordsize IS updatable on a live dataset (it governs subsequent writes),
 # so this is safe to reconcile -- unlike ashift, which is create-time-only on

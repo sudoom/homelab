@@ -49,6 +49,27 @@ truenas_datasets:
     recordsize: 1M
     comments: "Immich photo library (NFS to the cluster). Light snapshots."
     quota: 0
+    # OWNERSHIP IS LOAD-BEARING HERE, unlike media/keepers.
+    #
+    # Those two are consumed by pods running as ROOT (the media + keepers
+    # namespaces hold the privileged SCC), and the NFS export sets
+    # maproot_user=root, so root-on-client writes fine into a root:root dataset.
+    #
+    # Immich does NOT: its namespace is restricted-v2 (baseline PSA, no
+    # privileged binding) and immich-server runs as the OpenShift-injected UID
+    # 1000980000. A root:root 0755 dataset root is unwritable by it, so the
+    # dataset must be chowned to that UID or the cutover fails at first write.
+    #
+    # 1000980000 is NOT arbitrary: it is the base of the immich namespace's
+    # `openshift.io/sa.scc.uid-range` annotation (1000980000/10000), which is
+    # assigned when the namespace is created and stable for its lifetime. All
+    # 6,183 files in the current Synology library are already owned by it.
+    # COUPLING TO KNOW ABOUT: delete and recreate the immich namespace and
+    # OpenShift may assign a different range, orphaning this ownership. Check
+    # `oc get ns immich -o jsonpath='{.metadata.annotations.openshift\.io/sa\.scc\.uid-range}'`
+    # before assuming this value still matches.
+    owner_uid: 1000980000
+    owner_gid: 1000980000
   - name: keepers
     recordsize: 1M
     comments: "keepers bulk download volume (RWX to the cluster). Per-app config/state stays on ceph-nvme-block."

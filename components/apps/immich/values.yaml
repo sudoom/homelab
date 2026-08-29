@@ -40,16 +40,48 @@ postgres:
       schedule: "0 0 3 * * *"   # 03:00 UTC base backup (offset from 04:30 snapshot)
 
 library:
-  # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi). Decided
-  # 2026-06-18: photos are irreplaceable, so they live where the existing 3-2-1
-  # pipeline already is (Synology -> cloud + offsite) — NOT on the shared
-  # cephfs-hdd EC tier (which would need a brand-new Ceph->NAS backup path and
-  # competes with media/RGW for ~6.9 TiB). NFS local-RAID also serves the
-  # thumbnail-heavy phone workload (small random reads) at least as well as
-  # EC-2+1-on-HDD, whose worst profile IS small random reads. The Postgres DB
-  # stays on ceph-nvme-block (fast RBD, never NFS). nfs-csi reclaimPolicy=Retain.
+  # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi).
+  #
+  # !! THE PREMISE OF THIS DECISION WAS FALSE (found 2026-08-29) !!
+  # The 2026-06-18 rationale was: "photos are irreplaceable, so they live where
+  # the existing 3-2-1 pipeline already is (Synology → cloud + offsite)". The
+  # operator confirmed there is NO Hyper Backup / Cloud Sync job over
+  # /volume1/kubenfs. That pipeline does not exist and never did, so these
+  # photos have had ZERO backup since the 2026-06-20 deploy. This is the third
+  # place the same phantom pipeline was asserted (also README.md's Immich item,
+  # and the "DB offsite backup COVERED" claim, both corrected 2026-08-28).
+  #
+  # Consequence: the reason to stay on the Synology has evaporated. Migration to
+  # TrueNAS is tracked in tests/immich-truenas-migration/. The backup gap is a
+  # SEPARATE, standing HIGH item (README TODO) that gates RECLAIMING the Synology
+  # copy -- not the migration itself, during which two copies exist.
+  #
+  # The parts of the rationale that DO still hold: NFS local-RAID suits the
+  # thumbnail-heavy phone workload (small random reads) better than EC-2+1-on-HDD,
+  # whose worst profile IS small random reads; and the library should not compete
+  # with media/RGW for the shared HDD tier. Both argue for NAS-over-NFS generally,
+  # which TrueNAS satisfies -- and it measured ~270 MB/s vs the Synology's 52.
+  # The Postgres DB stays on ceph-nvme-block (fast RBD, never NFS).
+  # nfs-csi reclaimPolicy=Retain.
   storageClass: nfs-csi
   size: 500Gi
+
+  # ---- Synology → TrueNAS migration (staged 2026-08-29) --------------------
+  # Same two-flag shape proven on keepers. Runbook: tests/immich-truenas-migration/.
+  # storageClassName is immutable on a bound PVC, so the move is "stand up a
+  # SECOND PVC, copy into it, repoint the consumer" -- and the copy needs both
+  # mounted at once, which one flag cannot express.
+  truenasMigration:
+    # Step 1 - publish immich-library-nfs, binding the static PV
+    # truenas-immich-library (enable it in components/storage/nfs-csi first).
+    # Both PVCs then coexist; nothing consumes the new one.
+    stagePvc: false
+    #
+    # Step 2 (CUTOVER) is deliberately NOT a flag here. `existingClaim` below is
+    # a value passed to the upstream immich SUBCHART, and Helm does not template
+    # values.yaml -- a flag would render nothing and silently do nothing. That is
+    # exactly the failure mode the keepers `quiesced` flag hit (14327d4).
+    # Cut over by editing existingClaim: immich-library -> immich-library-nfs.
 
 # HPA for immich-server (CPU-based). Possible now that thumbs no longer pin the
 # server to one node via an RWO PVC — its only PVC is the RWX NFS library, so >1
@@ -142,6 +174,9 @@ immich:
     persistence:
       library:
         # The RWX library PVC this chart templates (see templates/library-pvc.yaml).
+        # CUTOVER POINT: change to `immich-library-nfs` (requires
+        # library.truenasMigration.stagePvc: true, which creates that PVC).
+        # A one-line edit, not a flag -- see truenasMigration above for why.
         existingClaim: immich-library
   # Bundled single Valkey (BullMQ queue). enabled per the 2026-06-18 decision
   # (no Redis operator). emptyDir is fine — the queue is reconstructable.

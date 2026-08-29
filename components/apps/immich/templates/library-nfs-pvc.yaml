@@ -1,0 +1,34 @@
+{{- if .Values.library.truenasMigration.stagePvc }}
+# Second library PVC for the Synology → TrueNAS migration.
+#
+# storageClassName: "" (empty, NOT absent) is load-bearing: empty string means
+# "no class", which stops the default StorageClass from dynamically provisioning
+# instead of binding the static PV. The matching PV (truenas-immich-library, in
+# components/storage/nfs-csi) sets the same and pre-binds to this exact
+# namespace/name via claimRef, so the two find each other and nothing else can
+# claim either side.
+#
+# Capacity must be <= the PV's (2Ti). The measured library is 137 GiB, of which
+# only ~114 GiB (library/) is irreplaceable -- encoded-video and thumbs are
+# regenerable by Immich.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-library-nfs
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Before the subchart Deployments (wave 0) that mount it, same as the
+    # Synology PVC it replaces.
+    argocd.argoproj.io/sync-wave: "-2"
+    # Irreplaceable photos: never let a stray manifest change prune this out
+    # from under a running copy or a live server.
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: ""
+  volumeName: truenas-immich-library
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 2Ti
+{{- end }}
