@@ -1,0 +1,188 @@
+# media: CephFS (cephfs-hdd) -> TrueNAS NFS bulk copy.
+#
+# Forked from tests/keepers-truenas-migration/ AFTER that migration completed
+# and verified byte-identical. What is the SAME: rsync -aH --numeric-ids, the
+# readOnly source, the exit-code classification, the self-arming --delete guards.
+# What is DIFFERENT and why this is not a find-and-replace:
+#   - 1,478 hardlinked files (keepers had ZERO) -- see the -H note below
+#   - SIX consumers, not one -- quiesce order matters, see the README
+#   - source is CephFS at a measured 124 MB/s, so the SOURCE is the constraint
+#     (keepers was capped by the Synology at 52 MB/s)
+#   - 24h deadline, not 12h: 3,535,497,592,832 B / 124 MB/s = 7.9 h floor, and
+#     the keepers Job's own comment already said 12h was not enough for media.
+#
+# MANUAL APPLY ONLY. Not registered in bootstrap/root-app -- ArgoCD must never
+# own this, or a selfHeal could restart a copy mid-flight.
+#
+# Re-running this Job IS the resume mechanism. rsync skips files whose size and
+# mtime already match, so a run interrupted by a node reboot, an OVN egress
+# break or a stale mount costs only the re-scan of 4,493 files (seconds), not
+# the 1.7 TiB. Delete the completed/failed Job object, then re-apply.
+#
+#   oc -n keepers delete job media-nfs-copy --ignore-not-found
+#   oc -n keepers apply -f 01-copy-job.yaml
+#   oc -n keepers logs -f job/media-nfs-copy
+#
+# Runs as root deliberately: -a preserves ownership, which needs root on the
+# writing side, and the TrueNAS export sets maproot_user=root (verified
+# 2026-08-28) so root is not squashed. The keepers `default` SA already holds
+# the privileged SCC via components/apps/keepers/templates/scc-rbac.yaml.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: media-nfs-copy
+  namespace: media
+spec:
+  backoffLimit: 0            # no silent retry -- re-apply deliberately (see above)
+  # 12h ceiling. MEASURED 2026-08-28 at 52.2 MB/s sustained -> ~10h for 1.7 TiB,
+  # so the margin is ~2h, not the comfortable gap the retracted "4-6h" implied.
+  # If the rate dips below ~42 MB/s this kills the copy mid-flight; that is safe
+  # (re-apply resumes) but you would rather not meet it at 09:10. NOT ENOUGH for
+  # the media leg: 3.21 TiB needs a bigger number even at CephFS's faster reads.
+  activeDeadlineSeconds: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+        - name: rsync
+          image: docker.io/alpine:3.22
+          # The `apk add` below needs POD-NETWORK egress to the alpine CDN, and
+          # that is the exact path the OVN br-ex.forwarding cascade breaks --
+          # which two of the three documented resume triggers (node reboot, OVN
+          # egress break) also cause. So a resume attempt during that cascade
+          # dies at package install, seconds in, for a reason orthogonal to the
+          # copy: both NFS mounts are kernel-mounted by hostNetwork CSI pods and
+          # are entirely unaffected.
+          #
+          # An earlier comment here claimed "pod egress is known good" and cited
+          # the image pulling. That was wrong on its own terms: CRI-O pulls in
+          # the HOST netns, which the cascade does not touch, so image
+          # pullability says nothing about pod egress. Two different paths.
+          #
+          # Mitigated below with a bounded retry that names the real cause
+          # rather than leaving an apk error to be misread as a bad tag.
+          securityContext:
+            runAsUser: 0
+          env:
+            # Extra flags per phase:
+            #   bulk / catch-up  : ""
+            #   step 4 DRY RUN   : "--delete --dry-run --info=del"   <-- ARMED NOW
+            #   step 4 REAL PASS : "--delete"
+            # --info=del is required for the dry run to name paths; without it
+            # rsync prints only a count (INFO_DEL fires at verbosity >= 1).
+            # PUT THIS BACK TO "" once step 4 is done -- this file is committed,
+            # and leaving it armed means the next apply runs a destructive pass.
+            - name: EXTRA
+              value: ""
+          # NOTE: keep this script free of inline comments -- the whole block
+          # becomes one `sh -c` argv entry, so anything here shows up in `ps`
+          # and makes the process table unreadable. Rationale lives in the YAML
+          # comments above instead.
+          #
+          # -a   archive (perms, times, ownership, symlinks)
+          # -H   preserve hardlinks. A NO-OP for keepers (measured: 0 hardlinked
+          #      files) but kept so this command is byte-identical to the media
+          #      run, where it is load-bearing (1,478 of 2,203 files).
+          # NO -X. Dropped 2026-08-28 after it failed on every single path with
+          #      lsetxattr(..., "security.selinux") -> Not supported (95). That
+          #      xattr is not source data: the Synology stores nothing: the
+          #      MOUNTING NODE's kernel synthesises a generic
+          #      system_u:object_r:nfs_t:s0 label, identical on every file, and
+          #      ZFS-over-NFS cannot hold it. Verified there are ZERO user.*
+          #      xattrs anywhere in the tree, so -X preserved nothing while
+          #      emitting one error per path and, fatally, leaving rsync with
+          #      exit 23 -- which `set -e` turns into a FAILED Job on a copy
+          #      that actually succeeded.
+          # NO -A either, and for a different reason: the Synology tree does
+          #      carry real POSIX ACLs (drwxrwxrwx+), but the effective mode is
+          #      already 0777 and the sole consumer is one privileged container.
+          # --numeric-ids  do NOT remap uid/gid through name lookups that differ
+          #      between the two boxes. uid 1026 must stay uid 1026.
+          # NO --partial. Both /src and /dst are ordinary local paths to rsync
+          #      (NFS is mounted by the kernel), so rsync uses --whole-file and
+          #      there is no partial-transfer state for it to resume. An earlier
+          #      comment claimed it helped resumes; it does not. Resume works
+          #      because -a preserves mtime and rsync's quick-check skips files
+          #      whose size+mtime already match -- which --partial does not affect.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              n=0
+              until apk add --no-cache rsync >/dev/null 2>&1; do
+                n=$((n+1))
+                if [ "$n" -ge 5 ]; then
+                  echo "FATAL: apk could not reach dl-cdn.alpinelinux.org after 5 tries."
+                  echo "This is POD-NETWORK egress, NOT the NFS mounts -- those are"
+                  echo "kernel-mounted by hostNetwork CSI pods and are unaffected."
+                  echo "Check net.ipv4.conf.br-ex.forwarding on ALL THREE nodes (0 = broken),"
+                  echo "restart ovnkube-node, then re-apply this Job. See CLAUDE.md."
+                  exit 90
+                fi
+                echo "apk attempt $n failed; retrying in 15s"
+                sleep 15
+              done
+              echo "=== MOUNTS (this is the go/no-go) ==="
+              grep -E " /src | /dst " /proc/mounts | awk '{print "  " $2 "  <- " $1 "  (" $3 ")"}'
+              echo "=== space ==="
+              df -h /src /dst
+              case "$EXTRA" in
+                *--delete*)
+                  echo "=== ARMED: --delete is set. Guarding the destructive pass. ==="
+                  grep -q " /src nfs" /proc/mounts || { echo "FATAL: /src is not an NFS mount"; exit 91; }
+                  grep -q " /dst nfs" /proc/mounts || { echo "FATAL: /dst is not an NFS mount"; exit 92; }
+                  [ "$(find /src -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ] \
+                    || { echo "FATAL: /src is EMPTY -- --delete would wipe the target"; exit 93; }
+                  echo "  /src non-empty, both mounts are NFS: proceeding."
+                  ;;
+              esac
+              echo "=== rsync starting: $(date -u +%H:%M:%SZ) ==="
+              rc=0
+              time rsync -aH --numeric-ids \
+                   --info=progress2,stats2 --human-readable \
+                   $EXTRA /src/ /dst/ || rc=$?
+              echo "=== rsync exit $rc ==="
+              case "$rc" in
+                0)
+                  echo "clean." ;;
+                24)
+                  echo "exit 24 = some source files VANISHED mid-copy."
+                  case "$EXTRA" in
+                    *--delete*)
+                      echo "But --delete is set, so this is the QUIESCED pass and"
+                      echo "nothing should have been writing to /src. Files vanishing"
+                      echo "here means the quiesce FAILED -- transmission (or something)"
+                      echo "is still live. Do NOT cut over. Confirm replicas=0 and re-run."
+                      echo "Deliberately NOT swallowed: on this pass 24 is a real signal." ;;
+                    *)
+                      echo "Expected on the BULK pass: transmission is live and removes"
+                      echo "files as torrents are managed. Step 4's quiesced delta pass"
+                      echo "reconciles this. NOT a failure."
+                      rc=0 ;;
+                  esac ;;
+                *)
+                  echo "UNEXPECTED rsync exit $rc -- investigate before step 4."
+                  echo "23 = partial transfer due to error (per-file failures)."
+                  echo "12 = protocol/stream error.  30 = timeout." ;;
+              esac
+              echo "=== target after ==="
+              df -h /dst
+              exit "$rc"
+          volumeMounts:
+            - name: src
+              mountPath: /src
+              readOnly: true      # the old volume is the rollback; never write it
+            - name: dst
+              mountPath: /dst
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits:   {memory: 1Gi}
+      volumes:
+        - name: src
+          persistentVolumeClaim:
+            claimName: media-data-pvc          # SOURCE: cephfs-hdd (CephFS EC 2+1)
+            readOnly: true
+        - name: dst
+          persistentVolumeClaim:
+            claimName: media-data-nfs-pvc      # TARGET: 192.168.10.10:/mnt/tank/media

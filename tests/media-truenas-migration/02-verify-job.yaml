@@ -1,0 +1,140 @@
+# media migration verification. Read-only on BOTH volumes.
+#
+# Forked from the keepers verify Job, which passed on 1.65 TiB. THE ADDITION is
+# sections 3c/3d and their three gates: keepers had ZERO hardlinks, media has
+# 1,478 of 2,203. Hardlink loss is the one failure here that every other check
+# in this Job would report as success.
+#
+# What this proves and what it does not:
+#   - rsync -n --itemize-changes re-stats every file on both sides and reports
+#     ANY difference in size, mtime, ownership or mode. Clean output = the trees
+#     are metadata-identical. This is cheap (4,493 stat calls).
+#   - It does NOT prove the bytes are identical -- rsync trusts size+mtime by
+#     default. A full content check means re-reading 1.7 TiB twice over a 1 Gbit
+#     link (~8h), which is not proportionate for re-downloadable torrent data.
+#     Instead we checksum a random sample of 20 files.
+#   - Stated plainly so nobody later mistakes this for a full verification.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: media-nfs-verify
+  namespace: media
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+        - name: verify
+          image: docker.io/alpine:3.22
+          securityContext:
+            runAsUser: 0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              apk add --no-cache rsync coreutils findutils >/dev/null
+              echo "=== 0. mounts (provenance for this log) ==="
+              grep -E " /src | /dst " /proc/mounts | awk '{print "  " $2 "  <- " $1 "  (" $3 ")"}'
+
+              echo "=== 1. counts ==="
+              SF=$(find /src -type f | wc -l); DF=$(find /dst -type f | wc -l)
+              SD=$(find /src -type d | wc -l); DD=$(find /dst -type d | wc -l)
+              echo "  files: src=$SF dst=$DF"
+              echo "  dirs : src=$SD dst=$DD"
+              [ "$SF" = "$DF" ] && [ "$SD" = "$DD" ] \
+                && echo "  counts MATCH" || { echo "  counts DIFFER"; }
+
+              echo "=== 2. bytes (REGULAR FILES ONLY) ==="
+              SB=$(find /src -type f -printf "%s\n" | awk "{t+=\$1} END {print t+0}")
+              DB=$(find /dst -type f -printf "%s\n" | awk "{t+=\$1} END {print t+0}")
+              echo "  src=$SB  dst=$DB  delta=$((DB-SB))"
+              echo "  (files only, deliberately. du -sb also sums DIRECTORY st_size,"
+              echo "   which is filesystem-specific and can never match across these"
+              echo "   two: measured 2026-08-28, the same 918 dirs summed to 126,740"
+              echo "   bytes on the Synology and 7,247 on ZFS, because ZFS reports a"
+              echo "   directory's ENTRY COUNT as its size. Comparing du -sb would"
+              echo "   show a permanent ~119 KB delta that means nothing.)"
+
+              echo "=== 3. metadata diff, src -> dst (EMPTY == identical) ==="
+              if rsync -naH --numeric-ids --itemize-changes /src/ /dst/ > /tmp/diff 2>/tmp/diff.err; then
+                DC=$(wc -l < /tmp/diff)
+                echo "  difference count: $DC"
+                head -40 /tmp/diff
+              else
+                echo "  *** rsync ITSELF FAILED (rc=$?) -- the count is MEANINGLESS."
+                echo "  *** DO NOT CUT OVER. stderr:"; head -10 /tmp/diff.err
+                DC=-1
+              fi
+
+              echo "=== 3b. files on dst that are NOT on src (dry run, deletes nothing) ==="
+              rsync -naH --numeric-ids --delete --info=del /src/ /dst/ 2>/dev/null \
+                | grep -c "^deleting " > /tmp/extra || echo 0 > /tmp/extra
+              EX=$(cat /tmp/extra)
+              echo "  dst-only entries: $EX"
+              echo "  (section 3 alone cannot see these -- it has no --delete, so it"
+              echo "   proves src is a SUBSET of dst, not that they are equal.)"
+
+              echo "=== 3c. HARDLINK INTEGRITY (media-specific, THE gate) ==="
+              SI=$(find /src -type f -printf "%i\n" | sort -u | wc -l)
+              DI=$(find /dst -type f -printf "%i\n" | sort -u | wc -l)
+              SL=$(find /src -type f | wc -l)
+              DL=$(find /dst -type f | wc -l)
+              echo "  src: $SL paths -> $SI unique inodes  (hardlinked: $((SL-SI)))"
+              echo "  dst: $DL paths -> $DI unique inodes  (hardlinked: $((DL-DI)))"
+              echo "  measured 2026-08-28 on the source: 2203 paths, 1478 hardlinked"
+              echo "  If -H was defeated, dst unique inodes == dst paths and the"
+              echo "  hardlinked count collapses to 0 -- while file counts, byte"
+              echo "  totals and rsync exit code ALL still look correct."
+
+              echo "=== 3d. ON-DISK SIZE (the second hardlink tell) ==="
+              DU=$(du -sb /dst | cut -f1)
+              DUH=$(du -sbh /dst | cut -f1)
+              echo "  du -sb /dst = $DU ($DUH)"
+              echo "  expect ~3.3 TiB. ~5.6 TiB means every hardlink was expanded"
+              echo "  into a second full copy: 2.3 TiB wasted AND the seeding"
+              echo "  relationship between downloads/ and media/ is broken."
+              DUMAX=4400000000000
+              [ "$DU" -lt "$DUMAX" ] && echo "  under the 4.4 TB ceiling: OK" \
+                || echo "  *** OVER 4.4 TB -- hardlinks were NOT preserved ***"
+
+              echo "=== 4. sampled content checksums ==="
+              find /src -type f > /tmp/all
+              shuf -n 20 /tmp/all > /tmp/s
+              echo "  sampling $(wc -l < /tmp/s) of $(wc -l < /tmp/all) files"
+              rc=0
+              while IFS= read -r f; do
+                r=${f#/src/}
+                if [ ! -f "$f" ]; then echo "  SKIP $r (vanished on src)"; continue; fi
+                if [ ! -f "/dst/$r" ]; then echo "  FAIL $r (MISSING on dst)"; rc=1; continue; fi
+                if a=$(sha256sum "$f" 2>/dev/null); then a=${a%% *}; else a=UNREADABLE-SRC; fi
+                if b=$(sha256sum "/dst/$r" 2>/dev/null); then b=${b%% *}; else b=UNREADABLE-DST; fi
+                if [ "$a" = "$b" ]; then echo "  OK   $r"
+                else echo "  FAIL $r"; echo "       src=$a dst=$b"; rc=1; fi
+              done < /tmp/s
+
+              echo "=== VERDICT ==="
+              V=0
+              [ "$SF" = "$DF" ] || { echo "  FAIL: file counts differ";  V=1; }
+              [ "$SD" = "$DD" ] || { echo "  FAIL: dir counts differ";   V=1; }
+              [ "$DC" = "0" ]   || { echo "  FAIL: metadata diff is $DC (want 0)"; V=1; }
+              [ "$EX" = "0" ]   || { echo "  FAIL: $EX dst-only entries"; V=1; }
+              [ "$rc" = "0" ]   || { echo "  FAIL: checksum sample";      V=1; }
+              [ "$SB" = "$DB" ]  || { echo "  FAIL: file bytes differ by $((DB-SB))"; V=1; }
+              [ "$SI" = "$DI" ]  || { echo "  FAIL: unique inodes src=$SI dst=$DI -- HARDLINKS NOT PRESERVED"; V=1; }
+              [ "$((SL-SI))" = "$((DL-DI))" ] || { echo "  FAIL: hardlinked-file count differs"; V=1; }
+              [ "$DU" -lt "$DUMAX" ] || { echo "  FAIL: /dst is $DU bytes, over the 4.4 TB hardlink-expansion ceiling"; V=1; }
+              [ "$V" = "0" ] && echo "  ALL CHECKS PASSED" || echo "  DO NOT CUT OVER"
+              exit "$V"
+          volumeMounts:
+            - {name: src, mountPath: /src, readOnly: true}
+            - {name: dst, mountPath: /dst, readOnly: true}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits:   {memory: 1Gi}
+      volumes:
+        - name: src
+          persistentVolumeClaim: {claimName: media-data-pvc, readOnly: true}
+        - name: dst
+          persistentVolumeClaim: {claimName: media-data-nfs-pvc, readOnly: true}
