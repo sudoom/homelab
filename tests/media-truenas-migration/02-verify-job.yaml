@@ -83,7 +83,12 @@ spec:
               DL=$(find /dst -type f | wc -l)
               echo "  src: $SL paths -> $SI unique inodes  (hardlinked: $((SL-SI)))"
               echo "  dst: $DL paths -> $DI unique inodes  (hardlinked: $((DL-DI)))"
-              echo "  measured 2026-08-28 on the source: 2203 paths, 1478 hardlinked"
+              echo "  BASELINE measured on the source 2026-08-29, immediately pre-copy:"
+              echo "    paths 2203 / inodes 1464 / 739 paths are a second link"
+              echo "    (1478 files report links>1; at 2 links each that is 739 inodes)"
+              echo "    apparent sum-of-st_size 6,113,276,764,105 = 5.56 TiB"
+              echo "    actual   du -sb         3,535,491,727,459 = 3.215 TiB"
+              echo "    so 2.34 TiB of savings is what -H is protecting"
               echo "  If -H was defeated, dst unique inodes == dst paths and the"
               echo "  hardlinked count collapses to 0 -- while file counts, byte"
               echo "  totals and rsync exit code ALL still look correct."
@@ -92,7 +97,8 @@ spec:
               DU=$(du -sb /dst | cut -f1)
               DUH=$(du -sbh /dst | cut -f1)
               echo "  du -sb /dst = $DU ($DUH)"
-              echo "  expect ~3.3 TiB. ~5.6 TiB means every hardlink was expanded"
+              echo "  expect ~3,535,491,727,459 (3.215 TiB). ~6,113,276,764,105"
+              echo "  (5.56 TiB) means every hardlink was expanded"
               echo "  into a second full copy: 2.3 TiB wasted AND the seeding"
               echo "  relationship between downloads/ and media/ is broken."
               DUMAX=4400000000000

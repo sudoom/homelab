@@ -3,6 +3,20 @@ domain: apps.okd.sudops.pl
 
 storage:
   configClass: ceph-nvme-block
+
+  # ---- CephFS -> TrueNAS migration (staged 2026-08-29) ---------------------
+  # Same two-flag shape proven on keepers. storageClassName is immutable on a
+  # bound PVC, so the move is "stand up a SECOND PVC, copy into it, repoint the
+  # consumers" -- and the copy needs both mounted at once, which one flag
+  # cannot express. Runbook: tests/media-truenas-migration/.
+  truenasMigration:
+    # Step 1 - publish media-data-nfs-pvc, binding the static PV
+    # truenas-media-data (enable it in components/storage/nfs-csi first).
+    # Both PVCs coexist; nothing consumes the new one.
+    stagePvc: true      # step 2, 2026-08-29
+    # Step 2 - repoint ALL SIX consumers' /data at it. Requires stagePvc.
+    # bazarr, jellyfin, radarr, sonarr, transmission-master, transmission-slave.
+    cutover: false
   # Shared RWX media /data volume. Moved off Synology NFS (nfs-csi) onto the
   # in-cluster CephFS EC-2+1 HDD bulk tier (cephfs-hdd) 2026-06-15 — CephFS is
   # natively RWX so every media app shares one PVC. dataSize is now a REAL

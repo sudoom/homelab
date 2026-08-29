@@ -181,7 +181,14 @@ spec:
         {{- if $app.mountData }}
         - name: data
           persistentVolumeClaim:
+            {{- if $.Values.storage.truenasMigration.cutover }}
+            {{- if not $.Values.storage.truenasMigration.stagePvc }}
+            {{- fail "storage.truenasMigration.cutover requires stagePvc=true -- the target PVC would not exist" }}
+            {{- end }}
+            claimName: media-data-nfs-pvc
+            {{- else }}
             claimName: media-data-pvc
+            {{- end }}
         {{- end }}
         {{- if $app.hwAccel }}
         - name: dri

@@ -90,7 +90,11 @@ truenas:
     enabled: true
     volumes:
       - name: media-data
-        enabled: false
+        # ENABLED 2026-08-29 — step 1 of tests/media-truenas-migration/.
+        # /mnt/tank/media confirmed empty. 8Ti over-declares against the
+        # measured 3.2155 TiB, which is the safe direction (PV capacity must be
+        # >= PVC request or binding fails on VolumeMismatch).
+        enabled: true
         share: /mnt/tank/media
         capacity: 8Ti          # ceiling only; the real limit is the ZFS dataset
         claim:

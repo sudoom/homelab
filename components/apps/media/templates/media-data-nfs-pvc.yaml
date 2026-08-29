@@ -1,0 +1,27 @@
+{{- if .Values.storage.truenasMigration.stagePvc }}
+# Second data PVC for the CephFS -> TrueNAS migration.
+#
+# storageClassName: "" (empty, NOT absent) is load-bearing: empty means "no
+# class", which stops the default StorageClass from dynamically provisioning
+# instead of binding the static PV. The matching PV (truenas-media-data, in
+# components/storage/nfs-csi) sets the same and pre-binds to this exact
+# namespace/name via claimRef.
+#
+# Capacity must be <= the PV's 8Ti. Measured source is 3.2155 TiB.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-data-nfs-pvc
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Same guard as media-data-pvc: losing this object unmounts six apps.
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  storageClassName: ""
+  volumeName: truenas-media-data
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 8Ti
+{{- end }}
