@@ -37,7 +37,7 @@ sharedData:
     # coexist; nothing is consuming the new one yet. Safe to leave here for days.
     stagePvc: true      # step 2, 2026-08-28
     # Step 2 - repoint transmission's /data at the new PVC. Requires stagePvc.
-    cutover: false
+    cutover: true       # CUT OVER to TrueNAS 2026-08-28
 
 apps:
   transmission:
@@ -46,7 +46,7 @@ apps:
     # selfHeal enforces the quiesce instead of fighting it. Set back to false
     # only AFTER the cutover flag flips, or transmission restarts on whichever
     # PVC is currently wired. See tests/keepers-truenas-migration/.
-    quiesced: true       # QUIESCED for the step 4 delta sync
+    quiesced: false
     image: haugene/transmission-openvpn:5.5.2
     port: 9091
     # config PVC (transmission settings + resume files). 1Gi is plenty — the
