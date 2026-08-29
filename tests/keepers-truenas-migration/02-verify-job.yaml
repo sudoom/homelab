@@ -41,9 +41,16 @@ spec:
               [ "$SF" = "$DF" ] && [ "$SD" = "$DD" ] \
                 && echo "  counts MATCH" || { echo "  counts DIFFER"; }
 
-              echo "=== 2. apparent bytes ==="
-              SB=$(du -sb /src | cut -f1); DB=$(du -sb /dst | cut -f1)
+              echo "=== 2. bytes (REGULAR FILES ONLY) ==="
+              SB=$(find /src -type f -printf "%s\n" | awk "{t+=\$1} END {print t+0}")
+              DB=$(find /dst -type f -printf "%s\n" | awk "{t+=\$1} END {print t+0}")
               echo "  src=$SB  dst=$DB  delta=$((DB-SB))"
+              echo "  (files only, deliberately. du -sb also sums DIRECTORY st_size,"
+              echo "   which is filesystem-specific and can never match across these"
+              echo "   two: measured 2026-08-28, the same 918 dirs summed to 126,740"
+              echo "   bytes on the Synology and 7,247 on ZFS, because ZFS reports a"
+              echo "   directory's ENTRY COUNT as its size. Comparing du -sb would"
+              echo "   show a permanent ~119 KB delta that means nothing.)"
 
               echo "=== 3. metadata diff, src -> dst (EMPTY == identical) ==="
               if rsync -naH --numeric-ids --itemize-changes /src/ /dst/ > /tmp/diff 2>/tmp/diff.err; then
@@ -86,6 +93,7 @@ spec:
               [ "$DC" = "0" ]   || { echo "  FAIL: metadata diff is $DC (want 0)"; V=1; }
               [ "$EX" = "0" ]   || { echo "  FAIL: $EX dst-only entries"; V=1; }
               [ "$rc" = "0" ]   || { echo "  FAIL: checksum sample";      V=1; }
+              [ "$SB" = "$DB" ]  || { echo "  FAIL: file bytes differ by $((DB-SB))"; V=1; }
               [ "$V" = "0" ] && echo "  ALL CHECKS PASSED" || echo "  DO NOT CUT OVER"
               exit "$V"
           volumeMounts:
