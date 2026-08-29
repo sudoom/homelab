@@ -165,11 +165,8 @@ Optionally re-run once more while still live to shrink the Step 4 delta.
 ### Step 4 — quiesce and delta sync  *(the only downtime)*
 
 ```bash
-#   git:  components/apps/keepers/values.yaml
-#         apps.transmission.quiesced: true      <- NOT `oc scale`, see below
-#   then let ArgoCD apply it (or sync explicitly if auto-sync is off)
-oc -n keepers get deploy transmission -o jsonpath='{.spec.replicas}{"\n"}'   # want 0
-oc -n keepers get pod -l app=transmission --no-headers                       # want none
+oc -n keepers scale deploy/transmission --replicas=0
+oc -n keepers wait --for=delete pod -l app=transmission --timeout=120s
 ```
 
 **Confirm ArgoCD is on the commit that carries `quiesced: true` before starting
@@ -253,24 +250,25 @@ re-downloadable data. Said plainly so nobody believes more was proven.
 
 `components/apps/keepers/values.yaml` → `sharedData.truenasMigration.cutover: true`
 
-**Quiesce and un-quiesce are GIT operations, not `oc scale`.** `replicas` is
-`{{ if .Values.apps.transmission.quiesced }}0{{ else }}1{{ end }}`, so an
-out-of-band `oc scale` is drift that selfHeal reverts within ~3 min — restarting
-transmission mid-delta-sync, in the one window where nothing may write to the
-source. Set `apps.transmission.quiesced` instead.
+**Quiesce with `oc scale`, and that is CORRECT here — not a GitOps violation.**
+`root-app` renders `ignoreDifferences` for `.spec.replicas` on `apps/Deployment`
+onto every Application (44 of 45), so **ArgoCD never reconciles a replica count
+on this cluster.** Nothing fights an `oc scale`, and nothing applies a replica
+count from git either.
 
-> **If auto-sync is disabled** (as it was during this migration on 2026-08-28 —
-> `automated` removed from both `root-app` and `keepers`), nothing applies these
-> flag flips and the wait-loop below never exits. Either sync explicitly after
-> each flip:
-> ```bash
-> argocd app sync keepers          # or: oc -n openshift-gitops patch application keepers ... (operator-run)
-> ```
-> or re-enable automated sync before Step 6. **Re-enabling is a required
-> closing step either way** — `root-app` reports `OutOfSync` for as long as the
-> live `keepers` Application lacks the `automated` block that `root-app`
-> renders, and a repo whose apps have silently stopped self-healing is a worse
-> failure mode than the one auto-sync was disabled to avoid.
+> An earlier version of this runbook said the opposite — that selfHeal would
+> revert an `oc scale` within ~3 min — and added a `quiesced` flag to do it
+> declaratively. That was wrong, and it broke the reverse direction: because
+> ArgoCD ignores the field, the flag could not scale transmission back **up**
+> after cutover. The Deployment sat at 0 while ArgoCD reported Synced/Healthy.
+> Removed in `14327d4`. If you ever need a *declarative* replica change on this
+> cluster, that ignore has to be scoped to the HPA-managed apps first.
+
+```bash
+oc -n keepers scale deploy/transmission --replicas=0
+oc -n keepers wait --for=delete pod -l app=transmission --timeout=120s
+oc -n keepers get pod -l app=transmission --no-headers    # want none
+```
 
 **Wait for ArgoCD before scaling up.** There is no webhook; the controller polls
 (~3 min). Scaling up first gets you transmission back on the *Synology*, looking
