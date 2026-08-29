@@ -76,17 +76,27 @@ NFS export               enabled, maproot_user=root,
 host restriction is why the copy Job must run on a cluster node rather than
 anywhere else — the export is not reachable from the frontnet at all.
 
-**2. Confirm the Synology's offsite job.** ✅ **RESOLVED 2026-08-28 — there is
-no Hyper Backup over `/volume1/kubenfs`.** So this migration loses no coverage,
-because there is none to lose. Nothing blocks keepers.
+**2. Confirm the Synology's offsite job.** ✅ **RESOLVED 2026-08-29 — keepers is
+deliberately NOT in it, so this migration loses no coverage.**
 
-It did surface something worse, recorded as a README TODO: **the immich photo
-originals (114 GiB) have no backup of any kind.** No Hyper Backup, the Velero
-`daily` Schedule is paused with an 81-day-old last backup, and nothing else
-references the library. Immich's *database* is genuinely offsite (barman → R2,
-`ContinuousArchiving=True`) — the photos are not. That gates the immich move,
-not this one, but it is why the question was worth asking before touching
-anything.
+Hyper Backup on the DS418 runs **per-PVC**, not per-share. Verified by
+inspecting the task list: `Synology_C2_immich_photos_task` covers the *immich*
+PVC directory (`pvc-57345d42-…`) to Synology C2, while the keepers PVC
+(`pvc-3f531e77-…`) is unticked. That is the right call — torrents are
+re-downloadable — so nothing is lost by moving keepers.
+
+> **A correction worth carrying forward.** An earlier version of this section
+> said "there is no Hyper Backup over `/volume1/kubenfs`" and concluded the
+> immich photos had no backup at all. That was wrong: it over-read a terse
+> answer about the *share* into a claim about every PVC under it. The immich
+> photos are backed up to C2 and always were.
+>
+> The practical consequence is the opposite of what that error implied: because
+> the C2 task targets a **path on the Synology**, migrating immich to TrueNAS
+> *does* silently drop it out of backup while the task keeps reporting green
+> against a stale directory. So the immich move is genuinely gated on standing
+> up a TrueNAS→offsite path first. See the README TODO. **Check per-PVC, not
+> per-share, before moving anything else off this NAS.**
 
 ## Sequence
 

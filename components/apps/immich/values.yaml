@@ -40,29 +40,31 @@ postgres:
       schedule: "0 0 3 * * *"   # 03:00 UTC base backup (offset from 04:30 snapshot)
 
 library:
-  # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi).
+  # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi). Decided
+  # 2026-06-18: photos are irreplaceable, so they live where the existing 3-2-1
+  # pipeline already is (Synology → cloud) — NOT on the shared cephfs-hdd EC
+  # tier (which would need a brand-new Ceph→NAS backup path and competes with
+  # media/RGW for ~6.9 TiB). NFS local-RAID also serves the thumbnail-heavy
+  # phone workload (small random reads) at least as well as EC-2+1-on-HDD, whose
+  # worst profile IS small random reads. The Postgres DB stays on
+  # ceph-nvme-block (fast RBD, never NFS). nfs-csi reclaimPolicy=Retain.
   #
-  # !! THE PREMISE OF THIS DECISION WAS FALSE (found 2026-08-29) !!
-  # The 2026-06-18 rationale was: "photos are irreplaceable, so they live where
-  # the existing 3-2-1 pipeline already is (Synology → cloud + offsite)". The
-  # operator confirmed there is NO Hyper Backup / Cloud Sync job over
-  # /volume1/kubenfs. That pipeline does not exist and never did, so these
-  # photos have had ZERO backup since the 2026-06-20 deploy. This is the third
-  # place the same phantom pipeline was asserted (also README.md's Immich item,
-  # and the "DB offsite backup COVERED" claim, both corrected 2026-08-28).
+  # THE PIPELINE IS REAL — verified 2026-08-29 by inspecting Hyper Backup.
+  # Task `Synology_C2_immich_photos_task` backs up THIS PVC directory
+  # (/volume1/kubenfs/pvc-57345d42-d1f7-4ee1-8f36-8761a7d01b16) to Synology C2,
+  # with backups/ encoded-video/ library/ profile/ thumbs/ upload/ all selected.
+  # An earlier note in this file claimed the premise was false; that was wrong,
+  # and came from over-reading "no hyper backup for kubenfs" as "nothing under
+  # kubenfs is backed up". The job is per-PVC, not per-share: the keepers PVC
+  # (pvc-3f531e77) is deliberately NOT selected, which is fine — torrents are
+  # re-downloadable.
   #
-  # Consequence: the reason to stay on the Synology has evaporated. Migration to
-  # TrueNAS is tracked in tests/immich-truenas-migration/. The backup gap is a
-  # SEPARATE, standing HIGH item (README TODO) that gates RECLAIMING the Synology
-  # copy -- not the migration itself, during which two copies exist.
-  #
-  # The parts of the rationale that DO still hold: NFS local-RAID suits the
-  # thumbnail-heavy phone workload (small random reads) better than EC-2+1-on-HDD,
-  # whose worst profile IS small random reads; and the library should not compete
-  # with media/RGW for the shared HDD tier. Both argue for NAS-over-NFS generally,
-  # which TrueNAS satisfies -- and it measured ~270 MB/s vs the Synology's 52.
-  # The Postgres DB stays on ceph-nvme-block (fast RBD, never NFS).
-  # nfs-csi reclaimPolicy=Retain.
+  # ==> CONSEQUENCE FOR ANY MIGRATION OFF THIS NAS <==
+  # The C2 task targets a PATH on the Synology. Moving the library to TrueNAS
+  # silently drops it out of that backup while the task keeps reporting green
+  # against a stale directory. An equivalent TrueNAS→offsite path must exist
+  # BEFORE cutover — this is the gate on tests/immich-truenas-migration/, and it
+  # is a real gate, not a formality.
   storageClass: nfs-csi
   size: 500Gi
 
