@@ -165,8 +165,20 @@ Optionally re-run once more while still live to shrink the Step 4 delta.
 ### Step 4 — quiesce and delta sync  *(the only downtime)*
 
 ```bash
-oc -n keepers scale deploy/transmission --replicas=0
-oc -n keepers wait --for=delete pod -l app=transmission --timeout=120s
+#   git:  components/apps/keepers/values.yaml
+#         apps.transmission.quiesced: true      <- NOT `oc scale`, see below
+#   then let ArgoCD apply it (or sync explicitly if auto-sync is off)
+oc -n keepers get deploy transmission -o jsonpath='{.spec.replicas}{"\n"}'   # want 0
+oc -n keepers get pod -l app=transmission --no-headers                       # want none
+```
+
+**Confirm ArgoCD is on the commit that carries `quiesced: true` before starting
+the delta sync** — otherwise `replicas=0` is still just your `oc scale`, i.e.
+drift the controller may revert at any moment:
+
+```bash
+oc -n openshift-gitops get application keepers -o jsonpath='{.status.sync.revision}{"\n"}'
+git rev-parse HEAD    # these must match
 ```
 
 **A Job's pod template is immutable, so you must DELETE before EACH apply** —
@@ -240,6 +252,25 @@ re-downloadable data. Said plainly so nobody believes more was proven.
 ### Step 6 — cut over  *(git)*
 
 `components/apps/keepers/values.yaml` → `sharedData.truenasMigration.cutover: true`
+
+**Quiesce and un-quiesce are GIT operations, not `oc scale`.** `replicas` is
+`{{ if .Values.apps.transmission.quiesced }}0{{ else }}1{{ end }}`, so an
+out-of-band `oc scale` is drift that selfHeal reverts within ~3 min — restarting
+transmission mid-delta-sync, in the one window where nothing may write to the
+source. Set `apps.transmission.quiesced` instead.
+
+> **If auto-sync is disabled** (as it was during this migration on 2026-08-28 —
+> `automated` removed from both `root-app` and `keepers`), nothing applies these
+> flag flips and the wait-loop below never exits. Either sync explicitly after
+> each flip:
+> ```bash
+> argocd app sync keepers          # or: oc -n openshift-gitops patch application keepers ... (operator-run)
+> ```
+> or re-enable automated sync before Step 6. **Re-enabling is a required
+> closing step either way** — `root-app` reports `OutOfSync` for as long as the
+> live `keepers` Application lacks the `automated` block that `root-app`
+> renders, and a repo whose apps have silently stopped self-healing is a worse
+> failure mode than the one auto-sync was disabled to avoid.
 
 **Wait for ArgoCD before scaling up.** There is no webhook; the controller polls
 (~3 min). Scaling up first gets you transmission back on the *Synology*, looking
