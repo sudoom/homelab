@@ -97,8 +97,16 @@ Every mutation below is **operator-run**. Nothing here is applied by Claude.
 ```bash
 oc -n keepers exec deploy/transmission -- sh -c \
   'find /data -type f | wc -l; du -sb /data | cut -f1'
+
+# AND the consumer's own view of its state -- this one was MISSED on the keepers
+# run and it cost real diagnostic time. After cutover a torrent showed 72.3%,
+# and there was no before-snapshot to prove it had always been incomplete
+# rather than damaged by the copy. (It had: Have was fully verified and
+# Done == Availability.) Capture it, for any app that tracks per-item state:
+oc -n keepers exec deploy/transmission -- transmission-remote -l > /tmp/torrents-before.txt
 ```
-Write both numbers down. They are the acceptance criteria in Step 5.
+Write the numbers down. The Step 5 Job now computes its own verdict, but the
+before-snapshot is what lets you tell "pre-existing" from "we broke it".
 
 ### Step 1 — publish the static PV  *(git)*
 
@@ -285,10 +293,29 @@ oc -n keepers exec deploy/transmission -- sh -c 'grep " /data " /proc/mounts; ls
 # expect 192.168.10.10:/mnt/tank/keepers  and  1812  983
 ```
 
-`mountPath` stays `/data` and the layout is preserved, so transmission's torrent
-paths are unchanged — **it should not re-verify.** Confirm in the UI that
-torrents are seeding, not re-checking. Mass re-verification means paths moved;
-roll back rather than let it run.
+**EXPECT MASS RE-VERIFICATION. It is normal — do NOT roll back.** An earlier
+version of this line said the opposite ("mass re-verification means paths moved;
+roll back rather than let it run"). That was wrong and would have thrown away a
+good migration. Observed on the real cutover 2026-08-29: 89 of 105 torrents went
+to `Will Verify` immediately, and **every one of them passed**, at roughly
+3/min (~30 min for 1.7 TiB).
+
+Transmission re-checks after a restart when it cannot confirm its resume state
+matches what is on disk. `mountPath` is unchanged and the layout is preserved,
+but the backing device is not the same filesystem, and that is enough.
+
+Treat it as a bonus: it is an exhaustive, independent verification of every byte
+against the original torrent piece hashes — far stronger than this runbook's
+20-file checksum sample. Watch for torrents that end BELOW 100% with
+`Done < Availability`; that would be real loss. A torrent stuck below 100% with
+`Done == Availability` is just an incomplete download the swarm cannot finish.
+
+```bash
+# progress
+oc -n keepers exec deploy/transmission -- transmission-remote -l | grep -c "Will Verify"
+# anything that failed
+oc -n keepers exec deploy/transmission -- transmission-remote -l | awk 'NR>1 && $2 !~ /^100%$/'
+```
 
 ### Step 7 — soak, then reclaim
 
