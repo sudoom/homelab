@@ -38,7 +38,13 @@ metadata:
   namespace: {{ .Values.namespace }}
 spec:
   revisionHistoryLimit: 3
-  replicas: 1
+  # Declarative, because `oc scale` loses to ArgoCD. This Application runs
+  # automated selfHeal, so an out-of-band scale to 0 is drift that the
+  # controller reverts within ~3 min -- which would restart transmission in the
+  # middle of the migration's quiesced delta sync, exactly when nothing may
+  # write to the source. Quiesce by setting `quiesced: true` in values and
+  # letting ArgoCD apply it, never with `oc scale`.
+  replicas: {{ if .Values.apps.transmission.quiesced }}0{{ else }}1{{ end }}
   selector:
     matchLabels:
       app: transmission

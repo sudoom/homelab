@@ -42,6 +42,11 @@ sharedData:
 apps:
   transmission:
     enabled: true
+    # Migration quiesce switch. true -> replicas 0, declaratively, so ArgoCD's
+    # selfHeal enforces the quiesce instead of fighting it. Set back to false
+    # only AFTER the cutover flag flips, or transmission restarts on whichever
+    # PVC is currently wired. See tests/keepers-truenas-migration/.
+    quiesced: true       # QUIESCED for the step 4 delta sync
     image: haugene/transmission-openvpn:5.5.2
     port: 9091
     # config PVC (transmission settings + resume files). 1Gi is plenty — the
