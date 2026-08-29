@@ -54,10 +54,16 @@ spec:
           securityContext:
             runAsUser: 0
           env:
-            # Extra flags per phase. Bulk/catch-up passes: leave empty.
-            # FINAL quiesced pass: "--delete" (dry-run it first, see README).
+            # Extra flags per phase:
+            #   bulk / catch-up  : ""
+            #   step 4 DRY RUN   : "--delete --dry-run --info=del"   <-- ARMED NOW
+            #   step 4 REAL PASS : "--delete"
+            # --info=del is required for the dry run to name paths; without it
+            # rsync prints only a count (INFO_DEL fires at verbosity >= 1).
+            # PUT THIS BACK TO "" once step 4 is done -- this file is committed,
+            # and leaving it armed means the next apply runs a destructive pass.
             - name: EXTRA
-              value: ""
+              value: "--delete --dry-run --info=del"
           # NOTE: keep this script free of inline comments -- the whole block
           # becomes one `sh -c` argv entry, so anything here shows up in `ps`
           # and makes the process table unreadable. Rationale lives in the YAML
