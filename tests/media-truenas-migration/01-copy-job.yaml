@@ -85,7 +85,7 @@ spec:
             # PUT THIS BACK TO "" once step 4 is done -- this file is committed,
             # and leaving it armed means the next apply runs a destructive pass.
             - name: EXTRA
-              value: ""
+              value: "--delete --dry-run --info=del"
           # NOTE: keep this script free of inline comments -- the whole block
           # becomes one `sh -c` argv entry, so anything here shows up in `ps`
           # and makes the process table unreadable. Rationale lives in the YAML
