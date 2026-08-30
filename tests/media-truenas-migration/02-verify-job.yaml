@@ -30,6 +30,11 @@ spec:
           image: docker.io/alpine:3.22
           securityContext:
             runAsUser: 0
+            # Same reason as 01-copy-job.yaml: /src is CephFS, which cannot carry
+            # per-file SELinux labels, so a confined container is denied entry
+            # even as root. Would have failed identically had this not been added
+            # before the first run.
+            privileged: true
           command: ["/bin/sh", "-c"]
           args:
             - |

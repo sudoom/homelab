@@ -85,7 +85,7 @@ spec:
             # PUT THIS BACK TO "" once step 4 is done -- this file is committed,
             # and leaving it armed means the next apply runs a destructive pass.
             - name: EXTRA
-              value: "--delete --dry-run --info=del"
+              value: ""
           # NOTE: keep this script free of inline comments -- the whole block
           # becomes one `sh -c` argv entry, so anything here shows up in `ps`
           # and makes the process table unreadable. Rationale lives in the YAML
@@ -141,11 +141,16 @@ spec:
               case "$EXTRA" in
                 *--delete*)
                   echo "=== ARMED: --delete is set. Guarding the destructive pass. ==="
-                  grep -q " /src nfs" /proc/mounts || { echo "FATAL: /src is not an NFS mount"; exit 91; }
-                  grep -q " /dst nfs" /proc/mounts || { echo "FATAL: /dst is not an NFS mount"; exit 92; }
+                  # /src is CEPH here, not NFS -- this is the one guard constant
+                  # that did not survive the fork from keepers, where both sides
+                  # were NFS. It fired fail-closed on the first attempt, which is
+                  # the right behaviour: an unsatisfiable precondition must refuse
+                  # the destructive pass rather than wave it through.
+                  grep -q " /src ceph " /proc/mounts || { echo "FATAL: /src is not a ceph mount"; exit 91; }
+                  grep -q " /dst nfs"   /proc/mounts || { echo "FATAL: /dst is not an NFS mount"; exit 92; }
                   [ "$(find /src -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ] \
                     || { echo "FATAL: /src is EMPTY -- --delete would wipe the target"; exit 93; }
-                  echo "  /src non-empty, both mounts are NFS: proceeding."
+                  echo "  /src non-empty, /src=ceph and /dst=nfs as expected: proceeding."
                   ;;
               esac
               echo "=== rsync starting: $(date -u +%H:%M:%SZ) ==="

@@ -16,7 +16,7 @@ storage:
     stagePvc: true      # step 2, 2026-08-29
     # Step 2 - repoint ALL SIX consumers' /data at it. Requires stagePvc.
     # bazarr, jellyfin, radarr, sonarr, transmission-master, transmission-slave.
-    cutover: false
+    cutover: true       # CUT OVER to TrueNAS 2026-08-30
   # Shared RWX media /data volume. Moved off Synology NFS (nfs-csi) onto the
   # in-cluster CephFS EC-2+1 HDD bulk tier (cephfs-hdd) 2026-06-15 — CephFS is
   # natively RWX so every media app shares one PVC. dataSize is now a REAL
