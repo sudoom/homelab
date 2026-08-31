@@ -2672,10 +2672,109 @@ Recorded in `group_vars` and the README with the thing that actually matters: **
 is not a date, it is the first byte written.** ZFS emits no warning at that moment and the
 property keeps reporting a valid value forever after.
 
+### Applied the same evening — and it worked first time
+
+```
+PLAY RECAP
+truenas : ok=57  changed=9  unreachable=0  failed=0  skipped=26
+
+TASK [Assert the box converged]
+"Converged: every declared dataset (incl. create-time-only properties), export,
+ SMB share, snapshot task, cron job and the scrub schedule are live."
+```
+
+with every drift list empty, including the two new ones:
+
+```
+"dataset_createtime_drift": [],
+"smb_shares_missing": [],
+```
+
+The destroy ran first and the gate printed the drift it was there to fix:
+
+```
+gate passed - tank/timemachine is empty (191.81 KiB), 0 snapshots, 0 children, 0 shares
+  current: casesensitivity=SENSITIVE acltype=POSIX aclmode=DISCARD recordsize=128K quota=1 TiB
+>>> destroying 'tank/timemachine' (irreversible, one-shot)
+True
+>>> verifying it is gone (expect [])
+[]
+```
+
+Verified afterwards against the box rather than trusting the recap — the playbook can
+assert its own declarations converged, it cannot tell you Samba generated something a Mac
+will accept:
+
+```
+NAME                       USED  QUOTA  RECSIZE  CASE         ACLTYPE  ACLMODE
+tank/timemachine           591K  1.46T       1M  insensitive  nfsv4    restricted
+tank/timemachine/macmini   192K  1000G       1M  insensitive  nfsv4    restricted
+tank/timemachine/mba       192K   500G       1M  insensitive  nfsv4    restricted
+
+/mnt/tank/timemachine/macmini  uid=3001 gid=3001 acltype=NFS4 trivial=False
+     owner@ -1 ALLOW {'BASIC': 'FULL_CONTROL'} {'BASIC': 'INHERIT'}
+
+[macmini-tm]
+    fruit:time machine = True
+    vfs objects = fruit streams_xattr shadow_copy_zfs ixnas zfs_core io_uring
+```
+
+### The two things the design got right, confirmed empirically
+
+**mDNS discovery works with no extra configuration.** The MacBook Air found `mba-tm` on
+`truenas.local` on its own — avahi was already running and Samba registers the Time Machine
+service itself once `fruit:time machine` is set. Nothing had to be declared for it. Worth
+recording because it was the one part of the chain with no server-side proof available:
+a share can be perfectly configured and still be invisible in the Time Machine picker.
+
+**The ZFS child quota propagates to the SMB client.** macOS reported **536,87 GB available**
+for `mba-tm` — exactly 500 GiB. That closes the open question the design had been assuming
+its way past, and it retroactively justifies `timemachine_quota: 0`: the client is already
+seeing the true size, so the SMB-level value would have been a second, redundant ceiling
+free to disagree with the real one.
+
+It also settles the client-side **Disk Usage Limit**, which should be left at None. Because
+the quota is advertised honestly, macOS is managing a volume whose real size is 500 GiB —
+the same situation as a dedicated USB disk, which is Time Machine's best-tested shape. A
+Custom limit would reintroduce exactly the two-disagreeing-ceilings problem.
+
+### Backup encryption: ON, and the reason is the drives
+
+The pool is deliberately **not** ZFS-encrypted (decided 2026-08-25: one-way door, conflicts
+with unattended import after a power event). So Time Machine's own client-side encryption is
+the only encryption this data will ever have.
+
+The deciding argument is not "backups should be encrypted" in the abstract — it is that the
+pool is six **used datacenter pulls at ~43k hours**. Some of those drives will fail and leave
+the building during the life of these backups, carrying a full image of a laptop. Encryption
+is transparent server-side (Samba and ZFS see opaque band files, no interaction with
+`fruit:time machine`); the only real cost is that the passphrase must be stored somewhere
+durable, because it cannot be changed later without starting over.
+
+### Still open after the apply
+
+- **Nothing alerts if a Mac stops backing up.** `pool.snapshottask.query` covers
+  `tank/{media,immich,backup}` and not `tank/timemachine` (correct — Time Machine keeps its
+  own history, and snapshots would pin rewritten bands against a hard quota). The monthly
+  scrub covers the whole pool. But there is no signal at all for "the MacBook Air last
+  completed a backup 40 days ago", which is the same detection-without-delivery shape that
+  let the Synology wildcard cert expire unseen for a month.
+- **SMTP is still unconfigured** — `mail.config` reads `outgoingserver='' smtp=False`, and
+  the playbook reports `alerting_unconfigured: true` on every run. So even the SMART cron
+  jobs and ZFS alerts mail into a void. The vault now exists, which was the blocker; adding
+  the SMTP vars is a small edit away.
+- **A side effect worth writing down: creating `vars/vault.yml` cost this topic its
+  no-prompt property.** The `first_found` + `errors='ignore'` pattern only skips a vault that
+  does not exist; once an encrypted one does, `include_vars` needs the password. So
+  `playbook.yml` now requires `--ask-vault-pass` like technitium's, and can no longer be run
+  non-interactively. `check.yml` is unaffected. This was a known, stated trade before the
+  file was created — recorded here so nobody re-derives it as a regression.
+
 ### State at end of session
 
-Everything is code; nothing has been applied. The next run is an operator decision, and it
-is two steps:
+**Applied and live.** Both Macs are connected and running their first backups; `eno1` peaked
+at **912 Mb/s**, i.e. the 1G frontnet at line rate, shared between the two. The original
+pre-apply plan was:
 
 ```bash
 cd ansible/truenas
