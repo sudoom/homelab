@@ -2450,3 +2450,244 @@ du -sb /dst   ~= 3.3 TiB, NOT ~5.6 TiB
 match, the existing byte check matches, every gate goes green — and you find out when
 tank/media reads 5.6 TiB or both transmissions start re-downloading 2.3 TiB. Same shape as
 the `quiesced` flag ArgoCD ignored while reporting Synced/Healthy.
+
+## 2026-08-31 — Time Machine, and the property you only get one shot at
+
+Started the Time Machine workstream. It was pulled to the front of the four-move
+programme on 2026-08-29 for one reason: `casesensitivity` is a create-time ZFS property,
+`tank/timemachine` was still empty, and that is the only window in which fixing it is
+free. Everything else in the programme can be done in any order; this could not.
+
+### What the box actually looked like
+
+The SMB stack was entirely greenfield — worth recording, because the plan had assumed
+"needs its own decision set" and not much more:
+
+```
+$ midclt call service.query '[["service","=","cifs"]]'
+[{'service': 'cifs', 'enable': False, 'state': 'STOPPED'}]
+
+$ midclt call sharing.smb.query      -> 0 shares
+$ midclt call user.query  '[["builtin","=",false]]'  -> only truenas_admin (smb=False)
+$ midclt call group.query '[["builtin","=",false]]'  -> only truenas_admin
+
+$ midclt call smb.config | jq .aapl_extensions
+false
+```
+
+And the three datasets were confirmed still recreatable:
+
+```
+NAME               USED  REFER  QUOTA  RECSIZE  CASE       ACLTYPE  ACLMODE
+tank/personal      192K   192K   none     128K  sensitive  posix    discard
+tank/timemachine   192K   192K     1T     128K  sensitive  posix    discard
+tank/work          192K   192K   none     128K  sensitive  posix    discard
+```
+
+191.81 KiB is what an empty ZFS dataset costs in metadata. Zero snapshots on any of them.
+
+### The version trap, found before it cost anything
+
+TrueNAS 25.10 replaced the old per-share SMB feature booleans with a `purpose` enum plus
+a discriminated `options` object. Every pre-25.10 guide — and there are many, Time Machine
+on TrueNAS being a well-trodden path — sets `timemachine: true`, `vfsobjects`,
+`fruit_metadata`. **None of those fields exist on this box.** So every payload here was
+derived from the box's own schema instead of from documentation:
+
+```
+$ midclt call core.get_methods | python3 -c '...sharing.smb.create...'
+purpose enum: DEFAULT_SHARE LEGACY_SHARE TIMEMACHINE_SHARE MULTIPROTOCOL_SHARE
+              TIME_LOCKED_SHARE PRIVATE_DATASETS_SHARE EXTERNAL_SHARE
+              VEEAM_REPOSITORY_SHARE FCP_SHARE
+```
+
+That same introspection paid for itself twice more.
+
+**First: the ordering constraint is in the schema, not in any guide.** The description of
+`TIMEMACHINE_SHARE` reads *"NOTE: `aapl_extensions` must be set in the global
+`smb.config`."* So the global flag has to converge before any share is attempted, and the
+role is ordered global → groups → users → ACLs → shares → service. Get it backwards and
+the validation error names the share, not the missing global.
+
+**Second, and this one would have shipped broken:** `options` is a discriminated union
+whose discriminator `propertyName` is `purpose` — so `purpose` is `required` *inside*
+`options` as well as at the top level, on a branch that is `additionalProperties: false`.
+
+```
+$ ... schema-level required: ['purpose']
+```
+
+I had written the payload with `purpose` only at the top level. It renders fine, reads
+fine, and would have been rejected outright at create. Caught by reading the branch's
+`required` list rather than by trusting that a top-level field propagates down.
+
+**Third:** `user.create`'s `group` field is the group's **database `id`**, not its Unix
+`gid` — the schema is explicit ("This is not the same as the Unix group `gid` value").
+So the role has to re-query groups after creating them and look the id up. Passing 3001
+and expecting it to mean "the group whose gid is 3001" silently binds the wrong group.
+
+### Assert, don't reconcile
+
+The interesting design question was what `truenas-storage` should do when a live dataset's
+`casesensitivity` does not match the declaration.
+
+The instinct is a reconcile task, because that is what every other property in this role
+gets. It is exactly wrong here. `pool.dataset.update` **accepts** the key, does nothing,
+and returns success — so a reconcile would report `ok` forever while the property stayed
+wrong. That is the same "declared but never applied" shape that has already produced three
+separate bugs in this topic, and the same shape as the `quiesced` flag ArgoCD ignored while
+reporting Synced/Healthy during the media migration.
+
+So it asserts and fails the run, naming the drifted datasets, and the fail message carries
+the remedy. Verified against the live box before it could ever fire in anger:
+
+```
+TASK [Report] ***
+    "DRIFT": ["tank/timemachine:INSENSITIVE:NFSV4:RESTRICTED"],
+    "declared_and_existing": ["tank/timemachine:INSENSITIVE:NFSV4:RESTRICTED"]
+```
+
+One entry, the right one — and critically, the two children that do not exist yet are
+*not* flagged, because a declared-but-missing dataset gets created correctly by the next
+task and flagging it would be a false alarm.
+
+The assert also runs **before** the create task, so a wrong parent blocks its children
+from being created underneath it. Children inherit `casesensitivity` at create; creating
+them under a drifted parent would multiply the problem rather than surface it.
+
+### The destroy script, and testing a gate by making it refuse
+
+`destroy-empty-dataset.sh` is the only thing that can make that assert satisfiable. Same
+shape as `bootstrap-pool.sh`: dry-run by default, gate re-derived on the box at execution
+time, fail-closed.
+
+It only ever **destroys**. Re-creation belongs to the playbook, which already knows every
+declared property; a script that also created would be a second definition of the same
+datasets, free to drift from `group_vars`.
+
+A gate that has only ever been observed passing is not a tested gate, so it was run against
+four datasets it must refuse:
+
+```
+--- media ---      NOT EMPTY: tank/media holds 3.23 TiB (3550638024384 bytes)
+                   has 3 snapshot(s): ['tank/media@auto-20260829-0200', ...]
+                   NFS share(s) still reference /mnt/tank/media
+--- s3 ---         NOT EMPTY: tank/s3 holds 21.97 MiB
+                   has 3 child dataset(s): [...] -- destroy children first
+--- keepers ---    NOT EMPTY: tank/keepers holds 1.65 TiB
+                   NFS share(s) still reference /mnt/tank/keepers
+--- .system ---    .system is appliance-owned or an absolute path; refusing
+--- nosuchthing -- dataset tank/nosuchthing does not exist
+```
+
+and once against the one it must pass:
+
+```
+gate passed - tank/timemachine is empty (191.81 KiB), 0 snapshots, 0 children, 0 shares
+  current: casesensitivity=SENSITIVE acltype=POSIX aclmode=DISCARD recordsize=128K quota=1 TiB
+```
+
+Note it reports *every* reason it refused rather than stopping at the first — `media` trips
+three independent gates and says so.
+
+### Numbers that changed
+
+The operator chose 1000 GiB for the Mac mini and 500 GiB for the MacBook Air. That sums to
+1500 GiB and **overshoots the 1 TiB parent quota `tank/timemachine` already carried**. A
+ZFS parent quota caps the whole subtree, so as declared the mini alone would have left the
+MBA about 48 GiB — a failure that would surface months later as a backup that stops
+completing, on the machine nobody was watching.
+
+Parent raised to exactly the sum (1500 GiB), so it remains a real total ceiling without
+ever binding before a child's own quota does.
+
+This moves the capacity table recorded on 2026-08-29: Time Machine was budgeted at
+"≤ 1.00 TiB by construction", now 1.46 TiB. Worst case across the whole programme goes
+**57% → 60.5%** of the 14.35 TiB usable, leaving 5.67 TiB of headroom. Still nowhere near
+the 80% line, so it still does not order anything — but the old figure is now wrong and
+should not be quoted forward. (Same discipline as the throughput number that got quoted
+for months after it went stale.)
+
+`recordsize` also moved, 128K → 1M, for both children. Time Machine over SMB writes a
+sparsebundle whose payload is 8 MiB band files: at 1M that is 8 records per band with no
+read-modify-write on a full-band write; at 128K it is 64 records and 8× the indirect-block
+metadata, on a 6-wide RAIDZ2 of spinning disks. `recordsize` **is** updatable, unlike the
+other three — but it applies to new writes only, so it has to be right before the first
+backup rather than before the first byte.
+
+### Ownership: one owner of the concern
+
+`tank/immich` declares `owner_uid` and gets a `filesystem.chown`, because it is POSIX-mode
+and there the numeric owner *is* the access control. The Time Machine children deliberately
+do **not**, even though they also need a specific owner. They are `acltype=NFSV4` +
+`aclmode=RESTRICTED`, where the ACL is the access control — a bare chown would leave the
+inherited ACL untouched while looking like it had worked. One `filesystem.setacl` sets owner
+and ACL together, so there is exactly one place that decides who can write there.
+
+The ACL is a single `owner@ ALLOW FULL_CONTROL` with `INHERIT`, and nothing else. With no
+`everyone@` entry NFSv4 denies by default, so each Mac's account reaches only its own
+dataset. `smbd` runs as root and bypasses the ACL, so the share still works.
+
+The drift check on that ACL has a boundary worth stating rather than papering over: it
+re-applies when the owner is wrong, the acltype is not NFS4, the ACL is trivial (never set
+or stripped), or the set of ACE `tag:id` pairs differs — so a rogue grant added by hand
+**is** caught. It does **not** catch someone downgrading `owner@` from FULL_CONTROL to
+MODIFY in the UI, because `getacl` returns perms expanded into individual flags while the
+declaration uses the BASIC form, and comparing them would mean reimplementing the
+middleware's expansion table in Jinja.
+
+### Passwords: choosing noise over silence
+
+`user.query` exposes only the NT hash, and Ansible's builtin `hash` filter has no MD4, so
+the declared password cannot be hashed for comparison without leaving the all-builtin
+invariant. That leaves two options: set the password only at create (a rotated vault value
+then silently never applies — the trap again), or set it every run.
+
+Chose every run, with `changed_when: false` because setting a password to the value it
+already has changes nothing observable. The task is idempotent in *outcome* even though the
+call always executes, and a vault rotation always lands.
+
+The vault stays optional for the whole topic. Everything in the SMB role except the two
+passwords converges without it — global flag, groups, ACLs, shares, service. When the vault
+is absent the role **says so per account** instead of reporting a clean converged run that
+no Mac can actually log in to:
+
+```
+SMB account 'tm-macmini' was SKIPPED -- its vault password
+(truenas_smb_password_macmini) is not loaded. Its share is live and its dataset
+is ACL'd, but that Mac cannot authenticate until you re-run with `--ask-vault-pass`.
+```
+
+That line exists because a skipped task and a converged task render identically in the
+recap — the same ambiguity that makes `--check` structurally useless for this playbook.
+
+### `tank/work` — deliberately not decided
+
+Left alone. Pure-SMB would want INSENSITIVE like `timemachine`; multiprotocol would want
+SENSITIVE like `personal`, which immich will read over NFS during the photo import. Nobody
+has decided which and no consumer exists yet, so guessing would just be a coin flip with a
+one-way door behind it.
+
+Recorded in `group_vars` and the README with the thing that actually matters: **the deadline
+is not a date, it is the first byte written.** ZFS emits no warning at that moment and the
+property keeps reporting a valid value forever after.
+
+### State at end of session
+
+Everything is code; nothing has been applied. The next run is an operator decision, and it
+is two steps:
+
+```bash
+cd ansible/truenas
+./destroy-empty-dataset.sh timemachine --destroy
+ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass
+```
+
+with the two SMB passwords added to `vars/vault.yml` first, or the shares come up with no
+account able to authenticate (and the run will say so).
+
+Validated so far, all read-only: playbook `--syntax-check` passes; the drift detector was
+exercised against live data and flags exactly `tank/timemachine`; the destroy gate was
+exercised against five datasets and refuses four; a scoped `--check` of `truenas-smb`
+against the live box completes with no templating error; and both share payloads were
+rendered and checked against the middleware schema by hand.

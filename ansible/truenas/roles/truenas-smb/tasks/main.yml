@@ -1,0 +1,344 @@
+---
+# ---------------------------------------------------------------------------
+# truenas-smb — Time Machine targets over SMB
+# ---------------------------------------------------------------------------
+# Same middleware shapes as the other roles (see truenas-storage's header):
+# SINGLETONS reconcile via <ns>.config + .update, COLLECTIONS need
+# query-compare-act because their identity is an integer `id`.
+#
+# ORDER IS LOAD-BEARING AND NOT OBVIOUS. `sharing.smb.create` with
+# `purpose: TIMEMACHINE_SHARE` is REJECTED while global `aapl_extensions` is
+# false -- the middleware's own schema says so ("NOTE: `aapl_extensions` must be
+# set in the global `smb.config`"). So: global flag -> groups -> users -> ACLs
+# -> shares -> service. Reordering this produces a validation error that names
+# the share, not the missing global, which is a bad afternoon.
+#
+# VERSION NOTE: TrueNAS 25.10 replaced the old per-share feature booleans
+# (`timemachine: true`, `vfsobjects`, `fruit_metadata`, ...) with a single
+# `purpose` enum plus a discriminated `options` object. Every pre-25.10 guide
+# and playbook on the internet sets fields that NO LONGER EXIST here. All
+# payloads below were derived from this box's own `core.get_methods` output.
+# ---------------------------------------------------------------------------
+
+# ---- 1. Global SMB config: aapl_extensions --------------------------------
+# A singleton, so a plain query-compare-update. Enabling this turns on the
+# Apple SMB2/3 protocol extensions (the `fruit` VFS module) server-wide, which
+# is what lets macOS see a share as a Time Machine destination at all.
+- name: Query global SMB config
+  ansible.builtin.command:
+    argv: [midclt, call, smb.config]
+  register: truenas_smb_cfg
+  changed_when: false
+  check_mode: false
+
+- name: Enable Apple SMB extensions (required before any TIMEMACHINE_SHARE)
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - smb.update
+      - '{"aapl_extensions": true}'
+  when:
+    - truenas_smb_aapl_extensions | bool
+    - not (truenas_smb_cfg.stdout | from_json).aapl_extensions
+
+# ---- 2. Groups ------------------------------------------------------------
+# One group per Mac. GIDs are PINNED in group_vars so the dataset ACLs below
+# keep meaning what they say -- left unpinned the middleware allocates the next
+# free id, and a rebuild in a different order silently rebinds the ACLs to the
+# wrong machine.
+- name: Query existing groups
+  ansible.builtin.command:
+    argv: [midclt, call, group.query]
+  register: truenas_grp_q
+  changed_when: false
+  check_mode: false
+
+- name: Create missing SMB groups
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - group.create
+      - '{{ {"name": item.username, "gid": item.gid, "smb": true} | to_json }}'
+  loop: "{{ truenas_smb_users }}"
+  loop_control:
+    label: "{{ item.username }} (gid {{ item.gid }})"
+  when: item.username not in (truenas_grp_q.stdout | from_json | map(attribute='group') | list)
+
+# Re-query so newly created groups are visible to the user task below. The
+# `group` field of user.create is the group's DATABASE `id`, NOT its Unix gid
+# (the middleware schema is explicit: "This is not the same as the Unix group
+# `gid` value"), so the id has to be looked up -- there is no way to pass 3001
+# and have it mean the group whose gid is 3001.
+- name: Re-query groups after creation
+  ansible.builtin.command:
+    argv: [midclt, call, group.query]
+  register: truenas_grp_q2
+  changed_when: false
+  check_mode: false
+
+# ---- 3. Users -------------------------------------------------------------
+# SKIPPED ENTIRELY WHEN THE VAULT IS ABSENT, deliberately -- same shape as the
+# SMTP vars in truenas-system. Everything else in this role converges without a
+# vault, which is what keeps `ansible-playbook playbook.yml` runnable with no
+# interactive prompt for routine, non-secret changes. The consequence is
+# explicit rather than silent: see the "SMB users were skipped" report at the
+# end of this file.
+- name: Query existing users
+  ansible.builtin.command:
+    argv: [midclt, call, user.query]
+  register: truenas_usr_q
+  changed_when: false
+  check_mode: false
+
+- name: Create missing SMB users
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - user.create
+      - "{{ _usr_payload | to_json }}"
+  vars:
+    _pw: "{{ lookup('vars', item.password_var, default='') }}"
+    _grp: "{{ (truenas_grp_q2.stdout | from_json | selectattr('gid', 'equalto', item.gid) | list | first) | default({}, true) }}"
+    _usr_payload:
+      username: "{{ item.username }}"
+      uid: "{{ item.uid }}"
+      full_name: "{{ item.full_name }}"
+      group: "{{ _grp.id | default(omit) }}"
+      group_create: false
+      password: "{{ _pw }}"
+      # smb: true is what makes the middleware store an NT hash for this
+      # account. Without it the user exists and cannot authenticate to SMB.
+      smb: true
+      # An SMB-only account has no business having a shell or a home dir.
+      # `home` defaults to /var/empty already; nologin + no SSH password are
+      # the parts that need saying out loud.
+      shell: /usr/sbin/nologin
+      ssh_password_enabled: false
+      locked: false
+  no_log: true
+  loop: "{{ truenas_smb_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - lookup('vars', item.password_var, default='') | length > 0
+    - item.username not in (truenas_usr_q.stdout | from_json | map(attribute='username') | list)
+
+# WHY THIS RUNS EVERY TIME ON EXISTING USERS: the alternative -- setting the
+# password only at create -- means a rotated vault value is silently never
+# applied, which is precisely the "declared but never executed" failure this
+# topic has already produced three times. There is no way to COMPARE first:
+# user.query exposes only the NT hash, and Ansible's builtin `hash` filter has
+# no MD4, so the declared password cannot be hashed for comparison without
+# leaving the all-builtin invariant.
+#
+# So it always applies, and `changed_when: false` because setting a password to
+# the value it already has changes nothing observable. The task is idempotent
+# in OUTCOME even though the call always executes.
+- name: Reassert SMB user passwords (a vault rotation lands here)
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - user.update
+      - "{{ (_live.id) | string }}"
+      - '{{ {"password": lookup("vars", item.password_var, default="")} | to_json }}'
+  vars:
+    _live: "{{ (truenas_usr_q.stdout | from_json | selectattr('username', 'equalto', item.username) | list | first) | default({}, true) }}"
+  no_log: true
+  changed_when: false
+  loop: "{{ truenas_smb_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - lookup('vars', item.password_var, default='') | length > 0
+    - _live | length > 0
+
+# ---- 4. Dataset ACLs ------------------------------------------------------
+# These datasets are acltype=NFSV4 + aclmode=RESTRICTED, so the ACL -- not the
+# mode bits -- is the access control. One `filesystem.setacl` sets owner AND
+# ACL together, which is why group_vars deliberately does NOT give these two
+# datasets an `owner_uid` the way tank/immich has one: a bare chown there would
+# leave the inherited ACL untouched while looking like it had worked.
+#
+# A single owner@ ALLOW/FULL_CONTROL entry, and nothing else. With no
+# `everyone@` entry NFSv4 denies by default, so each Mac's account can reach
+# only its own dataset. smbd runs as root and bypasses the ACL, so the share
+# still works.
+- name: Read current ACL on the Time Machine datasets
+  ansible.builtin.command:
+    argv: [midclt, call, filesystem.getacl, "/mnt/{{ truenas_pool }}/{{ item.dataset }}"]
+  register: truenas_smb_acl_q
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: "{{ truenas_smb_users }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.dataset }}"
+
+# `--job` is MANDATORY: filesystem.setacl is a job method, and without it
+# midclt returns a job id immediately, so anything checking afterwards races
+# the ACL write. (Same lesson as pool.create in bootstrap-pool.sh. Note the
+# flag is `--job`, not `-job` -- a single dash is an argparse usage error.)
+#
+# `recursive: false` on purpose. Inheritance (flags BASIC=INHERIT) covers
+# everything created later, and a recursive apply on every playbook run would
+# eventually walk a multi-hundred-GiB sparsebundle for no reason.
+#
+# WHAT THE DRIFT CHECK BELOW DOES AND DOES NOT CATCH: it re-applies when the
+# owner is wrong, the acltype is not NFS4, the ACL is trivial (never set, or
+# stripped), or when the set of ACE tag:id:type triples differs -- so a rogue
+# grant added by hand IS caught. It does NOT catch someone downgrading owner@
+# from FULL_CONTROL to MODIFY in the UI, because getacl returns perms expanded
+# into individual flags and the declaration uses the BASIC form; comparing them
+# would mean reimplementing the middleware's expansion table here. Stated
+# plainly rather than papered over.
+- name: Apply the owner-only ACL where it has drifted
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - filesystem.setacl
+      - "{{ _acl_payload | to_json }}"
+  vars:
+    _live: "{{ (item.stdout | default('{}') | from_json) if (item.rc | default(1)) == 0 else {} }}"
+    _live_aces: "{{ (_live.acl | default([])) | map(attribute='tag') | zip((_live.acl | default([])) | map(attribute='id') | list) | map('join', ':') | sort | list }}"
+    _want_aces: ["owner@:-1"]
+    _acl_payload:
+      path: "/mnt/{{ truenas_pool }}/{{ item.item.dataset }}"
+      uid: "{{ item.item.uid }}"
+      gid: "{{ item.item.gid }}"
+      acltype: NFS4
+      dacl:
+        - tag: "owner@"
+          id: -1
+          type: ALLOW
+          perms: { BASIC: FULL_CONTROL }
+          flags: { BASIC: INHERIT }
+      options: { stripacl: false, recursive: false, traverse: false, canonicalize: true }
+  loop: "{{ truenas_smb_acl_q.results | default([]) }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.item.dataset }}"
+  when:
+    - (item.rc | default(1)) == 0
+    - (_live.uid | default(-1)) != item.item.uid
+      or (_live.gid | default(-1)) != item.item.gid
+      or (_live.acltype | default('')) != 'NFS4'
+      or (_live.trivial | default(true))
+      or _live_aces != _want_aces
+
+# ---- 5. Shares ------------------------------------------------------------
+# SMB share names ARE a natural key (the middleware enforces uniqueness and
+# case-insensitivity on them), unlike NFS exports which have no natural key at
+# all -- so this role can match on name instead of on path.
+- name: Query existing SMB shares
+  ansible.builtin.command:
+    argv: [midclt, call, sharing.smb.query]
+  register: truenas_smb_share_q
+  changed_when: false
+  check_mode: false
+
+# THE `purpose` KEY APPEARS TWICE ON PURPOSE. `options` is a DISCRIMINATED
+# UNION whose discriminator propertyName is `purpose`, so the middleware
+# requires it INSIDE options as well as at the top level -- its schema lists
+# `required: ["purpose"]` on every options branch, and the branch is
+# `additionalProperties: false`, so it is neither optional nor ignorable.
+# Omitting the inner one gets the create REJECTED, not silently defaulted.
+- name: Create missing SMB shares
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - sharing.smb.create
+      - "{{ _share_payload | to_json }}"
+  vars:
+    _share_payload:
+      name: "{{ item.name }}"
+      path: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+      purpose: "{{ item.purpose }}"
+      comment: "{{ item.comment }}"
+      enabled: true
+      browsable: true
+      options: "{{ truenas_smb_timemachine_options | combine({'purpose': item.purpose, 'vuid': item.vuid}) }}"
+  loop: "{{ truenas_smb_shares }}"
+  loop_control:
+    label: "{{ item.name }} -> /mnt/{{ truenas_pool }}/{{ item.dataset }}"
+  when: item.name not in (truenas_smb_share_q.stdout | from_json | map(attribute='name') | list)
+
+# The one field here whose drift is genuinely expensive is `vuid`. It is the
+# Time Machine volume UUID TrueNAS advertises over mDNS; if it changes, macOS
+# stops recognising the destination it has been backing up to and offers to
+# start a new backup -- silently discarding depth that took months to build.
+# Passing null makes the middleware MINT A NEW ONE, so an unreconciled vuid is
+# not a cosmetic drift.
+- name: Reconcile drifted SMB shares
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - sharing.smb.update
+      - "{{ (_live.id) | string }}"
+      - "{{ _want | to_json }}"
+  vars:
+    _live: "{{ (truenas_smb_share_q.stdout | from_json | selectattr('name', 'equalto', item.name) | list | first) | default({}, true) }}"
+    _live_opts: "{{ _live.options | default({}, true) }}"
+    _want:
+      path: "/mnt/{{ truenas_pool }}/{{ item.dataset }}"
+      purpose: "{{ item.purpose }}"
+      comment: "{{ item.comment }}"
+      enabled: true
+      options: "{{ truenas_smb_timemachine_options | combine({'purpose': item.purpose, 'vuid': item.vuid}) }}"
+  loop: "{{ truenas_smb_shares }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - _live | length > 0
+    - (_live.path | default('')) != ('/mnt/' ~ truenas_pool ~ '/' ~ item.dataset)
+      or (_live.purpose | default('')) != item.purpose
+      or (_live.comment | default('')) != item.comment
+      or not (_live.enabled | default(false))
+      or (_live_opts.vuid | default('')) != item.vuid
+      or (_live_opts.timemachine_quota | default(-1)) != truenas_smb_timemachine_options.timemachine_quota
+      or (_live_opts.auto_snapshot | default(true)) != truenas_smb_timemachine_options.auto_snapshot
+      or (_live_opts.auto_dataset_creation | default(true)) != truenas_smb_timemachine_options.auto_dataset_creation
+
+# ---- 6. Service -----------------------------------------------------------
+# Queried first rather than blind-updated so a converged box reports ok, not
+# changed -- `service.update` returns the record id either way, so an
+# unconditional call plus changed_when:false would be quietly dishonest.
+# (Same reasoning as the NFS service tasks in truenas-shares.)
+- name: Query SMB service state
+  ansible.builtin.command:
+    argv: [midclt, call, service.query, '[["service","=","cifs"]]']
+  register: truenas_cifs_state
+  changed_when: false
+  check_mode: false
+
+- name: Enable the SMB service at boot
+  ansible.builtin.command:
+    argv: [midclt, call, service.update, cifs, '{"enable": true}']
+  when: not (truenas_cifs_state.stdout | from_json | first).enable
+
+- name: Start the SMB service if it is not running
+  ansible.builtin.command:
+    argv: [midclt, call, service.start, cifs]
+  when: (truenas_cifs_state.stdout | from_json | first).state != "RUNNING"
+
+# ---- 7. Say out loud when the vault gated something off -------------------
+# Without this the run looks fully converged while no Mac can authenticate.
+# A skipped task and a converged task render identically in the recap, which is
+# the same ambiguity that makes `--check` useless for this playbook.
+- name: Report SMB accounts that could not be configured (no vault)
+  ansible.builtin.debug:
+    msg: >-
+      SMB account '{{ item.username }}' was SKIPPED -- its vault password
+      ({{ item.password_var }}) is not loaded. Its share is live and its dataset
+      is ACL'd, but that Mac cannot authenticate until you re-run with
+      `--ask-vault-pass` and vars/vault.yml present.
+  loop: "{{ truenas_smb_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: lookup('vars', item.password_var, default='') | length == 0

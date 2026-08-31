@@ -28,6 +28,7 @@
     - role: truenas-storage   # assert pool, converge datasets  (run FIRST: everything else needs paths)
     - role: truenas-system    # hostname/timezone/NTP/alert email
     - role: truenas-shares    # NFS exports to the OKD nodes
+    - role: truenas-smb       # SMB Time Machine targets for the Macs
     - role: truenas-tasks     # scrub, SMART, periodic snapshots
     - role: truenas-apps      # garage S3 server backing the Velero BSL
 
@@ -68,6 +69,7 @@
       loop:
         - { key: datasets, method: pool.dataset.query, attr: id }
         - { key: nfs,      method: sharing.nfs.query,  attr: path }
+        - { key: smb,      method: sharing.smb.query,  attr: name }
         - { key: snap,     method: pool.snapshottask.query, attr: dataset }
         - { key: cron,     method: cronjob.query,      attr: description }
         - { key: scrub,    method: pool.scrub.query,   attr: id }
@@ -92,6 +94,14 @@
           # to get silently wrong here. Compared as sorted "id:value" pairs so
           # one `difference` covers all datasets at once.
           recordsize_drift: "{{ _want_rs | difference(_live_rs) }}"
+          smb_shares_missing: "{{ (truenas_smb_shares | map(attribute='name') | list) | difference(_live.smb | map(attribute='name') | list) }}"
+          # The three create-time-only properties, re-read AFTER the apply.
+          # truenas-storage asserts these too, but from its PRE-create query --
+          # so that assert can only speak about datasets that already existed.
+          # This one is the actual convergence proof: it also covers datasets
+          # this very run created, which is where a wrong create payload would
+          # otherwise hide.
+          dataset_createtime_drift: "{{ _want_ct | difference(_live_ct) }}"
           # NOT part of the convergence assert -- it is a known pending item, not
           # a failed apply. But it must be VISIBLE every run: without SMTP the
           # three SMART cron jobs mail root, root's mail goes nowhere, and a
@@ -108,6 +118,19 @@
         _child: "{{ _live.datasets | rejectattr('id', 'equalto', truenas_pool) | list }}"
         _want_rs: "{{ (truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list) | zip(truenas_datasets | map(attribute='recordsize') | list) | map('join', ':') | sort | list }}"
         _live_rs: "{{ (_child | map(attribute='id') | list) | zip(_child | map(attribute='recordsize') | map(attribute='value') | list) | map('join', ':') | sort | list }}"
+        _ct_decl: "{{ truenas_datasets | selectattr('casesensitivity', 'defined') | list }}"
+        _want_ct: >-
+          {{ (_ct_decl | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list)
+             | zip(_ct_decl | map(attribute='casesensitivity') | list,
+                   _ct_decl | map(attribute='acltype') | list,
+                   _ct_decl | map(attribute='aclmode') | list)
+             | map('join', ':') | sort | list }}
+        _live_ct: >-
+          {{ (_live.datasets | map(attribute='id') | list)
+             | zip(_live.datasets | map(attribute='casesensitivity.value', default='') | list,
+                   _live.datasets | map(attribute='acltype.value', default='') | list,
+                   _live.datasets | map(attribute='aclmode.value', default='') | list)
+             | map('join', ':') | sort | list }}
 
     - name: Report declared-vs-live drift
       ansible.builtin.debug:
@@ -125,6 +148,8 @@
           - _drift.cron_jobs_missing | length == 0
           - not _drift.scrub_schedule_drift
           - _drift.recordsize_drift | length == 0
+          - _drift.smb_shares_missing | length == 0
+          - _drift.dataset_createtime_drift | length == 0
         fail_msg: "Apply finished but the box did not converge -- see the drift report above."
-        success_msg: "Converged: every declared dataset, export, snapshot task, cron job and the scrub schedule are live."
+        success_msg: "Converged: every declared dataset (incl. create-time-only properties), export, SMB share, snapshot task, cron job and the scrub schedule are live."
       when: not ansible_check_mode

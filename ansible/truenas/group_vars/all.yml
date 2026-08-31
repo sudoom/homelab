@@ -105,18 +105,106 @@ truenas_datasets:
     comments: "garage object blocks. garage's default block size is 1 MiB, so 1M matches."
     quota: 0
 
+  # ---- SMB datasets for humans ---------------------------------------
+  # THREE PROPERTIES BELOW ARE CREATE-TIME-ONLY AND CANNOT BE CHANGED LATER.
+  #
+  # `casesensitivity` above all: ZFS fixes it at create and there is no
+  # `zfs set` for it, no rename-in-place, no workaround. Getting it wrong is
+  # discovered months later by a Mac that cannot find a file it just wrote.
+  # `truenas-storage` therefore ASSERTS these three and fails loudly on drift
+  # rather than silently no-op-ing a reconcile it cannot perform. The only
+  # remedy is destroy + recreate -- see destroy-empty-dataset.sh.
+  #
+  # WHY INSENSITIVE FOR SMB: macOS and Windows both treat paths as
+  # case-insensitive. A case-SENSITIVE server backing a case-insensitive
+  # client lets `Photo.jpg` and `photo.jpg` coexist on disk while the client
+  # believes they are one file. TrueNAS's own preset for a pure-SMB dataset is
+  # INSENSITIVE + NFSV4 + RESTRICTED, which is what these three encode
+  # explicitly. Set as literal properties rather than via `share_type: SMB`
+  # because a preset's expansion is version-dependent and invisible in git --
+  # this way the review diff shows the actual values.
+  #
+  # AND WHY NOT EVERYWHERE: media/immich/keepers are NFS-mounted by Linux
+  # clients that expect case-sensitive lookup, so SENSITIVE is correct there
+  # and they are deliberately left alone.
   - name: personal
     recordsize: 128K
-    comments: "SMB share for humans (personal side of the personal/work split)."
+    comments: "SMB share for humans (personal side of the personal/work split). Family photos land here; immich imports them over NFS later."
     quota: 0
+    # DELIBERATELY LEFT SENSITIVE. This dataset is MULTIPROTOCOL: humans browse
+    # it over SMB and immich will read it over NFS during the photo import.
+    # TrueNAS's MULTIPROTOCOL/NFS presets both give SENSITIVE for exactly that
+    # reason. `acltype` is the only thing that wants changing here, and acltype
+    # IS updatable post-create -- so unlike timemachine there is no deadline.
   - name: work
     recordsize: 128K
     comments: "SMB share for humans (work side of the personal/work split)."
     quota: 0
+    # ---- OPEN DECISION WITH A SILENT DEADLINE (2026-08-31) ----------------
+    # Still empty (191.81 KiB, zero snapshots), so it can still be recreated
+    # with any casesensitivity. Pure-SMB would want INSENSITIVE like
+    # timemachine; multiprotocol would want SENSITIVE like personal. Nobody has
+    # decided which, and no consumer exists yet, so it is deliberately left
+    # as-is rather than guessed at.
+    #
+    # THE DEADLINE IS NOT A DATE, IT IS THE FIRST BYTE WRITTEN. ZFS emits no
+    # warning at that moment and the property keeps reporting a valid value
+    # forever after. Decide before anything mounts this.
   - name: timemachine
-    recordsize: 128K
-    comments: "Dedicated Time Machine SMB target. QUOTA IS MANDATORY - Time Machine will otherwise consume the pool."
-    quota: 1099511627776            # 1 TiB, in bytes
+    # Parent container only -- the SHARES point at the two children below, so
+    # no Mac ever mounts this path. It exists to hold the total ceiling and to
+    # make INSENSITIVE the inherited default, so a future third Mac's dataset
+    # is right by construction instead of right by remembering.
+    recordsize: 1M
+    casesensitivity: INSENSITIVE
+    acltype: NFSV4
+    aclmode: RESTRICTED
+    comments: "Parent for per-Mac Time Machine targets. QUOTA IS MANDATORY - Time Machine expands to fill whatever it is shown."
+    quota: 1610612736000            # 1500 GiB = the exact sum of the two children
+  # ---- One dataset per Mac, each with its OWN quota ---------------------
+  # NOT one share with `auto_dataset_creation`, which is the obvious-looking
+  # option: auto-created child datasets inherit NO quota, so the first Mac to
+  # run a large backup would consume the other's space and the second Mac's
+  # failure would be indistinguishable from a network problem. Pre-creating
+  # them is the only way each Mac gets a hard, independent ceiling.
+  #
+  # RECORDSIZE 1M, NOT THE 128K DEFAULT: Time Machine over SMB writes a
+  # sparsebundle whose payload is 8 MiB band files. At 1M that is 8 records per
+  # band with no read-modify-write on a full-band write; at 128K it is 64
+  # records and 8x the indirect-block metadata, on a 6-wide RAIDZ2 of spinning
+  # disks. A backup target is bulk-sequential-write shaped, which is exactly
+  # what large records suit. (recordsize IS updatable, but it applies to NEW
+  # WRITES ONLY -- so it has to be right before the first backup, not before
+  # the first byte. Hence: now.)
+  #
+  # The quota split is the operator's call, not a derived number: 1000 GiB for
+  # the Mac mini (the primary machine, stays), 500 GiB for the MacBook Air.
+  - name: timemachine/macmini
+    recordsize: 1M
+    casesensitivity: INSENSITIVE
+    acltype: NFSV4
+    aclmode: RESTRICTED
+    comments: "Time Machine target for the Mac mini."
+    quota: 1073741824000            # 1000 GiB
+    # NO owner_uid HERE, deliberately -- unlike tank/immich. That dataset is
+    # POSIX-mode, where a numeric chown IS the access control. These two are
+    # acltype=NFSV4 + aclmode=RESTRICTED, where the ACL is, and a bare chown
+    # would leave the inherited ACL untouched while looking like it had worked.
+    # `truenas-smb` sets owner AND ACL in one `filesystem.setacl` call so there
+    # is exactly one owner of this concern. See truenas_smb_users[].dataset.
+  - name: timemachine/mba
+    recordsize: 1M
+    casesensitivity: INSENSITIVE
+    acltype: NFSV4
+    aclmode: RESTRICTED
+    comments: "Time Machine target for the MacBook Air."
+    quota: 536870912000             # 500 GiB
+    # NO owner_uid HERE, deliberately -- unlike tank/immich. That dataset is
+    # POSIX-mode, where a numeric chown IS the access control. These two are
+    # acltype=NFSV4 + aclmode=RESTRICTED, where the ACL is, and a bare chown
+    # would leave the inherited ACL untouched while looking like it had worked.
+    # `truenas-smb` sets owner AND ACL in one `filesystem.setacl` call so there
+    # is exactly one owner of this concern. See truenas_smb_users[].dataset.
 
 # ---- NFS exports ----------------------------------------------------------
 # Restricted to the three OKD node addresses on the CEPH BACKNET (VLAN 10).
@@ -140,6 +228,86 @@ truenas_nfs_exports:
   - dataset: media
   - dataset: immich
   - dataset: keepers
+
+# ---- SMB (Time Machine) ---------------------------------------------------
+# The whole SMB stack was greenfield as of 2026-08-31: cifs STOPPED and
+# disabled, zero shares, zero non-builtin SMB users, aapl_extensions off.
+#
+# ORDER IS LOAD-BEARING in truenas-smb and it is not obvious from the outside:
+# `sharing.smb.create` with `purpose: TIMEMACHINE_SHARE` is REJECTED unless
+# global `aapl_extensions` is already true. The middleware says so in its own
+# schema ("NOTE: `aapl_extensions` must be set in the global `smb.config`"),
+# so the global flag has to be converged before any share is attempted.
+truenas_smb_aapl_extensions: true
+
+# TrueNAS 25.10 replaced the old per-share feature booleans (`timemachine:
+# true`, `vfsobjects`, ...) with a single `purpose` enum plus a discriminated
+# `options` object. Anything written for 24.x or earlier will not apply here --
+# the field simply does not exist any more. Verified against this box's own
+# `core.get_methods` output, not against documentation.
+truenas_smb_shares:
+  - name: macmini-tm
+    dataset: timemachine/macmini
+    purpose: TIMEMACHINE_SHARE
+    comment: "Time Machine target for the Mac mini (managed by ansible/truenas)"
+    # PINNED, NOT GENERATED. `vuid` is the Time Machine volume UUID TrueNAS
+    # puts in its mDNS advertisement, and macOS uses it to recognise a volume
+    # as the one it has been backing up to. Passing null makes the middleware
+    # MINT A NEW ONE ON EVERY WRITE -- so a null here would hand the Mac a
+    # different volume identity after any future playbook run and invite
+    # "Time Machine must create a new backup". A literal UUID is stable,
+    # reviewable, and not a secret.
+    vuid: "5f6d1c2a-3b4e-4d18-9a70-1c8e2f6b4a11"
+  - name: mba-tm
+    dataset: timemachine/mba
+    purpose: TIMEMACHINE_SHARE
+    comment: "Time Machine target for the MacBook Air (managed by ansible/truenas)"
+    vuid: "9c3a7e40-5d21-4f6b-8e12-77b4d05a3c29"
+
+# Applied to every TIMEMACHINE_SHARE. Both defaults are deliberate:
+#
+# timemachine_quota: 0 -- the ZFS per-dataset quota IS the enforcement, and it
+#   is the honest one. The SMB-level value only lies to the client about the
+#   disk size; the middleware's own note says modern macOS sets its quota
+#   client-side anyway. Two ceilings that can disagree is worse than one.
+#
+# auto_snapshot: false -- snapshotting on every completed backup sounds free
+#   and is not: each snapshot pins the 8 MiB bands that backup rewrote, against
+#   a hard quota, and Time Machine ALREADY keeps its own version history. The
+#   failure mode is a quota that fills with snapshots of a backup tool's own
+#   versioning. Deliberate no.
+#
+# auto_dataset_creation: false -- children are pre-created with quotas above.
+truenas_smb_timemachine_options:
+  timemachine_quota: 0
+  auto_snapshot: false
+  auto_dataset_creation: false
+
+# One SMB identity per Mac, not one shared account. Each Mac can then only
+# reach its own dataset, so neither can read the other's backups and a
+# credential rotation on one does not touch the other.
+#
+# UIDs/GIDs are PINNED so the dataset ACLs above (owner_uid 3001/3002) keep
+# meaning what they say. Left unpinned, the middleware allocates the next free
+# id and a rebuild in a different order silently rebinds the ACLs.
+#
+# PASSWORDS LIVE IN THE VAULT, and these tasks are SKIPPED when it is absent --
+# same shape as the SMTP vars. That keeps `ansible-playbook playbook.yml`
+# runnable with no interactive prompt for every non-secret change, which is the
+# property that makes this topic routinely runnable at all.
+truenas_smb_users:
+  - username: tm-macmini
+    uid: 3001
+    gid: 3001
+    full_name: "Time Machine - Mac mini"
+    dataset: timemachine/macmini
+    password_var: truenas_smb_password_macmini
+  - username: tm-mba
+    uid: 3002
+    gid: 3002
+    full_name: "Time Machine - MacBook Air"
+    dataset: timemachine/mba
+    password_var: truenas_smb_password_mba
 
 # ---- System ---------------------------------------------------------------
 truenas_hostname: truenas

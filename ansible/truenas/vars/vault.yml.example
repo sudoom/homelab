@@ -18,3 +18,18 @@ truenas_smtp_security: TLS
 truenas_smtp_user: alerts@example.com
 truenas_smtp_password: CHANGEME
 truenas_alert_to: you@example.com
+
+# ---- SMB (Time Machine) ---------------------------------------------------
+# One password per Mac, matching `password_var` in truenas_smb_users.
+#
+# These are the ONLY reason the SMB role touches the vault. Everything else in
+# it -- the global aapl_extensions flag, the groups, the dataset ACLs, the
+# shares, the service -- converges without one, so the playbook stays runnable
+# with no interactive prompt for routine changes. When the vault is absent the
+# role SAYS SO per account rather than reporting a clean converged run that no
+# Mac can actually log in to.
+#
+# The role re-asserts these on every run (it cannot compare against the stored
+# NT hash), so rotating a value here and re-running is all a rotation takes.
+truenas_smb_password_macmini: CHANGEME
+truenas_smb_password_mba: CHANGEME

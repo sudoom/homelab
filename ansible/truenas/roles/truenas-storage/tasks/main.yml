@@ -61,6 +61,66 @@
            | zip(truenas_ds_q.stdout | from_json | map(attribute='recordsize.value', default='') | list)
          ) }}
 
+# ---- Create-time-only properties: ASSERT, never reconcile ----------------
+# `casesensitivity`, `acltype` and `aclmode` are declared as a SET on the SMB
+# datasets (see group_vars). casesensitivity in particular is fixed by ZFS at
+# create: there is no `zfs set`, no rename-in-place, no workaround.
+#
+# WHY AN ASSERT AND NOT A RECONCILE TASK: a reconcile is what everything else in
+# this role does, and it is exactly wrong here -- `pool.dataset.update` accepts
+# the key and silently does nothing, so a "reconcile" would report `ok` forever
+# while the property stayed wrong. That is the same "declared but never applied"
+# shape that has already produced three separate bugs in this topic. Failing is
+# the only honest option when the remedy is destroy + recreate.
+#
+# This runs BEFORE the create task on purpose. A wrong parent must block its
+# children from being created underneath it -- children inherit casesensitivity
+# at create, so creating them under a drifted parent would multiply the problem
+# rather than surface it.
+#
+# Only datasets that ALREADY EXIST are compared. A declared-but-missing one is
+# created correctly by the next task, so flagging it here would be a false alarm.
+- name: Detect drift on create-time-only dataset properties
+  ansible.builtin.set_fact:
+    truenas_ds_ct_drift: "{{ _want_ct | difference(_live_ct) }}"
+  vars:
+    _j: "{{ truenas_ds_q.stdout | from_json }}"
+    _existing: "{{ _j | map(attribute='id') | map('regex_replace', '^' ~ truenas_pool ~ '/', '') | list }}"
+    _decl: >-
+      {{ truenas_datasets
+         | selectattr('casesensitivity', 'defined')
+         | selectattr('name', 'in', _existing)
+         | list }}
+    _want_ct: >-
+      {{ (_decl | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list)
+         | zip(_decl | map(attribute='casesensitivity') | list,
+               _decl | map(attribute='acltype') | list,
+               _decl | map(attribute='aclmode') | list)
+         | map('join', ':') | sort | list }}
+    _live_ct: >-
+      {{ (_j | map(attribute='id') | list)
+         | zip(_j | map(attribute='casesensitivity.value', default='') | list,
+               _j | map(attribute='acltype.value', default='') | list,
+               _j | map(attribute='aclmode.value', default='') | list)
+         | map('join', ':') | sort | list }}
+
+- name: Assert no dataset has drifted on a create-time-only property
+  ansible.builtin.assert:
+    that:
+      - truenas_ds_ct_drift | length == 0
+    fail_msg: >-
+      These datasets declare create-time-only properties that do NOT match the
+      live pool, and NOTHING in this playbook can fix them -- ZFS has no `set`
+      for casesensitivity: {{ truenas_ds_ct_drift | join(' | ') }}.
+      Each entry reads `dataset:CASESENSITIVITY:ACLTYPE:ACLMODE` as DECLARED.
+      The only remedy is destroy + recreate, which is a separate gated one-shot
+      because it is irreversible: run `./destroy-empty-dataset.sh <dataset>`
+      from ansible/truenas (dry-run by default; it refuses any dataset that is
+      not empty, has snapshots, has children, or is referenced by a share), then
+      re-run this playbook to re-create it from group_vars. If the dataset already holds data you care about, the property
+      is not recoverable without copying the data out and back.
+    success_msg: "Create-time-only dataset properties match the live pool."
+
 # recordsize applies to NEW WRITES ONLY. Creating the dataset with the right
 # value up front is the only way to get it right for the data that lands next --
 # which is why this runs before any migration step.
@@ -83,6 +143,9 @@
         }
         | combine({'compression': item.compression} if item.compression is defined else {})
         | combine({'quota': item.quota} if (item.quota | default(0)) | int > 0 else {})
+        | combine({'casesensitivity': item.casesensitivity} if item.casesensitivity is defined else {})
+        | combine({'acltype': item.acltype} if item.acltype is defined else {})
+        | combine({'aclmode': item.aclmode} if item.aclmode is defined else {})
       }}
   loop: "{{ truenas_datasets }}"
   loop_control:
