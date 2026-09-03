@@ -7,7 +7,7 @@ desiredMinAvailable: 1
 
 # Image used by the CronJob to call `oc patch`. origin-cli is the
 # canonical OpenShift CLI image, available in OKD without auth.
-image: quay.io/openshift/origin-cli:4.22
+image: quay.io/openshift/origin-cli:5.1
 
 # Schedule. Every 5 min is enough — loki-operator doesn't actively
 # reconcile the PDB (verified 2026-05-21), it only writes it on
