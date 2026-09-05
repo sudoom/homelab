@@ -122,9 +122,20 @@ data:
   # --create_only layout phase, and the measured run is then a fixed 60s window
   # over it. Without this the "measurement" would be the creation time of 1M
   # files, which is a different quantity and not comparable to a throughput.
+  # filename_format PINS BOTH SMALLFILE JOBS TO ONE SHARED CORPUS.
+  # fio's default filename_format is $jobname.$jobnum.$filenum, so
+  # smallfile-write and smallfile-read would each build their OWN million
+  # files -- two 64 GiB corpora per client where one suffices, and the layout
+  # is by far the most expensive thing in the whole matrix (metadata-bound,
+  # hours per backend). Naming them identically means smallfile-write creates
+  # the corpus and smallfile-read reads exactly those files, which is also the
+  # more honest pairing: the read test now walks the tree the write test built.
+  # It does not alter block size, file size, count, sync behaviour or runtime,
+  # so the measured shape is unchanged.
   smallfile-write.fio: |
     [global]
     directory=${BENCH_DIR}
+    filename_format=smallfile.$jobnum.$filenum
     ioengine=${BENCH_IOENGINE}
     direct=0
     fsync=1
@@ -145,6 +156,7 @@ data:
   smallfile-read.fio: |
     [global]
     directory=${BENCH_DIR}
+    filename_format=smallfile.$jobnum.$filenum
     ioengine=${BENCH_IOENGINE}
     direct=1
     group_reporting=1

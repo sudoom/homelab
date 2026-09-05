@@ -188,8 +188,27 @@ spec:
               # --create_only=1 lays out without measuring, and is a no-op when
               # the files are already the right size -- which is what makes the
               # retained layout cheap to reuse.
+              # --alloc-size RAISES FIO'S INTERNAL smalloc ARENA, and without it the
+              # 64 GiB smallfile corpus is unreachable. fio keeps a struct per
+              # file in a fixed pool set (8 pools); at the default 16384 KiB per
+              # pool that tops out near 322k files. 64 GiB / 64 KiB is 1,048,576
+              # files per client, 3.3x over, and fio does not degrade -- it
+              # aborts mid-layout:
+              #   smalloc: OOM. Consider using --alloc-size ...
+              #   fio: filesetup.c:1746: alloc_new_file: Assertion `0' failed.
+              # leaving a 4-file corpus that the old count check happily printed
+              # and ran against. 131072 KiB = 128 MiB per pool = ~2.5M files of
+              # headroom, allocated lazily, well inside the pod's 4Gi limit.
+              # It is passed to BOTH fio invocations because layout and the
+              # measured run each build the full file list.
+              FIO_ALLOC="--alloc-size=131072"
+              echo "### fio $(fio --version 2>/dev/null || echo unknown), ${FIO_ALLOC}"
+
               echo "### layout (create_only; no-op if already correct size)"
-              fio /tmp/job.fio --create_only=1 >/dev/null 2>&1 || true
+              fio /tmp/job.fio ${FIO_ALLOC} --create_only=1 >/tmp/layout.log 2>&1 || {
+                echo "WARN layout returned non-zero; tail follows" >&2
+                tail -15 /tmp/layout.log >&2
+              }
 
               # WANT is substituted by run.sh, NOT computed here.
               #
@@ -207,10 +226,24 @@ spec:
               # inapplicable there, it is guaranteed to fail.
               case "${WORKLOAD}" in
                 smallfile-*)
-                  # For these, the corpus is many files; assert the COUNT looks
-                  # right instead of any single file's size.
+                  # For these the corpus is many files, so "largest file" means
+                  # nothing; the COUNT is the thing to check. This used to only
+                  # PRINT the count, which is why a fio layout that aborted at 4
+                  # files out of 1,048,576 still went on to "measure" and record
+                  # a result. Printing is not checking.
                   NFILES=$(find "${BENCH_DIR}" -type f 2>/dev/null | wc -l)
-                  echo "  smallfile corpus: ${NFILES} files (size check N/A)"
+                  NUMJOBS=$(awk -F= '/^numjobs=/{print $2; exit}' /tmp/job.fio)
+                  EXPECT=$(( ${BENCH_NRFILES} * ${NUMJOBS:-1} ))
+                  FLOOR=$(( EXPECT - EXPECT / 100 ))          # allow 1% slack
+                  echo "  smallfile corpus: ${NFILES} files, want >= ${FLOOR} (${EXPECT} nominal)"
+                  if [ "${NFILES}" -lt "${FLOOR}" ]; then
+                    echo "FATAL: smallfile corpus is INCOMPLETE (${NFILES} < ${FLOOR})." >&2
+                    echo "  Measuring against a partial corpus reports the speed of whatever" >&2
+                    echo "  fraction got created, which is not a storage figure at all." >&2
+                    echo "  Layout log tail:" >&2
+                    tail -15 /tmp/layout.log >&2
+                    exit 1
+                  fi
                   ;;
                 *)
                   # awk, NOT `sort -rn | head -1`: head exits after one line,
@@ -241,8 +274,60 @@ spec:
               # previous job and (b) leaned on rate()[1m] when mktxp only
               # scrapes every 30s -- two samples, so a 60s burst straddling a
               # scrape boundary is averaged with idle time and reads ~25% low.
+              # ---- RENDEZVOUS BARRIER ------------------------------------
+              # NOTHING previously made the N clients measure at the SAME TIME.
+              # Each pod installs fio at startup and lays out its own corpus, both
+              # of variable duration, so the measured windows drifted apart --
+              # and the parser SUMS bandwidth across clients as though they were
+              # concurrent. Observed 2026-09-05 on rand-write-4k at 3 clients:
+              #   c2 1788631522-1788631588
+              #   c0 1788631607-1788631673   <- started after c2 had finished
+              #   c1 1788631689-1788631755
+              # Three strictly sequential runs, summed, reported as 74.2 MiB/s.
+              # The MikroTik counter said 255 Mb/s, which is 74.2/3. The wire was
+              # right. Worse, it was INTERMITTENT -- seq-* overlapped fine the
+              # same hour -- so no single row revealed which kind it was.
+              #
+              # Marker file per client on the shared volume, then a GO file
+              # carrying a common start epoch. GO exists because detecting "all
+              # markers present" is not enough on NFS: directory attributes are
+              # cached (acdirmin 30s), so clients notice each other at different
+              # times. A shared absolute target absorbs that skew -- everyone
+              # sleeps until the same wall-clock second instead of starting when
+              # they happen to notice. mkdir is the atomic primitive that elects
+              # a single GO writer.
+              BARRIER_DIR="/data/__BACKEND__/.barrier/__JOB_NAME__"
+              mkdir -p "${BARRIER_DIR}"
+              : > "${BARRIER_DIR}/${CLIENT}"
+              WANT_CLIENTS=__CLIENTS__
+              BARRIER_TIMEOUT=__BARRIER_TIMEOUT__
+              BARRIER_PAD=45
+              T0=$(date +%s)
+              while :; do
+                SEEN=$(ls -1 "${BARRIER_DIR}" 2>/dev/null | grep -c '^c[0-9]' || true)
+                if [ "${SEEN:-0}" -ge "${WANT_CLIENTS}" ]; then
+                  if mkdir "${BARRIER_DIR}/.go.lock" 2>/dev/null; then
+                    echo $(( $(date +%s) + BARRIER_PAD )) > "${BARRIER_DIR}/GO.tmp"
+                    mv "${BARRIER_DIR}/GO.tmp" "${BARRIER_DIR}/GO"
+                  fi
+                fi
+                if [ -f "${BARRIER_DIR}/GO" ]; then
+                  TARGET=$(cat "${BARRIER_DIR}/GO" 2>/dev/null || echo 0)
+                  [ -n "${TARGET}" ] && [ "${TARGET}" -gt 0 ] && break
+                fi
+                if [ $(( $(date +%s) - T0 )) -ge "${BARRIER_TIMEOUT}" ]; then
+                  echo "FATAL: barrier timed out after ${BARRIER_TIMEOUT}s with ${SEEN:-0}/${WANT_CLIENTS} clients ready." >&2
+                  echo "  A run whose clients did not start together cannot have its" >&2
+                  echo "  bandwidth summed, so there is nothing worth measuring here." >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+              while [ "$(date +%s)" -lt "${TARGET}" ]; do sleep 1; done
+              echo "### BARRIER_RELEASED waited $(( $(date +%s) - T0 ))s, ${WANT_CLIENTS} clients, target ${TARGET}"
+
               echo "### FIO_START_EPOCH $(date +%s)"
-              fio /tmp/job.fio --output-format=json --output=/tmp/out.json
+              fio /tmp/job.fio ${FIO_ALLOC} --output-format=json --output=/tmp/out.json
               echo "### FIO_END_EPOCH $(date +%s)"
               echo "### FIO_JSON_BEGIN"
               cat /tmp/out.json
@@ -266,7 +351,10 @@ spec:
           resources:
             requests:
               cpu: "500m"
-              memory: "1Gi"
+              # 2Gi, not 1Gi: --alloc-size=131072 lets fio claim up to 8 x 128 MiB
+              # of smalloc arena for the 1M-file smallfile corpus, on top of its
+              # own working set. The 4Gi limit is the backstop.
+              memory: "2Gi"
             limits:
               cpu: "2"
               memory: "4Gi"

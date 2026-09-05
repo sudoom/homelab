@@ -359,10 +359,30 @@ RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"
 #
 # 50 MB/s is a deliberately pessimistic layout rate (the DS418 writes at ~120
 # MB/s; the slowest plausible backend is what has to fit).
-LAYOUT_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS ))
-LAYOUT_SECS=$(( LAYOUT_BYTES / 50000000 ))
-DEADLINE=$(( LAYOUT_SECS + RUNTIME + 600 ))
-echo "  info deadline ${DEADLINE}s (layout of $(human "$LAYOUT_BYTES") allowed ${LAYOUT_SECS}s at a pessimistic 50 MB/s)"
+#
+# SMALLFILE LAYOUT IS METADATA-BOUND, NOT BANDWIDTH-BOUND, and costing it in
+# MB/s is how you kill a 3-hour layout at the 80-minute mark. A 64 GiB corpus of
+# 64 KiB files is 1,048,576 files PER CLIENT; over NFS each is a synchronous
+# create, so the honest unit is files/second. 100/s is deliberately pessimistic.
+# Clients lay out in parallel, so the wall-clock does not scale with CLIENTS.
+case "$WORKLOADS" in
+  *smallfile*)
+    FILES_PER_CLIENT=$(( $(to_bytes "$FILESIZE") / SMALLFILE_BYTES ))
+    LAYOUT_SECS=$(( FILES_PER_CLIENT / 100 ))
+    LAYOUT_DESC="${FILES_PER_CLIENT} files/client allowed ${LAYOUT_SECS}s at a pessimistic 100 files/s"
+    ;;
+  *)
+    LAYOUT_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS ))
+    LAYOUT_SECS=$(( LAYOUT_BYTES / 50000000 ))
+    LAYOUT_DESC="layout of $(human "$LAYOUT_BYTES") allowed ${LAYOUT_SECS}s at a pessimistic 50 MB/s"
+    ;;
+esac
+# The barrier waits out the SLOWEST client's layout, so its timeout is the
+# layout budget plus slack -- and it must expire BEFORE activeDeadlineSeconds,
+# otherwise the Job is killed instead of reporting which client never arrived.
+BARRIER_TIMEOUT=$(( LAYOUT_SECS + 900 ))
+DEADLINE=$(( LAYOUT_SECS + RUNTIME + 1200 ))
+echo "  info deadline ${DEADLINE}s (${LAYOUT_DESC}; barrier timeout ${BARRIER_TIMEOUT}s)"
 
 echo
 echo ">>> plan"
@@ -438,6 +458,7 @@ render() {
       -e "s|__IOENGINE__|${IOENGINE}|g" \
       -e "s|__IMAGE__|${IMAGE}|g" \
       -e "s|__DEADLINE__|${DEADLINE}|g" \
+      -e "s|__BARRIER_TIMEOUT__|${BARRIER_TIMEOUT}|g" \
       -e "s|__FILESIZE_BYTES__|$(to_bytes "$FILESIZE")|g" \
       "${HERE}/bench-job.yaml.tpl"
 }
