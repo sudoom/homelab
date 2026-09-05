@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Storage benchmark runner. OPERATOR-RUN — this applies to the cluster.
+#
+# WHY THIS EXISTS: five throughput figures in this repo have been wrong, and
+# four failed the same way — the number was real and the CONDITIONS were
+# invented ("246 MB/s sustained" was one reader; "~190 MB/s" came from a guessed
+# elapsed time). See data/storage-throughput.md. A harness fixes that by making
+# the conditions structural: every result row is emitted by the same code that
+# ran the test, so backend / workload / client-count / node placement / date
+# cannot drift from the number they describe.
+#
+# Usage:
+#   ./run.sh --list                                  # show backends + workloads
+#   ./run.sh --backend cephfs-hdd --dry-run          # gates + rendered manifest
+#   ./run.sh --backend cephfs-hdd                    # full matrix, 1 client
+#   ./run.sh --backend nfs-truenas-bench --clients 3 # multi-client
+#   ./run.sh --backend cephfs-hdd --workload smallfile-write --clients 2
+#
+# Results append to data/storage-benchmark-results.tsv (machine-readable) and
+# are summarised to stdout.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RESULTS="${REPO_ROOT}/data/storage-benchmark-results.tsv"
+
+NAMESPACE="${BENCH_NAMESPACE:-default}"
+IMAGE="${BENCH_IMAGE:-quay.io/ceph/ceph:v19.2.3}"
+IOENGINE="${BENCH_IOENGINE:-libaio}"
+RUNTIME="${BENCH_RUNTIME:-60}"
+FILESIZE="${BENCH_FILESIZE:-8G}"
+NRFILES="${BENCH_NRFILES:-2000}"
+CLIENTS=1
+WORKLOADS=""
+BACKEND=""
+DRY_RUN=0
+
+# ---- Backend registry ------------------------------------------------------
+# name|storage_class|access_mode|pvc_size|max_clients|layout
+#
+# A PIPE-DELIMITED STRING, NOT AN ASSOCIATIVE ARRAY, deliberately: `declare -A`
+# is bash 4+, and macOS ships bash 3.2.57 -- where `[name]=value` is parsed as
+# an arithmetic array index and the first word becomes an unbound variable.
+# This script has to run on the operator's Mac, so it stays bash-3.2 clean.
+# (Found the hard way: the first draft used declare -A and died on `--list`.)
+#
+# max_clients is a REAL constraint, not a policy: an RWO volume cannot be
+# mounted by pods on two nodes, so asking for 3 clients on ceph-nvme-block does
+# not produce a slow result -- it produces pods stuck Pending, which reads like
+# a hung benchmark rather than a scheduling impossibility.
+#
+# LAYOUT IS PART OF THE RESULT. Three backends, three different shapes, and the
+# shape explains the numbers: the DS418 has MORE spindles than CephFS-HDD (4 vs
+# 3) and measured 2.4x slower, because it is one box behind a 1G link. Without
+# the layout in the row, that looks like a contradiction.
+BACKENDS_TABLE="\
+ceph-nvme-block|ceph-nvme-block|ReadWriteOnce|20Gi|1|Ceph RBD replicated x3, 3 NVMe OSDs (PM9A1), 10G backnet
+cephfs-hdd|cephfs-hdd|ReadWriteMany|100Gi|6|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
+nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|100Gi|6|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
+nfs-csi|nfs-csi|ReadWriteMany|100Gi|6|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
+
+backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
+
+ALL_WORKLOADS="seq-read-1m seq-write-1m rand-read-4k rand-write-4k smallfile-write smallfile-read"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+usage_list() {
+  echo "Backends:"
+  echo "$BACKENDS_TABLE" | while IFS='|' read -r b sc am size maxc desc; do
+    [ -n "$b" ] || continue
+    printf "  %-20s %-16s max_clients=%-2s  %s\n" "$b" "$am" "$maxc" "$desc"
+  done
+  echo
+  echo "Workloads: ${ALL_WORKLOADS}"
+  echo
+  echo "NOTE: nfs-csi is the Synology, which is being sold. Measure it while it"
+  echo "      still exists — it is the only baseline for 'was the migration worth it'."
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --list)     usage_list; exit 0 ;;
+    --backend)  BACKEND="$2"; shift 2 ;;
+    --workload) WORKLOADS="$2"; shift 2 ;;
+    --clients)  CLIENTS="$2"; shift 2 ;;
+    --runtime)  RUNTIME="$2"; shift 2 ;;
+    --filesize) FILESIZE="$2"; shift 2 ;;
+    --dry-run)  DRY_RUN=1; shift ;;
+    *) die "unknown arg: $1 (try --list)" ;;
+  esac
+done
+
+[[ -n "$BACKEND" ]] || die "--backend required (try --list)"
+
+# Refuse a PRODUCTION share BEFORE the registry lookup, so someone who reaches
+# for the obvious name gets told why rather than a bare "unknown backend".
+# csi-driver-nfs provisions one subdirectory per PV INSIDE the share, and every
+# NFS class here is Retain -- so a run against nfs-truenas-media would write
+# pvc-<uuid> dirs into the live 3.39 TiB media library and leave them there.
+case "$BACKEND" in
+  nfs-truenas-media|nfs-truenas-immich|nfs-truenas-keepers)
+    die "'$BACKEND' is a PRODUCTION dataset, and benchmarking it would write
+  into live data: csi-driver-nfs creates a pvc-<uuid> subdirectory inside the
+  share, and the class is Retain, so the directory is orphaned afterwards.
+  Use --backend nfs-truenas-bench instead (tank/bench, 200G quota, exists for
+  exactly this)." ;;
+esac
+
+ROW="$(backend_row "$BACKEND")"
+[[ -n "$ROW" ]] || die "unknown backend '$BACKEND' (try --list)"
+[[ -n "$WORKLOADS" ]] || WORKLOADS="$ALL_WORKLOADS"
+
+IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS LAYOUT <<< "$ROW"
+
+# ---- Gates: fail closed, before anything is applied -----------------------
+echo ">>> gates"
+
+# 1. Client count vs access mode. RWO physically cannot span nodes.
+if [[ "$CLIENTS" -gt "$MAX_CLIENTS" ]]; then
+  die "backend '$BACKEND' is $ACCESS_MODE, max_clients=$MAX_CLIENTS, asked for $CLIENTS.
+  An RWO volume cannot be mounted by pods on different nodes — the extra pods
+  would sit Pending forever and look like a hung benchmark."
+fi
+echo "  ok   clients=$CLIENTS within max_clients=$MAX_CLIENTS for $ACCESS_MODE"
+
+# 2. StorageClass must actually exist.
+oc get sc "$SC" >/dev/null 2>&1 || die "StorageClass '$SC' not found on this cluster."
+echo "  ok   storageclass $SC present"
+
+# 3. Ceph must not already be unhealthy. Benchmarking a degraded cluster
+#    produces a number that describes the degradation, not the storage — and
+#    on a 3-node no-drain topology it also ADDS load during a recovery.
+CEPH_HEALTH="$(oc -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' 2>/dev/null || echo UNKNOWN)"
+case "$CEPH_HEALTH" in
+  HEALTH_OK) echo "  ok   ceph $CEPH_HEALTH" ;;
+  HEALTH_WARN)
+    echo "  WARN ceph $CEPH_HEALTH — known-benign warnings on this cluster are"
+    echo "       BLUESTORE_SLOW_OP_ALERT and CephPGImbalance. Anything else means"
+    echo "       the number you are about to take describes a degraded cluster:"
+    oc -n rook-ceph get cephcluster rook-ceph -o jsonpath='{range .status.ceph.details.*}{"         "}{@.message}{"\n"}{end}' 2>/dev/null
+    ;;
+  *) die "ceph health is '$CEPH_HEALTH' — refusing to add benchmark load." ;;
+esac
+
+# 4. Capacity headroom -- ACTUALLY CHECKED, not just recommended.
+#    A benchmark that fills a pool is an outage, not a test. nvme-replicated had
+#    only 152 GiB max_avail on 2026-09-05, small enough that an unchecked
+#    multi-client big-file run could genuinely hurt. An advisory "please verify"
+#    is what everyone skips at 2am, so this queries and refuses.
+#
+#    numfmt is GNU coreutils and does NOT exist on macOS, so sizes are parsed in
+#    pure bash. (Same portability class as the declare -A bug above.)
+to_bytes() {
+  local v="$1" n u
+  n="${v%%[!0-9]*}"
+  u="${v#$n}"
+  case "$u" in
+    ""|B)        echo $(( n )) ;;
+    K|KiB|k)     echo $(( n * 1024 )) ;;
+    M|MiB|m)     echo $(( n * 1024 * 1024 )) ;;
+    G|GiB|g)     echo $(( n * 1024 * 1024 * 1024 )) ;;
+    T|TiB|t)     echo $(( n * 1024 * 1024 * 1024 * 1024 )) ;;
+    *) die "cannot parse size '$v' (use e.g. 8G, 512M)" ;;
+  esac
+}
+
+ceph_pool_avail() {   # $1 = pool name -> bytes, or empty if unavailable
+  oc get --raw "/api/v1/namespaces/rook-ceph/services/http:rook-ceph-mgr:9283/proxy/metrics" 2>/dev/null \
+    | python3 -c "
+import sys,re
+t=sys.stdin.read(); want='$1'
+ids={d['pool_id']:d.get('name') for d in (dict(re.findall(r'(\w+)=\"([^\"]*)\"',m.group(1))) for m in re.finditer(r'ceph_pool_metadata\{([^}]*)\}',t)) if 'pool_id' in d}
+for m in re.finditer(r'^ceph_pool_max_avail\{([^}]*)\}\s+([0-9.e+]+)',t,re.M):
+    d=dict(re.findall(r'(\w+)=\"([^\"]*)\"',m.group(1)))
+    if ids.get(d.get('pool_id'))==want: print(int(float(m.group(2)))); break
+" 2>/dev/null
+}
+
+# filesize x clients x 4. The x4 covers: the file itself, fio's write pass over
+# it, per-client subdirectories, and slack so a benchmark never takes a pool to
+# its limit.
+NEED_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS * 4 ))
+AVAIL_BYTES=""
+AVAIL_SRC=""
+case "$BACKEND" in
+  ceph-nvme-block)   AVAIL_BYTES="$(ceph_pool_avail nvme-replicated)"; AVAIL_SRC="ceph pool nvme-replicated" ;;
+  cephfs-hdd)        AVAIL_BYTES="$(ceph_pool_avail cephfs-bulk-hdd)"; AVAIL_SRC="ceph pool cephfs-bulk-hdd" ;;
+  nfs-truenas-bench) AVAIL_BYTES="$(ssh -o ConnectTimeout=8 truenas_admin@192.168.1.25 \
+                        'zfs list -Hp -o available tank' 2>/dev/null || true)"; AVAIL_SRC="zfs tank" ;;
+  nfs-csi)           AVAIL_SRC="Synology (no credentialed probe -- check DSM by hand)" ;;
+esac
+
+human() { python3 -c "print('%.2f GiB' % ($1/1024**3))" 2>/dev/null || echo "$1 B"; }
+
+if [[ -n "$AVAIL_BYTES" ]]; then
+  if [[ "$AVAIL_BYTES" -lt "$NEED_BYTES" ]]; then
+    die "not enough headroom on $AVAIL_SRC.
+  need  $(human "$NEED_BYTES")  (filesize $FILESIZE x $CLIENTS clients x 4 safety factor)
+  have  $(human "$AVAIL_BYTES")
+  Lower --filesize or --clients, or pick another backend. Refusing to run a
+  benchmark that could fill the pool."
+  fi
+  echo "  ok   headroom $(human "$AVAIL_BYTES") available on $AVAIL_SRC, need $(human "$NEED_BYTES")"
+else
+  echo "  WARN could not probe capacity for $AVAIL_SRC."
+  echo "       Need $(human "$NEED_BYTES"). VERIFY BY HAND before a large run."
+fi
+
+RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"
+DEADLINE=$(( (RUNTIME + 300) * 2 ))
+
+echo
+echo ">>> plan"
+echo "  run_id    $RUN_ID"
+echo "  backend   $BACKEND  ($LAYOUT)"
+echo "  class     $SC / $ACCESS_MODE / $PVC_SIZE"
+echo "  clients   $CLIENTS"
+echo "  workloads $WORKLOADS"
+echo "  filesize  $FILESIZE   runtime ${RUNTIME}s   nrfiles $NRFILES"
+echo
+
+mkdir -p "$(dirname "$RESULTS")"
+if [[ ! -f "$RESULTS" ]]; then
+  printf 'run_id\tdate\tbackend\tstorage_class\tlayout\tworkload\tclients\tnodes\tfilesize\truntime_s\tioengine\tread_MBps\twrite_MBps\tread_iops\twrite_iops\tlat_ms_p99\n' > "$RESULTS"
+fi
+
+render() {
+  local workload="$1" pvc="$2" job="$3"
+  sed -e "s|__NAMESPACE__|${NAMESPACE}|g" \
+      -e "s|__PVC_NAME__|${pvc}|g" \
+      -e "s|__JOB_NAME__|${job}|g" \
+      -e "s|__BACKEND__|${BACKEND}|g" \
+      -e "s|__STORAGE_CLASS__|${SC}|g" \
+      -e "s|__ACCESS_MODE__|${ACCESS_MODE}|g" \
+      -e "s|__PVC_SIZE__|${PVC_SIZE}|g" \
+      -e "s|__WORKLOAD__|${workload}|g" \
+      -e "s|__CLIENTS__|${CLIENTS}|g" \
+      -e "s|__RUN_ID__|${RUN_ID}|g" \
+      -e "s|__FILESIZE__|${FILESIZE}|g" \
+      -e "s|__RUNTIME__|${RUNTIME}|g" \
+      -e "s|__NRFILES__|${NRFILES}|g" \
+      -e "s|__IOENGINE__|${IOENGINE}|g" \
+      -e "s|__IMAGE__|${IMAGE}|g" \
+      -e "s|__DEADLINE__|${DEADLINE}|g" \
+      "${HERE}/bench-job.yaml.tpl"
+}
+
+PVC_NAME="storage-bench-${BACKEND}"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo ">>> DRY RUN — rendered manifest for the first workload, nothing applied"
+  render "$(echo "$WORKLOADS" | awk '{print $1}')" "$PVC_NAME" "${RUN_ID}-first"
+  exit 0
+fi
+
+echo ">>> applying fio job definitions"
+oc apply -f "${HERE}/fio-jobs.yaml"
+
+for W in $WORKLOADS; do
+  JOB_NAME="${RUN_ID}-${W}"
+  echo
+  echo "=== $W (clients=$CLIENTS) ==="
+  render "$W" "$PVC_NAME" "$JOB_NAME" | oc apply -f -
+
+  # Job pod templates are IMMUTABLE — a second apply over an existing Job is
+  # silently rejected. Unique job names per run avoid that; this wait is what
+  # actually blocks until the result exists.
+  if ! oc -n "$NAMESPACE" wait --for=condition=complete "job/${JOB_NAME}" --timeout="${DEADLINE}s"; then
+    echo "  job did not complete; recent events:"
+    oc -n "$NAMESPACE" get events --sort-by=.lastTimestamp 2>/dev/null | grep "$JOB_NAME" | tail -5
+    oc -n "$NAMESPACE" logs "job/${JOB_NAME}" --tail=30 || true
+    echo "  SKIPPING result for $W"
+    continue
+  fi
+
+  NODES="$(oc -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" \
+            -o jsonpath='{range .items[*]}{.spec.nodeName}{","}{end}' 2>/dev/null | sed 's/,$//')"
+
+  # One log stream per client pod; the parser aggregates across them, which is
+  # what "3 clients did X MB/s" has to mean.
+  for POD in $(oc -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" -o name 2>/dev/null); do
+    oc -n "$NAMESPACE" logs "$POD" 2>/dev/null
+  done | python3 "${HERE}/parse-results.py" \
+        --run-id "$RUN_ID" --backend "$BACKEND" --storage-class "$SC" \
+        --layout "$LAYOUT" --workload "$W" --clients "$CLIENTS" \
+        --nodes "$NODES" --filesize "$FILESIZE" --runtime "$RUNTIME" \
+        --ioengine "$IOENGINE" --results "$RESULTS"
+
+  oc -n "$NAMESPACE" delete "job/${JOB_NAME}" --wait=false >/dev/null 2>&1 || true
+done
+
+echo
+echo ">>> done. Results appended to ${RESULTS#$REPO_ROOT/}"
+echo ">>> the benchmark PVC ${PVC_NAME} is RETAINED for reuse across runs."
+echo "    Delete it when finished:  oc -n ${NAMESPACE} delete pvc ${PVC_NAME}"
+column -t -s $'\t' "$RESULTS" | tail -n $(( $(echo "$WORKLOADS" | wc -w) + 1 ))

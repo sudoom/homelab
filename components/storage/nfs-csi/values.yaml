@@ -136,3 +136,19 @@ truenas:
     # which would have made the rehearsal unrunnable.
     - name: keepers
       share: /mnt/tank/keepers
+    # bench is for tests/storage-benchmark/ and NOTHING ELSE.
+    #
+    # WHY IT IS NOT ENOUGH TO BENCHMARK AGAINST nfs-truenas-media: csi-driver-nfs
+    # provisions by creating a subdirectory PER PV INSIDE THE SHARE, so a
+    # benchmark PVC on the media class writes into /mnt/tank/media itself --
+    # the live library, browsed over SMB and holding 3.39 TiB of real data. And
+    # because every class here is `Retain`, deleting the PVC leaves the
+    # pvc-<uuid> directory behind rather than cleaning it up. A benchmark must
+    # not be able to litter production storage.
+    #
+    # The dataset carries a 200G quota (ansible/truenas group_vars) so a runaway
+    # or mis-sized run cannot eat the pool -- the harness's own capacity gate is
+    # the first line of defence, this is the backstop that does not depend on
+    # anyone running the harness correctly.
+    - name: bench
+      share: /mnt/tank/bench

@@ -127,6 +127,24 @@ truenas_datasets:
   # AND WHY NOT EVERYWHERE: media/immich/keepers are NFS-mounted by Linux
   # clients that expect case-sensitive lookup, so SENSITIVE is correct there
   # and they are deliberately left alone.
+  # ---- benchmark scratch ----------------------------------------------
+  # Consumed ONLY by tests/storage-benchmark/. Exists so that benchmarking the
+  # TrueNAS NFS path never writes into a production dataset: csi-driver-nfs
+  # creates one subdirectory per PV inside the share, and every NFS class here
+  # is Retain, so a benchmark against the media class would litter the live
+  # library with pvc-<uuid> directories nobody ever cleans up.
+  #
+  # QUOTA IS THE POINT, not the recordsize. 200G bounds a runaway or mis-sized
+  # run independently of whether anyone ran the harness correctly -- the
+  # harness has its own capacity gate, but a backstop that depends on the tool
+  # being used properly is not a backstop.
+  #
+  # recordsize 1M matches media/keepers so that a sequential result measured
+  # here is comparable to those datasets rather than to a different layout.
+  - name: bench
+    recordsize: 1M
+    comments: "Scratch dataset for tests/storage-benchmark. Safe to destroy when empty. No offsite, no snapshots."
+    quota: 214748364800             # 200 GiB
   - name: personal
     recordsize: 128K
     comments: "SMB share for humans (personal side of the personal/work split). Family photos land here; immich imports them over NFS later."
@@ -228,6 +246,10 @@ truenas_nfs_exports:
   - dataset: media
   - dataset: immich
   - dataset: keepers
+  # Benchmark scratch. Same maproot default as the others: the harness Jobs run
+  # as root in the ceph image, so a squashed export would make every run fail
+  # at first write rather than measure anything.
+  - dataset: bench
 
 # ---- SMB (Time Machine) ---------------------------------------------------
 # The whole SMB stack was greenfield as of 2026-08-31: cifs STOPPED and

@@ -1,0 +1,149 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-bench-fio-jobs
+  namespace: default
+# ---------------------------------------------------------------------------
+# The workload definitions, as fio job files.
+#
+# WHY A CONFIGMAP AND NOT INLINE ARGS: these definitions are the ONLY thing that
+# makes results comparable across backends and across dates. If each run's
+# parameters live in whatever shell line someone typed that day, then two
+# numbers can differ because the storage differs OR because the test differed,
+# and nothing in the output tells you which. Pinning them here means a number is
+# only ever comparable to another number produced by the same named workload.
+#
+# CHANGING A JOB HERE INVALIDATES COMPARISON WITH EVERY PRIOR RESULT for that
+# workload id. If a workload needs different parameters, add a NEW id (e.g.
+# seq-read-1m-v2) rather than editing one in place -- otherwise the results file
+# silently mixes two different measurements under one name.
+#
+# Shared settings and why:
+#   direct=1     bypass the page cache. Without it the first run measures RAM
+#                and every backend looks identical and fast.
+#   time_based   fixed duration, so a fast backend does more work rather than
+#                finishing early -- keeps runs comparable in wall-clock.
+#   ioengine     libaio for block-ish paths. NFS/CephFS are fine with it too;
+#                psync is the fallback if a container image lacks libaio.
+# ---------------------------------------------------------------------------
+data:
+  # ---- BULK: one big file -------------------------------------------------
+  # Answers "how fast does a Jellyfin stream / a media import / a migration go".
+  # This is the shape every historical figure in data/storage-throughput.md was
+  # measured at, so it is the one that can be compared to them.
+  seq-read-1m.fio: |
+    [global]
+    directory=${BENCH_DIR}
+    ioengine=${BENCH_IOENGINE}
+    direct=1
+    time_based=1
+    runtime=${BENCH_RUNTIME}
+    ramp_time=5
+    group_reporting=1
+    filesize=${BENCH_FILESIZE}
+
+    [seq-read-1m]
+    rw=read
+    bs=1M
+    iodepth=8
+    numjobs=1
+
+  seq-write-1m.fio: |
+    [global]
+    directory=${BENCH_DIR}
+    ioengine=${BENCH_IOENGINE}
+    direct=1
+    time_based=1
+    runtime=${BENCH_RUNTIME}
+    ramp_time=5
+    group_reporting=1
+    filesize=${BENCH_FILESIZE}
+
+    [seq-write-1m]
+    rw=write
+    bs=1M
+    iodepth=8
+    numjobs=1
+
+  # ---- IOPS: small random IO on one big file ------------------------------
+  # Answers "what does a database or a metadata-heavy app feel like here".
+  # NOTE this is random IO WITHIN one file -- it is NOT the small-FILE test
+  # below. The two are different questions and are routinely conflated: this
+  # one never touches the filesystem's metadata path.
+  rand-read-4k.fio: |
+    [global]
+    directory=${BENCH_DIR}
+    ioengine=${BENCH_IOENGINE}
+    direct=1
+    time_based=1
+    runtime=${BENCH_RUNTIME}
+    ramp_time=5
+    group_reporting=1
+    filesize=${BENCH_FILESIZE}
+
+    [rand-read-4k]
+    rw=randread
+    bs=4k
+    iodepth=32
+    numjobs=1
+
+  rand-write-4k.fio: |
+    [global]
+    directory=${BENCH_DIR}
+    ioengine=${BENCH_IOENGINE}
+    direct=1
+    time_based=1
+    runtime=${BENCH_RUNTIME}
+    ramp_time=5
+    group_reporting=1
+    filesize=${BENCH_FILESIZE}
+
+    [rand-write-4k]
+    rw=randwrite
+    bs=4k
+    iodepth=32
+    numjobs=1
+
+  # ---- MANY SMALL FILES ---------------------------------------------------
+  # Answers "how long does an *arr library scan take" -- the workload that has
+  # NEVER been characterised on any of these backends (see the "still
+  # unmeasured" section of data/storage-throughput.md).
+  #
+  # This is the one where the three backends should diverge most, and where the
+  # bulk numbers are actively misleading: TrueNAS NFS is ~2.2x CephFS-HDD on
+  # sequential reads, but every small-file create is a synchronous round trip
+  # over NFS, while CephFS has a metadata server. Expect the ranking to invert.
+  #
+  # nrfiles x filesize per job, so keep filesize small and count high.
+  # NOT time_based: we want "how long to create N files", a completion time, not
+  # a throughput over a fixed window.
+  smallfile-write.fio: |
+    [global]
+    directory=${BENCH_DIR}
+    ioengine=${BENCH_IOENGINE}
+    direct=0
+    fsync=1
+    group_reporting=1
+
+    [smallfile-write]
+    rw=write
+    bs=64k
+    filesize=64k
+    nrfiles=${BENCH_NRFILES}
+    numjobs=4
+    file_service_type=sequential
+
+  smallfile-read.fio: |
+    [global]
+    directory=${BENCH_DIR}
+    ioengine=${BENCH_IOENGINE}
+    direct=1
+    group_reporting=1
+
+    [smallfile-read]
+    rw=read
+    bs=64k
+    filesize=64k
+    nrfiles=${BENCH_NRFILES}
+    numjobs=4
+    file_service_type=sequential
