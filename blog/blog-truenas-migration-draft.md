@@ -2858,3 +2858,118 @@ library scans are a metadata workload and nothing characterises it.
 Closed the "Benchmark CephFS-HDD vs TrueNAS-NFS" README TODO in the same pass; both sides
 have been measured since 2026-08-29 and the item had been carrying a stale caveat ("unknown
 whether 270 MB/s is a ceiling") that the 431 MB/s two-reader figure already answered.
+
+## 2026-09-05 — building a benchmark harness, and what it cost
+
+Storage change first, because the rule says so: added `tank/bench` (200 GiB,
+later 500 GiB), its NFS export, and an `nfs-truenas-bench` StorageClass. All
+three exist for one reason — **benchmarking `nfs-truenas-media` would have
+written into the live media library.** csi-driver-nfs provisions one
+subdirectory *per PV inside the share*, and every NFS class here is `Retain`,
+so a benchmark PVC on the media class creates `pvc-<uuid>/` inside 3.39 TiB of
+real data and orphans it afterwards. The harness now refuses the three
+production classes by name.
+
+Also fixed a defect that had been latent since the topic was written: **`quota`
+was declared but never applied to an existing dataset.** It appeared exactly
+once in `truenas-storage`, inside the *create* payload, so changing a quota in
+git did nothing to a dataset that already existed — and the play still reported
+`changed=0` and "Converged", because the convergence block never looked at
+quota either. Found by predicting `changed=1` for a 200G→500G bump, getting
+`changed=0`, and checking the box instead of assuming the prediction was wrong.
+Fourth instance of "declared but never applied" in this topic.
+
+### The harness
+
+`tests/storage-benchmark/` — six fio workloads x three client counts x three
+backends, run as Jobs from inside the cluster, which is the only place with a
+path to all three locations at once.
+
+The point was never the numbers. Five throughput figures in this repo have been
+wrong and four failed identically: *the measurement was real and the conditions
+were invented.* So the harness makes conditions structural — the same code that
+runs the test emits the row, and backend / workload / clients / node placement
+/ filesize / date cannot drift from the figure they describe. fio's JSON is
+parsed, never transcribed. And every row is cross-checked against the MikroTik's
+own port counters, because fio reports what the client believes and the switch
+reports what crossed the wire.
+
+### Nine defects, found by running it
+
+`declare -A` (bash 3.2 on macOS has no associative arrays). `numfmt` (GNU
+only). `envsubst` (not in the ceph image). `sort | head` under `pipefail`
+(SIGPIPE, but only once output exceeds the pipe buffer — so every big-file run
+passed and 80,000 files killed it instantly). A column-0 heredoc terminator
+inside a YAML block scalar (valid bash, valid-looking YAML, invalid manifest —
+three runs exited 0 having created nothing). `oc wait --for=condition=complete`
+(cannot observe failure, so it blocked on an already-Failed job for its full
+4783s deadline). A filesize smaller than the server's RAM (returns cache
+figures, silently). A deadline that ignored layout (killed a run mid-layout,
+and the partial files it left poisoned the next two).
+
+And the expensive one: **a dangling `${WIN}`**, left behind when the window
+arithmetic was replaced, which under `set -u` aborted the script *after* each
+job Completed but *before* the result was parsed or the job deleted. Twelve
+jobs ran successfully, produced no rows, were never cleaned up, and the driver
+advanced as if nothing had happened.
+
+### What actually found it
+
+Running **one cell with the driver's display filter removed**. The filter was
+hiding the error text, and separately could not match two-hyphen workload names
+(`rand-write-4k`), so successful results were invisible too. Two bugs
+concealing each other behind a third. When a harness goes quiet, take the
+filter off before theorising.
+
+I also blamed the wrong cause first — `grep -m1` under `set -e` — and committed
+that claim before the unfiltered run contradicted it. The correction is in the
+log at `000ccf4`.
+
+### The instrument was the unreliable one
+
+The worst error of the day was epistemic rather than mechanical. I built the
+switch cross-check to catch fio lying, then trusted it *over* fio without ever
+validating it — and constructed an elaborate client-page-cache theory (94 GB of
+node RAM, fio only reading the first 6.6 GiB of a 64 GiB file) to explain
+readings that were artifacts of my own query.
+
+Two defects in it: the window reached back before the job started, capturing the
+previous run's traffic; and `rate(...[1m])` against a **30-second scrape
+interval** gives two samples, so a 60s burst straddling a boundary averages with
+idle time and reads ~25% low. Replaced with an `increase()` counter delta over
+the exact window the pod reports for its fio run.
+
+With that fixed, fio and the wire agree at a **0.93 payload/L2 ratio** — which
+is what 1500-byte framing predicts. O_DIRECT was working the whole time. There
+was never a caching problem.
+
+### What was learned about the storage
+
+Very little, and none of it from the finished machinery. From the switch
+counters and the early runs, before the harness was trustworthy:
+
+- The DS418 **saturates its 1 GbE link** in both directions on sequential
+  access — 969.5 Mb/s read, 975.1 Mb/s write, against a 1000 Mb/s link. It is
+  link-bound, not box-bound, which is the opposite of what the 52.2 MB/s
+  migration figure implied.
+- At **4k random it is spindle-bound**: 853 read IOPS, ~3.3 MiB/s, which is
+  2.8% of the link. Random writes reach 7196 IOPS because the NAS absorbs and
+  coalesces them.
+
+That refines the LACP question usefully: **bonding helps sequential and does
+nothing for random**, so the payoff depends entirely on what the box serves.
+But the 52.2 MB/s from the keepers migration and the 133 MiB/s here are both
+true and measure different things — mixed real files versus one contiguous
+stream. Which is the whole argument for recording conditions.
+
+### Cost
+
+About two hours of wall-clock for zero quotable rows. Most of it self-inflicted:
+the `${WIN}` edit, a display filter that hid its own errors, and a blanket
+`oc delete job` that destroyed twelve cells of recoverable pod logs minutes
+after I had confirmed they were recoverable.
+
+The harness is real and the defects it found are real. Whether that was worth
+two hours against hand-measuring during actual migrations — which is where every
+figure in `data/storage-throughput.md` came from — is genuinely open, and is
+question one for the review.
