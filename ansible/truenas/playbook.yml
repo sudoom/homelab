@@ -94,6 +94,11 @@
           # to get silently wrong here. Compared as sorted "id:value" pairs so
           # one `difference` covers all datasets at once.
           recordsize_drift: "{{ _want_rs | difference(_live_rs) }}"
+          # Added 2026-09-05 after quota turned out to be declared-but-never-
+          # applied on existing datasets. The convergence block reported a clean
+          # box while tank/bench sat at 200G against a declared 500G, because
+          # nothing here looked at quota at all.
+          quota_drift: "{{ _want_q | difference(_live_q) }}"
           smb_shares_missing: "{{ (truenas_smb_shares | map(attribute='name') | list) | difference(_live.smb | map(attribute='name') | list) }}"
           # The three create-time-only properties, re-read AFTER the apply.
           # truenas-storage asserts these too, but from its PRE-create query --
@@ -118,6 +123,14 @@
         _child: "{{ _live.datasets | rejectattr('id', 'equalto', truenas_pool) | list }}"
         _want_rs: "{{ (truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list) | zip(truenas_datasets | map(attribute='recordsize') | list) | map('join', ':') | sort | list }}"
         _live_rs: "{{ (_child | map(attribute='id') | list) | zip(_child | map(attribute='recordsize') | map(attribute='value') | list) | map('join', ':') | sort | list }}"
+        _want_q: >-
+          {{ (truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list)
+             | zip(truenas_datasets | map(attribute='quota') | map('default', 0) | map('int') | map('string') | list)
+             | map('join', '=') | sort | list }}
+        _live_q: >-
+          {{ (_child | map(attribute='id') | list)
+             | zip(_child | map(attribute='quota') | map(attribute='rawvalue', default='0') | map('int') | map('string') | list)
+             | map('join', '=') | sort | list }}
         _ct_decl: "{{ truenas_datasets | selectattr('casesensitivity', 'defined') | list }}"
         _want_ct: >-
           {{ (_ct_decl | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list)
@@ -148,6 +161,7 @@
           - _drift.cron_jobs_missing | length == 0
           - not _drift.scrub_schedule_drift
           - _drift.recordsize_drift | length == 0
+          - _drift.quota_drift | length == 0
           - _drift.smb_shares_missing | length == 0
           - _drift.dataset_createtime_drift | length == 0
         fail_msg: "Apply finished but the box did not converge -- see the drift report above."

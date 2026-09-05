@@ -60,6 +60,13 @@
            (truenas_ds_q.stdout | from_json | map(attribute='id') | list)
            | zip(truenas_ds_q.stdout | from_json | map(attribute='recordsize.value', default='') | list)
          ) }}
+    # `rawvalue` not `parsed`: an UNQUOTA'D dataset returns parsed=null and
+    # rawvalue="0", so parsed cannot distinguish "no quota" from "unreadable".
+    truenas_ds_quota: >-
+      {{ dict(
+           (truenas_ds_q.stdout | from_json | map(attribute='id') | list)
+           | zip(truenas_ds_q.stdout | from_json | map(attribute='quota.rawvalue', default='0') | list)
+         ) }}
 
 # ---- Create-time-only properties: ASSERT, never reconcile ----------------
 # `casesensitivity`, `acltype` and `aclmode` are declared as a SET on the SMB
@@ -193,6 +200,35 @@
     - item.rc | default(1) == 0
     - (item.stdout | from_json).uid != item.item.owner_uid
        or (item.stdout | from_json).gid != (item.item.owner_gid | default(item.item.owner_uid))
+
+# QUOTA WAS DECLARED BUT NEVER APPLIED TO AN EXISTING DATASET until 2026-09-05.
+# It appeared exactly once in this role -- inside the CREATE payload -- so
+# changing a quota in group_vars silently did nothing to a dataset that already
+# existed, and the play still reported `changed=0` and "Converged".
+#
+# Found by predicting `changed=1` for a tank/bench 200G -> 500G bump, getting
+# `changed=0`, and checking the box instead of assuming the prediction was
+# wrong. That is the FOURTH "declared but never applied" defect in this topic,
+# which is why the convergence block in playbook.yml now asserts on quota too.
+#
+# ZFS quota IS freely updatable in both directions -- unlike casesensitivity,
+# which is why that one gets an assert and this one gets a reconcile.
+# Declaring 0 removes the quota.
+- name: Reconcile quota on datasets that drifted
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.dataset.update
+      - "{{ truenas_pool }}/{{ item.name }}"
+      - "{{ {'quota': (item.quota | default(0)) | int} | to_json }}"
+  loop: "{{ truenas_datasets }}"
+  loop_control:
+    label: "{{ truenas_pool }}/{{ item.name }}"
+  when:
+    - (truenas_pool ~ '/' ~ item.name) in truenas_ds_ids
+    - (truenas_ds_quota[truenas_pool ~ '/' ~ item.name] | default('0')) | int
+      != (item.quota | default(0)) | int
 
 # Only fires on genuine drift, so a converged box reports ok, not changed.
 # recordsize IS updatable on a live dataset (it governs subsequent writes),
