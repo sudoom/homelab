@@ -134,7 +134,7 @@ data:
   # so the measured shape is unchanged.
   smallfile-write.fio: |
     [global]
-    directory=${BENCH_DIR}
+    directory=${BENCH_SUBDIRS}
     filename_format=smallfile.$jobnum.$filenum
     ioengine=${BENCH_IOENGINE}
     direct=0
@@ -155,7 +155,7 @@ data:
 
   smallfile-read.fio: |
     [global]
-    directory=${BENCH_DIR}
+    directory=${BENCH_SUBDIRS}
     filename_format=smallfile.$jobnum.$filenum
     ioengine=${BENCH_IOENGINE}
     direct=1

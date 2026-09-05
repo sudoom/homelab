@@ -166,6 +166,36 @@ spec:
               # so the recorded parameters can never disagree with the executed
               # ones. That is the same principle as parsing fio's JSON instead of
               # transcribing its table.
+              # SMALLFILE CORPUS FANS OUT ACROSS SUBDIRECTORIES.
+              # Two reasons, and only the second is about performance. First, the
+              # workload claims to model an *arr library scan, and no library is a
+              # flat directory of a million files -- the old shape measured
+              # something nothing here actually does. Second, on 2026-09-05 a flat
+              # directory reached 391,608 entries on the DS418 and fio ended up
+              # wedged in uninterruptible sleep in it. That wedge is NOT proven to
+              # be caused by directory size -- the confirmed cause was create_only
+              # laying out zero-byte files -- so this half is insurance, not a
+              # diagnosis. 64 subdirs holds ~16k entries each, not 1,048,576.
+              #
+              # fio spreads files round-robin over a colon-separated `directory=`
+              # list but does NOT create the directories itself.
+              NSUB=64
+              SUBDIRS="${BENCH_DIR}"
+              case "${WORKLOAD}" in
+                smallfile-*)
+                  SUBDIRS=""
+                  i=0
+                  while [ "$i" -lt "${NSUB}" ]; do
+                    d=$(printf "%s/d%02d" "${BENCH_DIR}" "$i")
+                    mkdir -p "$d"
+                    SUBDIRS="${SUBDIRS}${SUBDIRS:+:}${d}"
+                    i=$((i+1))
+                  done
+                  echo "  subdirs    ${NSUB} under ${BENCH_DIR}"
+                  ;;
+              esac
+
+              sed -e "s|\${BENCH_SUBDIRS}|${SUBDIRS}|g" \
               sed -e "s|\${BENCH_DIR}|${BENCH_DIR}|g" \
                   -e "s|\${BENCH_IOENGINE}|${BENCH_IOENGINE}|g" \
                   -e "s|\${BENCH_RUNTIME}|${BENCH_RUNTIME}|g" \
@@ -218,8 +248,35 @@ spec:
               # leaving both workloads' semantics untouched. Command-line options
               # override the job file's global section, so this affects the layout
               # invocation and nothing else.
-              echo "### layout (create_only, fsync off; no-op if already correct size)"
-              fio /tmp/job.fio ${FIO_ALLOC} --fsync=0 --create_only=1 >/tmp/layout.log 2>&1 || {
+              # THE LAYOUT JOB IS READ-SHAPED, AND THAT IS THE WHOLE POINT.
+              # `fio --create_only=1` lays out DATA only for a job that will READ
+              # the files. For a WRITE job it has nothing to lay out -- the job
+              # itself does the writing -- so it creates them and leaves them
+              # EMPTY. Found 2026-09-05 the expensive way: smallfile-write spent
+              # 34 minutes producing 391,608 zero-byte files, early and late alike,
+              # then wedged. The same defect had already left seq-write-1m.0.0 at
+              # 6.4 GB against a 64 GiB target, unnoticed because the size gate
+              # checks the LARGEST file in the directory rather than the one this
+              # workload will touch.
+              #
+              # Consequence well beyond small files: every write workload was
+              # measuring ALLOCATION rather than overwrite. On a link-bound backend
+              # that is invisible; on TrueNAS and CephFS-HDD it is not the same
+              # operation and would not be the same number.
+              #
+              # So flip rw to its read counterpart for the layout pass only; the
+              # measured run still uses /tmp/job.fio untouched. fsync/time_based/
+              # runtime/ramp_time are dropped because they describe a measurement
+              # and this is not one -- durability during corpus CREATION changes no
+              # number, since the measured run rewrites or rereads these files.
+              sed -e "s|^rw=write$|rw=read|" \
+                  -e "s|^rw=randwrite$|rw=randread|" \
+                  -e "/^fsync=/d" -e "/^time_based=/d" \
+                  -e "/^runtime=/d" -e "/^ramp_time=/d" \
+                  /tmp/job.fio > /tmp/layout.fio
+              echo "### layout job (read-shaped; no-op if files are already the right size)"
+              grep -E "^(rw|directory|nrfiles|filesize|numjobs|filename_format)=" /tmp/layout.fio | sed "s/^/  /"
+              fio /tmp/layout.fio ${FIO_ALLOC} --create_only=1 >/tmp/layout.log 2>&1 || {
                 echo "WARN layout returned non-zero; tail follows" >&2
                 tail -15 /tmp/layout.log >&2
               }
@@ -245,7 +302,11 @@ spec:
                   # PRINT the count, which is why a fio layout that aborted at 4
                   # files out of 1,048,576 still went on to "measure" and record
                   # a result. Printing is not checking.
-                  NFILES=$(find "${BENCH_DIR}" -type f 2>/dev/null | wc -l)
+                  # -mindepth 2: count ONLY files inside the fan-out subdirs. The flat
+                  # directory still holds ~391k zero-byte files from the
+                  # create_only defect; they take no space but would otherwise
+                  # be credited to the corpus and let a short layout pass.
+                  NFILES=$(find "${BENCH_DIR}" -mindepth 2 -type f 2>/dev/null | wc -l)
                   NUMJOBS=$(awk -F= '/^numjobs=/{print $2; exit}' /tmp/job.fio)
                   EXPECT=$(( ${BENCH_NRFILES} * ${NUMJOBS:-1} ))
                   FLOOR=$(( EXPECT - EXPECT / 100 ))          # allow 1% slack
