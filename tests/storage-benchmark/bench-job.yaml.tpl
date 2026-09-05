@@ -204,8 +204,22 @@ spec:
               FIO_ALLOC="--alloc-size=131072"
               echo "### fio $(fio --version 2>/dev/null || echo unknown), ${FIO_ALLOC}"
 
-              echo "### layout (create_only; no-op if already correct size)"
-              fio /tmp/job.fio ${FIO_ALLOC} --create_only=1 >/tmp/layout.log 2>&1 || {
+              # --fsync=0 ON THE LAYOUT ONLY. Measured on the DS418 2026-09-05:
+              # laying out the smallfile corpus with the job's fsync=1 ran at
+              # 1.1 MB/s = 17 files/s across three clients, an ETA of FIFTY HOURS
+              # for 3.1M files. Each 64 KiB file was costing ~166 ms, which is a
+              # disk commit, not a network round trip.
+              #
+              # Durability during CORPUS CREATION is not part of the measurement:
+              # smallfile-write's measured run rewrites those files with fsync=1
+              # and smallfile-read only reads them, so how the bytes first landed
+              # changes neither number. Overriding it here buys back two orders of
+              # magnitude on the single most expensive step in the campaign while
+              # leaving both workloads' semantics untouched. Command-line options
+              # override the job file's global section, so this affects the layout
+              # invocation and nothing else.
+              echo "### layout (create_only, fsync off; no-op if already correct size)"
+              fio /tmp/job.fio ${FIO_ALLOC} --fsync=0 --create_only=1 >/tmp/layout.log 2>&1 || {
                 echo "WARN layout returned non-zero; tail follows" >&2
                 tail -15 /tmp/layout.log >&2
               }
