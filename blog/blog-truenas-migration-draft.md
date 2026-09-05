@@ -2790,3 +2790,71 @@ exercised against live data and flags exactly `tank/timemachine`; the destroy ga
 exercised against five datasets and refuses four; a scoped `--check` of `truenas-smb`
 against the live box completes with no templating error; and both share payloads were
 rendered and checked against the middleware schema by hand.
+
+## 2026-09-05 — verifying the rollback still exists, and consolidating the numbers
+
+Two days before the media soak window closes (~2026-09-06), checked that the thing the
+soak is protecting actually still exists. `media-data-pvc` is retained on `cephfs-hdd`
+purely as the rollback that is not a 3.2 TiB re-copy — but nobody had looked at it since
+the cutover.
+
+```
+POOL                                       ID       STORED          RAW    MAX_AVAIL
+nvme-replicated                             1   312.33 GiB   937.00 GiB   152.51 GiB
+ceph-objectstore.rgw.buckets.data          10    12.49 GiB    37.46 GiB     1.83 TiB
+cephfs-bulk-hdd                            17     3.22 TiB     4.83 TiB     3.67 TiB
+cephfs-metadata                            18    180.3 MiB    541.0 MiB   152.51 GiB
+```
+
+Intact. 3.22 TiB stored × 1.5 (EC 2+1 amplification) = 4.83 TiB raw, exactly as it
+should be. The rollback is real through the end of the window.
+
+**This was a false alarm I raised myself, and the mechanism is worth recording.** The day
+before, I read the same metric endpoint and reported "pool 1 = 341646253492" with the
+worry that the EC pool held 341 GB rather than 3.2 TiB. Two errors compounded:
+
+1. I piped through `head -12`, which cut the output off at pool 12 — **`cephfs-bulk-hdd`
+   is pool 17 and was never in the output I read.**
+2. Pool 1 is `nvme-replicated`. I treated an unlabelled `pool_id` as if it were the one
+   I was looking for, because the metric line carries the id and not the name.
+
+The fix in the query is to join `ceph_pool_metadata` (which carries `name`) against
+`ceph_pool_stored` on `pool_id` first, and print names — never reason about a bare
+`pool_id`. CLAUDE.md had recorded `pool_id="17"` correctly since 2026-08-28; I just
+didn't check my own reading against it before raising the alarm.
+
+Incidental from the same output: `nvme-replicated` shows **152.51 GiB MAX_AVAIL** against
+312 GiB stored. Not alarming yet, but it is the tightest pool on the cluster and worth
+watching — the weekly `node-fstrim` DaemonSet is what keeps it from drifting up, since
+`ceph-nvme-block` has no `discard` mountOption.
+
+### Consolidating the throughput numbers
+
+Wrote `data/storage-throughput.md` — every measured figure for all three backends in one
+table, each with the client count, stream count, path and method that produced it.
+
+The reason is a pattern that has now repeated five times in this repo: **the number was
+usually fine, and the conditions were invented.**
+
+| Claimed | Actual | What went wrong |
+|---|---|---|
+| "~200 MB/s" CephFS read | 76.6, later 124 MB/s | unmeasured guess, 2.6× high, quoted for months |
+| 76.6 MB/s CephFS read | 124 MB/s | real, but two months stale |
+| "~270 MB/s peak" TrueNAS | neither peak nor ceiling | a guess dressed as a measurement |
+| "246 MB/s sustained" | 246 = one reader; 431 for two | real number, wrong label |
+| "~190 MB/s" Time Machine | ~114 MB/s, 1G-capped | derived from a *guessed elapsed time* |
+
+Four of those five are the same failure: a real measurement, relabelled with conditions
+nobody checked. So the file's organising rule is that a row without its client count and
+method is not reusable, and the corrections table stays in the file rather than being
+tidied away — the point is to make the shape recognisable next time.
+
+It also records what is still **unmeasured**, which turned out to be more than expected:
+TrueNAS *write* throughput (every figure on record is read), TrueNAS beyond 2 concurrent
+readers (it scaled 1→2 nearly linearly and 431 MB/s is still only 34% of 10G),
+`nconnect=N` on any mount, and small-file/metadata performance anywhere — the *arr*
+library scans are a metadata workload and nothing characterises it.
+
+Closed the "Benchmark CephFS-HDD vs TrueNAS-NFS" README TODO in the same pass; both sides
+have been measured since 2026-08-29 and the item had been carrying a stale caveat ("unknown
+whether 270 MB/s is a ceiling") that the 431 MB/s two-reader figure already answered.
