@@ -47,7 +47,23 @@ RUNTIME="${BENCH_RUNTIME:-60}"
 # direct=1 bypasses the CLIENT page cache and does nothing about the server's.
 FILESIZE="${BENCH_FILESIZE:-64G}"
 MIN_FILESIZE="${BENCH_MIN_FILESIZE:-64G}"
-NRFILES="${BENCH_NRFILES:-2000}"
+# 20000 x 4 jobs = 80,000 files, ~5 GiB per client.
+#
+# RAISED FROM 2000 (= 500 MiB) because at that size the whole corpus fits in
+# every backend's cache -- the same trap min_filesize fixes for the big-file
+# workloads, which does NOT protect these: they ignore BENCH_FILESIZE and size
+# themselves from nrfiles x 64k.
+#
+# BE HONEST ABOUT WHAT THIS STILL IS: 5 GiB exceeds the DS418's 2 GB RAM but
+# NOT TrueNAS's 31.3 GiB ARC, so smallfile-* measures the METADATA PATH against
+# a partly-warm cache, not cold storage. That is deliberate -- an *arr library
+# scan really does stat files the NAS has been serving, so warm metadata is the
+# realistic shape -- but it means these numbers are NOT comparable to the
+# cache-defeating seq/rand figures and must not be read as "storage speed".
+# Defeating a 31 GiB ARC with 64k files needs ~512,000 of them, which is
+# 500k+ synchronous NFS round trips and hours of setup, for a question nobody
+# has asked yet.
+NRFILES="${BENCH_NRFILES:-20000}"
 CLIENTS=1
 WORKLOADS=""
 BACKEND=""
