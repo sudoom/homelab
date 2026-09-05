@@ -196,7 +196,7 @@ spec:
               esac
 
               sed -e "s|\${BENCH_SUBDIRS}|${SUBDIRS}|g" \
-              sed -e "s|\${BENCH_DIR}|${BENCH_DIR}|g" \
+                  -e "s|\${BENCH_DIR}|${BENCH_DIR}|g" \
                   -e "s|\${BENCH_IOENGINE}|${BENCH_IOENGINE}|g" \
                   -e "s|\${BENCH_RUNTIME}|${BENCH_RUNTIME}|g" \
                   -e "s|\${BENCH_FILESIZE}|${BENCH_FILESIZE}|g" \

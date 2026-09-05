@@ -467,7 +467,43 @@ PVC_NAME="storage-bench-${BACKEND}"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo ">>> DRY RUN — rendered manifest for the first workload, nothing applied"
-  render "$(echo "$WORKLOADS" | awk '{print $1}')" "$PVC_NAME" "${RUN_ID}-first"
+  render "$(echo "$WORKLOADS" | awk '{print $1}')" "$PVC_NAME" "${RUN_ID}-first" > /tmp/bench-render.yaml
+  cat /tmp/bench-render.yaml
+
+  # SHELL-LINT THE POD SCRIPT. kubeconform validates the YAML and is blind to
+  # what is inside a block scalar -- which is where every line of this harness's
+  # runtime logic lives.
+  #
+  # HONEST SCOPE: this would NOT have caught the 2026-09-05 breakage that
+  # prompted it. A patch inserted a second `sed` where an extra `-e` clause
+  # belonged, so the render became `sed -e "..." sed -e "..."` and sed read the
+  # word "sed" as an input filename. That is valid shell -- a command with
+  # arguments -- so `bash -n` passes it happily. What caught it was the driver's
+  # row check, on the first cell, at a cost of three cells rather than an
+  # evening. This lint covers a different class (unbalanced quotes, a missing
+  # `fi`, a truncated heredoc) which is cheap to exclude and has bitten this file
+  # before -- see the column-0 heredoc that silently produced an invalid
+  # manifest. Keep both: a syntax check and an outcome check answer different
+  # questions, and only the second one knows whether a run produced anything.
+  python3 - /tmp/bench-render.yaml > /tmp/bench-podscript.sh <<'PYEOF'
+import re, sys
+lines = open(sys.argv[1]).read().split("\n")
+i = next(n for n, l in enumerate(lines) if l.strip() == "- |")
+indent = len(lines[i + 1]) - len(lines[i + 1].lstrip())
+out = []
+for l in lines[i + 1:]:
+    if l.strip() and (len(l) - len(l.lstrip())) < indent:
+        break
+    out.append(l[indent:])
+print("\n".join(out))
+PYEOF
+  if bash -n /tmp/bench-podscript.sh 2>/tmp/bench-lint.err; then
+    echo ">>> ok   pod script passes bash -n ($(wc -l < /tmp/bench-podscript.sh) lines)"
+  else
+    echo ">>> FAIL pod script is not valid shell:" >&2
+    cat /tmp/bench-lint.err >&2
+    exit 1
+  fi
   exit 0
 fi
 
