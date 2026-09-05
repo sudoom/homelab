@@ -518,7 +518,7 @@ for W in $WORKLOADS; do
   SW_RX="$(switch_rate rx "${FIO_A:-}" "${FIO_B:-}")"
   SW_TX="$(switch_rate tx "${FIO_A:-}" "${FIO_B:-}")"
   if [[ -n "$SW_RX$SW_TX" ]]; then
-    echo "  switch ${SWITCH_IF}: peak rx ${SW_RX:-?} Mb/s, peak tx ${SW_TX:-?} Mb/s (over ${WIN}s)"
+    echo "  switch ${SWITCH_IF}: rx ${SW_RX:-?} Mb/s, tx ${SW_TX:-?} Mb/s (fio window $(( ${FIO_B:-0} - ${FIO_A:-0} ))s)"
   fi
 
   # One log stream per client pod; the parser aggregates across them, which is
