@@ -144,13 +144,21 @@ truenas_datasets:
   - name: bench
     recordsize: 1M
     comments: "Scratch dataset for tests/storage-benchmark. Safe to destroy when empty. No offsite, no snapshots."
-    # 500 GiB, RAISED FROM 200 GiB on 2026-09-05 for a concrete reason:
-    # defeating this box's ARC needs a file LARGER THAN ITS 31.3 GiB OF RAM, so
-    # the harness sets min_filesize=64G here. A 3-client run therefore lays out
-    # 3 x 64 GiB and the capacity gate wants 2x that = 384 GiB, which a 200 GiB
-    # quota refuses. 200 GiB silently capped the benchmark at single-client.
-    # (tank has ~8.9 TiB free, so this costs nothing.)
-    quota: 536870912000             # 500 GiB
+    # 1500 GiB. Raised 200 -> 500 -> 1500 GiB on 2026-09-05, the last step
+    # applied by hand in the TrueNAS UI and MIRRORED HERE THE SAME DAY. That
+    # mirroring is not bookkeeping: this role RECONCILES quota on every run
+    # (added 2026-09-05), so leaving the file at 500 GiB would have let the next
+    # playbook run shrink a live dataset back under its own contents mid-run.
+    #
+    # WHY 1500 AND NOT 500. Defeating this box's ARC needs a file larger than
+    # its 31.3 GiB of RAM, so the harness pins min_filesize=64G. What the 500
+    # GiB figure missed is that fio names each corpus after the JOB, so the six
+    # workloads do not share one file -- they lay out six. A 3-client grid is
+    # therefore 6 x 64 GiB x 3 = 1152 GiB, not the 384 GiB the harness's own
+    # capacity gate asks for. Confirmed empirically against the Synology, whose
+    # bench directory held four distinct 64 GiB files.
+    # (tank still has ~8.9 TiB free, so this costs nothing.)
+    quota: 1610612736000            # 1500 GiB
   - name: personal
     recordsize: 128K
     comments: "SMB share for humans (personal side of the personal/work split). Family photos land here; immich imports them over NFS later."

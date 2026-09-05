@@ -2973,3 +2973,130 @@ The harness is real and the defects it found are real. Whether that was worth
 two hours against hand-measuring during actual migrations — which is where every
 figure in `data/storage-throughput.md` came from — is genuinely open, and is
 question one for the review.
+
+---
+
+## 2026-09-05, later — the Synology grid, and three things the harness got wrong about itself
+
+Restarted the full 6x3 Synology grid with the corrected wire cross-check. Four
+cells in, the shape was already interesting:
+
+| workload | c3 | c2 | c1 |
+|---|---|---|---|
+| seq-read-1m  | 120.6 | 118.2 | 108.5 MiB/s |
+| seq-write-1m | 117.1 | | |
+
+Flat from one client to three, parked on 1 GbE. That is the LACP question
+answering itself — and it contradicts the 52.2 MB/s single-client figure the
+README's decision table was built on, which said the *box* was the bottleneck
+and the link had headroom. It does not.
+
+Except I cannot quote any of it yet, because verifying it turned up three
+defects in the measurement, not the storage.
+
+### 1. The corpus is per WORKLOAD, not per client
+
+I had written in `run.sh` that a 3-client run lays out "two 64 GiB corpora per
+client -- the big-file one and the smallfile one -- so 384 GiB total". That is
+wrong, and it was wrong from the moment it was written. fio derives its filename
+from the JOB name, so each of the six workloads gets its own corpus. Exec'd into
+a running pod rather than reasoning about it further:
+
+```
+$ ls -la /data/nfs-csi/c0
+rand-read-4k.0.0    68719476736
+rand-write-4k.0.0   68719349760
+seq-read-1m.0.0     68719476736
+seq-write-1m.0.0     6891241472
+```
+
+Four files, one per workload run so far, 64 GiB each. The real footprint is
+6 x 64 GiB x 3 clients = **1152 GiB**, three times what the capacity gate asks
+for. The Synology has 7.0 TB free so it never noticed; `tank/bench` at a 500 GiB
+quota and the CephFS PVC at 600 Gi would both have died partway through layout,
+which on CephFS-HDD is about four hours in.
+
+That last file is the second defect, sitting in plain sight: `seq-write-1m.0.0`
+is 6.4 GB against a 64 GiB target. The size gate checks **the largest file in
+the directory**, not the file the current workload is about to use, so a short
+corpus passes as long as some *other* workload's corpus is full-size. The exact
+poisoning shape the gate was written to catch, walking straight through it.
+
+### 2. The physical ceiling was never established, so "impossible" was a guess
+
+Cell 1 (`seq-read-1m`, c=3) came back 120.6 MiB/s and the harness flagged it
+SUSPECT: fio claimed more than crossed the wire. Before believing that, I
+checked what the wire actually is.
+
+```
+mktxp_interface_rate{routerboard="home-router", name="nas"} = 1000
+ether9..ether16 = 0
+```
+
+One Synology port, 1 GbE, and the DS418's second NIC is not cabled — so a hidden
+second link is not the explanation. Then the part I had never measured:
+
+```
+$ ip link show br-ex
+11: br-ex: <...> mtu 1500
+```
+
+**MTU 1500 on the frontnet path.** 1448 bytes of TCP payload per 1538 bytes on
+the wire is 94.1%, so a 1 GbE link tops out near 941 Mb/s of NFS payload — about
+112 MiB/s. Which means cell 4's `seq-write-1m` at **117.1 MiB/s, annotated
+`ok`**, is above the physical ceiling and passed as clean, while cell 1 at 120.6
+was flagged. The annotations are unreliable in *both* directions.
+
+Root cause is mundane: the comparison mixes MiB/s with MB/s and compares fio's
+payload against the switch's L2 framing, a 5-8% error against a 1.05 SUSPECT
+threshold. The same order of magnitude as the thing being tested.
+
+This is the second time in one day that the cross-check, not the storage, was
+the broken instrument. The lesson I actually take from it: **a checker built to
+catch a lie needs its own calibration before its verdicts mean anything.** The
+ceiling it compares against has to be derived from a measured MTU and a measured
+link rate, written down, not assumed.
+
+The recoverable part: both raw numbers are recorded in the results TSV, so this
+is recomputable after the grid finishes. No cell needs re-running.
+
+### 3. Losing the pod logs, again
+
+`run.sh` deletes each Job as soon as it has parsed the result, which takes the
+per-client `FIO_START_EPOCH` / `FIO_END_EPOCH` with it — the same loss that cost
+36 minutes earlier today. Rather than change a running harness, added a
+read-only harvester alongside it that snapshots every benchmark pod's log every
+5 s until the pod disappears. First thing it proved: client start times spread
+only ~6 s across a 65 s window, which rules out "the three clients did not
+overlap, so summing their bandwidth is invalid" as the explanation for the
+over-ceiling numbers.
+
+### Quota, and mirroring a manual change back into code
+
+Operator raised `tank/bench` by hand in the UI, 500 GiB -> 1500 GiB, once the
+1152 GiB footprint above was understood. Mirrored into
+`ansible/truenas/group_vars/all.yml` the same day — not as bookkeeping, but
+because the `truenas-storage` role **reconciles quota on every run** as of this
+morning. Leaving the file at 500 GiB would have armed the next playbook run to
+shrink a live dataset back under its own contents, mid-benchmark. A reconcile
+loop makes drift dangerous in a way that a create-only role never was.
+
+### New: `verify-backend.py`
+
+`run.sh` annotates one row at a time and structurally cannot see anything else.
+Every defect that has cost this harness real time was only visible **across**
+rows: a partial-file read looks fine on its own and is impossible only next to
+the link rate; instrument bias is indistinguishable from caching until you can
+see that it is *systematic*. So the grid now gets a second pass that reads all
+18 rows and asks what one row cannot:
+
+- coverage — all 18 cells present, no silent gaps
+- the MikroTik cross-check as **two** questions: is any row above the link's
+  physical ceiling (fio is wrong), and is *every* row biased the same way (the
+  checker is wrong)
+- aggregate scaling across client counts, which is the LACP signal
+- node spread — 3 clients on 3 nodes is 3 NFS mounts is 3 flows; 3 clients on
+  one node is one flow and cannot show what bonding would do
+
+It prints findings and never edits or deletes rows. Exit 1 means do not proceed
+to the next backend.
