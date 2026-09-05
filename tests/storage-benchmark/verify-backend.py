@@ -26,13 +26,28 @@ WORKLOADS = ["seq-read-1m", "seq-write-1m", "rand-read-4k", "rand-write-4k",
              "smallfile-write", "smallfile-read"]
 CLIENTS = ["3", "2", "1"]
 
-# Practical payload ceiling per link, Mb/s. A 1 GbE link is 1000 Mb/s of L2
-# framing; NFS-over-TCP payload tops out near 94% of that. fio reporting MORE
-# payload than the link can frame is not a fast disk, it is a measurement that
-# did not cross the wire.
-LINK_PAYLOAD_CEILING = {"home-router/nas": 944.0, "home-switch/TrueNAS": 9440.0}
+# Practical payload ceiling per link, in Mb/s of NFS payload -- DERIVED, not
+# assumed, because assuming it is what made the harness's own SUSPECT
+# annotations meaningless in both directions on 2026-09-05.
+#
+# Per frame: wire bytes = MTU + 14 (eth hdr) + 4 (FCS) + 8 (preamble) + 12 (IFG)
+#            payload    = MTU - 20 (IPv4) - 32 (TCP + timestamps)
+#
+#   1 GbE, MTU 1500 (measured: `ip link show br-ex` on node4 = 1500):
+#       1448 / 1538 * 1000 Mb/s = 941 Mb/s = 112.2 MiB/s
+#   10 GbE, MTU 9000 (measured: enp1s0f0np0 = 9000, the storage backnet):
+#       8948 / 9038 * 10000 Mb/s = 9900 Mb/s
+#
+# A row above this did not cross the wire, whatever fio believes. Note the
+# Synology sits on the FRONTNET at MTU 1500 -- it does not get the backnet's
+# jumbo frames, which is why the two ceilings are not simply 10x apart.
+LINK_PAYLOAD_CEILING = {"home-router/nas": 941.0, "home-switch/TrueNAS": 9900.0}
 
 def mbps(mib_s):
+    """TSV 'MBps' columns actually hold MiB/s (parse-results.py: bytes/s -> KiB/s
+    -> MiB/s), so the header is mislabelled. Convert honestly here rather than
+    inherit the ambiguity -- run.sh's own annotation converts with 8 * 1.024 and
+    lands ~2.4% LOW, which is most of why its verdicts cannot be trusted."""
     return float(mib_s) * 1024 * 1024 * 8 / 1e6
 
 def main():
