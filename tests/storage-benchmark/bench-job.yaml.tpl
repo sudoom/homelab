@@ -201,17 +201,37 @@ spec:
               # while run.sh happily reported "job did not complete".
               # Never put a column-0 heredoc terminator inside this block.
               WANT=__FILESIZE_BYTES__
-              GOT=$(find "${BENCH_DIR}" -type f -printf '%s\n' 2>/dev/null | sort -rn | head -1)
-              GOT=${GOT:-0}
-              echo "  largest file: ${GOT} bytes, want >= ${WANT}"
-              if [ "${GOT}" -lt "${WANT}" ]; then
-                echo "FATAL: layout is SHORT (${GOT} < ${WANT})." >&2
-                echo "  A short file is served from the server's cache and yields a" >&2
-                echo "  throughput that never crossed the wire. Refusing to measure." >&2
-                echo "  Most likely a previous run was killed mid-layout; clear it with" >&2
-                echo "  ./run.sh --backend <b> --clean and re-run." >&2
-                exit 1
-              fi
+              # SIZE CHECK APPLIES ONLY TO THE BIG-FILE WORKLOADS.
+              # smallfile-* deliberately writes 64k files and takes its size
+              # from nrfiles, so "largest file >= BENCH_FILESIZE" is not just
+              # inapplicable there, it is guaranteed to fail.
+              case "${WORKLOAD}" in
+                smallfile-*)
+                  # For these, the corpus is many files; assert the COUNT looks
+                  # right instead of any single file's size.
+                  NFILES=$(find "${BENCH_DIR}" -type f 2>/dev/null | wc -l)
+                  echo "  smallfile corpus: ${NFILES} files (size check N/A)"
+                  ;;
+                *)
+                  # awk, NOT `sort -rn | head -1`: head exits after one line,
+                  # sort takes SIGPIPE writing the second, and `set -o pipefail`
+                  # turns that into a fatal error. It only bites once there are
+                  # enough files to overflow the pipe buffer -- which is why it
+                  # passed on every big-file run and killed smallfile-write with
+                  # exit 141. awk streams and never closes the pipe early.
+                  GOT=$(find "${BENCH_DIR}" -type f -printf '%s\n' 2>/dev/null \
+                        | awk 'BEGIN{m=0} $1>m{m=$1} END{print m+0}')
+                  echo "  largest file: ${GOT} bytes, want >= ${WANT}"
+                  if [ "${GOT}" -lt "${WANT}" ]; then
+                    echo "FATAL: layout is SHORT (${GOT} < ${WANT})." >&2
+                    echo "  A short file is served from the server's cache and yields a" >&2
+                    echo "  throughput that never crossed the wire. Refusing to measure." >&2
+                    echo "  Most likely a previous run was killed mid-layout; clear it with" >&2
+                    echo "  ./run.sh --backend <b> --clean and re-run." >&2
+                    exit 1
+                  fi
+                  ;;
+              esac
 
               # --output-format=json is the whole point: the parser reads this,
               # not the human table, so a result can never be transcribed wrong.

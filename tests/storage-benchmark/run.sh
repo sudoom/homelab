@@ -455,7 +455,23 @@ for W in $WORKLOADS; do
   # Job pod templates are IMMUTABLE — a second apply over an existing Job is
   # silently rejected. Unique job names per run avoid that; this wait is what
   # actually blocks until the result exists.
-  if ! oc -n "$NAMESPACE" wait --for=condition=complete "job/${JOB_NAME}" --timeout="${DEADLINE}s"; then
+  # Wait for EITHER outcome. `--for=condition=complete` alone sits out the full
+  # deadline on a Job that has already Failed -- observed 2026-09-05, where a
+  # job that died in seconds left the driver blocked for its 4783s deadline.
+  # There is no "complete or failed" selector, so poll both.
+  END=$(( $(date +%s) + DEADLINE ))
+  JOB_OK=0
+  while [ "$(date +%s)" -lt "$END" ]; do
+    if oc -n "$NAMESPACE" get "job/${JOB_NAME}" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null | grep -q True; then
+      JOB_OK=1; break
+    fi
+    if oc -n "$NAMESPACE" get "job/${JOB_NAME}" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null | grep -q True; then
+      echo "  job FAILED (not a timeout) -- surfacing immediately"
+      break
+    fi
+    sleep 15
+  done
+  if [ "$JOB_OK" != "1" ]; then
     echo "  job did not complete; recent events:"
     oc -n "$NAMESPACE" get events --sort-by=.lastTimestamp 2>/dev/null | grep "$JOB_NAME" | tail -5
     oc -n "$NAMESPACE" logs "job/${JOB_NAME}" --tail=30 || true
