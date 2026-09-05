@@ -3221,3 +3221,89 @@ is not what the workload was supposed to model. An *arr library is a tree.
 fio takes colon-separated `directory=` and distributes files round-robin, which
 would both spread the metadata load and make the test more honest about what it
 claims to represent.
+
+---
+
+## 2026-09-06, small hours — TrueNAS measured, and a number that describes a dataset
+
+Twelve TrueNAS bulk cells, zero failures, with the read-shaped layout and the barrier
+both in. The layout fix was confirmed on the wire before the first result landed:
+
+```
+tank/bench USED: 62.9G -> 67.4G      (growing)
+home-switch/TrueNAS tx: 302.3 MB/s = 2419 Mb/s
+```
+
+Under the old code that same step produced zero-byte files and near-zero traffic.
+
+| workload | c3 | c2 | c1 | vs Synology |
+|---|---:|---:|---:|---|
+| `seq-read-1m` | 463.7 | 530.3 | 519.3 MiB/s | **4.7x faster** |
+| `seq-write-1m` | 104.0 | 102.7 | 86.8 MiB/s | ~0.9x — no advantage |
+| `rand-read-4k` | 0.8 (205 iops) | 0.8 (209) | 1.5 (375) | ~0.4x |
+| `rand-write-4k` | 0.2 (61 iops) | 0.2 (60) | 0.2 (60) | ~125x slower |
+
+Sequential reads are **pool-bound, not link-bound** — 530 MiB/s is 4.45 Gb/s on a 10 GbE
+link, and a third client makes it worse. That also retires the old "scales with
+concurrency, so a single-client number is not the ceiling" line in
+`data/storage-throughput.md`, which came from two migration passes rather than a client
+sweep. With a real sweep the curve is flat-to-falling; one client gets essentially all
+of it.
+
+The headline that would have been wrong: **"TrueNAS is 125x worse than the Synology at
+random writes."**
+
+```
+tank/bench  recordsize  1M          zpool tank:  raidz2-0 (6 disks)
+tank/bench  sync        standard    ...and nothing else. No log vdev.
+```
+
+`recordsize=1M` means a 4 KiB request touches a whole 1 MiB record — **256x
+amplification in both directions**. The arithmetic closes: 375 iops x 1 MiB is ~375 MB/s
+of real disk work, which is exactly what this pool does sequentially. The disks are not
+slow; they are moving 256 bytes of record for every byte asked for. On top of that,
+`sync=standard` with no SLOG puts every NFS sync write in the ZIL on those same six
+spindles.
+
+The Synology sits on a 4 KiB-block filesystem. So the comparison is of **record sizes**,
+not hardware — and 1M is the *correct* setting for `tank/bench`, which inherited the
+shape of media/immich/keepers where files are large. All four rows now carry that caveat
+inline in the results TSV, and the layout string records `recordsize 1M, no SLOG` so
+future rows can never lose it. Queued: a `tank/bench16` dataset at `recordsize=16K` to
+make `rand-*` a hardware comparison.
+
+This is the same failure the harness exists to prevent, one level up. The measurement was
+real; the conditions were unstated. Unstated conditions are how "TrueNAS is terrible at
+small IO" becomes repo folklore.
+
+### A gate I nearly broke on the same night I argued for it
+
+The first verification pass printed **CLEAR TO PROCEED** while one row read
+`wire 259.95x expected` and was marked `ok`. My shared-port caveat appended a note to a
+*passing* verdict instead of replacing it, so a row whose switch port carried 260x the
+expected bytes was recorded as checked and fine. One commit earlier I had written that a
+gate nobody believes is worse than no gate, and then built one.
+
+A shared-port ratio above 1.5 is now `UNCORROBORATED` — the fio figure stands, the wire
+cannot confirm it — and the verifier escalates to blocking if more than half the grid is
+uncorroborated. The honest result for TrueNAS is 6 of 12 uncorroborated, all `rand-*`,
+where the payload is ~1 MB/s and the live media/immich/keepers NFS traffic on the same
+10G port dwarfs it. The Synology had no such problem: nothing else uses that port, and
+its ratios sat at a tight 1.07-1.08.
+
+### Small files: the layout works, the scale is still unknown
+
+Calibration on the Synology reached its first point and proved the read-shaped layout:
+
+```
+corpus files (subdirs only): 8192 / 8192
+one file: 65536 smallfile.0.0
+layout.fio: rw=read  filesize=64k  nrfiles=2048
+```
+
+Real 64 KiB files, all of them, spread across 64 subdirectories. Compare with the
+391,608 zero-byte files the old layout produced. The second calibration point — the one
+that cancels fixed costs and yields a marginal per-file rate — was still running when the
+session ended, so the question "is 1,048,576 files per client tens of minutes or hours"
+is still open. It is the first thing to run next session, and it needs five minutes, not
+an evening.
