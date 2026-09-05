@@ -193,38 +193,61 @@ is a small addition if the data justifies it.
 **Do this while the DS418 still exists.** It is being sold, and it is the only
 baseline for "was the TrueNAS migration worth it".
 
-## Pending fixes (found while running, 2026-09-05 — apply after the matrix)
+## State as of 2026-09-05 (paused for review)
 
-Deliberately NOT applied mid-matrix: the driver actively reads `run.sh`,
-`fio-jobs.yaml`, `bench-job.yaml.tpl` and `parse-results.py`, and a partial
-write during a run would corrupt it. None of these affect the fio columns —
-they are cross-check recording issues.
+**The harness works end to end** — one row carries `note=ok`, having gone job →
+parse → switch cross-check → record. Before that the chain had never completed
+once. **There is still no usable dataset**: all other rows are annotated
+`NOT QUOTABLE`, `SUPERSEDED` or `SUSPECT`, and the 18-cell Synology grid was
+stopped part-way.
 
-1. **The switch-window arithmetic reaches back before the job started.**
-   `WIN=$(( $(date +%s) - JOB_START + 60 ))` is then used as
-   `max_over_time(rate(...)[WIN:30s])`, which looks back `WIN` seconds *from
-   now* — i.e. ~60 s before the job began — and the inner `rate(...[1m])`
-   adds another 60 s on top. So a run picks up the tail of the PREVIOUS run.
-   Observed: a `seq-write-1m` row recorded `wire rx 972.0 Mb/s`, which is
-   meaningless for a write test and was the preceding `seq-read-1m` bleeding in.
-   Fix: query `query_range` with explicit `start=JOB_START&end=JOB_END` instead
-   of a look-back window, so the bounds are the job's own.
+### Settled, don't re-litigate
 
-2. **The "fio claims more than the wire" threshold is too loose.** It is 1.15;
-   an observed 1.20 discrepancy passed unflagged. Tighten to ~1.05.
+- **O_DIRECT works over NFS here.** fio and the switch agree at a 0.93
+  payload/L2 ratio, exactly what 1500-byte framing predicts. Every earlier
+  "fio exceeds the wire" was a defect in *my cross-check*, not caching. I built
+  a client-page-cache theory (94 GB node RAM) on an artifact of my own
+  instrument — the checker was wrong, not the thing being checked.
+- **The wire figure must be a counter delta over the pod-reported fio window.**
+  `rate(...[1m])` is unusable: mktxp scrapes every 30s, so a 60s burst
+  straddling a scrape boundary averages with idle time and reads ~25% low.
+- **Corpus sizing is derived, not chosen.** All six workloads share one 64 GiB
+  corpus, set by the largest server cache in scope (TrueNAS's 31.3 GiB ARC).
 
-3. **fio's multi-client aggregate assumes the clients overlap, and they don't.**
-   Each pod independently does `dnf install fio`, the layout check, then runs
-   its own 60 s window, so the three drift apart. Summing their bandwidths
-   therefore counts intervals when only one or two clients were actually
-   reading — which is the likely cause of fio reporting 133.0 MiB/s
-   (1115 Mb/s payload) against a 1 GbE link whose wire ceiling is ~941 Mb/s.
-   The switch counter has no such problem: it measures concurrency by
-   construction.
-   **Consequence worth internalising: for MULTI-CLIENT aggregate throughput the
-   wire number is the more trustworthy of the two, not fio's sum.**
-   Proper fix is a start barrier so all clients begin measuring together (fio
-   has `--startdelay`, or a shared file on the PVC all clients poll).
+### Defects found by running it, all fixed
+
+| defect | why inspection missed it |
+|---|---|
+| `declare -A` | bash 3.2 on macOS has no associative arrays |
+| `numfmt` | GNU coreutils only |
+| `envsubst` | not in the ceph image |
+| `sort \| head` + `pipefail` | SIGPIPE only once output exceeds the pipe buffer |
+| column-0 heredoc in a YAML block scalar | valid bash, valid-looking YAML, invalid manifest |
+| `oc wait --for=condition=complete` | cannot observe failure; blocks for the full deadline |
+| filesize < server RAM | returns cache figures *silently* |
+| deadline ignoring layout | killed a run mid-layout, poisoning the next two |
+| **dangling `${WIN}`** | **killed 12 runs after Completion but before parse/cleanup** |
+
+### The method that actually worked
+
+Every one of the last four was found by **running one cell with the driver's
+display filter removed**. The filter was concealing the errors, and separately
+could not match two-hyphen workload names, so successes were invisible too —
+two bugs hiding each other behind a third. When this harness goes quiet, take
+the filter off before theorising.
+
+### Open for the review
+
+1. **Was any of this worth it** versus hand-measuring during real work, which
+   is where every historical figure in `data/storage-throughput.md` came from.
+2. **`dnf install fio` costs ~90s per pod per Job** and depends on pod egress.
+   Mirroring an fio-bearing image through the zot pullthrough removes both.
+3. **CephFS may not be worth running at all** — ~1 hour of EC 2+1 layout on
+   three HDD spindles, for a tier that now has no production consumers.
+4. **fio's multi-client sum assumes the clients overlap** and they don't; each
+   pod installs fio and checks layout independently before its own 60s window.
+   A start barrier would fix it. Until then the switch counter is the better
+   aggregate for multi-client runs.
 
 ## Known gaps
 
