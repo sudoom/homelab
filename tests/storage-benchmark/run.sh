@@ -506,8 +506,15 @@ for W in $WORKLOADS; do
 
   # Read the fio window the POD reported, so the counter delta covers exactly
   # the measured run and nothing else.
-  FIO_A=$(echo "$LOGS" | grep -m1 "FIO_START_EPOCH" | awk '{print $3}')
-  FIO_B=$(echo "$LOGS" | grep -m1 "FIO_END_EPOCH"   | awk '{print $3}')
+  # awk, NOT `grep | awk`. Under `set -euo pipefail` a grep that matches nothing
+  # exits 1, pipefail propagates it, and set -e kills run.sh AT THIS LINE --
+  # before the result is parsed and before the job is deleted. That is exactly
+  # what happened on 2026-09-05: twelve jobs ran to Completion, produced no
+  # rows, were never cleaned up, and the driver advanced to the next cell as if
+  # nothing had gone wrong. Silent, and indistinguishable from success.
+  # awk exits 0 whether or not it matches.
+  FIO_A=$(echo "$LOGS" | awk '/FIO_START_EPOCH/{print $3; exit}')
+  FIO_B=$(echo "$LOGS" | awk '/FIO_END_EPOCH/{print $3; exit}')
   SW_RX="$(switch_rate rx "${FIO_A:-}" "${FIO_B:-}")"
   SW_TX="$(switch_rate tx "${FIO_A:-}" "${FIO_B:-}")"
   if [[ -n "$SW_RX$SW_TX" ]]; then
