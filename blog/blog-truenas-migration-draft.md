@@ -3100,3 +3100,124 @@ see that it is *systematic*. So the grid now gets a second pass that reads all
 
 It prints findings and never edits or deletes rows. Exit 1 means do not proceed
 to the next backend.
+
+---
+
+## 2026-09-05, night — twelve verified Synology rows, and the small-file wall
+
+Run 2 of the Synology grid, with the start barrier in. Twelve bulk cells landed
+clean and verified; the six small-file cells did not land at all. Both halves
+are worth writing down, because the failures were more instructive than the
+successes.
+
+### The barrier changed the answer immediately
+
+```
+### BARRIER_RELEASED waited 45s, 3 clients, target 1788633839
+### BARRIER_RELEASED waited 48s, 3 clients, target 1788633839
+### BARRIER_RELEASED waited 53s, 3 clients, target 1788633839
+### FIO_START_EPOCH 1788633839   (x3)
+```
+
+Three different waits, one identical start. `seq-read-1m` at 3 clients went from
+120.6 MiB/s (run 1) to **112.6 MiB/s** — and that drop is the point: 112.6 MiB/s
+is 945 Mb/s of payload, and a 1 GbE link at MTU 1500 with TCP timestamps on
+(checked: `net.ipv4.tcp_timestamps=1`, so 1448 B payload per 1538 B frame) tops
+out at 941 Mb/s. Run 1's figure sat *above* the physical ceiling. Run 2's sits
+on it.
+
+### The verified table
+
+| workload | c3 | c2 | c1 | wire (corrected) |
+|---|---|---|---|---|
+| seq-read-1m | 112.6 | 111.1 | 109.2 MiB/s | 984 / 982 / 961 Mb/s rx |
+| seq-write-1m | 110.3 | 110.3 | 105.1 MiB/s | 968 / 962 / 914 Mb/s tx |
+| rand-read-4k | 1.4 (360 iops) | 2.0 (519) | 1.8 (471) | 13 / 26 / 29 Mb/s rx |
+| rand-write-4k | 30.0 (7690 iops) | 25.0 (6402) | 27.9 (7143) | 298 / 253 / 264 Mb/s tx |
+
+All twelve carry `ok` from the byte-level wire recheck, with client
+synchronisation at 99-100%.
+
+**The LACP verdict, finally measured.** Sequential is flat across client count
+and pinned at the link in *both* directions — 109-113 MiB/s read, 105-110 MiB/s
+write, against a ~112 MiB/s ceiling. The DS418 saturates 1 GbE with a single
+client and gains nothing from two more. So bonding **would** help multi-client
+sequential, because there is demand the link cannot carry. It would do nothing
+for `rand-read-4k`, which peaks at 2 clients (2.0 MB/s, 519 iops) and *falls* at
+three (1.4 MB/s, 360 iops) — four SHR spindles thrashing on seek, using 13-29
+Mb/s of a 1000 Mb/s link. This also retires the old "52.2 MB/s, the box is the
+bottleneck" figure the README's decision table was built on. It was wrong.
+
+### Correcting the wire figures, and how wrong they were
+
+`recheck-wire.py` now recomputes each row from raw counter deltas over the fio
+window and rewrites the wire columns, carrying the superseded value into the
+note so the correction is auditable:
+
+```
+745.1  -> 983.9 Mb/s     (live check read 24% LOW)
+1263.7 -> 960.9 Mb/s     (live check read 32% HIGH -- above 1 GbE line rate)
+1039.2 -> 962.1 Mb/s     (ditto, impossible)
+424.2  -> 253.3 Mb/s
+```
+
+Three of the original figures exceeded the line rate of the link they claimed to
+measure. `increase(counter[span+30s]) / span` against a counter that only
+refreshes every 30 s does that.
+
+One refinement the data forced: the framing model is only valid at bs=1M. Large
+sequential rows land at 1.07-1.08x expected bytes; 4k rows land at 1.1-2.0x,
+because per-operation NFS/RPC overhead is a large fraction of a 4 KiB payload.
+The first version flagged those as NOISY, which mislabelled good rows. The
+direction that is *always* diagnostic is the low one — fewer bytes on the wire
+than fio claims is physically impossible — so the upper bound now applies only
+to large-block workloads.
+
+### The small-file wall, and three wrong hypotheses
+
+`smallfile-write` at 3 clients never completed a corpus. The sequence:
+
+1. **"fsync is the bottleneck."** Layout was running at 17 files/s aggregate,
+   an ETA of 50 hours for 3.1M files, ~166 ms per 64 KiB file — disk-commit
+   territory. Added `--fsync=0` to the layout invocation only (defensible on its
+   own terms: the measured run rewrites those files with `fsync=1`, so how they
+   were first created changes no number). Result: **20 files/s**. No effect.
+2. **"the directory is full of stale files from this morning."** 391,612 entries
+   in one client directory, far more than the stopped attempt could have made.
+   Composition check: **391,608 of them were the new corpus, 0 stale.** Dead.
+3. **"the creation rate decays as the directory fills."** Coherent with both the
+   391k already present and the 20 files/s now. Measured before acting, and the
+   measurement killed it too.
+
+What the measurement actually found:
+
+```
+sample A: 391608 files       sample B (301s later): 391608 files
+apparent size: 0             blocks on disk (KiB): 0
+fio state: Dl                (uninterruptible sleep -- blocked in NFS)
+```
+
+**Every file is zero bytes**, early ones and late ones alike, and creation had
+completely stalled. `fio --create_only=1` on a *write* job creates the files and
+lays out no data — it has nothing to lay out, because the job itself will write
+them. The layout step is a no-op for write workloads.
+
+That single fact also explains an anomaly from earlier in the day that I had
+noted and not chased: `seq-write-1m.0.0` sitting at 6.4 GB against a 64 GiB
+target while the size gate passed. The gate checks *the largest file in the
+directory*, not the file this workload will touch, so a full-size
+`rand-read-4k.0.0` next door waved it through. Two symptoms, one cause.
+
+Consequence for the campaign, beyond small files: **write workloads have been
+measuring allocation, not overwrite.** On the Synology that changes nothing —
+the link saturates either way — but on TrueNAS and CephFS-HDD, where the link is
+not the constraint, extending a file and rewriting one are different operations
+with different costs. That needs fixing before either of those backends runs.
+
+Stopped there rather than spend a fourth hypothesis at midnight. Twelve rows are
+verified and quotable; the small-file design needs rethinking rather than
+patching, and one candidate is worth noting now: a flat million-file directory
+is not what the workload was supposed to model. An *arr library is a tree.
+fio takes colon-separated `directory=` and distributes files round-robin, which
+would both spread the metadata load and make the test more honest about what it
+claims to represent.

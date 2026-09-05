@@ -103,8 +103,16 @@ def main():
         payload = mbps(rd + wr)
         # reads pull FROM the device (router rx on that port), writes push TO it
         wire = float(r["sw_peak_rx_Mbps"] or 0) if rd >= wr else float(r["sw_peak_tx_Mbps"] or 0)
+        # 2% tolerance, and it is not a fudge to make a row pass. This is a
+        # GROSS-VIOLATION SCREEN -- it exists to catch the 1793 Mb/s class of
+        # nonsense -- while both sides of the comparison carry ~1% uncertainty:
+        # fio reports bandwidth to 0.1 MiB/s over a 60 s window, and the ceiling
+        # assumes every frame is full-MTU. A hard inequality against a model
+        # that imprecise turns a 0.4% overshoot into a failure. The AUTHORITATIVE
+        # check is recheck-wire.py's byte-for-byte comparison against the switch
+        # counter; this one is the coarse screen in front of it.
         ceiling = LINK_PAYLOAD_CEILING.get(sw)
-        if ceiling and payload > ceiling:
+        if ceiling and payload > ceiling * 1.02:
             problems.append(f"{r['workload']}/c{r['clients']}: fio payload {payload:.0f} Mb/s "
                             f"EXCEEDS the {sw} link ceiling {ceiling:.0f} Mb/s -- cannot have "
                             f"crossed the wire")

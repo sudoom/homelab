@@ -141,14 +141,43 @@ def main():
                     verdict = "NO COUNTER: mktxp series unavailable for this window"
                 else:
                     ratio = meas / expected if expected else 0
+                    # THE UPPER BOUND ONLY MEANS SOMETHING FOR LARGE-BLOCK IO.
+                    # FRAMING models Ethernet/IP/TCP per MTU-sized frame, which is
+                    # a good approximation at bs=1M (few headers per byte) and a
+                    # bad one at bs=4k, where every operation is a small request
+                    # packet plus an NFS/RPC-wrapped reply and the per-op overhead
+                    # is a large fraction of the payload. Measured 2026-09-05: 1M
+                    # workloads land at 1.07-1.08x, 4k workloads at 1.1-2.0x. That
+                    # spread is protocol cost, not a measurement fault, and
+                    # flagging it as NOISY (as the first version did) mislabels
+                    # good rows.
+                    #
+                    # The direction that is ALWAYS diagnostic is the low one:
+                    # fewer bytes crossing the wire than fio claims to have moved
+                    # is physically impossible and means the number came from a
+                    # cache or from summing clients that never ran together.
+                    big_block = "-1m" in r["workload"]
                     if ratio < 0.85:
                         verdict = (f"SUSPECT: only {ratio:.2f}x of the expected bytes crossed "
                                    f"{r['switch_if']} ({meas/1e9:.2f} GB vs {expected/1e9:.2f} GB)")
-                    elif ratio > 1.3:
-                        verdict = (f"NOISY: {ratio:.2f}x expected bytes on {r['switch_if']} -- "
+                    elif big_block and ratio > 1.3:
+                        verdict = (f"NOISY: {ratio:.2f}x expected bytes on {r['switch_if']} at bs=1M -- "
                                    f"unrelated traffic or a bad window")
                     else:
                         verdict = f"ok (wire {ratio:.2f}x expected, sync {overlap*100:.0f}%)"
+                    # REWRITE THE WIRE COLUMNS TOO, not just the note. They were
+                    # written by the live check, which this file exists because it
+                    # is wrong -- leaving them in place means every later reader
+                    # (verify-backend.py included) scores against numbers already
+                    # known to be bad, two of which exceeded 1 GbE line rate. The
+                    # superseded figure is carried into the note so the correction
+                    # is auditable rather than silent.
+                    win = hi - lo
+                    corrected = meas * 8 / win / 1e6 if win > 0 else 0
+                    col = "sw_peak_rx_Mbps" if direction == "rx" else "sw_peak_tx_Mbps"
+                    old_wire = r[col]
+                    r[col] = f"{corrected:.1f}"
+                    verdict += f"; wire recomputed {old_wire}->{corrected:.1f} Mb/s"
         if verdict != note:
             print(f"{r['run_id']} {r['workload']:<16} c{r['clients']}")
             print(f"    was: {note}")
