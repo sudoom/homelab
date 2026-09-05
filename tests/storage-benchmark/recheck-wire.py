@@ -58,6 +58,17 @@ PODLOGS = os.environ.get("BENCH_PODLOGS", "")
 # 0.85-1.30 band absorbs it; a row outside that band is saying something.
 FRAMING = {"home-router/nas": 1448 / 1538, "home-switch/TrueNAS": 8948 / 9038}
 
+# PORTS THAT CARRY TRAFFIC OTHER THAN THE BENCHMARK.
+# The Synology's port was clean all evening -- zero PVCs remain on nfs-csi, so
+# every byte on it was ours and the ratio landed at a tight 1.07-1.08x. The
+# TrueNAS 10G port is NOT clean: it also serves the live media, immich and
+# keepers NFS mounts, so an elevated ratio there can be someone watching
+# something, not a measurement fault. Ratios on this port are reported with that
+# caveat rather than scored, because the counter cannot tell our bytes from
+# theirs and pretending otherwise would be exactly the false precision this file
+# was written to remove.
+SHARED_PORT = {"home-switch/TrueNAS"}
+
 def promq(query):
     cmd = ["oc", "-n", "openshift-user-workload-monitoring", "exec",
            "prometheus-user-workload-0", "-c", "prometheus", "--",
@@ -165,6 +176,8 @@ def main():
                                    f"unrelated traffic or a bad window")
                     else:
                         verdict = f"ok (wire {ratio:.2f}x expected, sync {overlap*100:.0f}%)"
+                        if r["switch_if"] in SHARED_PORT and ratio > 1.15:
+                            verdict += " [shared port: excess may be other NFS clients]"
                     # REWRITE THE WIRE COLUMNS TOO, not just the note. They were
                     # written by the live check, which this file exists because it
                     # is wrong -- leaving them in place means every later reader
