@@ -47,23 +47,23 @@ RUNTIME="${BENCH_RUNTIME:-60}"
 # direct=1 bypasses the CLIENT page cache and does nothing about the server's.
 FILESIZE="${BENCH_FILESIZE:-64G}"
 MIN_FILESIZE="${BENCH_MIN_FILESIZE:-64G}"
-# 20000 x 4 jobs = 80,000 files, ~5 GiB per client.
+# smallfile corpus is DERIVED from FILESIZE, not set independently.
 #
-# RAISED FROM 2000 (= 500 MiB) because at that size the whole corpus fits in
-# every backend's cache -- the same trap min_filesize fixes for the big-file
-# workloads, which does NOT protect these: they ignore BENCH_FILESIZE and size
-# themselves from nrfiles x 64k.
+# It used to be a standalone 20000 (= ~5 GiB), which cleared the DS418's 2 GB
+# but NOT TrueNAS's 31.3 GiB ARC -- so the smallfile cells would have measured
+# warm metadata on one backend and cold storage on another, and the two would
+# have sat in the same table looking comparable. Deriving it means the corpus
+# is the same 64 GiB as every other workload and cannot drift out of step.
 #
-# BE HONEST ABOUT WHAT THIS STILL IS: 5 GiB exceeds the DS418's 2 GB RAM but
-# NOT TrueNAS's 31.3 GiB ARC, so smallfile-* measures the METADATA PATH against
-# a partly-warm cache, not cold storage. That is deliberate -- an *arr library
-# scan really does stat files the NAS has been serving, so warm metadata is the
-# realistic shape -- but it means these numbers are NOT comparable to the
-# cache-defeating seq/rand figures and must not be read as "storage speed".
-# Defeating a 31 GiB ARC with 64k files needs ~512,000 of them, which is
-# 500k+ synchronous NFS round trips and hours of setup, for a question nobody
-# has asked yet.
-NRFILES="${BENCH_NRFILES:-20000}"
+# COST, because it is not small: 64 GiB of 64k files is 1,048,576 files PER
+# CLIENT -- ~3M at c=3 -- and at the ~684 files/sec/client measured on the
+# DS418 that is ~25 minutes of one-time layout. The persistent layout is what
+# makes it affordable: paid once per backend, reused by every later run.
+#
+# SPACE: 192 GiB of big files + 192 GiB of small files = 384 GiB per backend at
+# c=3. Fits the 400Gi PVC and tank/bench's 500G quota, but not by much.
+SMALLFILE_BYTES=65536
+NRFILES="${BENCH_NRFILES:-}"
 CLIENTS=1
 WORKLOADS=""
 BACKEND=""
@@ -95,9 +95,10 @@ CLEAN=0
 # which nobody needed a benchmark to learn. Add it back only for an
 # NVMe-vs-NVMe question.
 #
-# PVC is 400Gi because a 3-client run at 64G lays out 192 GiB. NFS does not
-# enforce the request, but CephFS does -- a 100Gi PVC would have failed there
-# partway through the third client's layout, ~20 minutes in.
+# PVC is 600Gi. A 3-client run now lays out TWO 64 GiB corpora per client --
+# the big-file one and the smallfile one -- so 384 GiB total. 400Gi left only a
+# 4% margin, and CephFS ENFORCES the quota (NFS does not), so it would have
+# failed there partway through the last client's layout, ~40 minutes in.
 #
 # switch_if is the MikroTik port carrying this backend's traffic, as
 # routerboard/interface, or "-" when there is no single port to watch. It gives
@@ -120,9 +121,9 @@ CLEAN=0
 # leaving the sender, once arriving at the reader). There is no single port
 # whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
-cephfs-hdd|cephfs-hdd|ReadWriteMany|400Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
-nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|400Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
-nfs-csi|nfs-csi|ReadWriteMany|400Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
+cephfs-hdd|cephfs-hdd|ReadWriteMany|600Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
+nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|600Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
+nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
 
@@ -339,6 +340,11 @@ CLEANEOF
   oc -n "$NAMESPACE" delete "job/${CLEAN_JOB}" --wait=false >/dev/null 2>&1 || true
   echo ">>> done. The PVC itself is untouched: oc -n ${NAMESPACE} delete pvc storage-bench-${BACKEND}"
   exit 0
+fi
+
+# 4 jobs per client, so each job gets a quarter of the corpus.
+if [[ -z "$NRFILES" ]]; then
+  NRFILES=$(( $(to_bytes "$FILESIZE") / SMALLFILE_BYTES / 4 ))
 fi
 
 RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"

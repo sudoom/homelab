@@ -114,9 +114,14 @@ data:
   # sequential reads, but every small-file create is a synchronous round trip
   # over NFS, while CephFS has a metadata server. Expect the ranking to invert.
   #
-  # nrfiles x filesize per job, so keep filesize small and count high.
-  # NOT time_based: we want "how long to create N files", a completion time, not
-  # a throughput over a fixed window.
+  # nrfiles is DERIVED so the corpus equals BENCH_FILESIZE (64 GiB) -- the same
+  # as every other workload, so all six defeat the same caches and sit in one
+  # comparable table. At 64k per file that is ~1M files per client.
+  #
+  # time_based, like the other four: the corpus is built once by the
+  # --create_only layout phase, and the measured run is then a fixed 60s window
+  # over it. Without this the "measurement" would be the creation time of 1M
+  # files, which is a different quantity and not comparable to a throughput.
   smallfile-write.fio: |
     [global]
     directory=${BENCH_DIR}
@@ -124,6 +129,10 @@ data:
     direct=0
     fsync=1
     group_reporting=1
+
+    time_based=1
+    runtime=${BENCH_RUNTIME}
+    ramp_time=5
 
     [smallfile-write]
     rw=write
@@ -139,6 +148,10 @@ data:
     ioengine=${BENCH_IOENGINE}
     direct=1
     group_reporting=1
+
+    time_based=1
+    runtime=${BENCH_RUNTIME}
+    ramp_time=5
 
     [smallfile-read]
     rw=read
