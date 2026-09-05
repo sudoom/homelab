@@ -231,8 +231,14 @@ AVAIL_SRC=""
 case "$BACKEND" in
   ceph-nvme-block)   AVAIL_BYTES="$(ceph_pool_avail nvme-replicated)"; AVAIL_SRC="ceph pool nvme-replicated" ;;
   cephfs-hdd)        AVAIL_BYTES="$(ceph_pool_avail cephfs-bulk-hdd)"; AVAIL_SRC="ceph pool cephfs-bulk-hdd" ;;
+  # MUST probe the DATASET, not the pool. tank/bench carries a quota, and
+  # `zfs list -o available` on a quota'd dataset reports the quota-bounded
+  # figure while the pool reports the whole 8.88 TiB. Probing the pool would
+  # wave through a 3-client 64G run (needs 384 GiB) against a 200 GiB quota and
+  # fail it two thirds of the way into layout -- about 20 minutes in.
+  # Measured 2026-09-05: tank=9766991880320, tank/bench=214748168384.
   nfs-truenas-bench) AVAIL_BYTES="$(ssh -o ConnectTimeout=8 truenas_admin@192.168.1.25 \
-                        'zfs list -Hp -o available tank' 2>/dev/null || true)"; AVAIL_SRC="zfs tank" ;;
+                        'zfs list -Hp -o available tank/bench' 2>/dev/null || true)"; AVAIL_SRC="zfs tank/bench (quota-bounded)" ;;
   nfs-csi)           AVAIL_SRC="Synology (no credentialed probe -- check DSM by hand)" ;;
 esac
 
