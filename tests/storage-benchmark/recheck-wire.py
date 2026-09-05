@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Recompute the switch cross-check from raw counters, and re-annotate the rows.
+
+WHY THIS IS A SEPARATE PASS AND NOT A FIX TO run.sh.
+run.sh's live cross-check is wrong in a way that cannot be repaired in place
+after the fact -- but it does not have to be, because everything needed to redo
+it properly is already recorded. Keeping the recompute separate means the grid
+runs under ONE consistent (if flawed) annotation, and the correction is applied
+to all rows at once, by code that can be read and re-run.
+
+WHAT WAS WRONG WITH THE LIVE CHECK (2026-09-05):
+  1. `increase(counter[span+30s]) * 8 / span` -- a range one size, a divisor
+     another. mktxp only refreshes the counter every 30 s, so a 66 s fio window
+     contains 2-3 real samples and Prometheus extrapolates across them. Measured
+     error ran from 24% low to 14% HIGH: two rows recorded wire figures ABOVE
+     1 GbE line rate (1139.2 and 1003.3 Mb/s), which is not a fast disk, it is
+     an instrument reporting the impossible.
+  2. fio's payload was compared against the switch's L2 bytes with no framing
+     factor, and with a stray 1.024 in the unit conversion. Roughly 8% of error
+     against a 5% SUSPECT threshold -- the check could not resolve the thing it
+     was testing.
+
+WHAT THIS DOES INSTEAD: compares TOTAL BYTES, not rates. Rates need a divisor
+and the divisor was the bug. A counter delta between the sample before the fio
+window and the sample after it is alignment-free; idle traffic on these ports
+is ~0.1 Mb/s, so the 30 s of slack on each side contributes nothing.
+
+  expected L2 bytes = fio payload bytes / FRAMING_EFFICIENCY
+  ratio             = measured / expected
+
+  ratio ~1.0   fio and the wire agree
+  ratio <0.85  fio claims more than crossed the wire -- cached, or an aggregate
+               summed across clients that did not run concurrently
+  ratio >1.3   more crossed the wire than fio asked for -- other traffic on the
+               port, or the window is wrong
+
+It also re-derives client synchronisation from the harvested pod logs, because
+an aggregate is only meaningful if the clients overlapped.
+
+Usage:  ./recheck-wire.py --since-run bench-20260905-204... [--apply]
+Without --apply it prints what it would write and changes nothing.
+"""
+import argparse, csv, glob, json, os, re, subprocess, sys
+
+PODLOGS = os.environ.get("BENCH_PODLOGS", "")
+# MTU 1500 path (Synology, frontnet): payload 1448 B per 1538 B on the wire.
+# MTU 9000 path (TrueNAS, storage backnet): 8948 B per 9038 B.
+#
+# This is DELIBERATELY pure Ethernet + IPv4 + TCP framing and nothing else. It
+# is a first-principles constant, derived from a measured MTU, so it can be
+# checked by hand. It does NOT model NFS RPC headers, the ACK stream sharing
+# the direction, or retransmits -- which is why healthy rows land near 1.07x
+# rather than 1.00x, consistently, across every workload measured on 2026-09-05.
+# That offset is real protocol overhead sitting above the model, not drift.
+# DO NOT tune these constants to make the ratio come out at 1.00: that is
+# fitting the instrument to the data, and the whole reason this file exists is
+# that the previous check had no independently-derived reference at all. The
+# 0.85-1.30 band absorbs it; a row outside that band is saying something.
+FRAMING = {"home-router/nas": 1448 / 1538, "home-switch/TrueNAS": 8948 / 9038}
+
+def promq(query):
+    cmd = ["oc", "-n", "openshift-user-workload-monitoring", "exec",
+           "prometheus-user-workload-0", "-c", "prometheus", "--",
+           "wget", "-qO-", "--post-data=query=" + query,
+           "http://localhost:9090/api/v1/query"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, timeout=60).stdout
+        return json.loads(out)["data"]["result"]
+    except Exception:
+        return []
+
+def counter_delta(rb, ifn, direction, a, b):
+    """Exact counter delta over [a-45, b+45]. No rate(), no extrapolation."""
+    m = f'mktxp_interface_{direction}_byte_total{{routerboard_name="{rb}",name="{ifn}"}}'
+    lo = promq(f"{m} @ {a-45}")
+    hi = promq(f"{m} @ {b+45}")
+    if not lo or not hi:
+        return None
+    return float(hi[0]["value"][1]) - float(lo[0]["value"][1])
+
+def client_sync(run_id, workload):
+    """(spread_s, overlap_frac, n) from harvested pod logs, or None."""
+    wins = []
+    for f in glob.glob(os.path.join(PODLOGS, f"{run_id}-{workload}-*.log")):
+        txt = open(f, errors="ignore").read()
+        s = re.search(r"FIO_START_EPOCH (\d+)", txt)
+        e = re.search(r"FIO_END_EPOCH (\d+)", txt)
+        if s and e:
+            wins.append((int(s.group(1)), int(e.group(1))))
+    if not wins:
+        return None
+    starts = [w[0] for w in wins]
+    ends = [w[1] for w in wins]
+    # overlap of ALL windows / mean window length
+    inter = max(0, min(ends) - max(starts))
+    mean_len = sum(e - s for s, e in wins) / len(wins)
+    return (max(starts) - min(starts), inter / mean_len if mean_len else 0, len(wins))
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tsv", default="../../data/storage-benchmark-results.tsv")
+    ap.add_argument("--since-run", required=True)
+    ap.add_argument("--apply", action="store_true")
+    a = ap.parse_args()
+
+    with open(a.tsv) as fh:
+        head = fh.readline().rstrip("\n").split("\t")
+        rows = [dict(zip(head, l.rstrip("\n").split("\t"))) for l in fh if l.strip()]
+
+    changed = 0
+    for r in rows:
+        if r["run_id"] < a.since_run or r["switch_if"] in ("-", ""):
+            continue
+        rb, ifn = r["switch_if"].split("/", 1)
+        sync = client_sync(r["run_id"], r["workload"])
+        rd, wr = float(r["read_MBps"]), float(r["write_MBps"])
+        direction = "rx" if rd >= wr else "tx"
+        payload_bytes = (rd + wr) * 1024 * 1024 * float(r["runtime_s"])
+        eff = FRAMING.get(r["switch_if"], 0.94)
+        expected = payload_bytes / eff
+
+        note, verdict = r["note"], "?"
+        if sync is None:
+            verdict = "NO EPOCHS: pod logs not harvested; wire recheck impossible"
+        else:
+            spread, overlap, n = sync
+            if n < int(r["clients"]):
+                verdict = f"PARTIAL EPOCHS: {n}/{r['clients']} client logs"
+            elif overlap < 0.8:
+                verdict = (f"INVALID AGGREGATE: clients overlapped only "
+                           f"{overlap*100:.0f}% (start spread {spread}s); summed "
+                           f"bandwidth across non-concurrent runs")
+            else:
+                # windows are aligned, so the union is the measurement window
+                lo = min(int(re.search(r"FIO_START_EPOCH (\d+)", open(f, errors='ignore').read()).group(1))
+                         for f in glob.glob(os.path.join(PODLOGS, f"{r['run_id']}-{r['workload']}-*.log")))
+                hi = max(int(re.search(r"FIO_END_EPOCH (\d+)", open(f, errors='ignore').read()).group(1))
+                         for f in glob.glob(os.path.join(PODLOGS, f"{r['run_id']}-{r['workload']}-*.log")))
+                meas = counter_delta(rb, ifn, direction, lo, hi)
+                if meas is None:
+                    verdict = "NO COUNTER: mktxp series unavailable for this window"
+                else:
+                    ratio = meas / expected if expected else 0
+                    if ratio < 0.85:
+                        verdict = (f"SUSPECT: only {ratio:.2f}x of the expected bytes crossed "
+                                   f"{r['switch_if']} ({meas/1e9:.2f} GB vs {expected/1e9:.2f} GB)")
+                    elif ratio > 1.3:
+                        verdict = (f"NOISY: {ratio:.2f}x expected bytes on {r['switch_if']} -- "
+                                   f"unrelated traffic or a bad window")
+                    else:
+                        verdict = f"ok (wire {ratio:.2f}x expected, sync {overlap*100:.0f}%)"
+        if verdict != note:
+            print(f"{r['run_id']} {r['workload']:<16} c{r['clients']}")
+            print(f"    was: {note}")
+            print(f"    now: {verdict}")
+            r["note"] = verdict
+            changed += 1
+
+    print(f"\n{changed} row(s) re-annotated" + ("" if a.apply else " (dry run; pass --apply to write)"))
+    if a.apply and changed:
+        with open(a.tsv, "w") as fh:
+            w = csv.DictWriter(fh, fieldnames=head, delimiter="\t", lineterminator="\n")
+            w.writeheader()
+            w.writerows(rows)
+        print(f"wrote {a.tsv}")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
