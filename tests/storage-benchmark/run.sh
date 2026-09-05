@@ -326,7 +326,21 @@ CLEANEOF
 fi
 
 RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"
-DEADLINE=$(( (RUNTIME + 300) * 2 ))
+# THE DEADLINE MUST COVER LAYOUT, WHICH DOMINATES AT THESE FILE SIZES.
+# Original formula was (RUNTIME+300)*2 = 720s at runtime=60, while laying out
+# 3 x 64 GiB across a 1G link takes ~27 MINUTES. The clients=3 run was killed
+# mid-layout by that deadline -- and worse, the PARTIAL FILES it left behind
+# poisoned the next run: clients=2 read short files that fit in the DS418's
+# cache and reported 127.1 MiB/s (1066 Mb/s) against a wire that peaked at
+# 969.5 Mb/s. Physically impossible, and only visible because of the switch
+# cross-check.
+#
+# 50 MB/s is a deliberately pessimistic layout rate (the DS418 writes at ~120
+# MB/s; the slowest plausible backend is what has to fit).
+LAYOUT_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS ))
+LAYOUT_SECS=$(( LAYOUT_BYTES / 50000000 ))
+DEADLINE=$(( LAYOUT_SECS + RUNTIME + 600 ))
+echo "  info deadline ${DEADLINE}s (layout of $(human "$LAYOUT_BYTES") allowed ${LAYOUT_SECS}s at a pessimistic 50 MB/s)"
 
 echo
 echo ">>> plan"

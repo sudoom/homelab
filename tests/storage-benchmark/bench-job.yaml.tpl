@@ -175,6 +175,42 @@ spec:
               echo "### effective fio job"
               cat /tmp/job.fio
 
+              # LAY OUT FIRST, AS A SEPARATE STEP, AND VERIFY THE SIZE.
+              #
+              # Two reasons this is not folded into the measured run. First, a
+              # run killed mid-layout leaves a SHORT file, and the next run then
+              # reads a file small enough to sit in the server's cache and
+              # reports a throughput that never crossed the wire -- observed
+              # 2026-09-05 at 127.1 MiB/s against a 969.5 Mb/s link. Second,
+              # measuring a run that includes layout mixes write time into a
+              # read number.
+              #
+              # --create_only=1 lays out without measuring, and is a no-op when
+              # the files are already the right size -- which is what makes the
+              # retained layout cheap to reuse.
+              echo "### layout (create_only; no-op if already correct size)"
+              fio /tmp/job.fio --create_only=1 >/dev/null 2>&1 || true
+
+              WANT=$(python3 - <<'PY'
+import os,re
+v=os.environ["BENCH_FILESIZE"].strip()
+n=int(re.match(r"\d+",v).group()); u=v[len(str(n)):].upper()
+print(n*{"":1,"B":1,"K":1024,"KIB":1024,"M":1024**2,"MIB":1024**2,
+         "G":1024**3,"GIB":1024**3,"T":1024**4,"TIB":1024**4}[u])
+PY
+)
+              GOT=$(find "${BENCH_DIR}" -type f -printf '%s\n' 2>/dev/null | sort -rn | head -1)
+              GOT=${GOT:-0}
+              echo "  largest file: ${GOT} bytes, want >= ${WANT}"
+              if [ "${GOT}" -lt "${WANT}" ]; then
+                echo "FATAL: layout is SHORT (${GOT} < ${WANT})." >&2
+                echo "  A short file is served from the server's cache and yields a" >&2
+                echo "  throughput that never crossed the wire. Refusing to measure." >&2
+                echo "  Most likely a previous run was killed mid-layout; clear it with" >&2
+                echo "  ./run.sh --backend <b> --clean and re-run." >&2
+                exit 1
+              fi
+
               # --output-format=json is the whole point: the parser reads this,
               # not the human table, so a result can never be transcribed wrong.
               fio /tmp/job.fio --output-format=json --output=/tmp/out.json

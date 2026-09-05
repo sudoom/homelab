@@ -52,7 +52,10 @@ for b in blocks:
     for job in doc.get("jobs", []):
         for direction in ("read", "write"):
             d = job.get(direction, {})
-            bw = float(d.get("bw", 0) or 0)          # KiB/s
+            # bw_bytes, NOT bw: fio's `bw` is KiB/s by convention but that is a
+            # convention, and a unit ambiguity in a throughput harness is
+            # unacceptable. bw_bytes is bytes/s and cannot be misread.
+            bw = float(d.get("bw_bytes", 0) or 0) / 1024.0   # bytes/s -> KiB/s
             iops = float(d.get("iops", 0) or 0)
             if direction == "read":
                 read_bw += bw; read_iops += iops
