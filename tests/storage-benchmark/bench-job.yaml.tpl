@@ -235,7 +235,15 @@ spec:
 
               # --output-format=json is the whole point: the parser reads this,
               # not the human table, so a result can never be transcribed wrong.
+              # Bracket the measured run with epochs so the switch counter can be
+              # read over EXACTLY this window. Previously run.sh guessed the
+              # window from job start/end, which (a) reached back into the
+              # previous job and (b) leaned on rate()[1m] when mktxp only
+              # scrapes every 30s -- two samples, so a 60s burst straddling a
+              # scrape boundary is averaged with idle time and reads ~25% low.
+              echo "### FIO_START_EPOCH $(date +%s)"
               fio /tmp/job.fio --output-format=json --output=/tmp/out.json
+              echo "### FIO_END_EPOCH $(date +%s)"
               echo "### FIO_JSON_BEGIN"
               cat /tmp/out.json
               echo "### FIO_JSON_END"

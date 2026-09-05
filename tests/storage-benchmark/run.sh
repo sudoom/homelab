@@ -381,18 +381,27 @@ fi
 # does need exec rights. Fails soft: a missing cross-check must never lose an
 # otherwise-good benchmark result.
 #
-# max_over_time of the 1m rate, not an average: the job window includes fio's
-# layout phase and any ramp, and what we want to compare against fio's number
-# is the SUSTAINED PLATEAU, which is what the max of a smoothed rate finds.
+# An exact counter delta over the window the POD reports for its fio run.
+# The first version used max_over_time of a rate()[1m] across a guessed window;
+# that was wrong twice over -- it reached back into the previous job, and mktxp
+# only scrapes every 30s, so a 1m rate has two samples and a 60s burst
+# straddling a scrape boundary is averaged with idle time and reads ~25% low.
 #
 # Both directions are recorded because which one matters depends on the
 # workload -- reads show up as traffic FROM the device (the router's rx on that
 # port), writes as traffic TO it (tx). Recording both means the row is
 # interpretable without knowing which workload produced it.
-switch_rate() {   # $1 = rx|tx, $2 = window seconds -> Mb/s, empty on failure
+switch_rate() {   # $1 = rx|tx, $2 = start epoch, $3 = end epoch -> Mb/s
   [[ "$SWITCH_IF" == "-" ]] && return 0
-  local rb="${SWITCH_IF%%/*}" ifn="${SWITCH_IF##*/}" dir="$1" win="$2"
-  local q="max_over_time(rate(mktxp_interface_${dir}_byte_total{routerboard_name=\"${rb}\",name=\"${ifn}\"}[1m])[${win}s:30s])*8/1e6"
+  [[ -n "${2:-}" && -n "${3:-}" ]] || return 0
+  local rb="${SWITCH_IF%%/*}" ifn="${SWITCH_IF##*/}" dir="$1" a="$2" b="$3"
+  local span=$(( b - a ))
+  [[ "$span" -gt 0 ]] || return 0
+  # increase() over the EXACT fio window, not max_over_time of a rate. This is
+  # alignment-free: it is a counter delta across a known interval, so a 30s
+  # scrape cadence cannot smear a 60s burst into neighbouring idle time.
+  # The extra 30s of span covers one scrape's worth of quantisation.
+  local q="increase(mktxp_interface_${dir}_byte_total{routerboard_name=\"${rb}\",name=\"${ifn}\"}[$((span+30))s] @ ${b})*8/${span}/1e6"
   oc -n openshift-user-workload-monitoring exec prometheus-user-workload-0 -c prometheus -- \
      wget -qO- --post-data="query=${q}" 'http://localhost:9090/api/v1/query' 2>/dev/null \
    | python3 -c "
@@ -486,18 +495,22 @@ for W in $WORKLOADS; do
   NODES="$(oc -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" \
             -o jsonpath='{range .items[*]}{.spec.nodeName}{","}{end}' 2>/dev/null | sed 's/,$//')"
 
-  WIN=$(( $(date +%s) - JOB_START + 60 ))
-  SW_RX="$(switch_rate rx "$WIN")"
-  SW_TX="$(switch_rate tx "$WIN")"
+  LOGS="$(for POD in $(oc -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" -o name 2>/dev/null); do
+            oc -n "$NAMESPACE" logs "$POD" 2>/dev/null; done)"
+
+  # Read the fio window the POD reported, so the counter delta covers exactly
+  # the measured run and nothing else.
+  FIO_A=$(echo "$LOGS" | grep -m1 "FIO_START_EPOCH" | awk '{print $3}')
+  FIO_B=$(echo "$LOGS" | grep -m1 "FIO_END_EPOCH"   | awk '{print $3}')
+  SW_RX="$(switch_rate rx "${FIO_A:-}" "${FIO_B:-}")"
+  SW_TX="$(switch_rate tx "${FIO_A:-}" "${FIO_B:-}")"
   if [[ -n "$SW_RX$SW_TX" ]]; then
     echo "  switch ${SWITCH_IF}: peak rx ${SW_RX:-?} Mb/s, peak tx ${SW_TX:-?} Mb/s (over ${WIN}s)"
   fi
 
   # One log stream per client pod; the parser aggregates across them, which is
   # what "3 clients did X MB/s" has to mean.
-  for POD in $(oc -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" -o name 2>/dev/null); do
-    oc -n "$NAMESPACE" logs "$POD" 2>/dev/null
-  done | python3 "${HERE}/parse-results.py" \
+  echo "$LOGS" | python3 "${HERE}/parse-results.py" \
         --run-id "$RUN_ID" --backend "$BACKEND" --storage-class "$SC" \
         --layout "$LAYOUT" --workload "$W" --clients "$CLIENTS" \
         --nodes "$NODES" --filesize "$FILESIZE" --runtime "$RUNTIME" \
