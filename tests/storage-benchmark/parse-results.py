@@ -81,6 +81,17 @@ if n_parsed != int(args.clients):
 
 to_mbps = lambda kib: round(kib / 1024.0, 1)   # KiB/s -> MiB/s
 
+# Auto-annotate the failure modes we already know how to detect.
+note = "ok"
+if n_parsed != int(args.clients):
+    note = "PARTIAL: %d of %s clients reported" % (n_parsed, args.clients)
+if args.switch_rx_mbps or args.switch_tx_mbps:
+    _wire = max([float(x) for x in (args.switch_rx_mbps, args.switch_tx_mbps) if x] or [0])
+    _fio = (read_bw + write_bw) * 8 / 1000.0
+    if _wire and _fio and _fio / _wire > 1.05:
+        note = ("SUSPECT: fio ~%.0f Mb/s exceeds wire %.0f Mb/s by %.0f%%"
+                % (_fio, _wire, (_fio/_wire - 1) * 100))
+
 row = [
     args.run_id, date.today().isoformat(), args.backend, args.storage_class,
     args.layout, args.workload, str(n_parsed), args.nodes or "-",
@@ -89,6 +100,12 @@ row = [
     f"{round(read_iops)}", f"{round(write_iops)}",
     f"{round(lat_p99_ms, 2)}",
     args.switch_if or "-", args.switch_rx_mbps or "-", args.switch_tx_mbps or "-",
+    # NOTHING IS EVER DELETED FROM THIS FILE. A run that turns out not to be
+    # quotable gets its reason written here instead -- deleting it destroys the
+    # evidence of WHY, which is the only thing that stops the same mistake
+    # being made again. Three rows were purged on 2026-09-05 and had to be
+    # recovered from git; that is the practice this column replaces.
+    note,
 ]
 
 with open(args.results, "a") as fh:
@@ -108,7 +125,7 @@ if args.switch_rx_mbps or args.switch_tx_mbps:
     verdict = ""
     if wire and fio_mbps:
         ratio = fio_mbps / wire
-        if ratio > 1.15:
+        if ratio > 1.05:
             verdict = "  <-- fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)"
         elif ratio < 0.5:
             verdict = "  (wire carried much more -- layout/other traffic in window)"

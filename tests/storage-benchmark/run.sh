@@ -370,7 +370,7 @@ echo
 
 mkdir -p "$(dirname "$RESULTS")"
 if [[ ! -f "$RESULTS" ]]; then
-  printf 'run_id\tdate\tbackend\tstorage_class\tlayout\tworkload\tclients\tnodes\tfilesize\truntime_s\tioengine\tread_MBps\twrite_MBps\tread_iops\twrite_iops\tlat_ms_p99\tswitch_if\tsw_peak_rx_Mbps\tsw_peak_tx_Mbps\n' > "$RESULTS"
+  printf 'run_id\tdate\tbackend\tstorage_class\tlayout\tworkload\tclients\tnodes\tfilesize\truntime_s\tioengine\tread_MBps\twrite_MBps\tread_iops\twrite_iops\tlat_ms_p99\tswitch_if\tsw_peak_rx_Mbps\tsw_peak_tx_Mbps\tnote\n' > "$RESULTS"
 fi
 
 # ---- Switch-side cross-check ----------------------------------------------
