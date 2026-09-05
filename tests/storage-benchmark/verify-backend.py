@@ -60,6 +60,13 @@ def main():
     # separates "this grid" from "everything I tried before lunch".
     ap.add_argument("--since-run", default=None,
                     help="only consider rows with run_id >= this (e.g. bench-20260905-193943)")
+    # A grid deliberately restricted to some workloads is not an incomplete grid.
+    # Without this the TrueNAS bulk run -- which excludes smallfile on purpose,
+    # because that design is still being proven on the Synology -- would report
+    # six missing cells and a FAIL verdict every time, training the reader to
+    # ignore the verdict. A gate nobody believes is worse than no gate.
+    ap.add_argument("--workloads", default="all", choices=["all", "bulk", "smallfile"],
+                    help="which workload set this grid was meant to cover (default all 6)")
     a = ap.parse_args()
 
     with open(a.tsv) as fh:
@@ -80,9 +87,13 @@ def main():
     have = collections.defaultdict(list)
     for r in grid:
         have[(r["workload"], r["clients"])].append(r)
-    missing = [f"{w}/c{c}" for w in WORKLOADS for c in CLIENTS if (w, c) not in have]
+    want = {"all": WORKLOADS,
+            "bulk": [w for w in WORKLOADS if not w.startswith("smallfile")],
+            "smallfile": [w for w in WORKLOADS if w.startswith("smallfile")]}[a.workloads]
+    missing = [f"{w}/c{c}" for w in want for c in CLIENTS if (w, c) not in have]
     dupes = [f"{k[0]}/c{k[1]}x{len(v)}" for k, v in have.items() if len(v) > 1]
-    print(f"[coverage] {len(have)}/18 cells present")
+    print(f"[coverage] {len(have)}/{len(want)*len(CLIENTS)} cells present "
+          f"({a.workloads} workload set)")
     if missing:
         problems.append(f"missing cells: {', '.join(missing)}")
     if dupes:
