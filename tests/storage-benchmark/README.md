@@ -141,6 +141,58 @@ recorded with the count actually observed rather than the count asked for.
 `nodes` matters: 3 clients on 3 nodes and 3 clients on 1 node are different
 measurements.
 
+## The Synology LACP question — what the multi-client runs decide
+
+Long-standing open item (README TODO): would bonding the DS418's two 1 GbE NICs
+help? The harness answers it, but only if the mechanism is understood first.
+
+**LACP balances per *flow*, hashed on src/dst MAC/IP/port.** One NFS mount is
+one TCP connection is one flow, and it stays pinned to a single link no matter
+how many are bonded. Bonding never makes one mount faster.
+
+**But the clients here do produce distinct flows** — for a reason that is easy
+to get wrong. NFS is kernel-mounted by the **hostNetwork `csi-nfs-node`
+DaemonSet**, so the mount is per *node*, not per pod. csi-driver-nfs stages a
+volume once per (node, volume) and bind-mounts it into each pod. Therefore:
+
+- 3 clients on **3 nodes** → 3 mounts → 3 TCP connections → **3 flows**, which
+  LACP can spread across links.
+- 3 clients on **1 node** → 1 shared mount → 1 connection → **1 flow**, which
+  LACP cannot help at all.
+
+This is why `nodes` is a column and not a footnote, and it makes the experiment
+**self-validating**: if throughput scales with clients spread across 3 nodes but
+not with 3 clients on 1 node, that confirms the per-node mount is the flow unit.
+
+### The decision criterion
+
+A single 1 GbE link is ~118 MB/s practical. Single-client read on the DS418 was
+measured at **52.2 MB/s (416 Mbps) — 44% of one link**, so at one client the
+*box* is the bottleneck and the link is not.
+
+Run `seq-read-1m` at `--clients 1`, `2`, `3` (spread across nodes) and read the
+aggregate:
+
+| aggregate plateaus at | meaning | LACP verdict |
+|---|---|---|
+| **well below ~118 MB/s** (e.g. 60–70) | DS418 CPU / SHR spindles are the limit | **worthless** — bonding a link you cannot fill buys nothing |
+| **at ~118 MB/s** | the single 1 GbE link is saturated | **would help** — a second link has somewhere to go |
+| scales past 118 MB/s | more than one link is already active | re-check the current bond config first |
+
+Only `seq-read-1m` is informative here. `rand-*` and `smallfile-*` will be
+spindle- and latency-bound on 4 SHR drives long before they are link-bound, so
+they cannot distinguish the two cases.
+
+**If it turns out link-bound**, the cheaper lever to test before buying into
+LACP is the NFS client's **`nconnect=N`** (multiple TCP connections per mount,
+Linux 5.3+) — that alone multiplies flows without touching the switch, and LACP
+can then spread them. It needs a second StorageClass carrying
+`nconnect=4` in `mountOptions` (they are immutable on an existing class), which
+is a small addition if the data justifies it.
+
+**Do this while the DS418 still exists.** It is being sold, and it is the only
+baseline for "was the TrueNAS migration worth it".
+
 ## Known gaps
 
 - **The Synology writes into `/volume1/kubenfs`** alongside production PVCs
