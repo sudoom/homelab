@@ -193,6 +193,39 @@ is a small addition if the data justifies it.
 **Do this while the DS418 still exists.** It is being sold, and it is the only
 baseline for "was the TrueNAS migration worth it".
 
+## Pending fixes (found while running, 2026-09-05 — apply after the matrix)
+
+Deliberately NOT applied mid-matrix: the driver actively reads `run.sh`,
+`fio-jobs.yaml`, `bench-job.yaml.tpl` and `parse-results.py`, and a partial
+write during a run would corrupt it. None of these affect the fio columns —
+they are cross-check recording issues.
+
+1. **The switch-window arithmetic reaches back before the job started.**
+   `WIN=$(( $(date +%s) - JOB_START + 60 ))` is then used as
+   `max_over_time(rate(...)[WIN:30s])`, which looks back `WIN` seconds *from
+   now* — i.e. ~60 s before the job began — and the inner `rate(...[1m])`
+   adds another 60 s on top. So a run picks up the tail of the PREVIOUS run.
+   Observed: a `seq-write-1m` row recorded `wire rx 972.0 Mb/s`, which is
+   meaningless for a write test and was the preceding `seq-read-1m` bleeding in.
+   Fix: query `query_range` with explicit `start=JOB_START&end=JOB_END` instead
+   of a look-back window, so the bounds are the job's own.
+
+2. **The "fio claims more than the wire" threshold is too loose.** It is 1.15;
+   an observed 1.20 discrepancy passed unflagged. Tighten to ~1.05.
+
+3. **fio's multi-client aggregate assumes the clients overlap, and they don't.**
+   Each pod independently does `dnf install fio`, the layout check, then runs
+   its own 60 s window, so the three drift apart. Summing their bandwidths
+   therefore counts intervals when only one or two clients were actually
+   reading — which is the likely cause of fio reporting 133.0 MiB/s
+   (1115 Mb/s payload) against a 1 GbE link whose wire ceiling is ~941 Mb/s.
+   The switch counter has no such problem: it measures concurrency by
+   construction.
+   **Consequence worth internalising: for MULTI-CLIENT aggregate throughput the
+   wire number is the more trustworthy of the two, not fio's sum.**
+   Proper fix is a start barrier so all clients begin measuring together (fio
+   has `--startdelay`, or a shared file on the PVC all clients poll).
+
 ## Known gaps
 
 - **The Synology writes into `/volume1/kubenfs`** alongside production PVCs
