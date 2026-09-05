@@ -1,1 +1,2 @@
 run_id	date	backend	storage_class	layout	workload	clients	nodes	filesize	runtime_s	ioengine	read_MBps	write_MBps	read_iops	write_iops	lat_ms_p99
+bench-20260905-151053	2026-09-05	nfs-csi	nfs-csi	Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet	seq-read-1m	1	node6.okd.sudops.pl	1G	10	libaio	104.6	0.0	104	0	152.04

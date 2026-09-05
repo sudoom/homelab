@@ -71,10 +71,13 @@ spec:
       containers:
         - name: fio
           # quay.io/ceph/ceph is used because it is PROVEN to pull on this
-          # cluster -- it is the OSD image, already cached on every node.
-          # registry.access.redhat.com/rhel9/support-tools does NOT pull here
-          # (ImagePullBackOff on node4, 2026-06-10). Do not "simplify" this to
-          # a smaller generic image without confirming it pulls on all 3 nodes.
+          # cluster. registry.access.redhat.com/rhel9/support-tools does NOT
+          # (ImagePullBackOff on node4, 2026-06-10). Do not "simplify" this to a
+          # smaller generic image without confirming it pulls on all 3 nodes.
+          #
+          # NOT already cached, despite being the OSD image family: measured
+          # 2026-09-05, node6 pulled it in 67s (1.49 GB). Budget that per node on
+          # first use -- it is why the Job deadline has generous setup slack.
           image: __IMAGE__
           env:
             - name: BENCH_DIR
@@ -139,9 +142,22 @@ spec:
               echo "  filesize   ${BENCH_FILESIZE}   runtime ${BENCH_RUNTIME}s   nrfiles ${BENCH_NRFILES}"
               echo "  ioengine   ${BENCH_IOENGINE}"
 
-              # envsubst the job file so one ConfigMap serves every backend and
-              # size -- the WORKLOAD SHAPE stays pinned, only the scale varies.
-              envsubst < "/fio-jobs/${WORKLOAD}.fio" > /tmp/job.fio
+              # Substitute with sed, NOT envsubst: envsubst ships in gettext and is
+              # NOT present in the ceph image (found by running it -- the first
+              # attempt died with `envsubst: command not found` after a 67s image
+              # pull and a dnf install). sed is always there.
+              #
+              # fio can also expand ${VAR} natively, but doing it here means the
+              # job file we PRINT below is byte-identical to the one fio runs --
+              # so the recorded parameters can never disagree with the executed
+              # ones. That is the same principle as parsing fio's JSON instead of
+              # transcribing its table.
+              sed -e "s|\${BENCH_DIR}|${BENCH_DIR}|g" \
+                  -e "s|\${BENCH_IOENGINE}|${BENCH_IOENGINE}|g" \
+                  -e "s|\${BENCH_RUNTIME}|${BENCH_RUNTIME}|g" \
+                  -e "s|\${BENCH_FILESIZE}|${BENCH_FILESIZE}|g" \
+                  -e "s|\${BENCH_NRFILES}|${BENCH_NRFILES}|g" \
+                  "/fio-jobs/${WORKLOAD}.fio" > /tmp/job.fio
               echo "### effective fio job"
               cat /tmp/job.fio
 

@@ -38,7 +38,7 @@ BACKEND=""
 DRY_RUN=0
 
 # ---- Backend registry ------------------------------------------------------
-# name|storage_class|access_mode|pvc_size|max_clients|layout
+# name|storage_class|access_mode|pvc_size|max_clients|min_filesize|layout
 #
 # A PIPE-DELIMITED STRING, NOT AN ASSOCIATIVE ARRAY, deliberately: `declare -A`
 # is bash 4+, and macOS ships bash 3.2.57 -- where `[name]=value` is parsed as
@@ -55,11 +55,26 @@ DRY_RUN=0
 # shape explains the numbers: the DS418 has MORE spindles than CephFS-HDD (4 vs
 # 3) and measured 2.4x slower, because it is one box behind a 1G link. Without
 # the layout in the row, that looks like a contradiction.
+#
+# min_filesize DEFEATS THE SERVER'S CACHE, and it is per-backend because the
+# servers have wildly different RAM. This is not theoretical: the first smoke
+# run here used filesize=1G against the DS418 (2 GB RAM) and returned
+# 104.6 MiB/s -- 878 Mbps, near 1G line rate -- because the whole file was
+# served from the Synology's page cache. That is a NETWORK measurement wearing
+# a storage measurement's clothes, and it is exactly the "real number, invented
+# conditions" failure this harness exists to prevent.
+#
+#   DS418            2 GB RAM      -> 8G   (4x)
+#   TrueNAS         31.3 GiB ECC   -> 64G  (2x; ARC will happily hold 8G or 32G)
+#   Ceph OSDs   osd_memory_target
+#               ~4 GiB x 3 OSDs    -> 32G
+#
+# direct=1 bypasses the CLIENT page cache; it does nothing about the server's.
 BACKENDS_TABLE="\
-ceph-nvme-block|ceph-nvme-block|ReadWriteOnce|20Gi|1|Ceph RBD replicated x3, 3 NVMe OSDs (PM9A1), 10G backnet
-cephfs-hdd|cephfs-hdd|ReadWriteMany|100Gi|6|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
-nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|100Gi|6|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
-nfs-csi|nfs-csi|ReadWriteMany|100Gi|6|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
+ceph-nvme-block|ceph-nvme-block|ReadWriteOnce|20Gi|1|32G|Ceph RBD replicated x3, 3 NVMe OSDs (PM9A1), 10G backnet
+cephfs-hdd|cephfs-hdd|ReadWriteMany|100Gi|6|32G|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
+nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|100Gi|6|64G|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
+nfs-csi|nfs-csi|ReadWriteMany|100Gi|6|8G|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
 
@@ -69,9 +84,9 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 usage_list() {
   echo "Backends:"
-  echo "$BACKENDS_TABLE" | while IFS='|' read -r b sc am size maxc desc; do
+  echo "$BACKENDS_TABLE" | while IFS='|' read -r b sc am size maxc minfs desc; do
     [ -n "$b" ] || continue
-    printf "  %-20s %-16s max_clients=%-2s  %s\n" "$b" "$am" "$maxc" "$desc"
+    printf "  %-20s %-16s max_clients=%-2s min_filesize=%-4s %s\n" "$b" "$am" "$maxc" "$minfs" "$desc"
   done
   echo
   echo "Workloads: ${ALL_WORKLOADS}"
@@ -113,7 +128,7 @@ ROW="$(backend_row "$BACKEND")"
 [[ -n "$ROW" ]] || die "unknown backend '$BACKEND' (try --list)"
 [[ -n "$WORKLOADS" ]] || WORKLOADS="$ALL_WORKLOADS"
 
-IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS LAYOUT <<< "$ROW"
+IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS MIN_FILESIZE LAYOUT <<< "$ROW"
 
 # ---- Gates: fail closed, before anything is applied -----------------------
 echo ">>> gates"
@@ -179,10 +194,24 @@ for m in re.finditer(r'^ceph_pool_max_avail\{([^}]*)\}\s+([0-9.e+]+)',t,re.M):
 " 2>/dev/null
 }
 
-# filesize x clients x 4. The x4 covers: the file itself, fio's write pass over
+# 5. Cache-defeat gate. A file that fits in the SERVER's RAM measures the
+#    server's RAM. See the min_filesize note in the registry above.
+if [[ "${BENCH_ALLOW_SMALL:-0}" != "1" && "$(to_bytes "$FILESIZE")" -lt "$(to_bytes "$MIN_FILESIZE")" ]]; then
+  die "--filesize $FILESIZE is too small for '$BACKEND' (minimum $MIN_FILESIZE).
+  A file smaller than the server's RAM is served from its cache, so the result
+  measures the network and the cache rather than the storage. Measured proof:
+  filesize=1G against the DS418 (2 GB RAM) returned 104.6 MiB/s = 878 Mbps,
+  near 1G line rate, while the same box does 52.2 MB/s on cold data.
+  Override deliberately with BENCH_ALLOW_SMALL=1 if you actually want the
+  cache-served ceiling -- and label the result as such."
+fi
+echo "  ok   filesize $FILESIZE >= $MIN_FILESIZE (defeats server cache)"
+
+# filesize x clients x 2. Each client lays out exactly one file of this size;
+# x2 is slack, not headroom for a second copy.: the file itself, fio's write pass over
 # it, per-client subdirectories, and slack so a benchmark never takes a pool to
 # its limit.
-NEED_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS * 4 ))
+NEED_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS * 2 ))
 AVAIL_BYTES=""
 AVAIL_SRC=""
 case "$BACKEND" in
@@ -198,7 +227,7 @@ human() { python3 -c "print('%.2f GiB' % ($1/1024**3))" 2>/dev/null || echo "$1 
 if [[ -n "$AVAIL_BYTES" ]]; then
   if [[ "$AVAIL_BYTES" -lt "$NEED_BYTES" ]]; then
     die "not enough headroom on $AVAIL_SRC.
-  need  $(human "$NEED_BYTES")  (filesize $FILESIZE x $CLIENTS clients x 4 safety factor)
+  need  $(human "$NEED_BYTES")  (filesize $FILESIZE x $CLIENTS clients x 2 safety factor)
   have  $(human "$AVAIL_BYTES")
   Lower --filesize or --clients, or pick another backend. Refusing to run a
   benchmark that could fill the pool."
