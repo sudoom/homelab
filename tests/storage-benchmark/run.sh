@@ -407,6 +407,7 @@ render() {
       -e "s|__IOENGINE__|${IOENGINE}|g" \
       -e "s|__IMAGE__|${IMAGE}|g" \
       -e "s|__DEADLINE__|${DEADLINE}|g" \
+      -e "s|__FILESIZE_BYTES__|$(to_bytes "$FILESIZE")|g" \
       "${HERE}/bench-job.yaml.tpl"
 }
 
@@ -426,7 +427,14 @@ for W in $WORKLOADS; do
   echo
   echo "=== $W (clients=$CLIENTS) ==="
   JOB_START=$(date +%s)
-  render "$W" "$PVC_NAME" "$JOB_NAME" | oc apply -f -
+  # Check the apply. Previously an invalid manifest was swallowed here and
+  # surfaced 20 minutes later as an unexplained "job did not complete", which
+  # is how a YAML block-scalar bug went unnoticed through three whole runs.
+  if ! render "$W" "$PVC_NAME" "$JOB_NAME" | oc apply -f -; then
+    echo "  FAILED TO APPLY the manifest for $W -- not a storage problem." >&2
+    echo "  Render it and inspect:  ./run.sh --backend $BACKEND --workload $W --dry-run" >&2
+    exit 1
+  fi
 
   # Job pod templates are IMMUTABLE — a second apply over an existing Job is
   # silently rejected. Unique job names per run avoid that; this wait is what
@@ -436,6 +444,10 @@ for W in $WORKLOADS; do
     oc -n "$NAMESPACE" get events --sort-by=.lastTimestamp 2>/dev/null | grep "$JOB_NAME" | tail -5
     oc -n "$NAMESPACE" logs "job/${JOB_NAME}" --tail=30 || true
     echo "  SKIPPING result for $W"
+    # Delete it here too. The failed clients=3 job sat around for 20 minutes
+    # because only the success path cleaned up, which made it harder to see
+    # which run had actually failed.
+    oc -n "$NAMESPACE" delete "job/${JOB_NAME}" --wait=false >/dev/null 2>&1 || true
     continue
   fi
 

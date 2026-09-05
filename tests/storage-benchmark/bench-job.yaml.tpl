@@ -191,14 +191,16 @@ spec:
               echo "### layout (create_only; no-op if already correct size)"
               fio /tmp/job.fio --create_only=1 >/dev/null 2>&1 || true
 
-              WANT=$(python3 - <<'PY'
-import os,re
-v=os.environ["BENCH_FILESIZE"].strip()
-n=int(re.match(r"\d+",v).group()); u=v[len(str(n)):].upper()
-print(n*{"":1,"B":1,"K":1024,"KIB":1024,"M":1024**2,"MIB":1024**2,
-         "G":1024**3,"GIB":1024**3,"T":1024**4,"TIB":1024**4}[u])
-PY
-)
+              # WANT is substituted by run.sh, NOT computed here.
+              #
+              # It used to be a `python3 - <<'PY' ... PY` heredoc, which broke
+              # the manifest: this whole script is a YAML block scalar indented
+              # 14 spaces, and a heredoc terminator must sit at column 0 -- less
+              # indented than the block, which ENDS THE BLOCK SCALAR. The result
+              # was `could not find expected ':'` and a Job that never applied,
+              # while run.sh happily reported "job did not complete".
+              # Never put a column-0 heredoc terminator inside this block.
+              WANT=__FILESIZE_BYTES__
               GOT=$(find "${BENCH_DIR}" -type f -printf '%s\n' 2>/dev/null | sort -rn | head -1)
               GOT=${GOT:-0}
               echo "  largest file: ${GOT} bytes, want >= ${WANT}"
