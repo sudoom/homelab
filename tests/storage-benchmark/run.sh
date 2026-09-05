@@ -122,7 +122,7 @@ CLEAN=0
 # whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
 cephfs-hdd|cephfs-hdd|ReadWriteMany|600Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
-nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|600Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
+nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|600Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 1M, no SLOG
 nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
