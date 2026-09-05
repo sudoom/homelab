@@ -16,6 +16,7 @@
 #   ./run.sh --backend cephfs-hdd                    # full matrix, 1 client
 #   ./run.sh --backend nfs-truenas-bench --clients 3 # multi-client
 #   ./run.sh --backend cephfs-hdd --workload smallfile-write --clients 2
+#   ./run.sh --backend nfs-csi --clean                 # remove retained layout files
 #
 # Results append to data/storage-benchmark-results.tsv (machine-readable) and
 # are summarised to stdout.
@@ -30,15 +31,31 @@ NAMESPACE="${BENCH_NAMESPACE:-default}"
 IMAGE="${BENCH_IMAGE:-quay.io/ceph/ceph:v19.2.3}"
 IOENGINE="${BENCH_IOENGINE:-libaio}"
 RUNTIME="${BENCH_RUNTIME:-60}"
-FILESIZE="${BENCH_FILESIZE:-8G}"
+# ONE FILESIZE FOR EVERY BACKEND, deliberately. Comparability is the whole
+# point of this harness, and a figure taken at 8G is not comparable to one
+# taken at 64G no matter how carefully both are labelled.
+#
+# 64G is not arbitrary -- it is set by the LARGEST server cache in scope:
+#   Synology DS418      2    GB RAM
+#   Ceph OSDs        ~  4    GiB osd_memory_target x3
+#   TrueNAS            31.3  GiB ECC  <-- binding constraint
+# A file at or below a server's RAM is served from that server's cache, so the
+# result measures RAM and network instead of storage. Proven here, not assumed:
+# an 1G file against the DS418 returned 104.6 MiB/s (878 Mbps, near 1G line
+# rate) while the same box does 52.2 MB/s on cold data.
+#
+# direct=1 bypasses the CLIENT page cache and does nothing about the server's.
+FILESIZE="${BENCH_FILESIZE:-64G}"
+MIN_FILESIZE="${BENCH_MIN_FILESIZE:-64G}"
 NRFILES="${BENCH_NRFILES:-2000}"
 CLIENTS=1
 WORKLOADS=""
 BACKEND=""
 DRY_RUN=0
+CLEAN=0
 
 # ---- Backend registry ------------------------------------------------------
-# name|storage_class|access_mode|pvc_size|max_clients|min_filesize|layout
+# name|storage_class|access_mode|pvc_size|max_clients|layout
 #
 # A PIPE-DELIMITED STRING, NOT AN ASSOCIATIVE ARRAY, deliberately: `declare -A`
 # is bash 4+, and macOS ships bash 3.2.57 -- where `[name]=value` is parsed as
@@ -56,25 +73,19 @@ DRY_RUN=0
 # 3) and measured 2.4x slower, because it is one box behind a 1G link. Without
 # the layout in the row, that looks like a contradiction.
 #
-# min_filesize DEFEATS THE SERVER'S CACHE, and it is per-backend because the
-# servers have wildly different RAM. This is not theoretical: the first smoke
-# run here used filesize=1G against the DS418 (2 GB RAM) and returned
-# 104.6 MiB/s -- 878 Mbps, near 1G line rate -- because the whole file was
-# served from the Synology's page cache. That is a NETWORK measurement wearing
-# a storage measurement's clothes, and it is exactly the "real number, invented
-# conditions" failure this harness exists to prevent.
+# ceph-nvme-block IS DELIBERATELY ABSENT (2026-09-05). It is RWO, so it can
+# never take part in the multi-client dimension, and it is NVMe against three
+# HDD-backed backends -- a comparison that tells you the device class differs,
+# which nobody needed a benchmark to learn. Add it back only for an
+# NVMe-vs-NVMe question.
 #
-#   DS418            2 GB RAM      -> 8G   (4x)
-#   TrueNAS         31.3 GiB ECC   -> 64G  (2x; ARC will happily hold 8G or 32G)
-#   Ceph OSDs   osd_memory_target
-#               ~4 GiB x 3 OSDs    -> 32G
-#
-# direct=1 bypasses the CLIENT page cache; it does nothing about the server's.
+# PVC is 400Gi because a 3-client run at 64G lays out 192 GiB. NFS does not
+# enforce the request, but CephFS does -- a 100Gi PVC would have failed there
+# partway through the third client's layout, ~20 minutes in.
 BACKENDS_TABLE="\
-ceph-nvme-block|ceph-nvme-block|ReadWriteOnce|20Gi|1|32G|Ceph RBD replicated x3, 3 NVMe OSDs (PM9A1), 10G backnet
-cephfs-hdd|cephfs-hdd|ReadWriteMany|100Gi|6|32G|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
-nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|100Gi|6|64G|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
-nfs-csi|nfs-csi|ReadWriteMany|100Gi|6|8G|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
+cephfs-hdd|cephfs-hdd|ReadWriteMany|400Gi|6|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
+nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|400Gi|6|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
+nfs-csi|nfs-csi|ReadWriteMany|400Gi|6|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
 
@@ -84,12 +95,14 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 usage_list() {
   echo "Backends:"
-  echo "$BACKENDS_TABLE" | while IFS='|' read -r b sc am size maxc minfs desc; do
+  echo "$BACKENDS_TABLE" | while IFS='|' read -r b sc am size maxc desc; do
     [ -n "$b" ] || continue
-    printf "  %-20s %-16s max_clients=%-2s min_filesize=%-4s %s\n" "$b" "$am" "$maxc" "$minfs" "$desc"
+    printf "  %-20s %-16s max_clients=%-2s  %s\n" "$b" "$am" "$maxc" "$desc"
   done
   echo
   echo "Workloads: ${ALL_WORKLOADS}"
+  echo
+  echo "All backends run at the SAME filesize (${FILESIZE}) so results are comparable."
   echo
   echo "NOTE: nfs-csi is the Synology, which is being sold. Measure it while it"
   echo "      still exists — it is the only baseline for 'was the migration worth it'."
@@ -104,6 +117,7 @@ while [[ $# -gt 0 ]]; do
     --runtime)  RUNTIME="$2"; shift 2 ;;
     --filesize) FILESIZE="$2"; shift 2 ;;
     --dry-run)  DRY_RUN=1; shift ;;
+    --clean)    CLEAN=1; shift ;;
     *) die "unknown arg: $1 (try --list)" ;;
   esac
 done
@@ -128,7 +142,7 @@ ROW="$(backend_row "$BACKEND")"
 [[ -n "$ROW" ]] || die "unknown backend '$BACKEND' (try --list)"
 [[ -n "$WORKLOADS" ]] || WORKLOADS="$ALL_WORKLOADS"
 
-IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS MIN_FILESIZE LAYOUT <<< "$ROW"
+IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS LAYOUT <<< "$ROW"
 
 # ---- Gates: fail closed, before anything is applied -----------------------
 echo ">>> gates"
@@ -236,6 +250,52 @@ if [[ -n "$AVAIL_BYTES" ]]; then
 else
   echo "  WARN could not probe capacity for $AVAIL_SRC."
   echo "       Need $(human "$NEED_BYTES"). VERIFY BY HAND before a large run."
+fi
+
+# --clean removes the retained layout files (and only those). They are kept by
+# default because at 64G per client they are the expensive part of a run, but
+# they DO occupy real space on a production-adjacent share -- notably the
+# Synology, where the benchmark PVC lives in /volume1/kubenfs beside the immich
+# and keepers PVCs and cannot be isolated.
+if [[ "$CLEAN" == "1" ]]; then
+  echo ">>> cleaning retained layout files for $BACKEND"
+  CLEAN_JOB="storage-bench-clean-$(date +%s)"
+  cat <<CLEANEOF | oc apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${CLEAN_JOB}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: storage-benchmark
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: storage-bench-${BACKEND}
+      containers:
+        - name: clean
+          image: ${IMAGE}
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "before:"; du -sh /data/${BACKEND} 2>/dev/null || echo "  (nothing)"
+              rm -rf /data/${BACKEND}
+              echo "after:";  du -sh /data/${BACKEND} 2>/dev/null || echo "  (removed)"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+CLEANEOF
+  oc -n "$NAMESPACE" wait --for=condition=complete "job/${CLEAN_JOB}" --timeout=600s || true
+  oc -n "$NAMESPACE" logs "job/${CLEAN_JOB}" 2>/dev/null || true
+  oc -n "$NAMESPACE" delete "job/${CLEAN_JOB}" --wait=false >/dev/null 2>&1 || true
+  echo ">>> done. The PVC itself is untouched: oc -n ${NAMESPACE} delete pvc storage-bench-${BACKEND}"
+  exit 0
 fi
 
 RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"

@@ -37,6 +37,14 @@ spec:
   # dimension is worth more than another decimal place on a single client.
   completions: __CLIENTS__
   parallelism: __CLIENTS__
+  # Indexed gives each pod a stable JOB_COMPLETION_INDEX, which is what makes
+  # the laid-out data files REUSABLE ACROSS RUNS. Without it the per-client
+  # directory has to be keyed on the pod name, which changes every run, so every
+  # run re-lays out its files. At 64G on a 1G-attached Synology that is ~22
+  # MINUTES PER CLIENT of pure setup before a single measured byte -- which
+  # would make the whole harness impractical at the file sizes needed to defeat
+  # a 31 GiB ARC.
+  completionMode: Indexed
   # A benchmark that hangs must not hold a PVC forever. Sized to comfortably
   # exceed runtime x workloads with setup slack.
   activeDeadlineSeconds: __DEADLINE__
@@ -80,8 +88,10 @@ spec:
           # first use -- it is why the Job deadline has generous setup slack.
           image: __IMAGE__
           env:
+            # Keyed on BACKEND, not run id: the expensive laid-out files must
+            # survive from one run to the next so layout is paid once.
             - name: BENCH_DIR
-              value: /data/__RUN_ID__
+              value: /data/__BACKEND__
             - name: BENCH_FILESIZE
               value: "__FILESIZE__"
             - name: BENCH_RUNTIME
@@ -109,7 +119,11 @@ spec:
               # Each client gets its OWN subdirectory. Without this, N clients
               # would collide on the same filenames and the run would measure
               # lock contention rather than the storage.
-              CLIENT="${HOSTNAME}"
+              #
+              # Keyed on JOB_COMPLETION_INDEX (stable) rather than $HOSTNAME
+              # (changes every run), so client 0's 64 GiB file is still there
+              # next time and fio skips the layout phase entirely.
+              CLIENT="c${JOB_COMPLETION_INDEX:-0}"
               export BENCH_DIR="${BENCH_DIR}/${CLIENT}"
               mkdir -p "${BENCH_DIR}"
 
@@ -168,9 +182,15 @@ spec:
               cat /tmp/out.json
               echo "### FIO_JSON_END"
 
-              # Leave nothing behind: the next run must not read a warm file
-              # written by this one, and the PVC must not silently fill up.
-              rm -rf "${BENCH_DIR}"
+              # DELIBERATELY NOT deleting the data files. They are the expensive
+              # part (64 GiB per client) and reusing them is the difference
+              # between a 2-minute run and a 25-minute one. They are also read
+              # with direct=1 and are far larger than any server's RAM, so a
+              # warm file is not a stale-cache hazard here.
+              #
+              # Clean up explicitly when finished:  ./run.sh --backend X --clean
+              echo "### layout retained at ${BENCH_DIR} for reuse"
+              du -sh "${BENCH_DIR}" 2>/dev/null || true
           volumeMounts:
             - name: data
               mountPath: /data
