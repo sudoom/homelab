@@ -174,10 +174,26 @@ def main():
                     elif big_block and ratio > 1.3:
                         verdict = (f"NOISY: {ratio:.2f}x expected bytes on {r['switch_if']} at bs=1M -- "
                                    f"unrelated traffic or a bad window")
+                    elif r["switch_if"] in SHARED_PORT and ratio > 1.5:
+                        # NOT "ok". The first version of this branch appended a
+                        # caveat to an `ok` verdict, which meant a row whose port
+                        # carried 259.95x the expected bytes was recorded as
+                        # PASSING. That is the "gate nobody believes" failure,
+                        # self-inflicted one commit after warning about it.
+                        #
+                        # A shared port cannot isolate this run's bytes from the
+                        # media/immich/keepers NFS traffic beside them. When the
+                        # excess is small the cross-check still bounds things
+                        # usefully; when it is 3x or 260x it bounds nothing, and
+                        # the honest verdict is that the fio figure stands
+                        # UNCORROBORATED -- not that it was checked and passed.
+                        # This bites hardest on rand-*, where the payload is
+                        # ~1 MB/s and any background traffic dwarfs it.
+                        verdict = (f"UNCORROBORATED: {ratio:.2f}x expected bytes on shared port "
+                                   f"{r['switch_if']}; fio figure stands but the wire cannot "
+                                   f"confirm it (sync {overlap*100:.0f}%)")
                     else:
                         verdict = f"ok (wire {ratio:.2f}x expected, sync {overlap*100:.0f}%)"
-                        if r["switch_if"] in SHARED_PORT and ratio > 1.15:
-                            verdict += " [shared port: excess may be other NFS clients]"
                     # REWRITE THE WIRE COLUMNS TOO, not just the note. They were
                     # written by the live check, which this file exists because it
                     # is wrong -- leaving them in place means every later reader

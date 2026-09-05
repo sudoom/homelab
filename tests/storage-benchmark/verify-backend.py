@@ -177,6 +177,16 @@ def main():
     print(f"  checked {len(grid)} rows")
 
     # 5. ANNOTATIONS. run.sh's own per-row verdicts.
+    # UNCORROBORATED rows are not failures -- fio measured what it measured --
+    # but a grid that is mostly uncorroborated has not been independently checked,
+    # and saying "clear to proceed" about it overclaims.
+    unc = [r for r in grid if r["note"].startswith("UNCORROBORATED")]
+    if unc:
+        frac = len(unc) / len(grid)
+        msg = (f"{len(unc)}/{len(grid)} rows are UNCORROBORATED (shared switch port could not "
+               f"isolate this run's bytes): " + ", ".join(f"{r['workload']}/c{r['clients']}" for r in unc))
+        (problems if frac > 0.5 else warnings).append(msg)
+
     print("\n[per-row notes]")
     notes = collections.Counter(r["note"].split(":")[0] for r in grid)
     for k, v in notes.most_common():
