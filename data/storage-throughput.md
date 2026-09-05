@@ -32,12 +32,17 @@ over which path, by which method**. A number without those is not reusable.
 | **CephFS-HDD** (EC 2+1) | kernel CephFS, 10G backnet | **76.6 MB/s** | 22.1 MB/s | 2026-06-12 | 1 client, 1 stream, `direct` |
 | **CephFS-HDD** (EC 2+1) | kernel CephFS, 10G backnet | **124 MB/s** | — | 2026-08-28 | 1 client, 1 stream |
 | **CephFS-HDD** (EC 2+1) | kernel CephFS, 10G backnet | **170 MiB/s** | — | 2026-08-28 | **3 parallel** streams, aggregate |
-| **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | **246 MB/s** | — | 2026-08-29 | **1 reader** |
-| **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | **431 MB/s** | — | 2026-08-30 | **2 readers**, aggregate |
+| **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | **530.3 MiB/s** | **102.7 MiB/s** | 2026-09-06 | 2 clients, fio `seq-*-1m`, **pool-bound not link-bound** |
+| **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | **519.3 MiB/s** | **86.8 MiB/s** | 2026-09-06 | 1 client, fio `seq-*-1m` |
+| **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | 246 MB/s | — | 2026-08-29 | 1 reader, migration-derived (superseded by fio) |
+| **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | 431 MB/s | — | 2026-08-30 | 2 readers, migration-derived (superseded by fio) |
 | **TrueNAS** (RAIDZ2 6-wide) | SMB over 1G frontnet | — | **~114 MB/s** | 2026-08-31 | 2 Macs, Time Machine, link-saturating |
 | *(reference)* cross-node pod | iperf3, 1G frontnet | 879 Mbit/s | — | 2026-05-21 | pre-IPsec baseline |
 
-**TrueNAS NFS is ~2.2× CephFS-HDD read and ~5× the Synology.**
+**TrueNAS NFS is ~4.3× CephFS-HDD read and ~4.7× the Synology on sequential reads —
+and roughly the SAME as the Synology on sequential writes** (102.7 vs 110.3 MiB/s). The
+read advantage is real and large; the write advantage does not exist. Do not carry "5×
+faster" forward as a general statement.
 
 ## Per-backend detail
 
@@ -97,22 +102,48 @@ config, measured 1.6× faster** two months later. Nothing changed about the stor
 first measurement was taken on a freshly-built tier under different conditions. Re-measure
 before sizing anything.
 
-### TrueNAS — scales with concurrency, so a single-client number is not the ceiling
+### TrueNAS — pool-bound, and the 4k figures do not describe the hardware
 
 6-wide RAIDZ2 of HGST 4 TB drives, NFS exported on the 10G storage backnet
-(`192.168.10.10`, MTU 9000).
+(`192.168.10.10`, MTU 9000). Twelve cells from `tests/storage-benchmark/`, 2026-09-06,
+64 GiB corpora, barrier-synchronised clients.
 
-- **1 reader: ~246 MB/s** (1.97 Gb/s on `enp2s0f0np0`), held for a full hour during the
-  keepers post-cutover verification pass — so this is sustained, not a burst.
-- **2 readers: ~431 MB/s** (3.45 Gb/s), both media transmissions verifying concurrently.
+| workload | 3 clients | 2 clients | 1 client | cross-check |
+|---|---:|---:|---:|---|
+| `seq-read-1m` | 463.7 | 530.3 | 519.3 MiB/s | ok, wire 1.09-1.11x |
+| `seq-write-1m` | 104.0 | 102.7 | 86.8 MiB/s | ok (one row noisy) |
+| `rand-read-4k` | 0.8 (205 iops) | 0.8 (209) | 1.5 (375) | **uncorroborated** |
+| `rand-write-4k` | 0.2 (61 iops) | 0.2 (60) | 0.2 (60) | **uncorroborated** |
 
-Neither is near 10G line rate. **246 MB/s is a per-client ceiling, not the NAS's** —
-it nearly doubles with a second reader, which is the whole point of recording the client
-count alongside the number.
+**Sequential reads are pool-bound, not link-bound.** 530 MiB/s is 4.45 Gb/s on a 10 GbE
+link, and adding a third client makes it *worse* (463.7). The old "scales with
+concurrency, so a single-client number is not the ceiling" framing was drawn from two
+migration passes; with a real client sweep the curve is flat-to-falling. One client
+already gets essentially all of it.
 
-Methodology note: these came from watching real work (migration verification passes)
-rather than a synthetic benchmark. Same shape as the CephFS `dd` tests — sequential
-large-file reads — so the comparison is fair.
+**Sequential writes are ~5x slower than reads** (86.8-104.0 vs 463.7-530.3) and are
+level with the Synology, which is link-capped at ~110 MiB/s. RAIDZ2 parity on spinning
+disks, and no SLOG.
+
+**The 4k rows measure the DATASET, not the box — do not quote them as a TrueNAS
+capability.** `tank/bench` is `recordsize=1M`, `sync=standard`, and `zpool status tank`
+shows a bare `raidz2-0` with **no log vdev**. So:
+
+- a 4 KiB request touches a whole 1 MiB record — **256x amplification** in both
+  directions. 375 iops x 1 MiB is ~375 MB/s of real disk work, which is exactly what
+  this pool does sequentially. The disks are not slow; they are moving 256 bytes of
+  record per byte requested.
+- every NFS sync write commits to the ZIL on those same six spinning disks.
+
+The Synology sits on a 4 KiB-block filesystem, so `rand-write-4k` "TrueNAS 0.2 MB/s vs
+Synology 30.0 MB/s" is a comparison of **record sizes**, not of hardware. A 16K-recordsize
+dataset (and an SLOG) would produce a completely different number. Queued as a README
+TODO; until then these four rows carry the caveat inline in the results TSV.
+
+Also note the cross-check is weaker here than on the Synology: the 10G port carries the
+live media/immich/keepers NFS mounts too, so on the low-payload `rand-*` rows background
+traffic dwarfs the benchmark and the wire cannot isolate it. Those rows are recorded
+`UNCORROBORATED` — the fio figure stands, nothing independent confirms it.
 
 ### TrueNAS SMB (Time Machine) — the 1G frontnet is the constraint here
 
