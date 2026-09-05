@@ -26,7 +26,9 @@ over which path, by which method**. A number without those is not reusable.
 
 | Backend | Path | Read | Write | Date | Conditions |
 |---|---|---:|---:|---|---|
-| **Synology DS418** | NFS over 1G frontnet | **52.2 MB/s** | — | 2026-08-28 | 1 client, bulk sequential |
+| **Synology DS418** | NFS over 1G frontnet | **112.6 MiB/s** | **110.3 MiB/s** | 2026-09-05 | 3 clients/3 nodes, fio `seq-*-1m`, **link-saturated** |
+| **Synology DS418** | NFS over 1G frontnet | **109.2 MiB/s** | **105.1 MiB/s** | 2026-09-05 | 1 client, fio `seq-*-1m` |
+| ~~Synology DS418~~ | ~~NFS over 1G frontnet~~ | ~~52.2 MB/s~~ | — | ~~2026-08-28~~ | **SUPERSEDED — see corrections log** |
 | **CephFS-HDD** (EC 2+1) | kernel CephFS, 10G backnet | **76.6 MB/s** | 22.1 MB/s | 2026-06-12 | 1 client, 1 stream, `direct` |
 | **CephFS-HDD** (EC 2+1) | kernel CephFS, 10G backnet | **124 MB/s** | — | 2026-08-28 | 1 client, 1 stream |
 | **CephFS-HDD** (EC 2+1) | kernel CephFS, 10G backnet | **170 MiB/s** | — | 2026-08-28 | **3 parallel** streams, aggregate |
@@ -39,20 +41,42 @@ over which path, by which method**. A number without those is not reusable.
 
 ## Per-backend detail
 
-### Synology DS418 — 52.2 MB/s, and the box is the bottleneck
+### Synology DS418 — the link is the wall, in both directions
 
-Measured mid-run during the keepers migration (1.65 TiB, Synology → TrueNAS) from two
-`zfs list -Hp -o used` samples 90 s apart on the destination. Bulk sequential reads of
-large files.
+Twelve cells from `tests/storage-benchmark/`, 2026-09-05, 64 GiB corpora, clients
+synchronised by a rendezvous barrier, every row cross-checked byte-for-byte against the
+MikroTik `home-router/nas` counter.
 
-52.2 MB/s is **416 Mbps** — the 1 Gbit link is not close to saturated, so **the DS418
-itself is the constraint, not its network**.
+| workload | 3 clients | 2 clients | 1 client | wire (corrected) |
+|---|---:|---:|---:|---|
+| `seq-read-1m` | 112.6 | 111.1 | 109.2 MiB/s | 984 / 982 / 961 Mb/s |
+| `seq-write-1m` | 110.3 | 110.3 | 105.1 MiB/s | 968 / 962 / 914 Mb/s |
+| `rand-read-4k` | 1.4 (360 iops) | 2.0 (519) | 1.8 (471) | 13 / 26 / 29 Mb/s |
+| `rand-write-4k` | 30.0 (7690 iops) | 25.0 (6402) | 27.9 (7143) | 298 / 253 / 264 Mb/s |
 
-That single figure settled a queued piece of work: bonding the DS418's two 1 GbE NICs
-(802.3ad LACP) was on the TODO list to speed up moving data off it. **Bonding two links
-you cannot fill one of buys nothing.** LACP also balances per *flow* — one NFS mount is
-one TCP connection and stays capped at 1 Gbps no matter how many links are bonded. The
-lever that would help a single mount is the client's `nconnect=N`, not the bond.
+**Sequential is flat across client count and pinned at the link.** 112.6 MiB/s is 945
+Mb/s of payload; a 1 GbE link at MTU 1500 with TCP timestamps on (`br-ex` measured at
+1500, `net.ipv4.tcp_timestamps=1`, so 1448 payload bytes per 1538 on the wire) tops out
+near 941 Mb/s. A *single* client already fills it.
+
+**This reverses the LACP verdict this file previously carried.** The old entry said the
+DS418 ran at 52.2 MB/s = 416 Mbps and therefore "the box is the constraint, not its
+network", and concluded that bonding two links you cannot fill buys nothing. That
+premise was wrong: the box fills the link with one client and has more to give. Bonding
+**would** help multi-client sequential — 3 clients on 3 nodes are 3 NFS mounts, so 3 TCP
+flows, which LACP can spread. It would still do nothing for a single mount (one flow,
+one link), where `nconnect=N` remains the lever.
+
+**It would also do nothing for random 4k**, which is spindle-bound long before it is
+link-bound: `rand-read-4k` peaks at 2 clients (2.0 MB/s, 519 iops) and *falls* at three
+(1.4 MB/s, 360 iops) — four SHR drives thrashing on seek while using 13-29 Mb/s of a
+1000 Mb/s link. Adding a second link to that changes nothing.
+
+Why the old figure was wrong: it was derived from two `zfs list` samples 90 s apart on
+the *destination* during the keepers migration — a real measurement of that migration,
+which was rsync-over-one-stream with small files in the mix, not of what the DS418 can
+do. Real number, invented conditions, which is the failure mode this whole file exists
+to prevent.
 
 ### CephFS-HDD — EC 2+1 across three spindles, and not a network cap
 
@@ -112,8 +136,16 @@ recognisable next time:
 | "~270 MB/s peak" TrueNAS | not a peak, not a ceiling | A guess dressed as a measurement; it was one client's pull rate |
 | "246 MB/s sustained" TrueNAS | 246 = **one reader**; 431 for two | Real number, wrong label — "sustained" implied it was the NAS's limit |
 | "~190 MB/s" Time Machine aggregate | ~114 MB/s (1G capped) | Derived from a *guessed elapsed time*, not a measured interval |
+| "52.2 MB/s, the box is the bottleneck" Synology | 109-113 MiB/s, the **link** is the bottleneck | Measured the keepers *migration* (one rsync stream, small files mixed in) and labelled it the DS418's capability. It reversed the LACP verdict for months. |
+| Synology wire figures 1017 / 1264 / 1039 Mb/s | 982 / 961 / 962 Mb/s | Three recorded figures **exceeded the line rate of the link they described**. `increase(counter[span+30s]) / span` against a counter that refreshes every 30 s, extrapolating across 2-3 samples. |
+| `seq-read-1m` c3 = 120.6 MiB/s | 112.6 MiB/s | Clients were not synchronised, so their bandwidth was summed across partially non-overlapping windows. At `rand-write-4k` the same defect summed three *strictly sequential* runs and inflated the figure 3x. |
 
-The pattern in four of five: the number was fine, the **conditions** were invented.
+The pattern in five of eight: the number was fine, the **conditions** were invented. The
+other three are newer and worse — the *instrument* was wrong, and in two of them it
+reported something physically impossible (more payload than the link can frame; more
+bytes than crossed the wire) without anything stopping to notice. Hence the two checks
+now in the harness: a physical-ceiling screen derived from a measured MTU, and a
+byte-for-byte counter comparison that never divides by a window.
 
 ## Still unmeasured
 
