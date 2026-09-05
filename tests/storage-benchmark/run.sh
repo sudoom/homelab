@@ -55,7 +55,7 @@ DRY_RUN=0
 CLEAN=0
 
 # ---- Backend registry ------------------------------------------------------
-# name|storage_class|access_mode|pvc_size|max_clients|layout
+# name|storage_class|access_mode|pvc_size|max_clients|switch_if|layout
 #
 # A PIPE-DELIMITED STRING, NOT AN ASSOCIATIVE ARRAY, deliberately: `declare -A`
 # is bash 4+, and macOS ships bash 3.2.57 -- where `[name]=value` is parsed as
@@ -82,10 +82,31 @@ CLEAN=0
 # PVC is 400Gi because a 3-client run at 64G lays out 192 GiB. NFS does not
 # enforce the request, but CephFS does -- a 100Gi PVC would have failed there
 # partway through the third client's layout, ~20 minutes in.
+#
+# switch_if is the MikroTik port carrying this backend's traffic, as
+# routerboard/interface, or "-" when there is no single port to watch. It gives
+# an INDEPENDENT measurement: fio reports what the client believes it got, the
+# switch reports what actually crossed the wire. Disagreement means one of them
+# is wrong, and historically it has been the client.
+#
+# It would have caught the 1G smoke test instantly -- 104.6 MiB/s of "disk"
+# read while the NAS port showed near-zero is obviously cache-served.
+#
+# THE TWO TrueNAS PORTS ARE NOT A NAMING TYPO -- they are two physical links,
+# and picking the wrong one measures nothing. Resolved by mktxp_interface_rate:
+#   home-switch/TrueNAS  link_rate=10000  <- 10G backnet, carries NFS (this one)
+#   home-router/TrueNas  link_rate= 1000  <- 1G frontnet, carries Time Machine SMB
+#   home-router/nas      link_rate= 1000  <- Synology
+# Check the link rate, not the spelling, if these ever need revisiting.
+#
+# cephfs-hdd is "-" on purpose: its traffic is node-to-node across the backnet,
+# so it appears on three ports at once and each byte is counted twice (once
+# leaving the sender, once arriving at the reader). There is no single port
+# whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
-cephfs-hdd|cephfs-hdd|ReadWriteMany|400Gi|6|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
-nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|400Gi|6|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
-nfs-csi|nfs-csi|ReadWriteMany|400Gi|6|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
+cephfs-hdd|cephfs-hdd|ReadWriteMany|400Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
+nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|400Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet
+nfs-csi|nfs-csi|ReadWriteMany|400Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
 
@@ -95,7 +116,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 usage_list() {
   echo "Backends:"
-  echo "$BACKENDS_TABLE" | while IFS='|' read -r b sc am size maxc desc; do
+  echo "$BACKENDS_TABLE" | while IFS='|' read -r b sc am size maxc swif desc; do
     [ -n "$b" ] || continue
     printf "  %-20s %-16s max_clients=%-2s  %s\n" "$b" "$am" "$maxc" "$desc"
   done
@@ -142,7 +163,7 @@ ROW="$(backend_row "$BACKEND")"
 [[ -n "$ROW" ]] || die "unknown backend '$BACKEND' (try --list)"
 [[ -n "$WORKLOADS" ]] || WORKLOADS="$ALL_WORKLOADS"
 
-IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS LAYOUT <<< "$ROW"
+IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS SWITCH_IF LAYOUT <<< "$ROW"
 
 # ---- Gates: fail closed, before anything is applied -----------------------
 echo ">>> gates"
@@ -319,8 +340,40 @@ echo
 
 mkdir -p "$(dirname "$RESULTS")"
 if [[ ! -f "$RESULTS" ]]; then
-  printf 'run_id\tdate\tbackend\tstorage_class\tlayout\tworkload\tclients\tnodes\tfilesize\truntime_s\tioengine\tread_MBps\twrite_MBps\tread_iops\twrite_iops\tlat_ms_p99\n' > "$RESULTS"
+  printf 'run_id\tdate\tbackend\tstorage_class\tlayout\tworkload\tclients\tnodes\tfilesize\truntime_s\tioengine\tread_MBps\twrite_MBps\tread_iops\twrite_iops\tlat_ms_p99\tswitch_if\tsw_peak_rx_Mbps\tsw_peak_tx_Mbps\n' > "$RESULTS"
 fi
+
+# ---- Switch-side cross-check ----------------------------------------------
+# mktxp metrics live in USER-WORKLOAD monitoring, not platform, so this queries
+# prometheus-user-workload-0 rather than prometheus-k8s-0. There is no
+# read-only HTTP path to it (the service ports are behind oauth-proxy and the
+# API service-proxy is rejected), so this execs into the pod -- a read, but it
+# does need exec rights. Fails soft: a missing cross-check must never lose an
+# otherwise-good benchmark result.
+#
+# max_over_time of the 1m rate, not an average: the job window includes fio's
+# layout phase and any ramp, and what we want to compare against fio's number
+# is the SUSTAINED PLATEAU, which is what the max of a smoothed rate finds.
+#
+# Both directions are recorded because which one matters depends on the
+# workload -- reads show up as traffic FROM the device (the router's rx on that
+# port), writes as traffic TO it (tx). Recording both means the row is
+# interpretable without knowing which workload produced it.
+switch_rate() {   # $1 = rx|tx, $2 = window seconds -> Mb/s, empty on failure
+  [[ "$SWITCH_IF" == "-" ]] && return 0
+  local rb="${SWITCH_IF%%/*}" ifn="${SWITCH_IF##*/}" dir="$1" win="$2"
+  local q="max_over_time(rate(mktxp_interface_${dir}_byte_total{routerboard_name=\"${rb}\",name=\"${ifn}\"}[1m])[${win}s:30s])*8/1e6"
+  oc -n openshift-user-workload-monitoring exec prometheus-user-workload-0 -c prometheus -- \
+     wget -qO- --post-data="query=${q}" 'http://localhost:9090/api/v1/query' 2>/dev/null \
+   | python3 -c "
+import json,sys
+try:
+    r=json.load(sys.stdin)['data']['result']
+    print('%.1f' % float(r[0]['value'][1]) if r else '')
+except Exception:
+    print('')
+" 2>/dev/null
+}
 
 render() {
   local workload="$1" pvc="$2" job="$3"
@@ -358,6 +411,7 @@ for W in $WORKLOADS; do
   JOB_NAME="${RUN_ID}-${W}"
   echo
   echo "=== $W (clients=$CLIENTS) ==="
+  JOB_START=$(date +%s)
   render "$W" "$PVC_NAME" "$JOB_NAME" | oc apply -f -
 
   # Job pod templates are IMMUTABLE — a second apply over an existing Job is
@@ -374,6 +428,13 @@ for W in $WORKLOADS; do
   NODES="$(oc -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" \
             -o jsonpath='{range .items[*]}{.spec.nodeName}{","}{end}' 2>/dev/null | sed 's/,$//')"
 
+  WIN=$(( $(date +%s) - JOB_START + 60 ))
+  SW_RX="$(switch_rate rx "$WIN")"
+  SW_TX="$(switch_rate tx "$WIN")"
+  if [[ -n "$SW_RX$SW_TX" ]]; then
+    echo "  switch ${SWITCH_IF}: peak rx ${SW_RX:-?} Mb/s, peak tx ${SW_TX:-?} Mb/s (over ${WIN}s)"
+  fi
+
   # One log stream per client pod; the parser aggregates across them, which is
   # what "3 clients did X MB/s" has to mean.
   for POD in $(oc -n "$NAMESPACE" get pods -l "job-name=${JOB_NAME}" -o name 2>/dev/null); do
@@ -382,7 +443,8 @@ for W in $WORKLOADS; do
         --run-id "$RUN_ID" --backend "$BACKEND" --storage-class "$SC" \
         --layout "$LAYOUT" --workload "$W" --clients "$CLIENTS" \
         --nodes "$NODES" --filesize "$FILESIZE" --runtime "$RUNTIME" \
-        --ioengine "$IOENGINE" --results "$RESULTS"
+        --ioengine "$IOENGINE" --results "$RESULTS" \
+        --switch-if "$SWITCH_IF" --switch-rx-mbps "${SW_RX:-}" --switch-tx-mbps "${SW_TX:-}"
 
   oc -n "$NAMESPACE" delete "job/${JOB_NAME}" --wait=false >/dev/null 2>&1 || true
 done

@@ -24,6 +24,11 @@ AP = argparse.ArgumentParser()
 for a in ("run-id", "backend", "storage-class", "layout", "workload",
           "clients", "nodes", "filesize", "runtime", "ioengine", "results"):
     AP.add_argument("--" + a, required=True)
+# Switch-side cross-check. Optional and defaulted: a missing cross-check must
+# never lose an otherwise-good result, and cephfs-hdd has no single port to
+# watch (its traffic is node-to-node and would be double-counted).
+for a in ("switch-if", "switch-rx-mbps", "switch-tx-mbps"):
+    AP.add_argument("--" + a, default="")
 args = AP.parse_args()
 
 raw = sys.stdin.read()
@@ -80,6 +85,7 @@ row = [
     f"{to_mbps(read_bw)}", f"{to_mbps(write_bw)}",
     f"{round(read_iops)}", f"{round(write_iops)}",
     f"{round(lat_p99_ms, 2)}",
+    args.switch_if or "-", args.switch_rx_mbps or "-", args.switch_tx_mbps or "-",
 ]
 
 with open(args.results, "a") as fh:
@@ -88,3 +94,21 @@ with open(args.results, "a") as fh:
 print("  %-16s read %8s MiB/s  write %8s MiB/s  riops %7s  wiops %7s  p99 %6s ms  (%d client%s on %s)"
       % (args.workload, row[11], row[12], row[13], row[14], row[15],
          n_parsed, "" if n_parsed == 1 else "s", args.nodes or "?"))
+
+# Sanity-check fio against the wire. fio reports what the client believes it
+# got; the switch reports what actually crossed. When they disagree materially
+# the client is usually the one that is wrong -- a cache-served read looks fast
+# to fio while the port shows nearly nothing.
+if args.switch_rx_mbps or args.switch_tx_mbps:
+    fio_mbps = (read_bw + write_bw) * 8 / 1000.0          # KiB/s -> ~Mb/s
+    wire = max([float(x) for x in (args.switch_rx_mbps, args.switch_tx_mbps) if x] or [0])
+    verdict = ""
+    if wire and fio_mbps:
+        ratio = fio_mbps / wire
+        if ratio > 1.15:
+            verdict = "  <-- fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)"
+        elif ratio < 0.5:
+            verdict = "  (wire carried much more -- layout/other traffic in window)"
+    print("                   wire %s peak rx %s / tx %s Mb/s vs fio ~%.0f Mb/s%s"
+          % (args.switch_if, args.switch_rx_mbps or "-", args.switch_tx_mbps or "-",
+             fio_mbps, verdict))
