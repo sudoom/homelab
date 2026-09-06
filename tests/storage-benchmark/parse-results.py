@@ -91,6 +91,25 @@ if args.switch_rx_mbps or args.switch_tx_mbps:
     if _wire and _fio and _fio / _wire > 1.05:
         note = ("SUSPECT: fio ~%.0f Mb/s exceeds wire %.0f Mb/s by %.0f%%"
                 % (_fio, _wire, (_fio/_wire - 1) * 100))
+    # THE CHECK ONLY LOOKED ONE WAY, which is how a row whose counter showed 91x
+    # the workload's bytes was recorded `ok` (cephfs-hdd rand-write-4k c=1,
+    # 2026-09-06: fio 4.2 Mb/s, pool 383.6 Mb/s). Far MORE traffic than the
+    # workload produced is not a pass -- it means the counter is measuring
+    # something else as well, usually this cell's own corpus layout (a write,
+    # landing on the same tx counter a write workload measures) or, on a shared
+    # port, someone else's traffic.
+    #
+    # 3x, not 1.3x: small-block workloads legitimately run 1.1-2.0x over payload
+    # because per-operation protocol overhead is a large fraction of a 4k
+    # request. Below 3x is protocol cost; above it is a different workload.
+    # This is the crude live screen -- recheck-wire.py does the careful version
+    # from raw counter deltas afterwards.
+    elif _wire and _fio and _wire / _fio > 3.0:
+        note = ("UNCORROBORATED: counter shows %.1fx the workload's bytes "
+                "(%.0f Mb/s vs fio %.0f Mb/s) -- the window is measuring more "
+                "than this run, most likely its own corpus layout. The fio "
+                "figure stands; the cross-check does not confirm it."
+                % (_wire / _fio, _wire, _fio))
 
 row = [
     args.run_id, date.today().isoformat(), args.backend, args.storage_class,
