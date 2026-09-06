@@ -95,10 +95,31 @@ CLEAN=0
 # which nobody needed a benchmark to learn. Add it back only for an
 # NVMe-vs-NVMe question.
 #
-# PVC is 600Gi. A 3-client run now lays out TWO 64 GiB corpora per client --
-# the big-file one and the smallfile one -- so 384 GiB total. 400Gi left only a
-# 4% margin, and CephFS ENFORCES the quota (NFS does not), so it would have
-# failed there partway through the last client's layout, ~40 minutes in.
+# PVC SIZE IS DERIVED FROM THE CORPUS COUNT, and the count is not one per
+# client. fio's default filename_format is $jobname.$jobnum.$filenum, so each
+# of the FOUR bulk workloads keeps its OWN 64 GiB file. The two smallfile jobs
+# share a single corpus, but only because fio-jobs.yaml pins filename_format
+# explicitly. Per client that is 4 x 64 GiB bulk + 64 GiB smallfile = 320 GiB,
+# so a 3-client 18-cell grid needs 960 GiB.
+#
+# MEASURED, not derived: after the 12-cell TrueNAS bulk grid completed,
+# `zfs list tank/bench` read USED 767G with exactly 256 GiB in each of c0/c1/c2
+# -- 4 x 64 GiB per client, smallfile corpus not yet built.
+#
+# This read 600Gi until 2026-09-06, with a comment claiming "TWO 64 GiB corpora
+# per client -- so 384 GiB total". That undercounts the bulk side 4:1. It never
+# failed because on NFS the PVC size is ADVISORY -- csi-driver-nfs provisions a
+# subdirectory inside the share and nothing enforces the request, so the real
+# limits were the DS418 volume and tank/bench's quota. CephFS ENFORCES it, so
+# cephfs-hdd at 600Gi would have hit ENOSPC mid-layout around cell 9 of 12,
+# hours in, presenting as a CephFS fault rather than a sizing error.
+#
+# The two NFS entries STAY at 600Gi deliberately: their PVCs are already Bound
+# with corpora in them, and run.sh re-applies the PVC on every run -- raising
+# the request on a live PVC is an expansion, which csi-driver-nfs does not
+# support, so it would break every future NFS run to fix a number that has no
+# effect there. cephfs-hdd is sized correctly because it is enforced and the
+# PVC does not exist yet.
 #
 # switch_if is the MikroTik port carrying this backend's traffic, as
 # routerboard/interface, or "-" when there is no single port to watch. It gives
@@ -121,7 +142,7 @@ CLEAN=0
 # leaving the sender, once arriving at the reader). There is no single port
 # whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
-cephfs-hdd|cephfs-hdd|ReadWriteMany|600Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet
+cephfs-hdd|cephfs-hdd|ReadWriteMany|1000Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet, quota ENFORCED
 nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|600Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 1M, no SLOG
 nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
@@ -220,16 +241,21 @@ esac
 #
 #    numfmt is GNU coreutils and does NOT exist on macOS, so sizes are parsed in
 #    pure bash. (Same portability class as the declare -A bug above.)
+#
+#    Accepts BOTH the fio spelling (64G) and the Kubernetes one (1000Gi). Only
+#    fio sizes reached it until the grid gate below started parsing pvc_size,
+#    which is a Kubernetes quantity -- "1000Gi" left "Gi" as the unit and fell
+#    through to die(). Same number, different dialect, in one script.
 to_bytes() {
   local v="$1" n u
   n="${v%%[!0-9]*}"
   u="${v#$n}"
   case "$u" in
-    ""|B)        echo $(( n )) ;;
-    K|KiB|k)     echo $(( n * 1024 )) ;;
-    M|MiB|m)     echo $(( n * 1024 * 1024 )) ;;
-    G|GiB|g)     echo $(( n * 1024 * 1024 * 1024 )) ;;
-    T|TiB|t)     echo $(( n * 1024 * 1024 * 1024 * 1024 )) ;;
+    ""|B)           echo $(( n )) ;;
+    K|Ki|KiB|k)     echo $(( n * 1024 )) ;;
+    M|Mi|MiB|m)     echo $(( n * 1024 * 1024 )) ;;
+    G|Gi|GiB|g)     echo $(( n * 1024 * 1024 * 1024 )) ;;
+    T|Ti|TiB|t)     echo $(( n * 1024 * 1024 * 1024 * 1024 )) ;;
     *) die "cannot parse size '$v' (use e.g. 8G, 512M)" ;;
   esac
 }
@@ -294,6 +320,43 @@ if [[ -n "$AVAIL_BYTES" ]]; then
 else
   echo "  WARN could not probe capacity for $AVAIL_SRC."
   echo "       Need $(human "$NEED_BYTES"). VERIFY BY HAND before a large run."
+fi
+
+# 6. PVC QUOTA vs the WHOLE GRID, not just this cell.
+#
+# Gate 4 asks "does the pool have room for this invocation". That is the wrong
+# question on a backend whose PVC is enforced, because the corpora are RETAINED
+# and accumulate across cells: each of the four bulk workloads keeps its own
+# 64 GiB file per client, and the two smallfile jobs share one more. A grid
+# therefore lands at 320 GiB x clients even though no single cell needs more
+# than 64 GiB x clients.
+#
+# Checked against the PVC REQUEST rather than the pool because that is what
+# CephFS enforces -- the pool had 3753 GiB free on 2026-09-06 while the PVC
+# would have cut the run off at 600.
+#
+# Advisory on NFS (nothing enforces the request there), so it warns instead of
+# dying unless the class actually enforces it.
+GRID_BYTES=$(( $(to_bytes "$FILESIZE") * 5 * CLIENTS ))
+PVC_BYTES=$(to_bytes "$PVC_SIZE")
+if [[ "$GRID_BYTES" -gt "$PVC_BYTES" ]]; then
+  MSG="a full 18-cell grid at clients=$CLIENTS retains $(human "$GRID_BYTES") of corpora
+  (4 bulk corpora + 1 shared smallfile corpus, 64G each, per client) but the PVC
+  is only $(human "$PVC_BYTES")."
+  case "$BACKEND" in
+    cephfs-hdd)
+      die "$MSG
+  CephFS ENFORCES the quota, so this fails with ENOSPC partway through layout --
+  hours in, looking like a CephFS fault. Raise pvc_size in the backend registry
+  BEFORE the PVC is created (it is immutable-ish afterwards: csi-driver-nfs
+  cannot expand, and a CephFS expansion needs the PV patched too)." ;;
+    *)
+      echo "  WARN $MSG"
+      echo "       Advisory here -- $SC does not enforce the request, so the real"
+      echo "       limits are the share's own quota. Not fatal." ;;
+  esac
+else
+  echo "  ok   PVC $PVC_SIZE covers a full grid at clients=$CLIENTS ($(human "$GRID_BYTES") of retained corpora)"
 fi
 
 # --clean removes the retained layout files (and only those). They are kept by
