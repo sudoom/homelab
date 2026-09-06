@@ -420,8 +420,22 @@ RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"
 # 969.5 Mb/s. Physically impossible, and only visible because of the switch
 # cross-check.
 #
-# 50 MB/s is a deliberately pessimistic layout rate (the DS418 writes at ~120
-# MB/s; the slowest plausible backend is what has to fit).
+# THE PESSIMISTIC LAYOUT RATE IS PER BACKEND, because "the slowest plausible
+# backend" is not one number. 50 MB/s covers the two NFS backends (the DS418
+# writes at ~110 MiB/s, TrueNAS at ~87-104), but cephfs-hdd is EC 2+1 across
+# three spindles and its last measured sequential write is 22.1 MB/s
+# (2026-06-12, data/storage-throughput.md) -- EC amplifies writes x1.5.
+#
+# At 50 MB/s the c=1 deadline works out to 2634s while a 64 GiB layout at
+# 22 MB/s needs ~3120s, so the FIRST cell would have been killed mid-layout.
+# That failure is not merely a lost cell: a killed layout leaves a PARTIAL
+# file, and the next run reads it, fits it in cache, and reports something
+# physically impossible -- which is exactly how the Synology produced a
+# 127.1 MiB/s row against a wire that peaked at 969.5 Mb/s.
+#
+# 15 MB/s for cephfs-hdd rather than the measured 22.1: the figure is nearly
+# three months old, and the retained media PVC still occupies the same pool,
+# so the OSDs are not the empty ones that measurement was taken against.
 #
 # SMALLFILE LAYOUT IS METADATA-BOUND, NOT BANDWIDTH-BOUND, and costing it in
 # MB/s is how you kill a 3-hour layout at the 80-minute mark. A 64 GiB corpus of
@@ -435,9 +449,13 @@ case "$WORKLOADS" in
     LAYOUT_DESC="${FILES_PER_CLIENT} files/client allowed ${LAYOUT_SECS}s at a pessimistic 100 files/s"
     ;;
   *)
+    case "$BACKEND" in
+      cephfs-hdd) LAYOUT_MBPS=15 ;;
+      *)          LAYOUT_MBPS=50 ;;
+    esac
     LAYOUT_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS ))
-    LAYOUT_SECS=$(( LAYOUT_BYTES / 50000000 ))
-    LAYOUT_DESC="layout of $(human "$LAYOUT_BYTES") allowed ${LAYOUT_SECS}s at a pessimistic 50 MB/s"
+    LAYOUT_SECS=$(( LAYOUT_BYTES / (LAYOUT_MBPS * 1000000) ))
+    LAYOUT_DESC="layout of $(human "$LAYOUT_BYTES") allowed ${LAYOUT_SECS}s at a pessimistic ${LAYOUT_MBPS} MB/s"
     ;;
 esac
 # The barrier waits out the SLOWEST client's layout, so its timeout is the
