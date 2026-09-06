@@ -123,8 +123,12 @@ def counter_delta(rb, ifn, direction, a, b):
         # all rather than failing loudly.
         metric = "ceph_pool_rd_bytes" if direction == "rx" else "ceph_pool_wr_bytes"
         j = f'on(pool_id) group_left ceph_pool_metadata{{name="{ifn}"}}'
-        lo = promq(f"{metric} @ {a} * {j} @ {a}", platform=True)
-        hi = promq(f"{metric} @ {b} * {j} @ {b}", platform=True)
+        # Padded like the mktxp path: the counter is scraped every 15s and the
+        # mgr's pool stats lag the client ack, so an exact window truncates real
+        # bytes. Verified not to launder a bad row -- a cache-served read
+        # plateaus at 0.176 however wide the window gets.
+        lo = promq(f"{metric} @ {a-45} * {j} @ {a-45}", platform=True)
+        hi = promq(f"{metric} @ {b+45} * {j} @ {b+45}", platform=True)
         if not lo or not hi:
             return None
         return float(hi[0]["value"][1]) - float(lo[0]["value"][1])

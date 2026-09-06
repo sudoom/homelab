@@ -553,7 +553,18 @@ switch_rate() {   # $1 = rx|tx, $2 = start epoch, $3 = end epoch -> Mb/s
     # side carries its own @, and the metadata join resolves pool_id inside
     # PromQL so no third level of shell quoting is needed.
     local j="on(pool_id) group_left ceph_pool_metadata{name=\"${ifn}\"}"
-    local cq="${metric} @ ${b} * ${j} @ ${b} - (${metric} @ ${a} * ${j} @ ${a})"
+    # PAD THE WINDOW BY 45s EACH SIDE, exactly as the mktxp path does. An
+    # unpadded delta measured 0.52 of a write cell that was actually correct:
+    # the counter is scraped every 15s AND the mgr's own pool stats lag the
+    # client ack, so "@ b - @ a" truncates real bytes off both ends. Measured on
+    # cell 2 of the 2026-09-06 CephFS grid: pad 0 -> 0.52, pad 20 -> 0.94,
+    # pad 45 -> 1.01.
+    #
+    # Padding cannot manufacture a pass: the read cell of the same grid went
+    # 0.107 -> 0.176 and PLATEAUED there (pad 90 identical), because there were
+    # no more pool bytes to find. A cache-served row stays caught.
+    local pa=$(( a - 45 )) pb=$(( b + 45 ))
+    local cq="${metric} @ ${pb} * ${j} @ ${pb} - (${metric} @ ${pa} * ${j} @ ${pa})"
     oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- \
        wget -qO- --post-data="query=${cq}" 'http://localhost:9090/api/v1/query' 2>/dev/null \
      | python3 -c "
