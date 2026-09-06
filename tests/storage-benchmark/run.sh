@@ -203,6 +203,18 @@ ROW="$(backend_row "$BACKEND")"
 
 IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS SWITCH_IF LAYOUT <<< "$ROW"
 
+# BENCH_LAYOUT_NOTE appends a CONDITION to the layout column. The registry
+# describes the backend's permanent shape; this describes the state of the
+# world during the run, which is the other half of what makes a number mean
+# something. Without it two runs of the same cell under materially different
+# conditions produce rows that look identical and cannot be told apart later --
+# the exact failure the corrections log is full of.
+#
+# Added 2026-09-06 when media/immich/keepers were scaled to zero and Time
+# Machine set to manual, giving the first genuinely idle window TrueNAS has
+# been measured in. Every prior TrueNAS row was taken against a live NAS.
+[[ -n "${BENCH_LAYOUT_NOTE:-}" ]] && LAYOUT="${LAYOUT}, ${BENCH_LAYOUT_NOTE}"
+
 # ---- Gates: fail closed, before anything is applied -----------------------
 echo ">>> gates"
 
