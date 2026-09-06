@@ -74,7 +74,11 @@ PODLOGS = os.environ.get(
 # fitting the instrument to the data, and the whole reason this file exists is
 # that the previous check had no independently-derived reference at all. The
 # 0.85-1.30 band absorbs it; a row outside that band is saying something.
-FRAMING = {"home-router/nas": 1448 / 1538, "home-switch/TrueNAS": 8948 / 9038}
+FRAMING = {"home-router/nas": 1448 / 1538, "home-switch/TrueNAS": 8948 / 9038,
+           # A Ceph pool counter measures the storage layer directly, so there
+           # is no Ethernet/IP/TCP framing between the payload and the counter:
+           # expected == payload exactly, ratio 1.0 is the ideal.
+           "cephpool/cephfs-bulk-hdd": 1.0}
 
 # PORTS THAT CARRY TRAFFIC OTHER THAN THE BENCHMARK.
 # The Synology's port was clean all evening -- zero PVCs remain on nfs-csi, so
@@ -87,9 +91,18 @@ FRAMING = {"home-router/nas": 1448 / 1538, "home-switch/TrueNAS": 8948 / 9038}
 # was written to remove.
 SHARED_PORT = {"home-switch/TrueNAS"}
 
-def promq(query):
-    cmd = ["oc", "-n", "openshift-user-workload-monitoring", "exec",
-           "prometheus-user-workload-0", "-c", "prometheus", "--",
+def promq(query, platform=False):
+    """Query Prometheus. THE TWO INSTANCES HOLD DIFFERENT METRICS:
+    mktxp_* (the MikroTik switch counters) is scraped by USER-WORKLOAD
+    monitoring, ceph_pool_* (the mgr metrics) by the PLATFORM one. Querying the
+    wrong one returns an empty result rather than an error, which reads exactly
+    like "no traffic" -- so the cephpool cross-check silently did nothing when it
+    first shipped."""
+    ns, pod = ("openshift-user-workload-monitoring", "prometheus-user-workload-0")
+    if platform:
+        ns, pod = ("openshift-monitoring", "prometheus-k8s-0")
+    cmd = ["oc", "-n", ns, "exec",
+           pod, "-c", "prometheus", "--",
            "wget", "-qO-", "--post-data=query=" + query,
            "http://localhost:9090/api/v1/query"]
     try:
@@ -100,6 +113,21 @@ def promq(query):
 
 def counter_delta(rb, ifn, direction, a, b):
     """Exact counter delta over [a-45, b+45]. No rate(), no extrapolation."""
+    if rb == "cephpool":
+        # Ceph's own per-pool byte counters, for a backend no switch port can
+        # isolate. rd == read out of the pool, wr == written into it.
+        #
+        # NOTE the @ modifier binds to a SELECTOR, never to a parenthesised
+        # binary expression -- "(expr) @ t" returns an empty vector with no
+        # error, so a join written that way silently yields no cross-check at
+        # all rather than failing loudly.
+        metric = "ceph_pool_rd_bytes" if direction == "rx" else "ceph_pool_wr_bytes"
+        j = f'on(pool_id) group_left ceph_pool_metadata{{name="{ifn}"}}'
+        lo = promq(f"{metric} @ {a} * {j} @ {a}", platform=True)
+        hi = promq(f"{metric} @ {b} * {j} @ {b}", platform=True)
+        if not lo or not hi:
+            return None
+        return float(hi[0]["value"][1]) - float(lo[0]["value"][1])
     m = f'mktxp_interface_{direction}_byte_total{{routerboard_name="{rb}",name="{ifn}"}}'
     lo = promq(f"{m} @ {a-45}")
     hi = promq(f"{m} @ {b+45}")
@@ -138,6 +166,7 @@ def main():
 
     changed = 0
     skipped_no_epochs = 0
+    skipped_no_counter = 0
     for r in rows:
         if r["run_id"] < a.since_run or r["switch_if"] in ("-", ""):
             continue
@@ -186,7 +215,11 @@ def main():
                          for f in glob.glob(os.path.join(PODLOGS, f"{r['run_id']}-{r['workload']}-*.log")))
                 meas = counter_delta(rb, ifn, direction, lo, hi)
                 if meas is None:
-                    verdict = "NO COUNTER: mktxp series unavailable for this window"
+                    # Same rule as the NO EPOCHS branch above: a tool that could
+                    # not read the counter has no opinion about the measurement,
+                    # and must not overwrite the verdict that did.
+                    skipped_no_counter += 1
+                    continue
                 else:
                     ratio = meas / expected if expected else 0
                     # THE UPPER BOUND ONLY MEANS SOMETHING FOR LARGE-BLOCK IO.
@@ -251,6 +284,9 @@ def main():
             r["note"] = verdict
             changed += 1
 
+    if skipped_no_counter:
+        print(f"\nNOTE: {skipped_no_counter} row(s) LEFT UNCHANGED -- counter series unavailable")
+        print(f"      for their window. Their existing verdicts stand.")
     if skipped_no_epochs:
         print(f"\nNOTE: {skipped_no_epochs} row(s) LEFT UNCHANGED -- no harvested pod logs found in")
         print(f"      {PODLOGS}")

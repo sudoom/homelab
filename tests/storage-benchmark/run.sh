@@ -142,12 +142,27 @@ CLEAN=0
 # cross-check cannot tell them apart, and the two must not be measured
 # concurrently or each will corroborate against the other's bytes.
 #
-# cephfs-hdd is "-" on purpose: its traffic is node-to-node across the backnet,
+# cephfs-hdd WAS "-" -- no cross-check at all -- reasoning that its traffic is
+# node-to-node, shows on three ports at once, and is double counted (once leaving
+# the sender, once arriving at the reader), so no single port means "CephFS
+# throughput". That is right about the SWITCH and wrong about the conclusion:
+# Ceph publishes per-pool byte counters, a BETTER instrument than a switch port
+# because it measures the storage layer directly instead of the network.
+#
+# The exemption cost a real result on 2026-09-06. Cell 1 of the CephFS grid
+# reported 1081.8 MiB/s seq-read from three HDD OSDs -- ~90% of 10 GbE line rate,
+# 8.7x the last measured figure for the tier -- and nothing flagged it, because
+# this was the one backend with no independent instrument. The pool counter said
+# 10.83 GB over the 66s window: 164.1 MB/s, ratio 0.145. The figure was 86% cache.
+#
+# "cephpool/<pool>" routes switch_rate() at the mgr metrics instead of mktxp.
+#
+# The old note, still true of the switch itself: its traffic is node-to-node across the backnet,
 # so it appears on three ports at once and each byte is counted twice (once
 # leaving the sender, once arriving at the reader). There is no single port
 # whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
-cephfs-hdd|cephfs-hdd|ReadWriteMany|1000Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet, quota ENFORCED
+cephfs-hdd|cephfs-hdd|ReadWriteMany|1000Gi|6|cephpool/cephfs-bulk-hdd|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet, quota ENFORCED
 nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|600Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 1M, no SLOG
 nfs-truenas-bench16|nfs-truenas-bench16|ReadWriteMany|1000Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 16K, no SLOG
 nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
@@ -524,6 +539,33 @@ switch_rate() {   # $1 = rx|tx, $2 = start epoch, $3 = end epoch -> Mb/s
   local rb="${SWITCH_IF%%/*}" ifn="${SWITCH_IF##*/}" dir="$1" a="$2" b="$3"
   local span=$(( b - a ))
   [[ "$span" -gt 0 ]] || return 0
+  # Ceph pool counters for backends no switch port can isolate. Same contract as
+  # the mktxp path -- a counter DELTA over the exact fio window, never a rate.
+  # rx == bytes read out of the pool, tx == bytes written into it. The pool_id is
+  # resolved inside PromQL via ceph_pool_metadata rather than in shell, which
+  # avoids a third level of quoting inside an already-quoted python -c.
+  if [[ "$rb" == "cephpool" ]]; then
+    local metric="ceph_pool_rd_bytes"
+    [[ "$dir" == "tx" ]] && metric="ceph_pool_wr_bytes"
+    # The @ modifier attaches to a SELECTOR, not to a parenthesised binary
+    # expression -- "(expr) @ t" returns an empty vector with no error, which is
+    # how this first shipped and silently produced no cross-check at all. Each
+    # side carries its own @, and the metadata join resolves pool_id inside
+    # PromQL so no third level of shell quoting is needed.
+    local j="on(pool_id) group_left ceph_pool_metadata{name=\"${ifn}\"}"
+    local cq="${metric} @ ${b} * ${j} @ ${b} - (${metric} @ ${a} * ${j} @ ${a})"
+    oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- \
+       wget -qO- --post-data="query=${cq}" 'http://localhost:9090/api/v1/query' 2>/dev/null \
+     | python3 -c "
+import json,sys
+try:
+    r=json.load(sys.stdin)['data']['result']
+    print('%.1f' % (float(r[0]['value'][1])*8/${span}/1e6) if r else '')
+except Exception:
+    print('')
+" 2>/dev/null
+    return 0
+  fi
   # increase() over the EXACT fio window, not max_over_time of a rate. This is
   # alignment-free: it is a counter delta across a known interval, so a 30s
   # scrape cadence cannot smear a 60s burst into neighbouring idle time.
