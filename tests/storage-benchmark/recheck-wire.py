@@ -41,6 +41,18 @@ Usage:  ./recheck-wire.py --since-run bench-20260905-204... [--apply]
 Without --apply it prints what it would write and changes nothing.
 """
 import argparse, csv, glob, json, os, re, subprocess, sys
+from pathlib import Path
+
+# The default TSV path is resolved from THIS FILE, not the working directory.
+# It was "../../data/..." until 2026-09-06, which silently required the caller to
+# be standing in tests/storage-benchmark/. The unattended orchestrator was not,
+# so both tools died on FileNotFoundError the instant a grid finished -- and
+# because a verify failure is deliberately non-fatal in that chain, the run
+# recorded "VERIFY FAIL" and moved on as though the gate had been applied and
+# had an opinion. A gate that cannot find its input must not look like a gate
+# that ran.
+_DEFAULT_TSV = str(Path(__file__).resolve().parents[2] / "data" / "storage-benchmark-results.tsv")
+
 
 PODLOGS = os.environ.get("BENCH_PODLOGS", "")
 # MTU 1500 path (Synology, frontnet): payload 1448 B per 1538 B on the wire.
@@ -109,7 +121,7 @@ def client_sync(run_id, workload):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tsv", default="../../data/storage-benchmark-results.tsv")
+    ap.add_argument("--tsv", default=_DEFAULT_TSV)
     ap.add_argument("--since-run", required=True)
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()

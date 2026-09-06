@@ -21,6 +21,18 @@ Usage:  ./verify-backend.py nfs-csi [--tsv path] [--since YYYY-MM-DD]
 Exit 0 = grid is trustworthy, 1 = something needs a human before proceeding.
 """
 import argparse, collections, csv, sys
+from pathlib import Path
+
+# The default TSV path is resolved from THIS FILE, not the working directory.
+# It was "../../data/..." until 2026-09-06, which silently required the caller to
+# be standing in tests/storage-benchmark/. The unattended orchestrator was not,
+# so both tools died on FileNotFoundError the instant a grid finished -- and
+# because a verify failure is deliberately non-fatal in that chain, the run
+# recorded "VERIFY FAIL" and moved on as though the gate had been applied and
+# had an opinion. A gate that cannot find its input must not look like a gate
+# that ran.
+_DEFAULT_TSV = str(Path(__file__).resolve().parents[2] / "data" / "storage-benchmark-results.tsv")
+
 
 WORKLOADS = ["seq-read-1m", "seq-write-1m", "rand-read-4k", "rand-write-4k",
              "smallfile-write", "smallfile-read"]
@@ -53,7 +65,7 @@ def mbps(mib_s):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("backend")
-    ap.add_argument("--tsv", default="../../data/storage-benchmark-results.tsv")
+    ap.add_argument("--tsv", default=_DEFAULT_TSV)
     # Scoping by DATE is not enough: a whole 18-cell grid runs inside one day,
     # alongside every earlier attempt from the same day. run_id is
     # bench-YYYYmmdd-HHMMSS, so it sorts lexically and is the only cut that
