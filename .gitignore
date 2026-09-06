@@ -49,3 +49,4 @@ kubeconfig
 *.kubeconfig
 config-breakglass
 config-readonly
+.bench-podlogs/

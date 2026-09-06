@@ -54,7 +54,13 @@ from pathlib import Path
 _DEFAULT_TSV = str(Path(__file__).resolve().parents[2] / "data" / "storage-benchmark-results.tsv")
 
 
-PODLOGS = os.environ.get("BENCH_PODLOGS", "")
+# Defaults to a well-known in-repo directory (gitignored) rather than "" so
+# that a caller who did not think about the environment still finds harvested
+# logs. It was "" until 2026-09-06, which made the unattended chain's rechecks
+# silently unable to find any epochs at all.
+PODLOGS = os.environ.get(
+    "BENCH_PODLOGS",
+    str(Path(__file__).resolve().parents[2] / ".bench-podlogs"))
 # MTU 1500 path (Synology, frontnet): payload 1448 B per 1538 B on the wire.
 # MTU 9000 path (TrueNAS, storage backnet): 8948 B per 9038 B.
 #
@@ -131,6 +137,7 @@ def main():
         rows = [dict(zip(head, l.rstrip("\n").split("\t"))) for l in fh if l.strip()]
 
     changed = 0
+    skipped_no_epochs = 0
     for r in rows:
         if r["run_id"] < a.since_run or r["switch_if"] in ("-", ""):
             continue
@@ -144,7 +151,25 @@ def main():
 
         note, verdict = r["note"], "?"
         if sync is None:
-            verdict = "NO EPOCHS: pod logs not harvested; wire recheck impossible"
+            # LEAVE THE ROW ALONE. Not being able to re-check is a fact about
+            # this tool's inputs, not about the measurement, and it must never
+            # replace a verdict that run.sh produced live from epochs it
+            # actually had.
+            #
+            # This branch used to write "NO EPOCHS: ... wire recheck impossible"
+            # into the note column. On 2026-09-06 it overwrote 13 good verdicts
+            # -- twelve `ok`/`SUSPECT` results from the idle-window re-take plus
+            # one from the bench16 A/B -- with that string, destroying the
+            # annotations of a grid that had just cost an operator three
+            # services being offline. The wire columns survived and the notes
+            # were restored from the driver log, but only because the driver
+            # happened to log them.
+            #
+            # Same species as the cwd-relative --tsv default fixed the same day:
+            # a check reporting on data it never read. Skipping is the only
+            # correct behaviour; a tool with no input has no opinion.
+            skipped_no_epochs += 1
+            continue
         else:
             spread, overlap, n = sync
             if n < int(r["clients"]):
@@ -226,6 +251,12 @@ def main():
             r["note"] = verdict
             changed += 1
 
+    if skipped_no_epochs:
+        print(f"\nNOTE: {skipped_no_epochs} row(s) LEFT UNCHANGED -- no harvested pod logs found in")
+        print(f"      {PODLOGS}")
+        print(f"      Their wire figures stay as run.sh's live in-run estimate, which quantises")
+        print(f"      badly on low-rate cells. Start the harvester BEFORE a grid to get a real")
+        print(f"      counter-delta recheck; there is no way to recover the epochs afterwards.")
     print(f"\n{changed} row(s) re-annotated" + ("" if a.apply else " (dry run; pass --apply to write)"))
     if a.apply and changed:
         with open(a.tsv, "w") as fh:
