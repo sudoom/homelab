@@ -137,6 +137,11 @@ CLEAN=0
 #   home-router/nas      link_rate= 1000  <- Synology
 # Check the link rate, not the spelling, if these ever need revisiting.
 #
+# bench and bench16 share the SAME physical port, because they are the same NAS
+# on the same 10G link -- the twin differs only in ZFS record size. So the wire
+# cross-check cannot tell them apart, and the two must not be measured
+# concurrently or each will corroborate against the other's bytes.
+#
 # cephfs-hdd is "-" on purpose: its traffic is node-to-node across the backnet,
 # so it appears on three ports at once and each byte is counted twice (once
 # leaving the sender, once arriving at the reader). There is no single port
@@ -144,6 +149,7 @@ CLEAN=0
 BACKENDS_TABLE="\
 cephfs-hdd|cephfs-hdd|ReadWriteMany|1000Gi|6|-|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet, quota ENFORCED
 nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|600Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 1M, no SLOG
+nfs-truenas-bench16|nfs-truenas-bench16|ReadWriteMany|1000Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 16K, no SLOG
 nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
@@ -315,6 +321,8 @@ case "$BACKEND" in
   # Measured 2026-09-05: tank=9766991880320, tank/bench=214748168384.
   nfs-truenas-bench) AVAIL_BYTES="$(ssh -o ConnectTimeout=8 truenas_admin@192.168.1.25 \
                         'zfs list -Hp -o available tank/bench' 2>/dev/null || true)"; AVAIL_SRC="zfs tank/bench (quota-bounded)" ;;
+  nfs-truenas-bench16) AVAIL_BYTES="$(ssh -o ConnectTimeout=8 truenas_admin@192.168.1.25 \
+                        'zfs list -Hp -o available tank/bench16' 2>/dev/null || true)"; AVAIL_SRC="zfs tank/bench16 (quota-bounded)" ;;
   nfs-csi)           AVAIL_SRC="Synology (no credentialed probe -- check DSM by hand)" ;;
 esac
 
