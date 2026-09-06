@@ -146,9 +146,31 @@ truenas:
     # pvc-<uuid> directory behind rather than cleaning it up. A benchmark must
     # not be able to litter production storage.
     #
-    # The dataset carries a 200G quota (ansible/truenas group_vars) so a runaway
-    # or mis-sized run cannot eat the pool -- the harness's own capacity gate is
-    # the first line of defence, this is the backstop that does not depend on
-    # anyone running the harness correctly.
+    # The dataset carries a quota (ansible/truenas group_vars -- 1500 GiB as of
+    # 2026-09-05) so a runaway or mis-sized run cannot eat the pool. The
+    # harness's own capacity gate is the first line of defence; this is the
+    # backstop that does not depend on anyone running the harness correctly.
     - name: bench
       share: /mnt/tank/bench
+    # bench16 is bench's TWIN, differing in exactly one property: recordsize
+    # 16K instead of 1M. It exists because the 2026-09-06 grid measured TrueNAS
+    # at 205-375 read iops and ~60 write iops on rand-4k, which reads as "the
+    # NAS is ~125x worse than the Synology at random writes" and is not a
+    # hardware result at all. tank/bench is recordsize=1M, so a 4 KiB request
+    # touches a whole 1 MiB record -- 256x amplification in both directions --
+    # while the Synology sits on a 4 KiB-block filesystem. That comparison is
+    # of RECORD SIZES, not of hardware.
+    #
+    # WHY 16K AND NOT 4K, which would match the Synology exactly: tank is
+    # raidz2 6-wide at ashift=12, so the stripe is 4 data + 2 parity 4 KiB
+    # sectors. A 16 KiB record fills it exactly. A 4 KiB record would occupy
+    # one data sector plus two parity sectors -- 3x space amplification and a
+    # worse result that would say more about RAIDZ geometry than about disks.
+    # 16K takes the 256x amplification down to 4x, which is the honest floor
+    # for this pool shape.
+    #
+    # Every other property is deliberately identical to bench (lz4, atime off,
+    # sync standard, posix acls, sensitive, logbias latency, primarycache all),
+    # verified property-by-property at creation, so the A/B isolates recordsize.
+    - name: bench16
+      share: /mnt/tank/bench16
