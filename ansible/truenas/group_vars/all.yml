@@ -152,13 +152,45 @@ truenas_datasets:
     #
     # WHY 1500 AND NOT 500. Defeating this box's ARC needs a file larger than
     # its 31.3 GiB of RAM, so the harness pins min_filesize=64G. What the 500
-    # GiB figure missed is that fio names each corpus after the JOB, so the six
-    # workloads do not share one file -- they lay out six. A 3-client grid is
-    # therefore 6 x 64 GiB x 3 = 1152 GiB, not the 384 GiB the harness's own
-    # capacity gate asks for. Confirmed empirically against the Synology, whose
-    # bench directory held four distinct 64 GiB files.
+    # GiB figure missed is that fio names each corpus after the JOB, so the
+    # workloads do not share one file. It is FIVE per client, not six: the four
+    # bulk workloads each lay out their own, and smallfile-write/smallfile-read
+    # share one because fio-jobs.yaml pins filename_format for exactly that
+    # reason (corrected 2026-09-06 -- this comment said six). A 3-client grid is
+    # therefore 5 x 64 GiB x 3 = 960 GiB, not the 384 GiB the harness's own
+    # capacity gate asked for before it was fixed the same day. Confirmed
+    # empirically: `zfs list tank/bench` read USED 767G after the 12-cell bulk
+    # grid, with exactly 256 GiB (4 x 64) in each of c0/c1/c2.
     # (tank still has ~8.9 TiB free, so this costs nothing.)
     quota: 1610612736000            # 1500 GiB
+  # bench16 is bench's TWIN. Exactly one property differs -- recordsize 16K
+  # instead of 1M -- so that a rand-4k A/B between them isolates record size and
+  # nothing else. Created 2026-09-06 by hand over SSH during an idle-NAS window
+  # and mirrored here the same day, for the same reason the quota above is
+  # mirrored: this role reconciles on every run, so a dataset the file does not
+  # know about is a dataset the next run cannot converge.
+  #
+  # WHY IT EXISTS. The 2026-09-06 grid put TrueNAS at 205-375 read iops and ~60
+  # write iops on rand-4k, which reads as "the NAS is ~125x worse than the
+  # Synology at random writes". It is not a hardware result: at recordsize=1M a
+  # 4 KiB request touches a whole 1 MiB record -- 256x amplification in both
+  # directions -- while the Synology sits on a 4 KiB-block filesystem. The
+  # arithmetic closes (375 iops x 1 MiB is about what this pool does
+  # sequentially), so the figure describes the DATASET, not the disks.
+  #
+  # WHY 16K AND NOT 4K, which would match the Synology exactly: tank is raidz2
+  # 6-wide at ashift=12, so a full stripe is 4 data + 2 parity 4 KiB sectors. A
+  # 16 KiB record fills it exactly; a 4 KiB record would take one data sector
+  # plus two parity sectors -- 3x space amplification, measuring RAIDZ geometry
+  # rather than the drives. 16K brings 256x amplification down to 4x, which is
+  # the honest floor for this pool shape.
+  - name: bench16
+    recordsize: 16K
+    comments: "Scratch dataset for tests/storage-benchmark, recordsize 16K. Twin of tank/bench for the record-size A/B. Safe to destroy when empty. No offsite, no snapshots."
+    # 1000 GiB. Sized for the four BULK workloads at 3 clients (4 x 64 x 3 =
+    # 768 GiB) plus margin; smallfile is not run here, since record size is not
+    # what that workload is about.
+    quota: 1073741824000            # 1000 GiB
   - name: personal
     recordsize: 128K
     comments: "SMB share for humans (personal side of the personal/work split). Family photos land here; immich imports them over NFS later."
@@ -264,6 +296,7 @@ truenas_nfs_exports:
   # as root in the ceph image, so a squashed export would make every run fail
   # at first write rather than measure anything.
   - dataset: bench
+  - dataset: bench16
 
 # ---- SMB (Time Machine) ---------------------------------------------------
 # The whole SMB stack was greenfield as of 2026-08-31: cifs STOPPED and
