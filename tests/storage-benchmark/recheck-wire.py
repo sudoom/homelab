@@ -266,6 +266,31 @@ def main():
                         verdict = (f"UNCORROBORATED: {ratio:.2f}x expected bytes on shared port "
                                    f"{r['switch_if']}; fio figure stands but the wire cannot "
                                    f"confirm it (sync {overlap*100:.0f}%)")
+                    elif ratio > 3.0:
+                        # THE GENERAL UPPER BOUND, and its absence is why this
+                        # ladder wrote "ok (wire 99.42x expected)" on a cephfs
+                        # rand-write row -- a passing verdict on a counter
+                        # showing ninety-nine times the workload's bytes. The
+                        # three branches above cover: too FEW bytes (any
+                        # workload), too many at bs=1M, and too many on a port
+                        # known to be shared. A small-block workload on a
+                        # dedicated instrument fell through every one of them.
+                        #
+                        # The same hole was fixed in parse-results.py earlier the
+                        # same day and NOT looked for here -- an instance
+                        # patched instead of a class. That is the actual lesson.
+                        #
+                        # 3x, not 1.3x: small-block workloads legitimately run
+                        # 1.1-2.0x over payload because per-operation protocol
+                        # overhead is a large fraction of a 4k request. Above 3x
+                        # the window is measuring another workload -- usually
+                        # this cell's own corpus layout, which is a write and so
+                        # lands on the counter a write workload reads.
+                        verdict = (f"UNCORROBORATED: {ratio:.2f}x expected bytes on "
+                                   f"{r['switch_if']} ({meas/1e9:.2f} GB vs {expected/1e9:.2f} GB "
+                                   f"expected) -- the window is measuring more than this run, "
+                                   f"most likely its own corpus layout. fio figure stands; the "
+                                   f"cross-check does not confirm it (sync {overlap*100:.0f}%)")
                     else:
                         verdict = f"ok (wire {ratio:.2f}x expected, sync {overlap*100:.0f}%)"
                     # REWRITE THE WIRE COLUMNS TOO, not just the note. They were
