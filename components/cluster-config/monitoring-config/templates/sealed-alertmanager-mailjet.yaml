@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: alertmanager-mailjet
+  namespace: openshift-monitoring
+spec:
+  encryptedData:
+    password: AgA2PJno5QJUhBMUlxcYjRmVEOKJ5kZCgtQcEPnsh7XRDz06L3w5Vcr8DzKDYM5blqFq7bqetGcNO1MpYAc8tqrP6dhef+Z8WspBgG/nz9besmXgwVS3sUhjTmCaKfd/176UUKBka4lFuj3XApGn1uk9ppEFhgZ9VozEZI+PISpZHKe70g7Xy92E/GBuuBl5pmOeHTT0BucxvBVWQn45VeIFvos2UIMAiNahFHJueFo+uEP11flGRkJf5O1iPs2U57oWjv8F74f4d7BDPOQ4uTkYmW6H394ACOJpmM5hfokkbC9626bOFX93C2PV47qCca2wrD8+SARwEkDQqzH3MAdqoZKr24e4v+/H44kzGutWCfDhxeLQZaWdnSQqukzoyf8m+fdftsSfpvEUhPOBoHK7xfwBFb4YgGOjdrGhgvTxpwynr5wXE21Ez30tLJfHgzAQrtJwwKoKdYJUqKP+1ii/YBbVxWjfvxRfNkgTO3RyBIV0kARGFOdDZYTdHvDwEzOXGOOHuL5tmPgReSBPZrMlYIR5kEXFH0WORWCceBLH5H9WoDAE35nMqGGD5r/J8wR4jlQdH0CjkBxJWhm2u6mEogXJZTLKwAoVMfEnHKTPI/NFgkX+KqHPTTj6cQ3o8AyXwEi/x/wFUsMxZUm2kxXVNZE0aojUMZXMG/hwxX++MwX32AVqOw/Pb2ucSSX4rJhPapIfsOvKHytHE1D0g6dwNCh4WKPmvmpV7eMfM8qBdQ==
+  template:
+    metadata:
+      name: alertmanager-mailjet
+      namespace: openshift-monitoring
