@@ -39,7 +39,7 @@ garage:
 # somewhere. This Job is that somewhere; it used to read an ObjectBucketClaim's
 # outputs instead, which is why it already exists and is proven.
 secretTranslator:
-  image: quay.io/openshift/origin-cli:4.22
+  image: quay.io/openshift/origin-cli:5.1
   destinationSecretName: loki-storage
 
 # LokiStack — 1x.pico is the smallest tier with HA replicas (the
