@@ -346,3 +346,9 @@ applications:
     path: components/apps/immich
     namespace: immich
     syncWave: "7"
+    # The cluster's ONLY HorizontalPodAutoscaler (min 1, max 2). Its Deployment
+    # is the sole reason .spec.replicas is ignored anywhere; every other app is
+    # now replica-managed from git. See the ignoreDifferences comment in
+    # templates/applications.yaml for what the blanket version cost twice.
+    hpaDeployments:
+      - immich-server

@@ -51,24 +51,37 @@ spec:
         - '.spec.volumeClaimTemplates[].metadata.creationTimestamp'
         - '.spec.volumeClaimTemplates[].spec.volumeMode'
         - '.spec.volumeClaimTemplates[].status'
-    # HPA-managed Deployments (e.g. immich-server): let the HorizontalPodAutoscaler
-    # own .spec.replicas — without this, selfHeal reverts it to the chart value and
-    # fights the HPA. Apps without an HPA set replicas explicitly; nothing changes
-    # it, so this ignore is a no-op for them -- WITH ONE TRAP, found 2026-08-29.
+    # HPA-managed Deployments: let the HorizontalPodAutoscaler own
+    # .spec.replicas, or selfHeal reverts it to the chart value and fights the
+    # HPA.
     #
-    # It is a no-op only while nobody wants GIT to change a replica count. The
-    # moment a chart tries to (a maintenance-mode flag, a quiesce switch, scaling
-    # something to 0 declaratively), ArgoCD silently does not apply it and still
-    # reports Synced/Healthy -- there is no drift, because the field is not
-    # compared. The keepers migration lost a downtime window to exactly this:
-    # a `quiesced` flag rendered replicas 0/1, ArgoCD ignored it, and the
-    # Deployment could not be scaled back UP from git after the cutover.
+    # OPT-IN, AND PER-DEPLOYMENT BY NAME, since 2026-09-07. It used to apply to
+    # every Deployment in all 44 apps, which made a replica count something git
+    # could not change ANYWHERE. The comment here already warned about that and
+    # already named this fix; it took a second incident to actually apply it.
     #
-    # If a declarative replica change is ever needed, scope this ignore to the
-    # HPA-managed apps that actually need it instead of all 44.
+    # What it costs when it is blanket: on 2026-09-06 the media, immich and
+    # keepers Deployments were scaled to 0 for a benchmark window. Re-enabling
+    # sync did not bring them back and never would have -- twelve workloads sat
+    # at 0/0 while ArgoCD reported the apps Synced/Healthy with an EMPTY diff,
+    # because the only differing field was the one field it was told not to
+    # compare. The keepers migration lost a downtime window to the same thing in
+    # August.
+    #
+    # There is exactly ONE HPA in this cluster (immich/immich-server, min 1
+    # max 2), so this now lists that Deployment by name and nothing else. Adding
+    # an HPA means adding its Deployment to `hpaDeployments` in values.yaml --
+    # if you forget, selfHeal fights the HPA, which is loud and self-correcting.
+    # Forgetting the opposite way (a blanket ignore) is silent, which is why the
+    # default is off.
+{{- with $app.hpaDeployments }}
+{{- range . }}
     - group: apps
       kind: Deployment
+      name: {{ . }}
       jqPathExpressions:
         - '.spec.replicas'
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
