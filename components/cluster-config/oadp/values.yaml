@@ -40,6 +40,17 @@ namespace: openshift-adp
 #   shred -u /tmp/creds
 #
 # Paste the resulting encryptedData.cloud into sealedCloud below.
+# GOTCHA (2026-09-07): OADP does NOT propagate `default` to an EXISTING BSL.
+# The DPA reconciles clean and reports Reconciled=True while spec.default stays
+# absent on the BackupStorageLocation, so the cluster ends up with no default at
+# all. A Schedule naming storageLocation explicitly still works, which is what
+# makes it quiet -- the exposure is an ad-hoc backup or restore during an
+# incident. Fix is to delete the BSL and let the DPA recreate it (the field IS
+# honoured at creation). Filed at
+# bugs/upstream-oadp-dpa-default-flag-not-propagated-existing-bsl.md
+#
+# Related: a location NAMED `default` MUST have default: true, which is why the
+# RGW BSL could not simply be demoted before removal.
 garageBsl:
   enabled: true
   name: truenas-garage
