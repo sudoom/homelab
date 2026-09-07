@@ -33,6 +33,23 @@ prometheus:
 alertmanager:
   volumeSize: 1Gi
 
+  # A 250 AND A QUEUE ID FROM MAILJET DO NOT MEAN THE MAIL WILL BE DELIVERED.
+  # Found 2026-09-07 while proving this path. Every layer reported success:
+  #   auth      235 2.7.0 Authentication successful
+  #   MAIL FROM 250 2.1.0 Ok        RCPT TO  250 2.1.5 Ok
+  #   DATA      250 OK queued as ffd64a5a-8e82-4815-a998-fa3f7d721a14
+  #   alertmanager_notifications_total{integration="email"} = 1, failed = 0
+  #   /v3/REST/apikey                isActive=True, runlevel=Normal
+  # and NOTHING arrived. /v3/REST/message stayed at Count=0. The cause was an
+  # account-level "sending activity is currently suspended" banner, visible only
+  # in the Mailjet UI: the MTA still accepts and queues, the suspension drops the
+  # message afterwards, and the API key itself reports healthy because the KEY is
+  # not what is suspended.
+  #
+  # So when alerts stop arriving, check the Mailjet account banner BEFORE
+  # touching anything here. Alertmanager's own counters cannot see past the
+  # SMTP handshake, and neither can any test that ends at "accepted".
+  #
   # SMTP delivery via Mailjet. Closes the "detection without delivery" gap: the
   # default OpenShift receivers are all EMPTY, so AlertmanagerReceiversNotConfigured
   # fires and nothing this cluster detects can reach a human.
