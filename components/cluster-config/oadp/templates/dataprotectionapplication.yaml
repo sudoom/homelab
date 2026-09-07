@@ -16,10 +16,15 @@ spec:
       enable: {{ .Values.dpa.nodeAgent.enable }}
       uploaderType: {{ .Values.dpa.nodeAgent.uploaderType }}
   backupLocations:
+    # RGW, on its way out (HDD-tier decommission phase 2b). Kept as a FALLBACK
+    # for exactly one commit: nothing targets it any more, and it is removed
+    # along with its OBC once garage has carried real traffic. Removing the
+    # destination and the redirect together is what made the Loki cutover block
+    # its own sync for hours on 2026-09-07.
     - name: default
       velero:
         provider: aws
-        default: true
+        default: false
         objectStorage:
           bucket: {{ .Values.obc.bucketName }}
           prefix: velero
@@ -35,7 +40,11 @@ spec:
     - name: {{ .Values.garageBsl.name }}
       velero:
         provider: aws
-        default: false
+        # THE DEFAULT since 2026-09-07. Exactly one BSL may carry this: two is
+        # ambiguous, zero means a Backup with no explicit storageLocation has
+        # nowhere to go. So this flag and the RGW one above move together, in a
+        # single commit, and never independently.
+        default: true
         objectStorage:
           bucket: {{ .Values.garageBsl.bucket }}
           prefix: {{ .Values.garageBsl.prefix }}

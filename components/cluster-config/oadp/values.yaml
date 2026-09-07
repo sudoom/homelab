@@ -83,6 +83,9 @@ dpa:
     uploaderType: kopia
 
 schedule:
+  # Must name a BSL declared in the DPA. Points at garage since 2026-09-07;
+  # the RGW BSL still exists this commit but nothing targets it.
+  storageLocation: truenas-garage
   # PAUSED. The ORIGINAL reason (single Ceph pool at ~83%, "no headroom until the
   # HDD tier ships") is STALE — the HDD tier landed 2026-06-12 and there are now
   # several pools. It did NOT unblock this, because the RGW data pool is x3 on
