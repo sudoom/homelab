@@ -1,8 +1,5 @@
 namespace: openshift-logging
 
-# OBC against the ceph-bucket StorageClass (CephObjectStore-backed).
-# The OBC controller materialises a CM (BUCKET_HOST/PORT/NAME) and a
-# Secret (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) in this namespace.
 # ---- Object storage: garage on TrueNAS (moved off Ceph RGW 2026-09-07) ----
 # Loki's chunks lived in ceph-objectstore.rgw.buckets.data, replicated x3 on the
 # three HDD OSDs -- the tier being decommissioned. This moves them off, which

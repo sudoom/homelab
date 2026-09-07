@@ -218,8 +218,18 @@ applications:
     namespace: rook-ceph
     syncWave: "3"
 
+  # RETIRED 2026-09-07 (HDD-tier decommission, phase 3c). The CephObjectStore
+  # and all nine ceph-objectstore.rgw.* pools go with it. Its only tenants were
+  # Loki's chunks and OADP's BackupStorageLocation; both moved to garage on
+  # TrueNAS the same day, and zero ObjectBucketClaims remain cluster-wide.
+  #
+  # Retiring rather than moving its data pool back to NVMe: garage already
+  # provides S3, so an in-cluster object store with no consumers is carrying a
+  # known Rook propagation bug (deviceClass is not applied to an existing pool)
+  # and the RGW-vs-router :80 anti-affinity, which permanently costs one
+  # schedulable node, for nothing.
   ceph-object-store:
-    enabled: true
+    enabled: false
     path: components/storage/ceph-object-store
     namespace: rook-ceph
     syncWave: "4"

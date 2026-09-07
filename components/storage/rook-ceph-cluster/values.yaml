@@ -198,82 +198,31 @@ rook-ceph-cluster:
           csi.storage.k8s.io/node-stage-secret-namespace: "{{ .Release.Namespace }}"
           csi.storage.k8s.io/fstype: ext4
 
-  # CephFS two-tier filesystem (Phase 4, 2026-06-12). One CephFilesystem,
-  # metadata on NVMe, two data pools (NVMe low-latency RWX + HDD bulk RWX).
-  # Rendered RADOS pools: cephfs-metadata (replicated NVMe) + cephfs-bulk-hdd
-  # (EC 2+1 on HDD). Single bulk data pool — the NVMe RWX tier is intentionally
-  # omitted. (Rook prefixes data-pool names with the fs name.)
-  # Both StorageClasses ship from the local templates/cephfs-storageclasses.yaml
-  # (the upstream subchart renders only ONE SC per fs entry, and we need two
-  # against the SAME fs) — so storageClass.enabled is false here.
-  cephFileSystems:
-    - name: cephfs
-      spec:
-        metadataPool:
-          failureDomain: host
-          deviceClass: nvme
-          replicated:
-            size: 3
-            requireSafeReplicaSize: true
-        dataPools:
-          # Single BULK tier on HDD, erasure-coded 2+1 (k=2,m=1) — the only EC
-          # profile that fits 3 hosts at failureDomain=host. 66% usable vs 33%
-          # for size=3 (≈2.4 TiB vs 1.2 TiB on the 3.6 TiB HDD raw). min_size is
-          # forced to 2 post-create (Ceph EC defaults to k+1=3, which would make
-          # the tier read-only on ANY host-down incl. upgrade reboots; min_size=2
-          # keeps it writable during a host reboot, at the redundancy floor).
-          # The NVMe low-latency RWX tier is intentionally OMITTED — add later if
-          # a low-latency RWX need appears (EC is wrong for hot/small-IO anyway).
-          - name: bulk-hdd             # -> cephfs-bulk-hdd
-            failureDomain: host
-            deviceClass: hdd
-            erasureCoded:
-              dataChunks: 2
-              codingChunks: 1
-            parameters:
-              # 64 (was 32) — brings the 3 HDD OSDs to ~96 PGs/OSD (Ceph's
-              # ~100/OSD guideline) once combined with the RGW data pool's 32.
-              # Bumped 2026-06-15 while the pool was near-empty (~26 GiB) so the
-              # split was nearly free; doing it after TiB of media would be a
-              # degraded-window rebalance. Autoscaler is broken on this Squid
-              # (returns []), so PGs are pinned manually.
-              pg_num_min: "64"
-        preservePoolsOnDelete: true
-        preserveFilesystemOnDelete: true
-        metadataServer:
-          activeCount: 1
-          activeStandby: true          # 1 active + 1 hot-standby MDS
-          # Low request (scheduler reserves only 1Gi x2) but a 4Gi LIMIT:
-          # Rook sizes mds_cache_memory_limit from limits.memory (~0.8x), so a
-          # 2Gi limit risks active-MDS OOMKill under metadata load. 4Gi limit
-          # matches the default cache target; the cluster has the headroom.
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "1Gi"
-            limits:
-              memory: "4Gi"
-          priorityClassName: system-cluster-critical
-          placement:
-            # required (not preferred): on this no-drain 3-node cluster keep the
-            # active + standby MDS on different hosts so one node loss can't take
-            # both. 2 daemons / 3 nodes always schedules.
-            podAntiAffinity:
-              requiredDuringSchedulingIgnoredDuringExecution:
-                - labelSelector:
-                    matchExpressions:
-                      - key: app
-                        operator: In
-                        values:
-                          - rook-ceph-mds
-                  topologyKey: kubernetes.io/hostname
-      # SCs ship from templates/cephfs-storageclasses.yaml (need two per fs).
-      storageClass:
-        enabled: false
+  # RETIRED 2026-09-07 (HDD-tier decommission, phase 3b).
+  #
+  # Was a single CephFilesystem `cephfs`: metadata replicated x3 on NVMe, one
+  # bulk data pool `cephfs-bulk-hdd` erasure-coded 2+1 across the three HDD
+  # OSDs, exposed as the RWX StorageClass `cephfs-hdd`.
+  #
+  # WHY IT GOES: its only consumer, media/media-data-pvc, moved to TrueNAS NFS
+  # on 2026-08-30 and its retained 3.5 TiB was reclaimed 2026-09-07. RWX is
+  # served by the NFS classes and no CephFS is planned, so the tier had no
+  # purpose -- and the HDD OSDs it exists for are being pulled.
+  #
+  # THIS IS ONE-WAY. Recreating needs a manual
+  # `ceph fs new cephfs cephfs-metadata <datapool> --force` FIRST: Ceph requires
+  # --force for an EC default data pool and Rook will not pass it. Rook adopts
+  # and manages the MDS afterwards, but cannot perform that first step.
+  #
+  # UNRESOLVED AT RETIREMENT, recorded so a future incident can connect it:
+  # this tier could not serve concurrent multi-node RWX. Two pods on two nodes
+  # gave one client persistent EACCES on statx -- 293 failures in 300s, no
+  # recovery until the concurrency stopped. Not the MDS (fs Ready, no evictions
+  # since August). Consistent with a blocklisted kernel client. Never root
+  # caused, and the same behaviour could affect RBD, which IS production. See
+  # the README TODO.
+  cephFileSystems: []
 
-  # No object stores rendered by this chart — components/storage/ceph-object-store/
-  # owns the CephObjectStore CR + RGW deployment + bucket SC separately.
-  # Folding it in is a separate migration once this one is bedded in.
   cephObjectStores: []
 
 # ---------------------------------------------------------------------------
@@ -287,12 +236,14 @@ rook-ceph-cluster:
 # full rendered RADOS pool name (<fsName>-<dataPool>), not the bare data-pool
 # name — the CSI driver takes it verbatim. Neither is the cluster default
 # (ceph-nvme-block RBD stays default); RWX is requested explicitly.
+# RETIRED 2026-09-07 with the filesystem above. Rendered the `cephfs-hdd` RWX
+# StorageClass from templates/cephfs-storageclasses.yaml. Nothing references it:
+# media/media-data-pvc and the storage-benchmark PVC were both reclaimed the
+# same day.
 cephfsStorageClasses:
-  enabled: true
+  enabled: false
   fsName: cephfs
-  classes:
-    - name: cephfs-hdd
-      pool: cephfs-bulk-hdd          # bulk RWX tier (EC 2+1 on HDD)
+  classes: []
 
 # OpenShift Route fronting the Ceph dashboard with edge TLS at
 # ceph.apps.okd.sudops.pl. Upstream chart only ships Ingress + Gateway-API
@@ -328,12 +279,16 @@ mgrServiceMonitor:
 clusterUtilizationAlert:
   enabled: true
 
-# StorageClass for ObjectBucketClaim provisioning against the existing
-# CephObjectStore (owned by components/storage/ceph-object-store/). Stays
-# as a local template here because that CR is still in a separate ArgoCD
-# app — folding it in is a follow-on migration.
+# RETIRED 2026-09-07 (HDD-tier decommission, phase 3c). Rendered the
+# `ceph-bucket` StorageClass that ObjectBucketClaims provisioned against the
+# CephObjectStore. That object store is being deleted: its only two tenants,
+# Loki's chunks and OADP's BackupStorageLocation, both moved to garage on
+# TrueNAS the same day, and zero OBCs exist anywhere in the cluster.
+#
+# Left enabled it would render a StorageClass pointing at an object store that
+# no longer exists -- a provisioner that accepts a claim and then fails.
 objectBucket:
-  enabled: true
+  enabled: false
   storageClassName: ceph-bucket
   # Secondary SC for buckets that must outlive their OBC (CNPG backups,
   # OADP). reclaimPolicy: Retain is hard-coded in the template; empty
