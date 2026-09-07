@@ -1603,3 +1603,150 @@ target the USB device, never the internal boot/HDD): `echo 1 > /sys/block/sdc/de
 `/sys/block/sdc` + the by-id symlink both GONE → safe to pull. (Detaching the wrong `sdX` here
 is non-destructive but would degrade Ceph/etcd, hence the same gate.)
 
+
+---
+
+# 2026-09-07 — decommissioning the HDD tier
+
+The tier shipped 2026-06-12 and is being removed 87 days later. Not because it
+failed: because everything it existed for moved somewhere better, and a storage
+tier with no consumers is pure cost — one 3.5" bay per node, ~15-20 W, and a
+`CephPGImbalance` false positive that exists *only* because two device classes
+get averaged together.
+
+## What it was carrying, and where that went
+
+| consumer | moved to | when |
+|---|---|---|
+| `media/media-data-pvc` (3.5 TiB, CephFS EC 2+1) | TrueNAS NFS | 2026-08-30, reclaimed 09-07 |
+| Loki chunks (RGW, ×3 replicated) | garage on TrueNAS | 2026-09-07 |
+| OADP BackupStorageLocation (RGW) | garage on TrueNAS | 2026-09-07 |
+
+Phase 0 was the only decision that mattered: does this cluster need *any*
+on-cluster bulk RWX afterwards? RWX is served by the NFS classes and no CephFS
+is planned, so the answer was no — and that made everything downstream a
+mechanical exercise rather than a judgement call.
+
+## Phase 1 — reclaim, and the purge that looks like an orphan
+
+Deleting `media-data-pvc` under a `Retain` class leaves a Released PV *and* an
+orphan CephFS subvolume. Both were cleaned. Then `ceph df` still showed **3.70 TB
+in 883,610 objects** while `ceph fs subvolume ls cephfs csi` returned `[]`.
+
+That combination looks exactly like an orphaned subvolume, and the remedy for
+*that* would have been a no-op here. It was the MDS **purge queue**:
+
+```
+pq_executing 1, pq_executing_ops 311, pq_item_in_journal 1658
+objects: 880,216 -> 877,057 in 45s
+```
+
+CephFS reclaims deleted files asynchronously. Three hours later the pool read
+`0 B / 0 objects` on its own. **"PVC gone but pool still full" is not evidence
+of an orphan** — check `pq_*` before reaching for `subvolume rm`.
+
+## Phase 2/2b — and an ordering mistake worth keeping
+
+The Loki cutover put the storage repoint and the ObjectBucketClaim removal in
+**one commit**. ArgoCD prunes *before* it runs sync hooks, so the bucket was
+being deleted while `loki-storage` still pointed at it, and the sync blocked for
+~an hour on `waiting for deletion of ObjectBucketClaim/loki`. Benign only
+because RGW deletes gradually and the bucket still existed throughout.
+
+The fix is two commits: repoint first, retire the destination second. Applying
+that lesson to OADP promptly produced a *different* failure, which is the more
+interesting half:
+
+```
+Reconciled=False  Error: Storage location named 'default' must be set as default
+```
+
+**OADP hardcodes that a BSL named `default` must have `default: true`.** The
+intermediate state the two-commit split requires — old location present but
+demoted — is one the operator forbids. And separately, OADP **does not propagate
+`default` to an existing BSL** (generation advanced six times without writing
+the field), so delete-and-promote doesn't work either. Neither ordering yields a
+default BSL without deleting it and letting the DPA recreate it. Filed at
+`bugs/upstream-oadp-dpa-default-flag-not-propagated-existing-bsl.md`.
+
+ArgoCD reported `Synced/Healthy` for the ~20 minutes the DPA sat in a
+five-second error loop, because it checks that the object applied, not
+`.status.conditions`.
+
+## The bucket-deletion timeout
+
+Loki's OBC took ~an hour to clear and appeared to stall repeatedly. Cause:
+
+```
+Delete ".../admin/bucket?bucket=loki-...&purge-objects=true":
+  context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+```
+
+The provisioner asks RGW to delete the bucket **and purge its objects in one
+synchronous HTTP call**. Purging ~20k objects off three HDD OSDs cannot finish
+inside that client timeout, so it times out, requeues, and each retry purges
+another slice — which is why the drain was bursty and why every ETA derived from
+a single interval was wrong. Eventually the workqueue backoff stretched far
+enough that it looked stalled entirely, *while the bucket was already gone*.
+A `rook-ceph-operator` restart reset the backoff and it completed in 15 seconds.
+
+## Phase 3 — Rook's dependent-check deadlock
+
+Both CRs wedged in `Deleting`:
+
+```
+CephObjectStore: failed to list buckets ... dial tcp: lookup
+  rook-ceph-rgw-ceph-objectstore.rook-ceph.svc: no such host
+CephFilesystem:  failed to list subvolumegroups: exec timeout waiting for
+  the command ceph to return          # zero MDS pods remained
+```
+
+**Rook tears down the daemon, then requires that daemon to prove teardown is
+safe.** Once the MDS and RGW are gone the dependent check can never succeed, so
+the finalizer never clears. Force-clearing is the documented remedy and was safe
+here because both dependent sets were verified empty *before* the daemons went
+down. Any future CephFS or object-store retirement on this cluster ends the same
+way — budget for it rather than treating it as a fault.
+
+Note also `preservePoolsOnDelete: true` on both CRs: pruning them deletes no
+pools at all. Thirteen pools survived as orphans, which is the flag working —
+and is also what would have broken phase 4.
+
+## The last thing pinning data to the HDDs
+
+After deleting all thirteen pools, `ceph osd df tree` still showed osd.3 and
+osd.5 holding one PG each. It was **`.mgr`** — created by Ceph itself, on the
+cluster-default `replicated_rule`, which targets bare `default` and therefore
+*every device class*. It appears in no list of "HDD pools" because it is not
+one.
+
+```
+ceph osd pool set .mgr crush_rule nvme-replicated
+-> osd.3 PGs=0   osd.4 PGs=0   osd.5 PGs=0
+```
+
+Without it, removing the OSDs would have degraded the manager pool instead of
+draining cleanly. Now shipped as `templates/mgr-pool-crush-rule.yaml` so a fresh
+bootstrap cannot silently reintroduce it.
+
+`ceph fs rm` alone took the cluster from `HEALTH_ERR` back to `HEALTH_WARN`:
+every error was the orphaned filesystem left behind when Rook removed the MDS
+but `preserveFilesystemOnDelete` kept the FS.
+
+## Retired without root cause
+
+`cephfs-hdd` could not serve concurrent multi-node RWX — two pods on two nodes,
+one client getting persistent EACCES on `statx`, **293 failures in 300 seconds**,
+no recovery until the concurrency stopped. Not the MDS (fs Ready, no evictions
+since August). Not one bad node (node4 first, then node5 on a directory it had
+just used successfully four times). Consistent with a blocklisted kernel client.
+
+fio renders that as `fio: /path is not a directory` for a directory that
+demonstrably exists, which sends you looking at paths instead of client
+sessions.
+
+It was never explained, and the tier is gone, so it is now unreproducible. The
+same mechanism could affect **RBD**, which is production — every config PVC,
+both Postgres clusters, Loki's WAL. Recorded here and in the README so that if
+RBD ever shows persistent EACCES on a multi-node claim, the precedent is
+findable.

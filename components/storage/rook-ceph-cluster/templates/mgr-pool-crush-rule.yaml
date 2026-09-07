@@ -1,0 +1,115 @@
+{{- if .Values.mgrPoolCrushRule.enabled }}
+# Pins the Ceph-internal `.mgr` pool to a device-class-specific CRUSH rule.
+#
+# WHY THIS EXISTS. `.mgr` is created by Ceph itself, not by a Rook CephBlockPool,
+# so no chart owns it and it lands on the cluster-default `replicated_rule`,
+# which targets bare `default` -- i.e. EVERY device class. On a two-class cluster
+# that quietly places manager-pool replicas on whichever OSDs CRUSH picks.
+#
+# It surfaced on 2026-09-07 during the HDD-tier decommission. After every HDD
+# pool was deleted, `ceph osd df tree` still showed osd.3 and osd.5 holding one
+# PG each -- the `.mgr` pool, which appears in no list of "HDD pools" because it
+# is not one. Removing the HDD OSDs in that state would have degraded the
+# manager pool rather than draining cleanly. Repointing `.mgr` at the NVMe rule
+# took both PGs to zero immediately.
+#
+# It is a Job rather than a note because the setting is Ceph-internal state with
+# no CR behind it: a fresh bootstrap recreates `.mgr` on replicated_rule and
+# silently reintroduces the same condition. Same reasoning as the
+# csi-rbd-provisioner-caps-fix and rbd-trash-purge-schedule Jobs beside it.
+#
+# Idempotent: reads the current rule and only sets it when it differs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mgr-pool-crush-rule-bootstrap
+  namespace: rook-ceph
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: mgr-pool-crush-rule-bootstrap
+    spec:
+      serviceAccountName: rook-ceph-default
+      restartPolicy: OnFailure
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: ceph
+          image: {{ .Values.mgrPoolCrushRule.image | quote }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              CEPH_CONFIG="/etc/ceph/ceph.conf"
+              MON_CONFIG="/etc/rook/mon-endpoints"
+              KEYRING_FILE="/etc/ceph/keyring"
+
+              cat <<KEYEOF > "$KEYRING_FILE"
+              [client.admin]
+              key = $(cat /var/lib/rook-ceph-mon/secret.keyring)
+              KEYEOF
+
+              cat <<EOF > "$CEPH_CONFIG"
+              [global]
+              mon_host = $(cat "$MON_CONFIG" | sed 's/[a-z0-9_-]\+=//g; s/=/ /; s/  */ /g')
+
+              [client.admin]
+              keyring = $KEYRING_FILE
+              EOF
+
+              POOL="{{ .Values.mgrPoolCrushRule.pool }}"
+              WANT="{{ .Values.mgrPoolCrushRule.rule }}"
+
+              if ! ceph osd pool ls | grep -qx "$POOL"; then
+                echo "pool $POOL absent -- nothing to pin, exiting clean"
+                exit 0
+              fi
+              if ! ceph osd crush rule ls | grep -qx "$WANT"; then
+                echo "FATAL: CRUSH rule '$WANT' does not exist" >&2
+                exit 1
+              fi
+
+              CUR=$(ceph osd pool get "$POOL" crush_rule | awk '{print $2}')
+              if [ "$CUR" = "$WANT" ]; then
+                echo "$POOL already on crush_rule '$WANT', skipping"
+              else
+                echo "$POOL on '$CUR', setting to '$WANT'"
+                ceph osd pool set "$POOL" crush_rule "$WANT"
+              fi
+              ceph osd pool get "$POOL" crush_rule
+          volumeMounts:
+            - name: ceph-config
+              mountPath: /etc/ceph
+            - name: mon-endpoint-volume
+              mountPath: /etc/rook
+            - name: ceph-admin-secret
+              mountPath: /var/lib/rook-ceph-mon
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              memory: "128Mi"
+      volumes:
+        - name: ceph-config
+          emptyDir: {}
+        - name: mon-endpoint-volume
+          configMap:
+            name: rook-ceph-mon-endpoints
+            items:
+              - key: data
+                path: mon-endpoints
+        - name: ceph-admin-secret
+          secret:
+            secretName: rook-ceph-mon
+            items:
+              - key: ceph-secret
+                path: secret.keyring
+{{- end }}

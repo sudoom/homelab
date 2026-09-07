@@ -311,6 +311,19 @@ rbdTrashPurgeSchedule:
   # Pinned to the same image we use for the cluster.
   image: quay.io/ceph/ceph:v19.2.4
 
+# Pins the Ceph-internal `.mgr` pool to a device-class-specific CRUSH rule.
+# Ceph creates `.mgr` itself, so no CR owns it and it defaults to
+# `replicated_rule`, which targets bare `default` -- every device class. On
+# 2026-09-07 that left two `.mgr` PGs on the HDD OSDs after every HDD pool had
+# been deleted, which would have degraded the manager pool during the OSD
+# removal instead of draining cleanly. A Job rather than a note because a fresh
+# bootstrap recreates `.mgr` on the default rule and reintroduces it silently.
+mgrPoolCrushRule:
+  enabled: true
+  pool: .mgr
+  rule: nvme-replicated
+  image: quay.io/ceph/ceph:v19.2.4
+
 # Bootstrap Job that applies the canonical caps to the CSI RBD provisioner
 # user, working around an upstream Rook 1.19.5 bug where the user is
 # generated with missing `osd profile rbd` cap (full write-up in
