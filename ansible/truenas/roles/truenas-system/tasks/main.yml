@@ -70,6 +70,40 @@
   changed_when: false
   check_mode: false
 
+# TRUENAS SENDS ALERTS TO A USER'S EMAIL ATTRIBUTE, NOT TO ANYTHING IN
+# mail.config. There is no "alert recipient" field: the destination is whatever
+# addresses the local administrator accounts carry. Configure SMTP perfectly and
+# the UI still refuses with "No e-mail address is set for root user or any other
+# local administrator" (observed 2026-09-07).
+#
+# `truenas_alert_to` existed in vars/vault.yml.example from the start and was
+# consumed NOWHERE -- a variable that read like configuration and was pure
+# documentation. Same "declared but never applied" family as the SMTP guard
+# below and the SMB passwords the sibling role reports per-account for.
+- name: Read alert-recipient users
+  ansible.builtin.command:
+    argv: [midclt, call, user.query, '[["username","in",{{ truenas_alert_users | default(["root"]) | to_json }}]]']
+  register: truenas_alert_users_q
+  changed_when: false
+  check_mode: false
+  when: truenas_alert_to is defined
+
+- name: Set the alert recipient address on the administrator accounts
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - user.update
+      - "{{ item.id | string }}"
+      - "{{ {'email': truenas_alert_to} | to_json }}"
+  loop: "{{ (truenas_alert_users_q.stdout | default('[]') | from_json) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when:
+    - truenas_alert_to is defined
+    - item.email != truenas_alert_to
+  no_log: true
+
 # FROM ADDRESS IS NOT THE SMTP USERNAME. This used to send
 # `fromemail: {{ truenas_smtp_user }}`, which is correct only for providers
 # where the username IS an email address. On Mailjet the username is an API key

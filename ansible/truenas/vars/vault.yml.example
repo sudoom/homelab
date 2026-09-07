@@ -32,8 +32,15 @@ truenas_smtp_from: alerts@example.com
 # Optional display name; defaults to "TrueNAS <inventory_hostname>".
 # truenas_smtp_fromname: TrueNAS truenas
 
-# Where alerts go.
+# Where alerts go. TrueNAS has no "alert recipient" setting -- it mails whatever
+# address the local ADMINISTRATOR ACCOUNTS carry, so this is written onto the
+# users listed in truenas_alert_users. With SMTP configured but no user email,
+# the UI refuses outright: "No e-mail address is set for root user or any other
+# local administrator."
 truenas_alert_to: you@example.com
+# Which accounts receive them. `root` is what the UI checks first; add
+# truenas_admin if you want both to carry it.
+# truenas_alert_users: [root]
 
 # ---- SMB (Time Machine) ---------------------------------------------------
 # One password per Mac, matching `password_var` in truenas_smb_users.
