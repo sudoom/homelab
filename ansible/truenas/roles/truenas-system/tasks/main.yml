@@ -70,6 +70,13 @@
   changed_when: false
   check_mode: false
 
+# FROM ADDRESS IS NOT THE SMTP USERNAME. This used to send
+# `fromemail: {{ truenas_smtp_user }}`, which is correct only for providers
+# where the username IS an email address. On Mailjet the username is an API key
+# (a 32-hex string), so fromemail would have been set to that key, and Mailjet
+# rejects mail from an unvalidated sender SILENTLY -- the playbook converges,
+# the config looks right, and no alert ever arrives. `truenas_smtp_from` is
+# separate and falls back to the username so existing setups are unchanged.
 - name: Configure alert email
   ansible.builtin.command:
     argv:
@@ -79,14 +86,34 @@
       - "{{ _mail | to_json }}"
   vars:
     _mail:
-      fromemail: "{{ truenas_smtp_user }}"
+      fromemail: "{{ truenas_smtp_from | default(truenas_smtp_user) }}"
+      fromname: "{{ truenas_smtp_fromname | default('TrueNAS ' ~ inventory_hostname) }}"
       outgoingserver: "{{ truenas_smtp_server }}"
       port: "{{ truenas_smtp_port | int }}"
       security: "{{ truenas_smtp_security }}"
       smtp: true
       user: "{{ truenas_smtp_user }}"
       pass: "{{ truenas_smtp_password }}"
+  # RECONCILES ON EVERY FIELD IT SETS, not just the server. The previous guard
+  # compared `outgoingserver` alone, so changing the port, the security mode,
+  # the username or the from address would have been declared in the vault and
+  # never applied -- the same "declared but never applied" trap the SMB role
+  # reports per-account for. `pass` is deliberately excluded: mail.config does
+  # not return it, so it cannot be compared and would force a change every run.
   when:
     - truenas_smtp_server is defined
-    - (truenas_mail.stdout | from_json).outgoingserver != truenas_smtp_server
+    - >-
+      [(truenas_mail.stdout | from_json).outgoingserver,
+       (truenas_mail.stdout | from_json).port | int,
+       (truenas_mail.stdout | from_json).security,
+       (truenas_mail.stdout | from_json).user,
+       (truenas_mail.stdout | from_json).fromemail,
+       (truenas_mail.stdout | from_json).smtp]
+      !=
+      [truenas_smtp_server,
+       truenas_smtp_port | int,
+       truenas_smtp_security,
+       truenas_smtp_user,
+       truenas_smtp_from | default(truenas_smtp_user),
+       true]
   no_log: true

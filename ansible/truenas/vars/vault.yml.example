@@ -12,11 +12,27 @@
 # SMTP for alert email. A drive-failure alert you never configured is worthless
 # (setup runbook, golden rule 5) — and on a 5-year-old drive cohort it is the
 # single highest-value thing in this file.
+# Mailjet is what this cluster uses; smtp.example.com below is generic.
+#   server   in-v3.mailjet.com
+#   port     587 with security TLS (TrueNAS calls STARTTLS "TLS"; 465 would be "SSL")
+#   user     the Mailjet API KEY  -- NOT an email address
+#   password the Mailjet SECRET KEY
 truenas_smtp_server: smtp.example.com
 truenas_smtp_port: 587
 truenas_smtp_security: TLS
 truenas_smtp_user: alerts@example.com
 truenas_smtp_password: CHANGEME
+
+# THE SENDER, SEPARATE FROM THE USERNAME, and on Mailjet they are NOT the same
+# thing: the username is an API key. It must be a VALIDATED SENDER in the
+# provider or mail is rejected silently -- the playbook converges, mail.config
+# looks correct, and nothing ever arrives. Omit it and it falls back to
+# truenas_smtp_user, which is right only where the username is an address.
+truenas_smtp_from: alerts@example.com
+# Optional display name; defaults to "TrueNAS <inventory_hostname>".
+# truenas_smtp_fromname: TrueNAS truenas
+
+# Where alerts go.
 truenas_alert_to: you@example.com
 
 # ---- SMB (Time Machine) ---------------------------------------------------
