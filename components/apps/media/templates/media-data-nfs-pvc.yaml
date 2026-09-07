@@ -1,5 +1,8 @@
-{{- if .Values.storage.truenasMigration.stagePvc }}
-# Second data PVC for the CephFS -> TrueNAS migration.
+# THE data PVC for the media stack. Was the "second" PVC of the CephFS ->
+# TrueNAS migration; became the only one on 2026-09-07 when the CephFS PVC and
+# its retained 3.5 TiB were reclaimed in the HDD-tier decommission. The
+# stagePvc gate that used to wrap this is gone with it -- a migration flag that
+# can no longer be turned off is not a flag.
 #
 # storageClassName: "" (empty, NOT absent) is load-bearing: empty means "no
 # class", which stops the default StorageClass from dynamically provisioning
@@ -24,4 +27,3 @@ spec:
   resources:
     requests:
       storage: 8Ti
-{{- end }}

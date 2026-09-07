@@ -181,14 +181,12 @@ spec:
         {{- if $app.mountData }}
         - name: data
           persistentVolumeClaim:
-            {{- if $.Values.storage.truenasMigration.cutover }}
-            {{- if not $.Values.storage.truenasMigration.stagePvc }}
-            {{- fail "storage.truenasMigration.cutover requires stagePvc=true -- the target PVC would not exist" }}
-            {{- end }}
+            # TrueNAS NFS, unconditionally since 2026-09-07. The CephFS
+            # rollback branch was removed with the data it pointed at: the
+            # retained media-data-pvc was reclaimed as part of the HDD-tier
+            # decommission, so a chart that still offered the fallback would
+            # render a claimName for a PVC that cannot exist.
             claimName: media-data-nfs-pvc
-            {{- else }}
-            claimName: media-data-pvc
-            {{- end }}
         {{- end }}
         {{- if $app.hwAccel }}
         - name: dri
