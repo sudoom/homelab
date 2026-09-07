@@ -156,3 +156,32 @@ oc -n openshift-adp get cm change-storage-class-config    # MUST be NotFound
 # purge what Retain left behind: the CephFS subvolume (toolbox) and
 # /mnt/tank/keepers/<pv>/ on the NAS
 ```
+
+## Cleanup: deleting a Backup does NOT empty the bucket (found 2026-09-07)
+
+Ten days after this rehearsal, with **zero** `Backup` CRs in the cluster, the
+garage `velero` bucket still held 18.9 MB across 23 objects:
+
+```
+velero/kopia/scmigrate-src/          kopia repo + 6 _log_* files
+velero/restores/scmigrate-1-to-nfs/  restore logs, results, resource-list, volumeinfo
+```
+
+There was no `velero/backups/` prefix — the backup *metadata* was removed
+correctly, which is why Velero's BSL sync does not resurrect the `Backup` CRs.
+What survives is the **kopia repository data** and the **restore artifacts**,
+and nothing in-cluster points at either: no `BackupRepository`, no `Restore`,
+no `PodVolumeBackup`/`PodVolumeRestore`, no `DeleteBackupRequest`.
+
+**Why it matters beyond 18 MB.** Orphaned objects in a backup bucket look like
+a restore point to anyone browsing it, and they are not one — there is no
+`Backup` CR to restore *from*. Someone finding `kopia/scmigrate-src` during an
+incident could reasonably conclude a recoverable copy exists.
+
+**Clean up by deleting the prefixes directly** (garage UI or any S3 client).
+This is object DATA, not configuration: `ansible/truenas` manages the bucket and
+its access key, not the objects inside, so removing them by hand does not
+violate the code-only rule for that box.
+
+**Do it before unpausing the daily Schedule**, so the first real backup lands in
+a bucket where everything present is something Velero can actually restore.
