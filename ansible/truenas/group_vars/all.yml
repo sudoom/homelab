@@ -436,8 +436,20 @@ truenas_garage:
     admin: 30190
   zone: truenas
   capacity_bytes: 8000000000000     # 8 TB advertised; ~7.3 TiB effective at replication_factor 1
-  s3_key_name: velero
-  s3_bucket: velero
+  # ---- S3 tenants: one key + one bucket per consumer -----------------------
+  # Was a single s3_key_name/s3_bucket pair until 2026-09-07, when Loki's chunks
+  # moved here off the Ceph RGW pool as part of the HDD-tier decommission.
+  #
+  # ONE KEY PER CONSUMER, deliberately, rather than sharing velero's: a shared
+  # key means rotating or revoking it takes out backups AND logging together,
+  # and it gives each consumer read/write on the other's data. The cost is one
+  # extra SealedSecret; the benefit is that the blast radius of a key is one
+  # tenant.
+  s3_tenants:
+    - key: velero
+      bucket: velero        # OADP BackupStorageLocation truenas-garage
+    - key: loki
+      bucket: loki          # LokiStack chunks (components/cluster-config/logging-stack)
   paths:
     config: /mnt/tank/s3/config
     metadata: /mnt/tank/s3/meta

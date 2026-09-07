@@ -279,14 +279,17 @@
 # The response carries secretAccessKey, hence no_log. The secret is never
 # persisted here -- garage keeps it and it can be re-read on demand with
 # GetKeyInfo?showSecretKey=true when the cluster-side SealedSecret is minted.
-- name: Create the velero access key
+- name: Create missing garage access keys
   ansible.builtin.uri:
     url: "{{ _garage_api }}/v2/CreateKey"
     method: POST
     headers: "{{ _garage_hdr }}"
     body_format: json
-    body: { name: "{{ truenas_garage.s3_key_name }}" }
-  when: truenas_garage.s3_key_name not in (truenas_garage_keys.json | map(attribute='name') | list)
+    body: { name: "{{ item.key }}" }
+  loop: "{{ truenas_garage.s3_tenants }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: item.key not in (truenas_garage_keys.json | map(attribute='name') | list)
   no_log: true
 
 - name: List garage buckets
@@ -296,19 +299,87 @@
   register: truenas_garage_buckets
   no_log: true
 
-- name: Create the velero bucket
+- name: Create missing garage buckets
   ansible.builtin.uri:
     url: "{{ _garage_api }}/v2/CreateBucket"
     method: POST
     headers: "{{ _garage_hdr }}"
     body_format: json
-    body: { globalAlias: "{{ truenas_garage.s3_bucket }}" }
-  when: truenas_garage.s3_bucket not in (truenas_garage_buckets.json | map(attribute='globalAliases') | flatten | list)
+    body: { globalAlias: "{{ item.bucket }}" }
+  loop: "{{ truenas_garage.s3_tenants }}"
+  loop_control:
+    label: "{{ item.bucket }}"
+  when: item.bucket not in (truenas_garage_buckets.json | map(attribute='globalAliases') | flatten | list)
+  no_log: true
+
+# Re-read AFTER creation so newly made keys and buckets have ids to grant with.
+- name: Re-read garage keys and buckets
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/{{ item }}"
+    headers: "{{ _garage_hdr }}"
+  loop: [ListKeys, ListBuckets]
+  register: truenas_garage_reread
+  no_log: true
+
+# `item.json['keys']` with brackets, NOT `item.json.keys`: Jinja resolves
+# attribute access before item lookup, and `keys` is a dict METHOD -- the dotted
+# form silently yields a bound method, so every selectattr below would filter an
+# empty result and the grant would be skipped for keys that genuinely lack it.
+# Bracket form is the only correct one for a field named after a dict method.
+- name: Index garage keys and buckets by name
+  ansible.builtin.set_fact:
+    _gkeys: "{{ dict(truenas_garage_reread.results[0].json | map(attribute='name') | zip(truenas_garage_reread.results[0].json | map(attribute='id'))) }}"
+    _gbuckets: "{{ dict(truenas_garage_reread.results[1].json
+                        | selectattr('globalAliases', 'defined')
+                        | rejectattr('globalAliases', 'equalto', [])
+                        | map(attribute='globalAliases.0')
+                        | zip(truenas_garage_reread.results[1].json
+                              | selectattr('globalAliases', 'defined')
+                              | rejectattr('globalAliases', 'equalto', [])
+                              | map(attribute='id'))) }}"
+
+# THE GRANT WAS MISSING FROM THIS ROLE UNTIL 2026-09-07 and the live velero
+# key had read/write/owner applied out-of-band. A bucket and a key with no
+# permission between them is the worst shape of drift: the playbook converges
+# clean, every resource exists, and nothing can authenticate. Same failure the
+# SMB role reports per-account for exactly this reason.
+#
+# Idempotent by gating on the permission already being present, so a converged
+# run reports no change rather than re-granting every time.
+- name: Read garage bucket permissions
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/GetBucketInfo?id={{ _gbuckets[item.bucket] }}"
+    headers: "{{ _garage_hdr }}"
+  loop: "{{ truenas_garage.s3_tenants }}"
+  loop_control:
+    label: "{{ item.bucket }}"
+  register: truenas_garage_bucketinfo
+  no_log: true
+
+- name: Grant each key read/write on its own bucket
+  ansible.builtin.uri:
+    url: "{{ _garage_api }}/v2/AllowBucketKey"
+    method: POST
+    headers: "{{ _garage_hdr }}"
+    body_format: json
+    body:
+      bucketId: "{{ _gbuckets[item.item.bucket] }}"
+      accessKeyId: "{{ _gkeys[item.item.key] }}"
+      permissions: { read: true, write: true, owner: true }
+  loop: "{{ truenas_garage_bucketinfo.results }}"
+  loop_control:
+    label: "{{ item.item.key }} -> {{ item.item.bucket }}"
+  when: >-
+    (item.json['keys'] | default([])
+       | selectattr('accessKeyId', 'equalto', _gkeys[item.item.key])
+       | selectattr('permissions.write', 'equalto', true) | list | length) == 0
   no_log: true
 
 - name: Report the garage S3 endpoint
   ansible.builtin.debug:
     msg: >-
       garage S3 endpoint http://{{ truenas_garage.bind_ip }}:{{ truenas_garage.ports.s3 }}
-      bucket={{ truenas_garage.s3_bucket }} key={{ truenas_garage.s3_key_name }}
+      tenants={{ truenas_garage.s3_tenants | map(attribute='key') | join(', ') }}
       layoutVersion={{ truenas_garage_status.json.layoutVersion }}
+      -- secrets are NOT printed; read one with
+      GetKeyInfo?id=<id>&showSecretKey=true when minting a SealedSecret.
