@@ -1,0 +1,99 @@
+{{- if .Values.alertmanager.email.enabled }}
+# Alertmanager routing + SMTP delivery.
+#
+# WHY THIS EXISTS. Every receiver in the default OpenShift Alertmanager config
+# is EMPTY -- `Default`, `Watchdog` and `Critical` are declared and deliver
+# nowhere, which is why AlertmanagerReceiversNotConfigured fires. Everything
+# this cluster detects reached only the in-console alert list, and that list is
+# served by the same Ceph-backed stack it would be reporting on: during the
+# 2026-05-12 storage incident the dashboards went dark with the storage.
+#
+# That is not a theoretical gap. `synology-cert-sync` failed nightly for about a
+# month and the wildcard cert expired on the Synology (2026-08-26) with nobody
+# notified. UserNamespaceJobFailed and the CNPG WAL-archive rules were shipped
+# in response -- detection. This is the delivery half they were waiting on.
+#
+# THE PASSWORD IS NOT IN THIS FILE. Alertmanager reads it from a mounted secret
+# via smtp_auth_password_file; the file comes from the SealedSecret named in
+# .Values.alertmanager.email.credentialsSecret, mounted by CMO because that
+# secret is listed under alertmanagerMain.secrets in cluster-monitoring-config.
+# Sealing the whole config instead would mean re-sealing to change a route, and
+# routing is exactly the part that should be reviewable in a diff.
+#
+# OWNERSHIP: CMO creates this Secret with an app.kubernetes.io/managed-by label
+# but does NOT track ownership of .data (managedFields is empty, no
+# ownerReferences), so ArgoCD taking it over is safe. If CMO ever starts
+# reconciling the content, this shows up as ordinary ArgoCD drift rather than
+# silent breakage.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-main
+  namespace: openshift-monitoring
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+type: Opaque
+stringData:
+  alertmanager.yaml: |
+    global:
+      resolve_timeout: 5m
+      smtp_smarthost: {{ .Values.alertmanager.email.smarthost | quote }}
+      smtp_from: {{ .Values.alertmanager.email.from | quote }}
+      # The Mailjet API key. Its secret half lives in the mounted SealedSecret
+      # and is never committed; a key without it cannot send.
+      smtp_auth_username: {{ .Values.alertmanager.email.username | quote }}
+      smtp_auth_password_file: "/etc/alertmanager/secrets/{{ .Values.alertmanager.email.credentialsSecret }}/password"
+      smtp_require_tls: true
+    inhibit_rules:
+      - source_matchers: ["severity = critical"]
+        target_matchers: ["severity =~ warning|info"]
+        equal: ["namespace", "alertname"]
+      - source_matchers: ["severity = warning"]
+        target_matchers: ["severity = info"]
+        equal: ["namespace", "alertname"]
+    route:
+      group_by: ["namespace"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: "Default"
+      routes:
+        # Watchdog fires CONTINUOUSLY by design -- it is the heartbeat proving
+        # the alert pipeline works. Routing it to email would deliver a message
+        # every repeat_interval forever, and an inbox that does that stops being
+        # read within a week. It is deliberately sunk into a null receiver.
+        - receiver: "Watchdog"
+          matchers: ["alertname = Watchdog"]
+        # CRITICAL ONLY, deliberately. The alternative -- everything -- means
+        # this cluster's standing warnings (BLUESTORE_SLOW_OP_ALERT,
+        # CephPGImbalance, PodDisruptionBudgetAtLimit on the two structural CNPG
+        # primary PDBs) arrive every 12h forever and train the recipient to
+        # ignore the channel. Widen only for alerts that are ACTIONABLE when
+        # they arrive.
+        - receiver: "Critical"
+          matchers: ["severity = critical"]
+        # The user-namespace job/cronjob rules from
+        # templates/alertingrule-job-failed.yaml. They exist because OpenShift's
+        # built-in KubeJobFailed is scoped to platform namespaces only, so every
+        # CronJob this repo ships in its own namespace was invisible -- which is
+        # how synology-cert-sync failed for a month unnoticed. They are `warning`
+        # severity, so without this route they would not be delivered and the
+        # detection work would still be undelivered.
+        - receiver: "Critical"
+          matchers: ["alertname =~ UserNamespace(JobFailed|CronJobNotSucceeding)"]
+        # WAL archiving to Cloudflare R2 is the only OFFSITE backup path for
+        # either Postgres cluster. CNPGWALArchiveFailing is `warning` at 15m and
+        # critical at 1h; the warning is worth delivering because the critical
+        # arrives 45 minutes into an outage that is already losing offsite RPO.
+        - receiver: "Critical"
+          matchers: ["alertname =~ CNPGWALArchiveFailing.*"]
+    receivers:
+      - name: "Default"
+      - name: "Watchdog"
+      - name: "Critical"
+        email_configs:
+          - to: {{ .Values.alertmanager.email.to | quote }}
+            send_resolved: true
+            headers:
+              subject: '[okd.sudops.pl] {{ `{{ .Status | toUpper }}` }} {{ `{{ .CommonLabels.alertname }}` }}'
+{{- end }}

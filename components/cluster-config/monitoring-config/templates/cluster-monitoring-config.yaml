@@ -20,6 +20,14 @@ data:
             requests:
               storage: {{ .Values.prometheus.volumeSize }}
     alertmanagerMain:
+{{- if .Values.alertmanager.email.enabled }}
+      # Mounts the sealed Mailjet credentials at
+      # /etc/alertmanager/secrets/<name>/, which is where
+      # smtp_auth_password_file in the alertmanager-main Secret reads from.
+      # Without this the config parses but every send fails on auth.
+      secrets:
+        - {{ .Values.alertmanager.email.credentialsSecret }}
+{{- end }}
       volumeClaimTemplate:
         spec:
           storageClassName: ceph-nvme-block

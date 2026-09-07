@@ -33,6 +33,28 @@ prometheus:
 alertmanager:
   volumeSize: 1Gi
 
+  # SMTP delivery via Mailjet. Closes the "detection without delivery" gap: the
+  # default OpenShift receivers are all EMPTY, so AlertmanagerReceiversNotConfigured
+  # fires and nothing this cluster detects can reach a human.
+  email:
+    # OFF until both halves exist: the Mailjet API key in `username` below, and
+    # the SealedSecret holding its secret half. Enabling with either missing
+    # deploys an alertmanager-main that parses fine and fails every send on
+    # auth -- which looks exactly like working delivery until an alert is
+    # actually needed. Flip to true in the same commit that supplies them.
+    enabled: false
+    smarthost: in-v3.mailjet.com:587
+    # Must be a VALIDATED SENDER in Mailjet or delivery fails silently.
+    from: alerts@sudops.pl
+    to: storm_cogent9c@icloud.com
+    # Mailjet API key. The secret half is sealed separately and mounted; a key
+    # on its own cannot send.
+    username: ""          # <-- Mailjet API key, set before enabling
+    # SealedSecret holding key `password` (the Mailjet secret key). Mounted at
+    # /etc/alertmanager/secrets/<name>/ by CMO because it is listed under
+    # alertmanagerMain.secrets below.
+    credentialsSecret: alertmanager-mailjet
+
 userWorkload:
   enabled: true
   retention: 15d
