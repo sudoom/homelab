@@ -42,7 +42,7 @@ postgres:
 library:
   # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi). Decided
   # 2026-06-18: photos are irreplaceable, so they live where the existing 3-2-1
-  # pipeline already is (Synology → cloud) — NOT on the shared cephfs-hdd EC
+  # pipeline already is (Synology → cloud) — NOT on the shared CephFS EC tier (retired 2026-09-07)
   # tier (which would need a brand-new Ceph→NAS backup path and competes with
   # media/RGW for ~6.9 TiB). NFS local-RAID also serves the thumbnail-heavy
   # phone workload (small random reads) at least as well as EC-2+1-on-HDD, whose

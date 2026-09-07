@@ -28,7 +28,7 @@ provisioner: nfs.csi.k8s.io
 parameters:
   server: {{ $.Values.truenas.server }}
   share: {{ .share }}
-# Retain matches nfs-csi and cephfs-hdd: deleting a PVC must never destroy the
+# Retain matches nfs-csi: deleting a PVC must never destroy the
 # data. Costs a manual PV + on-NAS directory cleanup; that is the intended trade.
 reclaimPolicy: Retain
 volumeBindingMode: Immediate
