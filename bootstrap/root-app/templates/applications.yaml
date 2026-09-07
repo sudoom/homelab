@@ -74,6 +74,21 @@ spec:
     # if you forget, selfHeal fights the HPA, which is loud and self-correcting.
     # Forgetting the opposite way (a blanket ignore) is silent, which is why the
     # default is off.
+    #
+    # RESIDUAL TRAP, and it is unavoidable rather than an oversight: an HPA
+    # CANNOT scale a Deployment up from zero. The HPA controller reports
+    # `ScalingActive=False  ScalingDisabled: scaling is disabled since the
+    # replica count of the target is zero`. So for a Deployment listed here,
+    # replicas is owned by neither git nor the HPA once it reaches 0, and it
+    # stays down until someone scales it by hand:
+    #     oc -n <ns> scale deploy/<name> --replicas=1
+    # after which the HPA takes over again permanently.
+    #
+    # Observed 2026-09-07: scoping this ignore restored eleven of the twelve
+    # Deployments that had been parked at 0 for a benchmark window; immich-server
+    # was the twelfth and needed exactly that one manual nudge. Anything quiesced
+    # to 0 that is ALSO HPA-managed needs a manual scale on the way back --
+    # budget for it in the runbook rather than discovering it during a cutover.
 {{- with $app.hpaDeployments }}
 {{- range . }}
     - group: apps
