@@ -3,17 +3,44 @@ namespace: openshift-logging
 # OBC against the ceph-bucket StorageClass (CephObjectStore-backed).
 # The OBC controller materialises a CM (BUCKET_HOST/PORT/NAME) and a
 # Secret (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) in this namespace.
-obc:
-  name: loki
+# ---- Object storage: garage on TrueNAS (moved off Ceph RGW 2026-09-07) ----
+# Loki's chunks lived in ceph-objectstore.rgw.buckets.data, replicated x3 on the
+# three HDD OSDs -- the tier being decommissioned. This moves them off, which
+# also partially decouples logging from Ceph: the 2026-05-12 failure mode was
+# dashboards going dark DURING a storage incident.
+#
+# ONLY PARTIAL, and worth being honest about: Loki's WAL (2x150Gi),
+# index-gateways (2x50Gi) and compactor all still sit on ceph-nvme-block, so a
+# Ceph incident still takes logging down. Full decoupling needs the WAL off Ceph
+# too, and an NFS-backed write-heavy WAL is an open performance question.
+#
+# NO CHUNK MIGRATION WAS DONE (operator's call, 2026-09-07). Chunks written
+# before the cutover stay in the RGW bucket and are deleted with it -- logs from
+# before this change are NOT queryable afterwards. Accepted deliberately: 13 GiB
+# of homelab logs against the cost of an S3->S3 copy.
+#
+# Endpoint is the FRONTNET address. Pods cannot reach the storage backnet
+# (192.168.10.0/24) -- see CLAUDE.md -- and Loki's ingesters and queriers are
+# ordinary pod-network pods, unlike the hostNetwork CSI daemons that mount NFS.
+# This is the same address and port the proven Velero truenas-garage BSL uses.
+garage:
+  endpoint: http://192.168.1.25:30188
+  bucket: loki
+  region: garage
+  # SealedSecret supplying ONLY access_key_id + access_key_secret. The
+  # non-secret half (endpoint/bucket/region) deliberately stays in this file so
+  # it stays reviewable in a diff -- sealing it would mean re-sealing to change
+  # an endpoint.
+  credentialsSecret: loki-garage-credentials
 
-# Pre-sync Job that translates OBC outputs -> LokiStack-shaped Secret.
-# LokiStack wants a Secret with keys: endpoint, bucketnames,
-# access_key_id, access_key_secret, region. The Job loops until the OBC
-# is Bound, then writes the Secret idempotently (apply-from-stdin).
+# Pre-sync Job that assembles the LokiStack-shaped Secret. LokiStack wants ONE
+# Secret carrying endpoint, bucketnames, access_key_id, access_key_secret and
+# region, so the sealed credentials and the plaintext config have to be merged
+# somewhere. This Job is that somewhere; it used to read an ObjectBucketClaim's
+# outputs instead, which is why it already exists and is proven.
 secretTranslator:
   image: quay.io/openshift/origin-cli:4.22
   destinationSecretName: loki-storage
-  region: us-east-1
 
 # LokiStack — 1x.pico is the smallest tier with HA replicas (the
 # 1x.demo tier is single-replica, leaves every PDB at ALLOWED
