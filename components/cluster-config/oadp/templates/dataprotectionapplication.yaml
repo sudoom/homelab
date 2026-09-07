@@ -16,27 +16,6 @@ spec:
       enable: {{ .Values.dpa.nodeAgent.enable }}
       uploaderType: {{ .Values.dpa.nodeAgent.uploaderType }}
   backupLocations:
-    # RGW, on its way out (HDD-tier decommission phase 2b). Kept as a FALLBACK
-    # for exactly one commit: nothing targets it any more, and it is removed
-    # along with its OBC once garage has carried real traffic. Removing the
-    # destination and the redirect together is what made the Loki cutover block
-    # its own sync for hours on 2026-09-07.
-    - name: default
-      velero:
-        provider: aws
-        default: false
-        objectStorage:
-          bucket: {{ .Values.obc.bucketName }}
-          prefix: velero
-        config:
-          region: us-east-1
-          profile: default
-          s3ForcePathStyle: "true"
-          s3Url: {{ .Values.s3Url }}
-        credential:
-          name: {{ .Values.secretTranslator.destinationSecretName }}
-          key: cloud
-{{- if .Values.garageBsl.enabled }}
     - name: {{ .Values.garageBsl.name }}
       velero:
         provider: aws
@@ -64,4 +43,3 @@ spec:
         credential:
           name: {{ .Values.garageBsl.credentialSecret }}
           key: cloud
-{{- end }}

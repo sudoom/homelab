@@ -1,18 +1,17 @@
 namespace: openshift-adp
 
-obc:
-  name: oadp
-  # Deterministic bucket name (vs generateBucketName) so the DPA can
-  # reference the bucket by name in its rendered manifest without a
-  # post-bind patch step.
-  bucketName: oadp
-
-secretTranslator:
-  image: quay.io/openshift/origin-cli:4.22
-  destinationSecretName: cloud-credentials
-
-# In-cluster S3 endpoint — bypasses Route + edge TLS, faster + reliable.
-s3Url: http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:80
+# ---- Ceph RGW: REMOVED 2026-09-07 (HDD-tier decommission, phase 2b) --------
+# The `obc`, `secretTranslator` and `s3Url` blocks lived here to point Velero at
+# ceph-objectstore.rgw.buckets.data -- x3 replicated on the three HDD OSDs being
+# retired. Backing a cluster up onto the storage it protects was always circular:
+# the 2026-06-08 incident was this Schedule snapshotting Loki's WAL PVCs into the
+# Ceph it was protecting, driving the cluster to 97% full.
+#
+# garage on TrueNAS is now the only BackupStorageLocation and is the default.
+# ACCEPTED COST: backups and logs now both live on the NAS, so it is a single
+# point for both. That is still better than backing up onto the subject, and the
+# offsite path that matters most -- CNPG -> Cloudflare R2 via barman-cloud -- is
+# untouched by any of this.
 
 # ---------------------------------------------------------------------------
 # Second BackupStorageLocation: garage S3 running on the TrueNAS box.
