@@ -398,16 +398,11 @@
 # collector directory.
 # ---------------------------------------------------------------------------
 
-# The textfile directory must exist BEFORE the container starts, or the
-# collector logs an error on every single scrape. Created via the middleware so
-# it is a real dataset path and not a stray directory the next `zfs` operation
-# is surprised by.
-- name: Ensure the textfile-collector directory exists
-  ansible.builtin.file:
-    path: "{{ truenas_node_exporter.textfile_dir }}"
-    state: directory
-    mode: "0755"
-
+# NOTE: the textfile directory is NOT created here. It is declared as a dataset
+# (`monitoring/textfile`) in group_vars and converged by truenas-storage, which
+# runs FIRST -- same reasoning as garage's host_path tree, and the reason this
+# role does no mkdir of its own. If the collector logs "failed to read textfile
+# directory" on every scrape, the storage role did not run, not this one.
 - name: Deploy the node_exporter custom app
   ansible.builtin.command:
     argv:

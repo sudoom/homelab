@@ -105,6 +105,20 @@ truenas_datasets:
     comments: "garage object blocks. garage's default block size is 1 MiB, so 1M matches."
     quota: 0
 
+  # Textfile-collector drop point for the node_exporter running on this box.
+  # A DATASET, not a mkdir, for the same reason the s3 tree above is: the app's
+  # host_path exists before the container starts, without anyone creating it
+  # out of band. Parent + child listed separately because this list does not
+  # create intermediates.
+  - name: monitoring
+    recordsize: 128K
+    comments: "Parent for on-box monitoring artifacts. Not exported over NFS."
+    quota: 0
+  - name: monitoring/textfile
+    recordsize: 128K
+    comments: "node_exporter --collector.textfile.directory. Tiny *.prom files, rewritten by cron."
+    quota: 0
+
   # ---- SMB datasets for humans ---------------------------------------
   # THREE PROPERTIES BELOW ARE CREATE-TIME-ONLY AND CANNOT BE CHANGED LATER.
   #

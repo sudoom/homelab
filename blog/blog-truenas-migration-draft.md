@@ -3543,6 +3543,14 @@ health/capacity/fragmentation, scrub recency, per-disk SMART, ARC hit ratio, `zi
 **not** in 1860 and are phase 2, alongside a textfile-collector cron for the things only a shell knows. The
 collector directory is already created and already passed to node_exporter, so phase 2 is only "write files there".
 
+One detail worth recording because I got it wrong first: the textfile-collector directory started life as an
+`ansible.builtin.file` mkdir. The box's own convention, written into `group_vars` next to the garage paths, is the
+opposite — *"Separate datasets (not subdirectories) so each gets its own recordsize, and so the app's host_path
+mountpoints exist without anyone mkdir-ing."* `tank/s3`, `tank/s3/config`, `tank/s3/meta` and `tank/s3/data` are
+all real datasets. So `monitoring` + `monitoring/textfile` are declared in `truenas_datasets` and converged by
+`truenas-storage`, which runs first; the apps role creates nothing. Reading the conventions the repo already states
+would have been faster than writing the task twice.
+
 The playbook run is the operator's — `ansible/truenas/playbook.yml` has needed `--ask-vault-pass` since
 2026-08-31. Until it runs the target reports DOWN, which is the right visible failure rather than a silent one.
 
