@@ -6,7 +6,19 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: quay.io/okderators/catalog-index:4.20
+  # Pinned per-OKD-minor. Bumped 4.20 -> 4.21 on 2026-09-08 AFTER the control
+  # plane reached 4.21.0-okd-scos.11. Applied by hand (`oc apply -f` this file) --
+  # phase0 is manual bootstrap, ArgoCD does not manage it.
+  #
+  # WHAT THE FLIP ACTUALLY DELIVERED: nothing, and one package regressed. The
+  # 4.21 catalog's alpha heads are cert-manager-operator v1.18.0 (IDENTICAL to
+  # installed), gitops-operator v1.19.0 (identical) and cluster-logging
+  # v6.3.0-2025-08-08 -- which is OLDER than the v6.5.0 we run. Zero InstallPlans
+  # were generated. That matches okderators issue #44 (logging/loki 4.21
+  # compatibility) still being open. Nothing downgrades -- OLM only walks the
+  # graph forward and every okderators subscription is installPlanApproval:
+  # Manual -- but do not expect this tag to be a source of operator upgrades.
+  image: quay.io/okderators/catalog-index:4.21
   displayName: OKDerators
   publisher: OKD Community
   updateStrategy:
