@@ -34,17 +34,172 @@ MINOR=18            # <- drives submodule branches via ${OCP_SHORT}
 1.20 is the newest buildable option, and it covers 4.21 *and* 4.22 in one bump — so the not-yet-created
 `release-4.22` catalog branch needs no follow-up.
 
-## What the PR changes (5 files, 42/19)
+## What the PR changes (3 commits, 9 files, 79/24)
 
 ```
- .gitmodules                         |  4 +--   cert-manager-1.18 -> 1.20, release-1.18 -> 1.20
- cert-manager/build.sh               |  2 +-   MINOR=18 -> 20
- cert-manager/cert-manager           |  2 +-   gitlink -> ddde1aa46c46994890adf8234266504f3efc0607
- cert-manager/operator               |  2 +-   gitlink -> bd768238b709eea3edc6f3fbf6cd50a480369b28
- cert-manager/patches/operator.patch | 51 ++--- REGENERATED + Makefile guard (see below)
+ .gitmodules                             |  4 +--   cert-manager-1.18 -> 1.20, release-1.18 -> 1.20
+ cert-manager/build.sh                   | 17 +++-   MINOR=18 -> 20, plus the upgrade-graph rewrite
+ cert-manager/cert-manager               |  2 +-   gitlink -> ddde1aa46c46994890adf8234266504f3efc0607
+ cert-manager/operator                   |  2 +-   gitlink -> bd768238b709eea3edc6f3fbf6cd50a480369b28
+ cert-manager/acme-solver.Containerfile  |  2 +-   go-toolset 1.24 -> 1.26
+ cert-manager/cert-manager.Containerfile |  2 +-   go-toolset 1.24 -> 1.26
+ cert-manager/istio-csr.Containerfile    |  2 +-   go-toolset 1.24 -> 1.26 (pre-existing breakage, see below)
+ cert-manager/operator.Containerfile     | 21 ++++   go-toolset 1.26 + direct `go build` instead of `make build`
+ cert-manager/patches/operator.patch     | 51 ++---  REGENERATED + Makefile guard (see below)
 ```
+
+Split into three commits so a maintainer can take them independently:
+
+| commit | subject |
+|---|---|
+| `6db11a4` | `[cert-manager] Update to 1.20` |
+| `3f508d4` | `[cert-manager] Update the istio-csr builder to Go 1.26` |
+| `8565c5f` | `[cert-manager] Set the okderators upgrade graph on the bundle` |
+
+## The upgrade-graph defect: the bundle offers no edge any okderators user can take
+
+Found by review, not by the build -- `operator-sdk bundle validate` passes either way, because this is a
+*graph* defect, not a schema one.
+
+The generated CSV inherits Red Hat's upgrade graph verbatim:
+
+```yaml
+olm.skipRange: '>=1.19.0 <1.20.0'
+replaces: cert-manager-operator.v1.19.0
+```
+
+**okderators has never published a 1.19 build.** Its entire published history for this package is:
+
+```
+$ ls catalog/cert-manager-operator/          # okderators-catalog-index, release-4.21
+cert-manager-operator.v1.14.0-2024-08-09-204321.yaml
+cert-manager-operator.v1.15.0-2025-05-30-151158.yaml
+cert-manager-operator.v1.18.0-2025-09-22-144722.yaml
+cert-manager-operator.v1.18.0-2025-12-25-214537.yaml
+```
+
+So the installed head, `1.18.0-2025-12-25-214537`, falls outside `>=1.19.0 <1.20.0` and the `replaces` names a
+CSV that does not exist in the catalog. Checked against `blang/semver/v4`, the library OLM resolves
+`olm.skipRange` with:
+
+```
+>=1.19.0 <1.20.0                       1.18.0-2025-12-25-214537 -> false
+>=1.0.0 <1.20.0-2026-09-08-213954      1.18.0-2025-12-25-214537 -> true
+```
+
+The fix follows `kube-descheduler/build.sh` and `vertical-pod-autoscaler/build.sh`, which already do exactly
+this -- widen `olm.skipRange` to cover every published okderators build and delete the dangling `replaces`:
+
+```bash
+export OLM_SKIP_RANGE=">=1.0.0 <${OCP_DATE}"
+yq e -i '.metadata.annotations["olm.skipRange"] = strenv(OLM_SKIP_RANGE)' "${CSV_BASE}"
+yq e -i 'del(.spec.replaces)' "${CSV_BASE}"
+yq e -i 'del(.spec.skips)' "${CSV_BASE}"
+```
+
+Verified on the generated bundle:
+
+```
+$ yq e '{"version": .spec.version, "skipRange": .metadata.annotations["olm.skipRange"],
+         "replaces": .spec.replaces}' bundle/manifests/cert-manager-operator.clusterserviceversion.yaml
+version: 1.20.0-2026-09-08-213954
+skipRange: '>=1.0.0 <1.20.0-2026-09-08-213954'
+replaces: null
+```
+
+**Nuance worth stating to the maintainer, because it changes how urgent this is.** In okderators the
+load-bearing upgrade edge is not the CSV at all -- `hack/add-bundle.sh` runs `opm render` and writes the bundle
+verbatim, and the graph lives in the hand-authored `olm.channel` entries in
+`catalog/cert-manager-operator/cert-manager-operator.yaml`:
+
+```yaml
+schema: olm.channel
+entries:
+  - name: cert-manager-operator.v1.18.0-2025-12-25-214537
+    replaces: cert-manager-operator.v1.18.0-2025-09-22-144722
+```
+
+That is why the existing 1.15 -> 1.18 hop works despite the same class of stale CSV metadata (the shipped 1.18
+build still carries `olm.skipRange: '>=1.17.0 <1.18.0'`). So the **companion catalog-index PR must add**:
+
+```yaml
+  - name: cert-manager-operator.v1.20.0-<date>
+    replaces: cert-manager-operator.v1.18.0-2025-12-25-214537
+```
+
+`replaces` edges do not require the intermediate versions to exist, so this jumps 1.18 -> 1.20 directly. The
+build.sh change is therefore belt-and-braces rather than the sole mechanism -- but it makes the bundle
+self-describing, matches the other okderators operators, and removes a `replaces` pointing at a CSV that is not
+in the catalog.
+
+## Only findable by running the build: istio-csr does not compile on main
+
+`istio-csr` tracks `main`, not `cert-manager-${OCP_SHORT}`, so this is **upstream-current breakage unrelated to
+the 1.20 bump** -- `./build.sh build_containers` fails on `main` today:
+
+```
+[1/2] STEP 1/8: FROM registry.access.redhat.com/ubi9/go-toolset:1.24 AS builder
+[1/2] STEP 8/8: RUN cd $HOME/cmd && go build -o $HOME/_output/cert-manager-istio-csr ...
+go: ../go.mod requires go >= 1.25.0 (running go 1.24.6; GOTOOLCHAIN=local)
+```
+
+`cert-manager/istio-csr/go.mod` declares `go 1.25.0`. Bumped to `go-toolset:1.26`, matching the other three.
+
+## Upstream Dockerfile comparison (AGENTS.md requirement)
+
+```bash
+./scripts/rhcatalog.sh containerfiles cert-manager 4.21
+```
+
+Two things a reviewer should know about this step for cert-manager specifically:
+
+- **Red Hat has not published 1.20 images.** The catalog's newest bundle for `openshift-cert-manager-operator`
+  is **1.18.0**, so `dump-containerfiles ... v1.20.0` returns `no bundle found`. A 1.20 comparison is not
+  possible; 1.18 is the only available baseline.
+- **The operator image is not in the bundle's `related_images`.** The five components the catalog returns are
+  `cert-manager-istiocsr`, `cert-manager-acmesolver`, `cert-manager-webhook`, `cert-manager-ca-injector` and
+  `cert-manager-controller` -- all operands. So the operator Containerfile cannot be diffed this way at all.
+
+For the five operand Dockerfiles the comparison is clean: the `ENV GO_BUILD_TAGS` / `GOEXPERIMENT` /
+`CGO_ENABLED=1` / `GOFLAGS=""` block and the `go build ... -tags ${GO_BUILD_TAGS} main.go` lines match ours
+exactly. The only differences are the two base images AGENTS.md explicitly lists as ignorable
+(`brew.registry.redhat.io/rh-osbs/openshift-golang-builder` vs `registry.access.redhat.com/ubi9/go-toolset`,
+`registry.redhat.io/rhel9-4-els/rhel:9.4` vs `quay.io/centos/centos:stream9`) plus the Go version, which has to
+differ because RH's baseline is 1.18 and 1.20's go.mod requires newer.
+
+Note also `scripts/rhcatalog.sh` needs **bash 4+** for its `declare -A`; it cannot run under macOS's system
+bash 3.2 (`line 9: acm: unbound variable`).
 
 ## VERIFIED BY BUILDING IT
+
+### All four container images build
+
+```
+$ cd cert-manager && BASE_REGISTRY=quay.io/sudoom ./build.sh build_containers
+Successfully tagged quay.io/sudoom/cert-manager/operator:1.20.0-2026-09-08-212653
+Successfully tagged quay.io/sudoom/cert-manager/cert-manager:1.20.0-2026-09-08-212653
+Successfully tagged quay.io/sudoom/cert-manager/acme-solver:1.20.0-2026-09-08-212653
+Successfully tagged quay.io/sudoom/cert-manager/istio-csr:1.20.0-...       (after the Go 1.26 bump)
+```
+
+`operator.Containerfile`'s replacement `RUN go build -o cert-manager-operator -ldflags '-w -s' -tags
+"${GO_BUILD_TAGS}" main.go` compiles clean, which is what the `make build` -> `go build` change exists to prove.
+
+**Workstation trap, cost ~30 min, nothing to do with the code.** An earlier build filled the host disk; the
+podman VM recorded a writeback error, and every subsequent `podman build` then died at
+`STEP 1: FROM ...` with an `input/output error` that looks like image corruption. Re-pulling the base image does
+not fix it. The real message is in the VM's kernel log:
+
+```
+$ podman machine ssh 'sudo dmesg -T | tail -3'
+overlayfs: Cannot mount volatile when upperdir has an unseen error. Sync upperdir fs to clear state.
+```
+
+podman mounts build layers `volatile`; overlayfs refuses that while the filesystem holds an unseen error.
+A `sync` inside the VM does **not** clear it -- `podman machine stop && podman machine start` does, and
+preserves all images (no `podman system reset` needed).
+
+### make bundle + operator-sdk bundle validate
 
 ```
 $ make bundle BUNDLE_VERSION=1.20.0-2026-09-08-200000 \
@@ -72,7 +227,7 @@ OKD strings: 7    Red Hat strings: 1 (see residue note below)
 
 The generated name/version match okderators' existing scheme exactly, so the channel entry slots in unchanged.
 
-## Second blocker, only findable by running the build: a new semver guard
+## Only findable by running the build: a new semver guard
 
 The 1.20 Makefile added a guard that 1.18 does not have:
 
@@ -191,9 +346,16 @@ Ceph) and `nvme-replicated` is at ~81.6% against an 85% nearfull threshold.
 
 Honest scope, so a reviewer knows what to re-check:
 
-- **No container images were built.** `make bundle` is verified end to end; `build_containers` is not. The build
-  host is arm64 and the target amd64, and the Containerfiles use `CGO_ENABLED=1` with
-  `strictfipsruntime,openssl` — a cross-arch emulated CGO build would prove little even if it succeeded.
+- **The images are arm64, the cluster is amd64.** `build_containers` now succeeds for all four images, which
+  proves the Containerfile changes compile — but the build host is Apple Silicon with Rosetta off, so these
+  artefacts cannot run on the cluster. An amd64 build under qemu with `CGO_ENABLED=1` +
+  `strictfipsruntime,openssl` would be slow and would prove little extra; building on amd64 nodes (the
+  in-cluster route below) is the better confirmation.
+- **Nothing was pushed.** `build_bundle`'s `podman push` was stripped for these runs, so no image reached
+  `quay.io/sudoom`. Consequence: `make bundle` had to run **without** `--use-image-digests`, because
+  operator-sdk resolves each `RELATED_IMAGE_*` against the registry and fails
+  `UNAUTHORIZED ... /v2/sudoom/cert-manager/cert-manager/manifests/...` on unpushed tags. Digest pinning is
+  orthogonal to everything verified here, but it is untested.
 - **The bundle was not installed on a cluster.** `operator-sdk bundle validate` passes, but an actual
   `InstallPlan` on OKD 4.21 is untested.
 - **Cosmetic residue, deliberately not fixed:** the generated CSV still contains one `redhat.com` string —
