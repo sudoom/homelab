@@ -455,6 +455,60 @@ truenas_garage:
     metadata: /mnt/tank/s3/meta
     data: /mnt/tank/s3/data
 
+# ---- node_exporter (the cluster's single-pane source for this box) --------
+# WHY A CONTAINER AND NOT A NATIVE SERVICE: the TrueNAS root filesystem is
+# mounted READ-ONLY (`boot-pool/ROOT/25.10.6 zfs ro,...`), so there is nowhere
+# to install a binary or a systemd unit. A container is not a stylistic
+# preference here, it is the only writable execution surface on the box.
+#
+# WHY A CUSTOM APP AND NOT A CATALOG APP: there is no `node-exporter` in ANY
+# TrueNAS train (430 apps available 2026-09-08; the nearest are netdata,
+# prometheus, scrutiny, glances, beszel-hub). So there is no `catalog_app` to
+# name -- but `app.create` accepts `custom_app: true` + a compose payload, and
+# the middleware's ONLY validation of that payload is a literal
+# `docker compose config` run (middlewared/plugins/apps/custom_app_utils.py ->
+# compose_utils.validate_compose_config). No allowlist, no denylist: if plain
+# docker compose accepts it, TrueNAS accepts it. `network_mode: host`,
+# `pid: host` and the read-only rootfs bind all pass.
+#
+# WHY NOT NETDATA, which IS already running: TrueNAS 25.10 runs netdata as its
+# own reporting backend on 127.0.0.1:6999 and it DOES answer
+# /api/v1/allmetrics?format=prometheus. It is still the wrong source -- see the
+# README TODO for the full reasoning, but the short version is that unbinding
+# it means editing a middleware-owned config file (reverts on upgrade) and its
+# metric names are `netdata_<chart>_<dim>_average` carrying PRE-AVERAGED values,
+# so rate() is meaningless and no community dashboard matches.
+#
+# WHY NOT reporting.exporters: that native feature exists on this box but
+# offers exactly one type -- GRAPHITE. No Prometheus type, and it would export
+# netdata's bespoke metric set anyway.
+#
+# PERSISTENCE: apps live on `tank/ix-apps` (the DATA pool; boot-pool is
+# separate), so this survives an OS upgrade.
+truenas_node_exporter:
+  app_name: node-exporter
+  image: quay.io/prometheus/node-exporter:v1.9.1
+  # Host networking is REQUIRED, not incidental: node_exporter must see the
+  # host's real interfaces for `node_network_*` -- which is the only way to get
+  # the 10G storage backnet's throughput onto the cluster dashboard.
+  #
+  # Consequence to be deliberate about: it therefore listens on every address
+  # this box holds, including the backnet. We bind it explicitly to the
+  # FRONTNET address instead, because that is the only one a cluster POD can
+  # reach (pods cannot route to 192.168.10.0/24 -- the trap that broke the
+  # Velero BSL on 2026-08-28) and there is no reason to also offer it on an
+  # interface nothing will scrape it from.
+  listen_address: "192.168.1.25:9100"
+  # 9100 is the node_exporter default and is free on this box (checked against
+  # `ss -lnt`: 22/80/111/139/443/445/2049/5357/6000/6999 and the 30186-30190
+  # garage block are taken; 9100 is not).
+  #
+  # Textfile collector: the directory node_exporter reads *.prom from. Phase 2
+  # (pool health, scrub age, SMART, snapshot age) writes here from a cron job;
+  # the directory is created now so the collector has somewhere to look and
+  # does not log an error on every scrape.
+  textfile_dir: /mnt/tank/monitoring/textfile
+
 # ---- Data protection ------------------------------------------------------
 truenas_scrub_day_of_month: "1"     # monthly
 truenas_scrub_threshold: 35         # days; skip a scheduled scrub if scrubbed more recently

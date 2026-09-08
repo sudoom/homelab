@@ -3379,3 +3379,176 @@ impossible. "Tune the CPU" is the obvious second and it is already done. And the
 contain a full-load reference nobody planned to capture, which is what turned "current draw" into
 "current draw relative to a floor and a ceiling" — the only framing in which 3 W is recognisable as
 noise rather than opportunity.
+
+## Getting the NAS into Grafana — and the survey mistake that nearly picked the wrong source
+
+2026-09-08. The NAS had zero representation in the cluster's Grafana, which had become the largest observability
+hole in the homelab: after the 2026-09-07 retirement of the Ceph HDD tier, **Loki's chunks and Velero's backup
+target both moved onto an unmonitored box.**
+
+I filed a design for this earlier the same day. Two of its load-bearing claims were wrong, and both were wrong in
+the same way — I concluded from a single probe instead of reading the thing itself.
+
+### Mistake 1: "netdata is not usable, nothing listens on :19999"
+
+That was a wrong-port probe. netdata is not just installed on TrueNAS 25.10, it is **running as the platform's own
+reporting backend**:
+
+```
+$ pgrep -a netdata
+73915 /usr/sbin/netdata -D
+73920 /usr/sbin/netdata --special-spawn-server
+
+$ ss -lnt | grep 6999
+LISTEN 0  4096  127.0.0.1:6999  0.0.0.0:*
+
+$ curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:6999/api/v1/allmetrics?format=prometheus'
+200
+```
+
+So the shortcut I ruled out on a bad reason was actually available. The conclusion survived, but only after finding
+reasons that hold up — from `/etc/netdata/netdata.conf`:
+
+```
+[global]
+	bind socket to IP = 127.0.0.1:6999
+[web]
+	enabled = no
+[plugin:proc]
+	/proc/diskstats = no
+	/proc/meminfo = no
+	/proc/stat = no
+```
+
+Localhost-bound, and un-binding it means editing a **middleware-owned file** that gets rewritten on upgrade — which
+breaks the code-only rule for this box. It is **v1.37.1** (2022). And the metric shape is disqualifying on its own:
+
+```
+netdata_net_net_kilobits_persec_average{chart="net.eno1",family="eno1",dimension="received"} 150751.95
+```
+
+Those are **pre-averaged** values under netdata's own naming. `rate()` over them is meaningless and no community
+dashboard matches. That is a real reason to reject a source. "I curled the wrong port" is not, and I had shipped
+the second one as if it were the first.
+
+I also checked the native path before dismissing it — TrueNAS does have a supported reporting-exporter feature:
+
+```
+$ midclt call reporting.exporters.exporter_schemas | jq -r '.[].key'
+GRAPHITE
+```
+
+One type. No Prometheus, and it would export netdata's bespoke metric set anyway.
+
+### Mistake 2: hedging on whether node_exporter could run at all
+
+The design said node_exporter would be "a TrueNAS app declared in `truenas-apps`, like garage". It cannot be —
+there is no `node-exporter` in **any** train:
+
+```
+$ midclt call app.available | jq '[.[].name] | length'
+430
+# filtered for export/prometheus/node/metric/netdata/scrutiny/grafana:
+stable    netdata      1.4.13
+stable    prometheus   1.4.16
+community glances      1.1.9
+community grafana      1.4.17
+community scrutiny     1.3.10
+community beszel-hub   1.1.12
+```
+
+I noted that `app.create` accepts `custom_app: true` and then **left it as an open unknown** — "whether TrueNAS's
+custom-app runner permits `network_mode: host` plus a read-only bind of `/`". The operator pushed back on exactly
+that, correctly. It was answerable in about ninety seconds by reading the middleware that was sitting on the box:
+
+```python
+# middlewared/plugins/apps/custom_app_utils.py
+    # Validate the compose configuration with docker compose
+    if compose_yaml_string and not verrors:
+        is_valid, error_msg = validate_compose_config(compose_yaml_string)
+
+# middlewared/plugins/apps/compose_utils.py
+def validate_compose_config(compose_yaml: str) -> tuple[bool, str]:
+    ...
+        cp = run(['docker', '--config', '/etc/docker', 'compose', '-f', tmp_file.name, 'config'], ...)
+```
+
+The **entire** validation is a `docker compose config` run. No allowlist, no denylist, no schema of permitted keys.
+If plain docker compose accepts it, TrueNAS accepts it — so `network_mode: host`, `pid: host` and the rootfs bind
+were never in question. The forums were no help here (one inconclusive thread about a Home Assistant install
+failing on an unrelated lifecycle error); the source was decisive and was local.
+
+And the container is not a preference — it is the only option:
+
+```
+$ findmnt -no SOURCE,FSTYPE,OPTIONS /
+boot-pool/ROOT/25.10.6 zfs ro,nodev,relatime,xattr,noacl,casesensitive
+```
+
+The root filesystem is **read-only**. There is nowhere to install a binary or a unit file. (`tank/ix-apps` is on the
+data pool, so apps do survive an OS upgrade — the boot pool is separate.)
+
+### What the box actually offers
+
+```
+/proc/spl/kstat/zfs/  ->  arcstats, abdstats, zil, zfetchstats, tank, boot-pool
+ARC                       25.1 GiB / 30.2 GiB c_max;  hits 526,889,641 : misses 11,322,871  = 97.9%
+zil_commit_count          687,912
+/proc/net/rpc/nfsd        present
+zpool list -H             tank ONLINE 45% 1%
+```
+
+`zil` is the one worth calling out: it turns the one-off SLOG study into a standing signal instead of a
+measurement someone has to remember to repeat.
+
+### The cluster side, and a deprecation warning that must be ignored
+
+ARC, ZIL, SMART and NFS server stats only exist on the box, so unlike `shelly-exporter` and `mikrotik-exporter`
+(both of which run the exporter as a pod here and reach out), this needs an agent there and a bare scrape target
+here. There is no `ScrapeConfig` CRD on this cluster — only `ServiceMonitor` — so the route is a **selectorless
+Service plus a hand-written Endpoints object**, which is the same trick `kube-system/kubelet` and
+`default/kubernetes` already use.
+
+`helm lint` objects:
+
+```
+[WARNING] templates/service-endpoints.yaml: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice
+```
+
+**Do not act on it.**
+
+```
+$ oc -n openshift-user-workload-monitoring get prometheus user-workload -o jsonpath='{.spec.serviceDiscoveryRole}'
+(empty)
+```
+
+Unset means prometheus-operator's default `Endpoints` service-discovery role, which watches the Endpoints API.
+Mirroring runs Endpoints → EndpointSlice and **never the reverse**, so replacing the object with an EndpointSlice
+leaves that role nothing to find. The failure is silent in the worst way: ServiceMonitor still valid, ArgoCD still
+`Synced`/`Healthy`, series just stop. Deprecated-but-discovered beats modern-but-invisible, and the condition to
+re-check is written into the chart.
+
+The scrape targets `192.168.1.25`, the **frontnet** address — a pod cannot route to `192.168.10.0/24`, which is the
+trap that broke the Velero BackupStorageLocation on 2026-08-28. The exporter is bound to that same address on the
+NAS side so the two cannot drift apart.
+
+`instance` is stamped `truenas` rather than the default `192.168.1.25:9100`, matching
+`shelly_power_watts{instance="truenas"}` — so the box's power draw and its ZFS behaviour carry the same name and a
+single dashboard can show both. That is the actual content of "single pane"; the rest is panels.
+
+### What is done and what is not
+
+grafana.com **1860** covers CPU, memory, load, filesystem, disk IO and network for free. ZFS pool
+health/capacity/fragmentation, scrub recency, per-disk SMART, ARC hit ratio, `zil_commit` rate and NFS latency are
+**not** in 1860 and are phase 2, alongside a textfile-collector cron for the things only a shell knows. The
+collector directory is already created and already passed to node_exporter, so phase 2 is only "write files there".
+
+The playbook run is the operator's — `ansible/truenas/playbook.yml` has needed `--ask-vault-pass` since
+2026-08-31. Until it runs the target reports DOWN, which is the right visible failure rather than a silent one.
+
+### The lesson worth keeping
+
+Both mistakes were the same mistake: **I probed once, got a result, and wrote the result up as a property of the
+system.** Port 19999 was empty, so "netdata is not usable". The compose runner was undocumented, so "unknown
+whether host networking works". In both cases the authoritative answer was on the box — a config file and a
+hundred lines of middleware Python — and reading it took less time than writing the hedge did.

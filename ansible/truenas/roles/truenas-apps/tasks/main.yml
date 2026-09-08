@@ -383,3 +383,86 @@
       layoutVersion={{ truenas_garage_status.json.layoutVersion }}
       -- secrets are NOT printed; read one with
       GetKeyInfo?id=<id>&showSecretKey=true when minting a SealedSecret.
+
+# ---------------------------------------------------------------------------
+# node_exporter — the box's metrics source for the cluster's Grafana.
+#
+# Deployed as a CUSTOM (compose) app rather than a catalog app because no
+# TrueNAS train ships node-exporter. The full rationale — including why not
+# netdata, which is already running, and why not a native service — is in
+# group_vars/all.yml above `truenas_node_exporter`.
+#
+# The compose below is upstream node_exporter's own documented Docker
+# invocation (host network + pid + `--path.rootfs=/host` over a read-only bind
+# of `/`), with two additions: an explicit bind address, and the textfile
+# collector directory.
+# ---------------------------------------------------------------------------
+
+# The textfile directory must exist BEFORE the container starts, or the
+# collector logs an error on every single scrape. Created via the middleware so
+# it is a real dataset path and not a stray directory the next `zfs` operation
+# is surprised by.
+- name: Ensure the textfile-collector directory exists
+  ansible.builtin.file:
+    path: "{{ truenas_node_exporter.textfile_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Deploy the node_exporter custom app
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.create
+      - "{{ _app | to_json }}"
+  vars:
+    _ne: "{{ truenas_node_exporter }}"
+    _app:
+      app_name: "{{ _ne.app_name }}"
+      custom_app: true
+      custom_compose_config:
+        services:
+          node-exporter:
+            image: "{{ _ne.image }}"
+            # `unless-stopped`, not `always`: an operator who stops this app
+            # from the UI should have it stay stopped across a reboot.
+            restart: unless-stopped
+            # Both are required for a host-accurate view. Without pid:host the
+            # process/context-switch counters describe the container, not the
+            # NAS.
+            network_mode: host
+            pid: host
+            command:
+              - "--path.rootfs=/host"
+              - "--web.listen-address={{ _ne.listen_address }}"
+              - "--collector.textfile.directory=/host{{ _ne.textfile_dir }}"
+            volumes:
+              # rslave so ZFS datasets mounted after the container starts are
+              # still visible inside it -- without it, a dataset created later
+              # is invisible to the filesystem collector until a restart.
+              - "/:/host:ro,rslave"
+  when: truenas_node_exporter.app_name not in truenas_app_names
+  register: truenas_ne_deploy
+  failed_when: false
+
+# Same reasoning as the garage deploy above: surface the real error from the
+# job record rather than leaving the operator with an opaque module failure.
+- name: Read the app.create job record if the node_exporter deploy failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.create"]]']
+  register: truenas_ne_job
+  changed_when: false
+  when: (truenas_ne_deploy.rc | default(0)) != 0
+
+- name: Fail with the real node_exporter reason
+  ansible.builtin.fail:
+    msg: "node_exporter app.create failed: {{ (truenas_ne_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_ne_deploy.rc | default(0)) != 0
+
+- name: Report node_exporter state
+  ansible.builtin.debug:
+    msg: >-
+      node_exporter {{ 'already present' if truenas_node_exporter.app_name in truenas_app_names else 'DEPLOYED' }}
+      -- metrics at http://{{ truenas_node_exporter.listen_address }}/metrics;
+      the cluster scrapes it via components/cluster-config/truenas-exporter

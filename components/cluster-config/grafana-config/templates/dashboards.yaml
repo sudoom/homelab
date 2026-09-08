@@ -224,3 +224,32 @@ spec:
   datasources:{{ $bindings }}
   json: |
 {{ .Files.Get "files/shelly-power.json" | indent 4 }}
+---
+# TrueNAS — Node Exporter Full (grafana.com 1860)
+#
+# The generic half of the NAS single pane, for free. 1860 is the canonical
+# node_exporter dashboard: CPU, memory, load, filesystem, disk IO, network --
+# all of which now exist for the NAS because a node_exporter runs on it as an
+# Ansible-managed custom app (ansible/truenas/roles/truenas-apps).
+#
+# Its template variables are `job` and `instance`; the ServiceMonitor in
+# components/cluster-config/truenas-exporter stamps `instance="truenas"`, which
+# is also the label the Shelly plug uses -- so this dashboard and the
+# shelly-power one describe the same box under the same name.
+#
+# NOT covered by 1860, and therefore still hand-built (README TODO phase 2):
+# ZFS pool health/capacity/fragmentation, scrub recency, per-disk SMART,
+# ARC hit ratio, zil_commit rate, NFS op latency.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: truenas-node-exporter
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: metrics
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  grafanaCom:
+    id: 1860

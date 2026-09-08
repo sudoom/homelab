@@ -1,0 +1,28 @@
+namespace: truenas-exporter
+
+# ---------------------------------------------------------------------------
+# The scrape target: node_exporter on the NAS.
+#
+# THIS ADDRESS MUST BE THE FRONTNET ONE. TrueNAS also sits on the 10G storage
+# backnet at 192.168.10.10, and that address is unreachable from here: a pod on
+# the OVN pod network cannot route to 192.168.10.0/24 (everything that reaches
+# the backnet today does so from the HOST stack -- Ceph is network.provider:
+# host, and the NFS CSI pods are hostNetwork). Pointing this at .10 produces a
+# silent scrape timeout with ZERO inbound SYNs on the NAS, which is exactly how
+# the Velero BackupStorageLocation broke on 2026-08-28. Use .25.
+#
+# The exporter is bound to this same address on the NAS side
+# (`truenas_node_exporter.listen_address`), so the two must move together.
+# ---------------------------------------------------------------------------
+target:
+  address: 192.168.1.25
+  port: 9100
+
+# Deliberately NOT the default `<ip>:<port>`. Stamping `truenas` here makes
+# node_exporter's series share an `instance` value with the existing
+# `shelly_power_watts{instance="truenas"}` plug metric, so one dashboard can put
+# the box's power draw next to its ZFS and NFS behaviour without a join hack.
+# That is the whole point of the single pane.
+instanceLabel: truenas
+
+scrapeInterval: 30s

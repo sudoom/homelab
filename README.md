@@ -175,18 +175,29 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   * **`/proc/net/rpc/nfsd` is present** → node_exporter's `nfsd` collector gives NFS ops for free.
   * **`zpool list -H -o name,health,capacity,fragmentation` works** (`tank ONLINE 45% 1%`) — pool state needs a
     shell, not an API.
-  **Mechanism — the first design said "declare node_exporter in `truenas-apps` like garage"; that does not work
-  as written.** There is **no `node-exporter` in any TrueNAS catalog train** (430 apps available; the nearest are
-  `netdata`, `prometheus`, `scrutiny`, `glances`, `beszel-hub`), so there is no `catalog_app` to name. The fix keeps
-  the same role and the same `midclt` call: **`app.create` accepts `custom_app: true` + `custom_compose_config`**
-  (confirmed in the method schema), so node_exporter ships as a **custom compose app** — host network, `pid: host`,
-  `/`,`/proc`,`/sys` bind-mounted read-only, `--path.rootfs=/host`.
-  **Shape:** (1) node_exporter as that custom app in `ansible/truenas/roles/truenas-apps/`; (2) a
-  **textfile-collector cron** for what only the shell knows — pool health, scrub age/errors, per-dataset capacity,
-  SMART attributes, newest-snapshot age — created with `cronjob.create`, which `truenas-tasks` **already uses** for
-  the SMART jobs, so this extends an existing pattern; (3) scrape it from the cluster with **Service + selectorless
-  Endpoints + ServiceMonitor** — note there is **no `ScrapeConfig` CRD on this cluster** (only `ServiceMonitor`), so
-  the selectorless-Endpoints wrapper is the only route for an off-cluster target, and it would be the repo's first.
+  **PHASE 1 SHIPPED 2026-09-08 — the code is in, the NAS-side playbook run is the operator's step.** Mechanism,
+  settled by reading the middleware rather than guessing: there is **no `node-exporter` in any TrueNAS catalog
+  train** (430 apps; nearest are `netdata`, `prometheus`, `scrutiny`, `glances`, `beszel-hub`), so there is no
+  `catalog_app` to name — but `app.create` takes `custom_app: true` + a compose payload, and the middleware's
+  **only** validation of that payload is a literal `docker compose config` run
+  (`middlewared/plugins/apps/custom_app_utils.py` → `compose_utils.validate_compose_config`). **No allowlist, no
+  denylist** — `network_mode: host`, `pid: host` and the read-only rootfs bind all pass. A container is also not a
+  preference: the TrueNAS root filesystem is mounted **read-only** (`boot-pool/ROOT/25.10.6 zfs ro,...`), so there
+  is nowhere to put a binary or a unit file. Apps live on `tank/ix-apps` (data pool), so this survives OS upgrades.
+  **Landed:** `truenas_node_exporter` in `group_vars/all.yml` + the custom-app tasks in
+  `roles/truenas-apps/tasks/main.yml`; `components/cluster-config/truenas-exporter/` (Service + selectorless
+  Endpoints + ServiceMonitor, `instance="truenas"`); root-app entry at wave 5; grafana.com **1860** wired into
+  `grafana-config`.
+  **Still to do — phase 2:** the **textfile-collector cron** for what only the shell knows (pool health, scrub
+  age/errors, per-dataset capacity, SMART attributes, newest-snapshot age), written with `cronjob.create` — which
+  `truenas-tasks` **already uses** for the SMART jobs — plus the hand-built ZFS/SMART/NFS panel set that 1860 does
+  not cover. `truenas_node_exporter.textfile_dir` already exists and is already passed to the collector, so phase 2
+  is purely "write files into it".
+  **Trap recorded in the chart, do not undo it:** `helm lint` flags `v1 Endpoints` as deprecated in 1.33+. It stays.
+  UWM's Prometheus has `spec.serviceDiscoveryRole` **unset** → prometheus-operator's default `Endpoints` discovery
+  role, which watches the Endpoints API; mirroring only runs Endpoints → EndpointSlice, never the reverse, so
+  "modernising" it makes the target vanish **silently** with the ServiceMonitor still valid and ArgoCD still Synced.
+  (There is no `ScrapeConfig` CRD on this cluster, which is what would otherwise express this in one object.)
   **Two constraints that will bite if forgotten:** the scrape MUST target **`192.168.1.25` (frontnet)** — a
   pod cannot reach `192.168.10.0/24`, which is the same trap that broke the Velero BSL on 2026-08-28; and
   **do not build on the REST API**, removed in TrueNAS 26 — `midclt` is the sanctioned path.
@@ -195,8 +206,9 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   only the TrueNAS-specific panel set is hand-built: pool capacity/health/fragmentation, scrub recency, per-disk
   SMART + temperature, ARC size and hit ratio, `zil_commit` rate, NFS ops/latency, 10G backnet throughput, and the
   existing `shelly_power_watts{instance="truenas"}` series.
-  **Note on who runs it:** the role change lands in git from here, but `ansible/truenas/playbook.yml` needs
-  `--ask-vault-pass` since 2026-08-31, so **the operator runs the playbook** — this cannot be a Claude-executed step.
+  **Next action is yours:** `ansible/truenas/playbook.yml` needs `--ask-vault-pass` since 2026-08-31, so the
+  playbook run cannot be a Claude-executed step. Until it runs, the cluster-side target simply reports DOWN — which
+  is the correct, visible failure mode rather than a silent one.
   **Decide deliberately, do not just inherit it:** a single pane has a single failure mode. Grafana runs on the
   cluster with its PVC on Ceph, and CLAUDE.md already warns not to rely on Grafana during a storage incident.
   Folding TrueNAS in extends that blindness to NAS incidents. Keep a break-glass path that does not depend on the

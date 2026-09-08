@@ -274,6 +274,17 @@ applications:
     namespace: shelly-exporter
     syncWave: "5"
 
+  # Scrape wiring ONLY -- no workload. The node_exporter it points at runs on
+  # the TrueNAS box itself as an Ansible-managed custom app; this chart is the
+  # Service + selectorless Endpoints + ServiceMonitor that let user-workload
+  # Prometheus reach an off-cluster IP. Enabling it before the NAS-side
+  # playbook has run just yields a DOWN target, not an error.
+  truenas-exporter:
+    enabled: true
+    path: components/cluster-config/truenas-exporter
+    namespace: truenas-exporter
+    syncWave: "5"
+
   # Phase 3 of the homelab.sudops.pl rollout. Daily CronJob; mirrors
   # the homelab-wildcard-tls cert (from cert-manager-config) into the
   # Synology DSM cert store via DSM's web API. DSM creds live in a
