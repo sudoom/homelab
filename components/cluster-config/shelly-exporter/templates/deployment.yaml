@@ -7,13 +7,28 @@ metadata:
     app.kubernetes.io/name: shelly-exporter
 spec:
   replicas: 1
-  # Recreate, not RollingUpdate: with `pod` dropped in the ServiceMonitor's
-  # metricRelabelings, two overlapping pods would emit IDENTICAL label sets
-  # and Prometheus would reject them as duplicate samples for the same
-  # timestamp. A single-replica poller has nothing to gain from a surge
-  # anyway; a few seconds of scrape gap on redeploy is the correct trade.
+  # maxSurge: 0 -- the old pod is terminated BEFORE the new one starts, so two
+  # pods never coexist. That matters because the ServiceMonitor drops `pod` in
+  # metricRelabelings: overlapping pods would emit IDENTICAL label sets and
+  # Prometheus would reject them as duplicate samples for the same timestamp.
+  # A single-replica poller gains nothing from a surge; a few seconds of scrape
+  # gap on redeploy is the correct trade.
+  #
+  # WHY NOT `type: Recreate`, which expresses this more directly: it CANNOT be
+  # applied to this already-existing Deployment. The API server defaulted
+  # `spec.strategy.rollingUpdate` (25%/25%) at creation, and server-side apply
+  # does not remove it when the type changes, so the update is rejected --
+  #   Deployment.apps "shelly-exporter" is invalid: spec.strategy.rollingUpdate:
+  #   Forbidden: may not be specified when strategy type is Recreate
+  # (observed 2026-09-08; ArgoCD reported the app OutOfSync with a Failed sync
+  # operation while the live object stayed on the old strategy). Recreate would
+  # need the Deployment deleted and recreated. maxSurge: 0 is the same
+  # guarantee as a pure field update, so GitOps can converge on its own.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: shelly-exporter
