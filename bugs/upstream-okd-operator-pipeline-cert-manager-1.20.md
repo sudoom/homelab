@@ -294,6 +294,84 @@ $ echo $?
 Verified against a fresh `--branch cert-manager-1.20` checkout, 7 OKD strings present afterwards, zero remaining
 `Red Hat` / `redhat` / `valid-subscription` occurrences.
 
+## IN-CLUSTER TEST: the upgrade graph is now proven by `opm`, install still gated on arch
+
+Two corrections to the earlier plan in this section, both found by trying it:
+
+**1. The internal registry is not available on this cluster.** `configs.imageregistry/cluster` reads
+`managementState: Removed`, there is no registry Deployment, no `image-registry-storage` PVC and no route —
+only the operator and the `node-ca` DaemonSet. It *was* used (the `nmstate-bundle-{broken,fixed}` and
+`nmstate-test-catalog-*` ImageStreams from four months ago are still there), but it has since been removed and
+its storage released. Re-enabling means creating the PVC and flipping `managementState` — a platform change, not
+a test step.
+
+**2. There is a better registry already running: zot.** `components/apps/zot/` deploys zot in-cluster at
+`zot.apps.okd.sudops.pl` (50Gi, `ceph-nvme-block`), and `components/cluster-config/image-mirror-zot/` already
+points the whole cluster's pulls at it via IDMS/ITMS. Its config declares no `auth` and no `accessControl`
+block, so it accepts anonymous pushes, and the route carries the trusted LE wildcard. The bundle pushed first
+try:
+
+```
+$ podman push zot.apps.okd.sudops.pl/okd-test/cert-manager-operator-bundle:1.20.0-2026-09-08-213954
+Writing manifest to image destination
+```
+
+Use an `okd-test/` prefix. The IDMS maps `source: quay.io` (and docker.io, ghcr.io, registry.k8s.io) to
+`mirrors: [zot.apps.okd.sudops.pl]`, so zot's repository namespace is shared across all four upstreams — a test
+push under a path that matches a real upstream repo would shadow it for the entire cluster.
+
+### The upgrade graph, proven both ways
+
+`opm render` against the pushed bundle, assembled into a catalog with the four published okderators bundles and
+the channel entry the companion catalog-index PR would add:
+
+```
+  - name: cert-manager-operator.v1.20.0-2026-09-08-213954
+    replaces: cert-manager-operator.v1.18.0-2025-12-25-214537
+
+$ opm validate /cat && echo OK
+OK
+```
+
+And the same catalog with the **unfixed** graph — i.e. what the bundle ships today, `replaces:
+cert-manager-operator.v1.19.0` against a 1.19 that okderators never published:
+
+```
+$ opm validate /cat
+level=fatal msg="invalid index:
+└── invalid package \"cert-manager-operator\":
+    └── invalid channel \"alpha\":
+        └── multiple channel heads found in graph:
+            cert-manager-operator.v1.18.0-2025-12-25-214537,
+            cert-manager-operator.v1.20.0-2026-09-08-213954"
+```
+
+**Two disconnected channel heads.** This is the defect stated in the tool's own words rather than as semver
+reasoning: 1.20 is not reachable from 1.18, so OLM keeps 1.18 as the head and never offers the upgrade. It is
+also a stronger result than a runtime test would give, because it fails at catalog-build time.
+
+### Why `operator-sdk run bundle` is not the answer *here*
+
+`BUILDING.md` documents `operator-sdk run bundle <bundle-image>` (+ `operator-sdk cleanup <package>`) as the
+simplest cluster deployment, and for a plain install test it is the right tool. It does not fit this particular
+verification, for three separate reasons:
+
+- **It cannot see the defect.** `run bundle` synthesises a single-entry catalog with no upgrade graph. There is
+  no 1.18 to upgrade from, so the `replaces`/`skipRange` problem is invisible to it by construction.
+- **cert-manager is installed AllNamespaces on this cluster.** The `OperatorGroup` in `cert-manager-operator`
+  has `spec: {}`, so the live CSV is copied into every namespace — including any scratch namespace `run bundle`
+  would target. A second CSV owning the same seven cluster-scoped CRDs (`Certificate`, `Issuer`,
+  `ClusterIssuer`, …) collides with the operator that issues this cluster's wildcard and API certificates. The
+  live Subscription is `installPlanApproval: Manual` and pinned to `source: okderators`, so it will not switch
+  sources on its own — but this is a production TLS path, not a test surface.
+- **Arch.** `run bundle` waits for the CSV to reach `Succeeded`. The operand images are arm64; it would fail at
+  the pod having already proven only the resolution step.
+
+**What would make `run bundle` the right call:** amd64 operand images. Build them in-cluster (the nodes are
+amd64) and push to zot, then run it against a cluster that is not serving this one's certificates — or accept
+the CRD-ownership collision as the expected, and safe, failure mode and read only the resolution result.
+
+## SUPERSEDED PLAN (kept for the steps, which still apply if the internal registry is ever re-enabled)
 ## PLANNED NEXT: in-cluster bundle test via the internal registry
 
 The one remaining gap is that the bundle has never been resolved by OLM on a real 4.21 cluster. That is testable
