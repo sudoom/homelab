@@ -66,6 +66,10 @@ spec:
   # being up, not WAL-archive success. ObjectStore CR below holds the R2 config.
   plugins:
     - name: barman-cloud.cloudnative-pg.io
+      # Defaulted to true by the CNPG webhook. Set explicitly: `plugins` is a
+      # list, so SSA compares the whole array and a server-added field leaves
+      # the Application permanently OutOfSync.
+      enabled: true
       isWALArchiver: true
       parameters:
         barmanObjectName: {{ $pg.backup.objectStore.name }}
