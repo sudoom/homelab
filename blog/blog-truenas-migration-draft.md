@@ -3918,3 +3918,45 @@ in this dashboard is now scoped `{instance="truenas"}`.
 
 Three bugs, and the one I would have caught by reading was the one I introduced by copying. The one that needed
 real investigation was invisible from the tool I had been using to verify all afternoon.
+
+### Reading the result — and a panel that confused its own author's intent
+
+Once the collector's cron fired, the whole point of the exercise showed up in one query:
+
+```
+SERIAL             MODEL                SMART  TEMP  HOURS   REALLOC  PENDING  UNCORR
+BTWA64640719480FGN INTEL SSDSC2BB480G6  PASS   34    49143   0        0        -
+K4KSH3VL           HUS726040ALA610      PASS   40    44081   0        0        0
+K4KTDL9L           HUS726040ALA610      PASS   38    44048   0        0        0
+K7GE89HL           HUS726040ALA610      PASS   39    43697   0        0        0
+K7GE897L           HUS726040ALA610      PASS   40    43697   0        0        0
+K7GEX0MR           HUS726040ALA610      PASS   39    43696   0        0        0
+K7GEWZLR           HUS726040ALA610      PASS   38    43696   0        0        0
+```
+
+Seven drives between 43,696 and 49,143 power-on hours — five to five-and-a-half years of continuous service —
+with **zero** reallocated, pending and uncorrectable sectors across the whole set. For a cohort of second-hand
+datacenter pulls that is a genuinely good hand, and until today none of it was visible anywhere.
+
+The operator's question on seeing the first render was "how do I read SMART?", which was fair: the panel labelled
+**SMART readable 7 / 7** is a *collection-health* meta-metric — how many disks the collector could read — and it
+sat in the top row looking like it was the SMART data. It has been renamed **SMART collection** and now says so,
+and the Disks row gained a real per-disk table.
+
+Worth writing the interpretation down, because the intuitive reading of these attributes is wrong on used drives:
+
+* **SMART** is the drive's own overall self-assessment. `FAIL` means it is predicting its own failure — act now.
+* **Reallocated (attr 5)** — sectors already remapped to spares. Damage that has been *contained*.
+* **Pending (197)** — sectors that failed a read and are waiting to be remapped. **This is the more urgent of the
+  two**: it is data currently at risk, not damage already dealt with. The intuitive ranking is backwards.
+* **Uncorrectable (198)** — sectors that could not be recovered at all.
+
+And the rule that matters for this box specifically: **a non-zero count is not automatically alarming here.** These
+drives arrived with five years of history. A count that *moves* is the signal, which is why the alert is
+`delta(...[24h]) > 0` rather than `> 0`. A threshold alert on absolute count would either fire forever or be set so
+high it never fires — the classic way a drive-health alert gets muted and stops meaning anything.
+
+The table is keyed by **serial**, never `/dev/sdX`. That is the same hazard that produced a false
+`CephNodeDiskspaceWarning` on the OKD nodes the same day, when pulling a drive moved every node's boot disk from
+`sdb` to `sda` and started a brand-new `node_filesystem_*` series that a 48-hour `predict_linear` then extrapolated
+into nonsense.

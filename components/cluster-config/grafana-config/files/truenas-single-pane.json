@@ -326,7 +326,7 @@
     },
     {
       "id": 6,
-      "title": "SMART readable",
+      "title": "SMART collection",
       "type": "stat",
       "gridPos": {
         "h": 4,
@@ -376,7 +376,7 @@
         },
         "overrides": []
       },
-      "description": "read_ok below scanned means SMART collection is broken (usually the cron stopped running as root) and drive health is unmonitored."
+      "description": "Health of the COLLECTION, not of the disks -- this is how many disks the collector could read, out of how many `smartctl --scan` found. The disks' own health is the table in the Disks row below. read_ok below scanned means the cron stopped running as root and drive health is unmonitored (it read 0 of 7 during development for exactly that reason)."
     },
     {
       "id": 101,
@@ -718,6 +718,256 @@
       "description": "These are 43k-hour datacenter pulls: a NON-ZERO count is normal and expected. A count that MOVES is the failure signal."
     },
     {
+      "id": 32,
+      "title": "SMART, per disk",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_disk_smart_healthy{instance=\"truenas\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_disk_temperature_celsius{instance=\"truenas\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_disk_power_on_hours{instance=\"truenas\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_disk_reallocated_sectors{instance=\"truenas\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_disk_pending_sectors{instance=\"truenas\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_disk_uncorrectable_sectors{instance=\"truenas\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "F"
+        }
+      ],
+      "description": "How to read this. SMART = the drive's own overall self-assessment; FAIL means it is predicting its own failure and should be replaced now. Reallocated (attr 5) = sectors already remapped to spares. Pending (197) = sectors that failed a read and are waiting to be remapped -- this is the MORE urgent of the two, because it is data currently at risk rather than damage already contained. Uncorrectable (198) = sectors that could not be recovered at all. On this box a NON-ZERO count is not automatically alarming: these are 43,000-hour datacenter pulls and they arrived with a history. What matters is a count that MOVES -- hence the alert uses delta() over 24h rather than a threshold. Keyed by SERIAL, never /dev/sdX, because device names re-enumerate on any reseat.",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "serial",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "endpoint": true,
+              "namespace": true,
+              "service": true,
+              "container": true,
+              "pod": true,
+              "instance": true,
+              "device": true,
+              "prometheus": true,
+              "prometheus_replica": true,
+              "Time A": true,
+              "Time B": true,
+              "Time C": true,
+              "Time D": true,
+              "Time E": true,
+              "Time F": true
+            },
+            "renameByName": {
+              "serial": "Serial",
+              "model": "Model",
+              "Value #A": "SMART",
+              "Value #B": "Temp \u00b0C",
+              "Value #C": "Power-on hours",
+              "Value #D": "Reallocated (5)",
+              "Value #E": "Pending (197)",
+              "Value #F": "Uncorrectable (198)"
+            },
+            "indexByName": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SMART"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "FAIL",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "PASS",
+                        "color": "green",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "(Reallocated|Pending|Uncorrectable).*"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Temp \u00b0C"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 45
+                    },
+                    {
+                      "color": "red",
+                      "value": 50
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "id": 104,
       "type": "row",
       "title": "NFS + network",
@@ -725,7 +975,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 39
       },
       "collapsed": false,
       "panels": []
@@ -738,7 +988,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 40
       },
       "datasource": {
         "type": "prometheus",
@@ -783,7 +1033,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 40
       },
       "datasource": {
         "type": "prometheus",
