@@ -249,14 +249,15 @@ rook-ceph-cluster:
 # full rendered RADOS pool name (<fsName>-<dataPool>), not the bare data-pool
 # name — the CSI driver takes it verbatim. Neither is the cluster default
 # (ceph-nvme-block RBD stays default); RWX is requested explicitly.
-# RETIRED 2026-09-07 with the filesystem above. Rendered the `cephfs-hdd` RWX
-# StorageClass from templates/cephfs-storageclasses.yaml. Nothing references it:
-# media/media-data-pvc and the storage-benchmark PVC were both reclaimed the
-# same day.
-cephfsStorageClasses:
-  enabled: false
-  fsName: cephfs
-  classes: []
+# NOTE (2026-09-08): `cephfsStorageClasses` and templates/cephfs-storageclasses.yaml
+# were DELETED, not just disabled. Keeping a false-gated CephFS StorageClass
+# template implied the tier could be restored by flipping `enabled: true`, and it
+# cannot: Ceph requires `--force` for an EC default data pool and Rook will not
+# pass it, so a rebuild needs a one-time manual `ceph fs new cephfs <meta> <data>
+# --force` BEFORE Rook can adopt the MDS. A flag that silently does nothing is
+# worse than no flag -- same failure shape as the immich `existingClaim` note in
+# components/apps/immich/values.yaml. Restore from git history if the tier ever
+# comes back; the CephFS section of CLAUDE.md has the full procedure.
 
 # OpenShift Route fronting the Ceph dashboard with edge TLS at
 # ceph.apps.okd.sudops.pl. Upstream chart only ships Ingress + Gateway-API
