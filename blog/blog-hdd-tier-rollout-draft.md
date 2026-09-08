@@ -1959,3 +1959,37 @@ purged osd.3
  -7         0.46579          host node4-okd-sudops-pl
   0   nvme  0.46579              osd.0                     up
 ```
+
+### `ceph osd safe-to-destroy` returns EAGAIN exactly when you most want to run it
+
+Purging `osd.4` after node5's disk pull, the gate refused to answer:
+
+```
+$ ceph osd safe-to-destroy 4
+command terminated with exit code 11      # EAGAIN
+```
+
+I purged anyway, on independent evidence (0 PGs, `hdd` class, no pool targets `hdd`), and it was
+fine. But that was the wrong habit: **exit 11 is not "unsafe", it is "cannot conclude"**, and
+treating an inconclusive gate as a pass is how you eventually purge something that mattered.
+
+The precise condition is a *combination*, which the same command proved a minute later — with
+recovery still in flight, `safe-to-destroy 5` returned **0**:
+
+```
+$ ceph osd safe-to-destroy 5
+OSD(s) 5 are safe to destroy without reducing data durability.
+exit=0
+$ ceph -s
+    Degraded data redundancy: 1129/362058 objects degraded (0.312%), 58 pgs degraded
+    recovery: 58 MiB/s, 16 objects/s
+```
+
+So EAGAIN needs **both** an OSD that is down and reporting no stats **and** PGs that are not all
+`active+clean`. That is precisely the state you are in the moment a node comes back from a disk
+pull — the target OSD is down because its disk is gone, and the cluster is still re-replicating
+from the node outage.
+
+**Ordering fix: wait for `active+clean` before purging, not after.** Then the OSD is still down but
+the PG condition is satisfied, and the gate gives a real answer instead of a shrug. Costs a couple
+of minutes of recovery wait and turns a bypassed check into a passed one.
