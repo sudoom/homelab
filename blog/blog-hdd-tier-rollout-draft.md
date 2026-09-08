@@ -1750,3 +1750,111 @@ same mechanism could affect **RBD**, which is production — every config PVC,
 both Postgres clusters, Loki's WAL. Recorded here and in the README so that if
 RBD ever shows persistent EACCES on a multi-node claim, the precedent is
 findable.
+
+---
+
+## Phase 4a — pulling the HDD OSDs out of Ceph (2026-09-08)
+
+Phases 0–3 emptied the HDD tier; phase 4 removes the OSDs themselves. The whole point of having
+done the ordering that way is visible in one line of pre-flight:
+
+```
+$ ceph osd safe-to-destroy 3
+OSD(s) 3 are safe to destroy without reducing data durability.
+```
+
+`osd.3/4/5` held **0 PGs** and 10 MiB each (bare BlueStore superblock). So unlike every other OSD
+operation on this no-drain cluster, **this one has no degraded window** — `ceph osd out` moves zero
+data and `ceph -s` never leaves `129 active+clean`. That is worth stating plainly because the
+instinct on a 3-node cluster is to treat any OSD change as a degraded-window event, and here the
+work done in phases 0–3 is exactly what buys the exemption.
+
+### Pre-flight that mattered
+
+Checking no CRUSH rule still pointed at the class being removed:
+
+```
+$ ceph osd crush rule dump | jq -r '.[] | "\(.rule_name): \([.steps[]|select(.item_name)|.item_name]|join(","))"'
+replicated_rule: default
+nvme-replicated: default~nvme
+...
+ceph-objectstore.rgw.buckets.data: default~hdd
+rgw-buckets-data-hdd: default~hdd
+cephfs-bulk-hdd: default~hdd
+
+$ ceph osd pool ls detail | grep -oE "pool [0-9]+ '[^']+'|crush_rule [0-9]+" | paste - -
+pool 1 'nvme-replicated'   crush_rule 1
+pool 3 '.mgr'              crush_rule 1
+```
+
+**Thirteen CRUSH rules survive for two pools.** Three of them still target `default~hdd`. They are
+inert — no pool references them — but they are teardown debris that reads like "the HDD tier is
+still live" to anyone auditing this later. Cleaning them up is phase 4b.
+
+The more interesting one: **removing the HDD OSDs permanently closes the `.mgr` trap.**
+`replicated_rule` targets bare `default`, i.e. every device class, which is how `.mgr` ended up
+holding the last PGs on the HDD OSDs after every HDD pool was gone. Once the HDD OSDs leave,
+`default` *is* nvme-only, so the trap cannot recur and
+`templates/mgr-pool-crush-rule.yaml` stops being load-bearing on a fresh bootstrap. Worth keeping
+the Job anyway — it costs nothing and documents the hazard — but the hazard is now structural,
+not operational.
+
+### The sequence, per node
+
+Order matters. **The device must leave `cephClusterSpec.storage.nodes[].devices` and reach the live
+CR before the deployment is scaled down**, or Rook recreates the OSD on its next reconcile.
+
+```
+# 1. commit the values.yaml device removal, wait for it to reach the LIVE CephCluster
+$ oc -n rook-ceph get cephcluster rook-ceph -o json | jq -c '.spec.storage.nodes[]|{name,devices:[.devices[].name]}'
+{"name":"node4.okd.sudops.pl","devices":["/dev/nvme0n1"]}
+
+# 2. out (no-op for data at 0 PGs)
+$ ceph osd out 3
+marked out osd.3.
+    osd: 6 osds: 6 up (since 4h), 5 in (since 12s)
+    pgs: 129 active+clean          # <- unchanged
+
+# 3. stop the daemon
+$ oc -n rook-ceph scale deploy rook-ceph-osd-3 --replicas=0
+
+# 4. purge (irreversible: CRUSH + auth + OSD map)
+$ ceph osd purge 3 --yes-i-really-mean-it
+purged osd.3
+
+# 5. remove the deployment
+$ oc -n rook-ceph delete deploy rook-ceph-osd-3
+```
+
+Post-node4 tree — node4 is nvme-only and its host weight drops from 4.10 to 0.47:
+
+```
+ -8         0.46579      zone fd-a
+ -7         0.46579          host node4-okd-sudops-pl
+  0   nvme  0.46579              osd.0                     up
+ -4         4.10448      zone fd-b
+ -3         4.10448          host node5-okd-sudops-pl
+  4    hdd  3.63869              osd.4                     up
+  1   nvme  0.46579              osd.1                     up
+```
+
+`ceph -s`: `5 osds: 5 up, 5 in`, `129 active+clean`. No backfill at any point.
+
+### The thing I got wrong
+
+I told the operator this was a no-degraded-window operation, which is true of the OSD purge — and
+then the spec edit rolled all three mons:
+
+```
+op-mon: [rook-ceph] updating deployment "rook-ceph-mon-a" after verifying it is safe to stop
+op-mon: [rook-ceph] Monitors in quorum: [a b c]
+```
+
+**Any `CephCluster` spec change triggers a full Rook reconcile, and Rook rolls the mons as part of
+it.** Quorum holds throughout (Rook checks `safe to stop` and goes one at a time), so it is safe —
+but it is a real disruption window, it takes a couple of minutes, and phase 4a incurs it **three
+times**, once per node commit. Worth waiting for `3/3 mons 2/2 Running` between nodes rather than
+stacking an OSD purge on top of a mon roll.
+
+The lesson generalises: on this chart, "I only changed the device list" is never the whole blast
+radius. The unit of change is the CephCluster CR, not the field.
