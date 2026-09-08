@@ -94,3 +94,20 @@ Shelly plug uses, so power and system metrics for this box share a name.
 
 ZFS pool health, scrub recency, SMART, ARC hit ratio, `zil_commit` rate and NFS
 latency are **not** in 1860 — see the TrueNAS TODO in the root `README.md`.
+
+## Why the Service is not headless
+
+`clusterIP: None` would be tidier — a ServiceMonitor scrapes pod endpoints and
+never touches the Service IP, so the virtual IP is dead weight. The first cut of
+this chart shipped the Service *without* the field, the API server allocated one,
+and `spec.clusterIP` is **immutable**:
+
+```
+Service "truenas-exporter" is invalid: spec.clusterIPs[0]:
+  Invalid value: []string{"None"}: may not change once set (retried 5 times)
+```
+
+ArgoCD burned all five retries on it. Converting now would mean deleting and
+recreating the Service — a manual mutation for zero functional gain. Same shape
+as the `strategy: Recreate` trap in `shelly-exporter`: **when an immutable field
+blocks a cosmetic improvement, change the manifest, not the cluster.**

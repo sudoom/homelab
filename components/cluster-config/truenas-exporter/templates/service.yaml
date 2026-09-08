@@ -6,7 +6,18 @@ metadata:
   labels:
     app.kubernetes.io/name: truenas-exporter
 spec:
-  clusterIP: None
+  # NOT headless, deliberately. `clusterIP: None` is what mikrotik-exporter uses
+  # and it is the tidier expression -- nothing here needs a virtual IP, because
+  # a ServiceMonitor scrapes the POD endpoints, never the Service IP. But this
+  # Service was first created WITHOUT the field, so the API server allocated one
+  # (172.30.150.233), and `spec.clusterIP` is IMMUTABLE:
+  #   Service "truenas-exporter" is invalid: spec.clusterIPs[0]:
+  #   Invalid value: []string{"None"}: may not change once set
+  # ArgoCD burned all 5 retries on that (observed 2026-09-08). Converting would
+  # require deleting and recreating the Service -- a manual mutation for zero
+  # functional gain. Same shape as the `strategy: Recreate` trap documented in
+  # shelly-exporter's deployment: when an immutable field blocks a cosmetic
+  # improvement, change the manifest, not the cluster.
   selector:
     app.kubernetes.io/name: truenas-exporter
   ports:

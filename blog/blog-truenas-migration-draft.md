@@ -3559,8 +3559,25 @@ is the entire job, and socat needs no config file, no writable directory and no 
 trivially compatible with OpenShift's `restricted-v2` arbitrary UID. An nginx image would need a ConfigMap plus
 writable temp paths to do strictly less.
 
-One non-obvious decision inside it: the pod's probe is a **TCP check on socat's own listener, and deliberately does
-not reach through to the NAS.** An HTTP probe against `/metrics` would mark the pod NotReady whenever the NAS is
+That rework then hit a second, smaller wall worth recording because it is the *same shape as a trap from earlier
+the same day*. Copying `mikrotik-exporter`'s headless Service brought `clusterIP: None` along with it — and the
+first cut of this chart had shipped the Service without the field, so one had already been allocated:
+
+```
+$ oc -n openshift-gitops get application truenas-exporter -o jsonpath='{.status.operationState.message}'
+one or more objects failed to apply, reason: Service "truenas-exporter" is invalid:
+spec.clusterIPs[0]: Invalid value: []string{"None"}: may not change once set (retried 5 times).
+```
+
+`spec.clusterIP` is immutable. This is structurally identical to the `strategy: RollingUpdate` → `Recreate` failure
+on `shelly-exporter` hours earlier: an immutable (or SSA-undeletable) field blocking a change that was only ever
+cosmetic, ArgoCD burning all five retries against it. And the resolution is the same one: a ServiceMonitor scrapes
+POD endpoints and never touches the Service IP, so headless buys nothing here. **When an immutable field blocks a
+cosmetic improvement, change the manifest, not the cluster** — deleting and recreating the Service to win
+tidiness would be a manual mutation for zero functional gain.
+
+One non-obvious decision inside the forwarder: the pod's probe is a **TCP check on socat's own listener, and
+deliberately does not reach through to the NAS.** An HTTP probe against `/metrics` would mark the pod NotReady whenever the NAS is
 down → pod drops out of the Service's endpoints → the Prometheus target **disappears**. A vanished target is far
 less visible than a present one reporting `up == 0`. Keep the pod Ready whenever socat is alive and let `up` carry
 the NAS's health.
