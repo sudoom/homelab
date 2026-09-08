@@ -269,3 +269,131 @@ scheduling constraint, no CephFS, half the OSDs, and logging/backups no longer s
 exist.** Re-check that tag as the single trigger condition. Alongside it, the June prerequisites still stand —
 a supervised, version-coherent **Rook bump to a CSI-working v1.20.x+** (v1.19.5 sits at the exact top of its Kube
 window at 1.35, zero slack), plus GitOps/Logging releases that document 4.22.
+
+---
+
+## HOP 1 EXECUTED 2026-09-08 — 4.20 → 4.21.0-okd-scos.11
+
+```
+started   ~17:54   Working towards 4.21.0-okd-scos.11: 71 of 970 done (7%)
+completed  19:29   history[0]: Completed 4.21.0-okd-scos.11 @ 2026-09-08T17:29:32Z
+elapsed   ~95 min, of which ~20 was a single drain block
+result    3/3 nodes Ready on v1.34.6 (Kube 1.34), zero degraded ClusterOperators
+```
+
+Note the pre-hop-1 checklist from the September re-assessment was **not** completed first — the capacity reclaim
+and the cert-manager bump were both outstanding when the upgrade started. Neither turned out to be a stopper, for
+reasons worth stating: Ceph had ~86 GiB of real headroom and a reboot consumes none of it on a 3-host failure
+domain, and cert-manager degrades at *renewal* rather than at cutover. That was luck confirming a judgement, not a
+vindication of skipping the list.
+
+### What the runbook predicted vs what happened
+
+| Predicted risk | Outcome |
+|---|---|
+| LokiStack `MinAvailable=2` PDB blocks the drain | **Did not fire.** All loki PDBs sat at `allowed=1` throughout — the `loki-pdb-override` CronJob is doing its job |
+| `br-ex.forwarding` zeroed by each node reboot | **Never fired.** All three nodes read `1` after every reboot |
+| Backnet NIC returns `linkdown` | **Did not fire** — including node6, which did exactly that on 2026-07-25 |
+| RGW vs router `:80` scheduling squeeze | Gone; the object store was retired 2026-09-07 |
+| — not predicted — | **A single-instance CNPG cluster blocked the drain for ~20 minutes** |
+
+The `br-ex.forwarding` non-event deserves a note rather than a shrug. CLAUDE.md records it as reliably zeroed by a
+reboot, confirmed three times on 2026-09-08 itself. The likely reconciliation: a full node reboot also restarts
+`ovnkube-node`, which re-asserts the sysctl on start, whereas the cases that broke were NetworkManager reapplies
+*without* a restart (a switch flap, a frontnet blip). The rule is probably better stated as **"an event that
+changes host addresses without restarting ovnkube-node"** rather than "a reboot".
+
+### The blocker nobody listed: single-instance CNPG
+
+```
+E0908 17:08:56 drain_controller: error when evicting pods/"immich-postgres-1" -n "immich"
+  (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+...
+E0908 17:17:16 Drain has been failing for more than 10 minutes. Waiting 5 minutes then retrying.
+```
+
+```
+immich-postgres   instances=1  primary=immich-postgres-1   (on node6)
+PDB               minAvailable=1  disruptionsAllowed=0  currentHealthy=1
+```
+
+CNPG creates a `minAvailable: 1` PDB over the primary. With **`instances: 1` there is no replica to fail over
+to**, so the budget can never be satisfied and the eviction can never succeed — it retries forever. `media-postgres`
+went through untouched because it runs 3 instances and CNPG simply moves the primary.
+
+CLAUDE.md already described these two PDBs as "structural... permanently 0 by construction" and correctly noted
+they "do NOT block draining a node that holds a *replica*". What it did not say is the corollary: **for a
+single-instance cluster every node is the primary's node**, so it blocks unconditionally. That is the gap.
+
+Fix was `oc -n immich delete pod immich-postgres-1` — CNPG recreated it on node4 (node6 being cordoned), the drain
+resumed, and Immich's DB was down for about the length of one pod start. Two smaller lessons from doing it:
+
+- The delete took **>120 s** (graceful Postgres shutdown + RBD unmount), long enough that the drain controller hit
+  its 10-minute failure threshold and backed off to a 5-minute retry. The unblock is therefore not instant — expect
+  to wait one backoff cycle after the pod moves.
+- `oc` failed with `Unauthorized` at exactly the wrong moment: the `authentication` operator had updated during the
+  upgrade and one `oauth-openshift` replica was `Pending` on the cordoned node. **This is what the break-glass
+  kubeconfig is for** — it is an SA token, not OAuth, so it kept working throughout.
+
+**Before hop 2:** either scale `immich-postgres` to 2 instances (needs NVMe headroom this cluster does not
+currently have) or plan the pod deletion as an explicit runbook step. It will recur.
+
+### Transient degradations that are NOT faults
+
+Two things went `Degraded` mid-upgrade and cleared on their own; both are worth recognising rather than chasing:
+
+- **`network`**, with `ApplyOperatorConfig: could not apply ClusterRole /multus-ancillary-tools: ... read tcp
+  192.168.1.8:43802->192.168.1.240:6443: read: connection reset by peer`. `.240` is the API VIP; the reset is the
+  VIP moving during the node cycle. `Available=True`, `Progressing=False`, all OVN pods fully ready.
+- **`kube-apiserver` / `kube-controller-manager` / `kube-scheduler`**, all with
+  `NodeControllerDegraded: The master nodes not ready: node6 not ready`. That is the three operators reporting the
+  node that is mid-reboot, not a fault in any of them. `etcd` stayed `Available=True, Degraded=False` — quorum held
+  at 2/3 throughout, which is the only one that would have mattered.
+
+The API also blanked briefly on each drain (an `oc get nodes` returning nothing, and the `Unauthorized` above).
+On a 3-node cluster every node is control-plane, so each drain removes an apiserver and can move the VIP. Expect
+one blip per node.
+
+### The catalog flip delivered nothing — and this changes the plan
+
+With the control plane on 4.21, `quay.io/okderators/catalog-index` was bumped `4.20` → `4.21` (and the platform
+moved `community-operator-index` to `v4.21` by itself). Both went `READY`. **Zero InstallPlans were generated**, and
+the reason is that the 4.21 catalog is not newer:
+
+```
+cert-manager-operator   alpha head = v1.18.0-2025-12-25   <- IDENTICAL to installed
+gitops-operator         alpha head = v1.19.0-2026-02-07   <- identical
+cluster-logging         alpha head = v6.3.0-2025-08-08    <- OLDER than the installed v6.5.0
+```
+
+That last line is okderators issue #44 ("logging-operator and loki-operator have to be updated to be compatible
+with 4.21", still open) showing up as a fact rather than a caveat. Nothing downgrades — OLM only walks the upgrade
+graph forward, and every okderators subscription had been switched to `installPlanApproval: Manual` an hour
+earlier — but the tag is not a source of operator upgrades.
+
+**The consequence is the important part: the cert-manager bump is not reachable from any catalog on this cluster.**
+
+```
+okderators (4.21)          cert-manager-operator  v1.18.0   <- installed, caps at Kube 1.33
+community-operators v4.21  cert-manager           v1.16.5   <- older
+operatorhubio :latest      cert-manager           v1.16.5   <- older
+```
+
+cert-manager 1.18 is EOL and supports Kube ≤ 1.33; the cluster is now on 1.34. The September plan's step 2 ("bump
+to 1.20.2") assumed a catalog would carry it. None does. So the June draft's "durable de-risk" — *migrate
+cert-manager off okderators* — is no longer optional or merely tidier; **it is the only route**, and it now points
+at the upstream Helm chart rather than a different catalog.
+
+How much time that leaves, measured rather than guessed:
+
+```
+cert-manager pods            3/3 Running, 0 restarts   (survived the hop on Kube 1.34)
+certificates                 5/5 Ready=True
+barman-cloud-{client,server} renews 2026-09-10   <- 2 days; internal CA, low risk
+homelab-wildcard             renews 2026-09-21   <- 13 days; FIRST ACME renewal, the real test
+api-cert / okd-wildcard      renews 2026-10-06
+```
+
+So the canary is the 09-10 internal-CA renewal, and the meaningful deadline is **2026-09-21**, the first
+Let's Encrypt DNS-01 renewal on an out-of-matrix cert-manager. It is running fine today; the risk is that renewal
+exercises code paths a steady-state pod does not.
