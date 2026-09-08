@@ -39,5 +39,21 @@ plugs:
   # and again once 6 spinning HDDs are under load: the ~15-30 W delta for
   # 3.5" drives is the number the README's "NVMe-only compact nodes"
   # power argument turns on.
+  #
+  # MEASURED 2026-09-08 (HDD-tier decommission, phase 4). Pulling ONE 3.5"
+  # HGST 4TB from each of the three OKD nodes moved `rack` from 213.7 W
+  # (09:00-10:00, pre-pull) to 197.7 W (11:00+, all three out) = -16.0 W,
+  # against a README estimate of "~15-20 W". `node6` -- the only per-node
+  # meter -- fell 50.3 -> 46.9 W for its single drive.
+  #
+  # READ THOSE WITH THE CONTROL: `truenas` was untouched and still drifted
+  # -1.5 W over the same window, so the noise floor is ~+/-1.5 W. And the
+  # rack drop (-16.0) EXCEEDS 3x node6's drop (-10.2), which nothing here
+  # can attribute -- there is no per-node plug on node4/node5. Post window
+  # was only 5 samples over 25 min with node6 freshly rebooted; re-read
+  # after a settled day before quoting these as final.
+  #
+  # This is also why `truenas` earns its place: without an untouched plug
+  # in the same series there is no way to tell a real delta from drift.
   - instance: truenas
     rpcUrl: http://192.168.1.55/rpc/Switch.GetStatus?id=0
