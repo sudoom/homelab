@@ -4027,3 +4027,56 @@ cache** — it is allocated memory that the kernel does not count in `MemAvailab
 under pressure. On any ZFS system the honest figure is `MemTotal - MemAvailable - ARC`, and the panel plots that
 explicitly as `used (excl. ARC)`. Low available memory with a large ARC is ZFS working exactly as designed, and it
 is the single most common way a ZFS box gets misdiagnosed as short of RAM.
+
+### Reclaiming 1.15 TiB, and a second run-in with "no become"
+
+With the recordsize question answered and its six rows safely in the results TSV, the benchmark corpus was no
+longer worth 1.15 TiB. Deleting it took three steps and the middle one was not obvious.
+
+The Kubernetes side was clean: delete the two PVCs, then the PVs. Both were `Retain`, which matters twice — it
+means CSI never calls `DeleteVolume` (so none of the stuck-provisioner hazard from the RBD notes applies), and it
+means **nothing was actually reclaimed** by either delete. The data sat untouched on the NAS with no cluster object
+referencing it. Removing the PV objects is still worth doing rather than leaving them `Released`, because
+`oc get pv | grep -E "Released|Failed"` is step one of the CSI-mount pre-flight in CLAUDE.md and two permanent
+entries there is a standing false alarm for every future session.
+
+Then `rm -rf` on the box failed, ~180 times:
+
+```
+rm: cannot remove '/mnt/tank/bench/pvc-9235d31c-.../nfs-truenas-bench/c0/rand-read-4k.0.0': Permission denied
+```
+
+The corpus was written by cluster pods through NFS with `maproot=root`, so every file is root-owned, and this
+playbook's account has no `become` by design. Same wall as the collector install earlier the same day, and the same
+question: what acts as root here? `midclt` again — except **there is no unlink method** in the `filesystem`
+namespace at all (`chown`, `mkdir`, `put`, `setperm`, `stat`, `listdir`, `getacl`, `setacl`, `statfs`, `get`).
+
+So the pattern is to borrow ownership rather than borrow privilege:
+
+```
+$ midclt call --job filesystem.chown \
+    '{"path": "/mnt/tank/bench/pvc-9235d31c-...", "uid": 950, "gid": 950,
+      "options": {"recursive": true, "traverse": false}}'
+$ rm -rf /mnt/tank/bench/pvc-9235d31c-...
+```
+
+`filesystem.chown` runs as root through the middleware and takes `recursive`. 182 inodes, so it is instant.
+One catch that cost a second pass: chowning the *contents* lets you empty the directory but not unlink the
+directory itself, because that entry lives in the dataset root, which is still `root:root`. The dataset root needs
+the same treatment, and should be chowned back afterwards so the declared state is unchanged:
+
+```
+tank/bench    767G -> 192K
+tank/bench16  387G -> 192K
+tank          45% -> 38%,  free 11.8T -> 13.5T
+```
+
+Note the pool freed **1.7 TiB** for 1.15 TiB of logical data — RAIDZ2 parity is in the raw figure and not in
+`zfs used`. Worth knowing before sizing anything from one number or the other.
+
+`traverse: false` on the chown is deliberate: it stops the recursion crossing a dataset boundary, so a stray path
+cannot take the operation somewhere it was not aimed.
+
+The harness survives: both datasets, both NFS exports, both StorageClasses and the 1M/16K recordsize settings stay
+declared, so the next grid provisions a fresh PVC and re-lays. The cost of the reclaim is precisely that layout
+pass, which is the trade the operator chose knowingly.
