@@ -1874,3 +1874,88 @@ step that is already irreversible.
 
 What I should not have done is state a causal rule from a single coincident observation. One
 sample is a coincidence; I presented it as a mechanism.
+
+
+### The trap that actually bit: `ceph osd purge` does not stop Rook re-adopting the disk
+
+node4's `osd.3` was purged cleanly at 09:5x. Twenty-five minutes later — on the reconcile triggered
+by committing node5's device removal — it came **back**:
+
+```
+$ ceph osd tree
+ -7          4.10448          host node4-okd-sudops-pl
+  3          3.63869              osd.3                     up   1.00000  1.00000    <- note: no CLASS
+  0   nvme   0.46579              osd.0                     up   1.00000  1.00000
+```
+
+The osd-prepare job log gives the mechanism in three lines:
+
+```
+cephosd: no new devices to configure. returning devices already configured with ceph-volume.
+cephosd: 0 ceph-volume lvm osd devices configured on this node
+cephosd: 2 ceph-volume raw osd devices configured on this node      <- NVMe + the HDD
+```
+
+**`cephClusterSpec.storage.nodes[].devices` only gates NEW provisioning.** On every reconcile Rook
+also runs `ceph-volume raw list` and re-adopts *any* disk still carrying a BlueStore signature,
+allowlist or not. And `ceph osd purge` removes the OSD from CRUSH, auth and the OSD map but does
+**not** touch the on-disk signature. So the disk was still advertising itself as an OSD, and Rook
+did what it is designed to do.
+
+It came back **without a device class** (blank `CLASS` above) because purge had deleted the CRUSH
+entry and re-adoption did not re-detect rotational class. Harmless here — both live pools use
+`default~nvme` and a classless OSD is not in `~nvme`, so `129 active+clean` never wavered — but it
+is a good illustration of how much state this operation quietly depends on.
+
+**So the removal sequence needs a fourth step that I did not have: the BlueStore signature must go.**
+Two ways to get there:
+
+- **Zap the disk in place** (`ceph-volume lvm zap` / wipe the superblock), then purge. No reboot.
+- **Physically remove the disk**, then purge. Rook cannot adopt what is not there.
+
+We took the second, because the drives were being pulled anyway and the 3.5" bay is not hot-swap —
+so the reboot was not avoidable and the zap would have bought nothing. **If the drives were
+staying**, the zap is the right answer: it decouples the logical removal from a power-cycle, and on
+this cluster a power-cycle is the expensive part.
+
+### What the reboot actually cost
+
+Ordering choice that paid off: **node4 first, because it held no VIP.**
+
+```
+node4  br-ex=0   <- rebooted
+node5  br-ex=1
+node6  br-ex=1
+```
+
+Only the rebooted node's `br-ex.forwarding` was zeroed. Compare with the morning's incident, where a
+keepalived VRRP tie-break moved two VIPs and zeroed all three. **The cascade's blast radius is the
+set of nodes whose host-address set changed** — reboot one VIP-free node and that set has one member.
+node5 and node6 both hold a VIP, so their reboots will move it and should be expected to zero all
+three.
+
+Also worth recording, because CLAUDE.md warns about it and it did **not** happen: the Ceph storage
+backnet NIC came back UP with the correct address on all three nodes.
+
+```
+node4  enp1s0f0np0 UP 192.168.10.2/24
+node5  enp1s0f0np0 UP 192.168.10.3/24
+node6  enp1s0f0np0 UP 192.168.10.4/24
+```
+
+Ceph recovery from the node4 outage was uneventful — a brief `533/354726 objects degraded (0.150%)`
+and `23 remapped pgs`, back to `129 active+clean` within a couple of minutes. Note there is no
+backfill to wait for on this topology: failure domain is `host` across exactly 3 hosts, so with one
+host down Ceph has nowhere to put a third replica and simply holds the PGs degraded until it
+returns. On a bigger cluster this step is a rebalance storm; here it is free.
+
+And the purge, second time, with the disk physically absent:
+
+```
+$ ceph osd safe-to-destroy 3
+OSD(s) 3 are safe to destroy without reducing data durability.
+$ ceph osd purge 3 --yes-i-really-mean-it
+purged osd.3
+ -7         0.46579          host node4-okd-sudops-pl
+  0   nvme  0.46579              osd.0                     up
+```
