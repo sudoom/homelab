@@ -307,7 +307,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "shelly_power_watts{instance=\"truenas\"}",
+          "expr": "avg by (instance) (shelly_power_watts{instance=\"truenas\"})",
           "legendFormat": "truenas",
           "refId": "A"
         }
@@ -322,7 +322,7 @@
         },
         "overrides": []
       },
-      "description": "From the Shelly plug. Shares instance=\"truenas\" with node_exporter -- the whole point of the single pane."
+      "description": "From the Shelly plug. Shares instance=\"truenas\" with node_exporter -- the whole point of the single pane. avg by (instance) is required, not cosmetic: the shelly series FORKED before its pod/container labeldrop landed on 2026-09-08, so a window spanning that change still contains several series all labelled truenas."
     },
     {
       "id": 6,
@@ -498,7 +498,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_zfs_arc_hits[5m]) / (rate(node_zfs_arc_hits[5m]) + rate(node_zfs_arc_misses[5m]))",
+          "expr": "rate(node_zfs_arc_hits{instance=\"truenas\"}[5m]) / (rate(node_zfs_arc_hits{instance=\"truenas\"}[5m]) + rate(node_zfs_arc_misses{instance=\"truenas\"}[5m]))",
           "legendFormat": "hit ratio",
           "refId": "A"
         }
@@ -535,7 +535,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "node_zfs_arc_size",
+          "expr": "node_zfs_arc_size{instance=\"truenas\"}",
           "legendFormat": "arc size",
           "refId": "A"
         },
@@ -544,7 +544,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "node_zfs_arc_c_max",
+          "expr": "node_zfs_arc_c_max{instance=\"truenas\"}",
           "legendFormat": "c_max",
           "refId": "B"
         }
@@ -580,7 +580,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_zfs_zil_zil_commit_count[5m])",
+          "expr": "rate(node_zfs_zil_zil_commit_count{instance=\"truenas\"}[5m])",
           "legendFormat": "zil_commit/s",
           "refId": "A"
         },
@@ -589,7 +589,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_zfs_zil_zil_commit_writer_count[5m])",
+          "expr": "rate(node_zfs_zil_zil_commit_writer_count{instance=\"truenas\"}[5m])",
           "legendFormat": "writer/s",
           "refId": "B"
         }
@@ -750,7 +750,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_nfsd_server_rpcs_total[5m])",
+          "expr": "rate(node_nfsd_server_rpcs_total{instance=\"truenas\"}[5m])",
           "legendFormat": "rpcs/s",
           "refId": "A"
         },
@@ -759,8 +759,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_nfsd_requests_total[5m])",
-          "legendFormat": "{{proc}}",
+          "expr": "topk(8, sum by (method) (rate(node_nfsd_requests_total{instance=\"truenas\"}[5m])))",
+          "legendFormat": "{{method}}",
           "refId": "B"
         }
       ],
@@ -795,7 +795,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_network_receive_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m]) * 8",
+          "expr": "rate(node_network_receive_bytes_total{instance=\"truenas\",device!~\"lo|veth.*|docker.*|br-.*\"}[5m]) * 8",
           "legendFormat": "{{device}} rx",
           "refId": "A"
         },
@@ -804,7 +804,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m]) * 8",
+          "expr": "rate(node_network_transmit_bytes_total{instance=\"truenas\",device!~\"lo|veth.*|docker.*|br-.*\"}[5m]) * 8",
           "legendFormat": "{{device}} tx",
           "refId": "B"
         }
@@ -819,7 +819,7 @@
         },
         "overrides": []
       },
-      "description": "eno1 is the 1G frontnet; the 10G backnet interface carries the NFS data path."
+      "description": "eno1 is the 1G frontnet; the 10G backnet interface carries the NFS data path. Every node_* query here is scoped {instance=\"truenas\"}: Grafana's datasource is thanos-querier, which merges PLATFORM metrics, so an unscoped node_network_* query silently returns the 3 OKD nodes' interfaces (ceph-shim, ovs-system, genev_sys_6081) alongside the NAS's."
     }
   ],
   "description": "Single pane for the TrueNAS box. node_exporter runs ON the NAS as an Ansible-managed custom app; pool/scrub/SMART come from its textfile collector; power comes from the Shelly plug, which shares instance=\"truenas\". BREAK-GLASS NOTE: this dashboard runs on the OKD cluster with its PVC on Ceph, so it goes dark exactly when cluster storage is in trouble. If you cannot reach it, the NAS's own UI at https://192.168.1.25 is the independent path."

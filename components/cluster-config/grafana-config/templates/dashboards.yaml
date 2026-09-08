@@ -269,6 +269,21 @@ spec:
 # Metrics prefixed `truenas_` come from the textfile collector at
 # ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py; those
 # prefixed `node_` are node_exporter's own collectors.
+#
+# EVERY `node_*` QUERY IN THIS DASHBOARD IS SCOPED `{instance="truenas"}`, and
+# that is load-bearing rather than tidy. Grafana's Prometheus datasource is
+# `thanos-querier.openshift-monitoring.svc:9091` (see the GrafanaDatasource),
+# which merges PLATFORM metrics with user-workload ones -- so the three OKD
+# nodes' own node_exporter is in scope too. An unscoped `node_network_*` query
+# silently blends their interfaces (ceph-shim, ovs-system, genev_sys_6081,
+# enp0s31f6) into a panel that claims to be about the NAS. Observed on the first
+# render, 2026-09-08. Note that querying `prometheus-user-workload-0` directly
+# does NOT reproduce it -- UWM alone sees only `job="truenas-exporter"` -- so
+# this is only visible through Grafana's own datasource.
+#
+# The power panel additionally needs `avg by (instance)`: the shelly series
+# forked before its pod/container labeldrop landed the same day, so any window
+# spanning that change still holds several series all labelled `truenas`.
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
 metadata:

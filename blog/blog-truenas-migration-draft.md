@@ -3868,3 +3868,53 @@ nothing it did not already have; pretending otherwise would be security theatre 
 
 The declarative bit is the part worth keeping: no new mechanism, no shell step, no chown task in the tasks role —
 one entry in `truenas_datasets`, converged by the storage role that already runs first.
+
+### First render, three bugs — and only one of them was where I looked
+
+The playbook landed (`ok=59 changed=5 failed=0`) and the dashboard came up. Three problems, worth separating
+because they failed in quite different ways.
+
+**1. Every `truenas_*` panel said "No data".** Not a bug — the textfile collector had only just been installed and
+its 5-minute cron had not fired. The `node_*` panels (ARC, ZIL, NFS) had data throughout, which is exactly the
+split you would expect.
+
+**2. The power stat showed three values, all labelled `truenas`:** 72.5 W, 70.6 W, 70 W. A direct query said
+otherwise:
+
+```
+$ shelly_power_watts{instance="truenas"}
+  86 W  labels: {endpoint, instance=truenas, job=shelly-exporter, namespace, service}
+```
+
+One series *now*. But the panel window is 24 hours, and the `pod`/`container` labeldrop only landed on
+shelly-exporter earlier the same day — so the window still spans the fork. `avg by (instance)` merges them, the
+same fix `shelly-power.json` already needed. I had fixed that dashboard and then written the identical bug into a
+new one hours later, because I copied the *metric* forward without the *lesson*.
+
+**3. The interface panel was rendering the wrong machine.** The legend showed `ceph-shim rx`, `ovs-system rx`,
+`genev_sys_6081 rx`, `enp0s31f6 rx` — OKD node interfaces, on a TrueNAS dashboard. My first instinct was that the
+query needed a job filter, so I checked:
+
+```
+$ count by (job) (node_network_receive_bytes_total)
+  job=truenas-exporter    series=9
+```
+
+Only TrueNAS. The diagnosis appeared wrong — and the reason it appeared wrong is that I had queried
+`prometheus-user-workload-0` directly, while **Grafana does not**:
+
+```
+$ oc -n grafana get grafanadatasource -o jsonpath='...'
+prometheus -> https://thanos-querier.openshift-monitoring.svc:9091
+```
+
+Thanos merges platform metrics with user-workload metrics. UWM alone sees only `job="truenas-exporter"`; through
+Thanos, the three OKD nodes' own node_exporter is equally in scope. So the panel was correct about what it asked
+for and wrong about what it meant, and **the verification path I trusted could not see the bug at all.**
+
+That last part is the generalisable bit, and it is not specific to this dashboard: any panel in this repo that uses
+a bare `node_*`, `container_*` or other platform-shared metric name is silently cluster-wide. Every `node_*` query
+in this dashboard is now scoped `{instance="truenas"}`.
+
+Three bugs, and the one I would have caught by reading was the one I introduced by copying. The one that needed
+real investigation was invisible from the tool I had been using to verify all afternoon.

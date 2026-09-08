@@ -223,6 +223,14 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   legitimately weeks old, so any "stale snapshot" alert would have fired forever on datasets that are supposed to
   look that way — `boot-pool` is now excluded wholesale from dataset/snapshot collection (its capacity still
   reaches Prometheus via `truenas_zpool_*`).
+  **Dashboard gotcha found on first render, and it generalises to every dashboard in this repo:** Grafana's
+  Prometheus datasource is **`thanos-querier`**, which merges PLATFORM metrics with user-workload ones — so a bare
+  `node_*` query silently blends the three OKD nodes' node_exporter into a panel that claims to be about the NAS
+  (the interface panel rendered `ceph-shim`, `ovs-system`, `genev_sys_6081` and `enp0s31f6` alongside TrueNAS's
+  `eno1`/`eno2`). Every `node_*` query in `truenas-single-pane.json` is therefore scoped `{instance="truenas"}`.
+  **Querying `prometheus-user-workload-0` directly does NOT reproduce this** — UWM alone returns only
+  `job="truenas-exporter"` — so it is invisible unless you check through Grafana's own datasource. The power panel
+  additionally needs `avg by (instance)` because the Shelly series forked before its labeldrop landed the same day.
   **Atomicity is load-bearing and is documented in the script:** node_exporter reads whatever is in the directory at
   scrape time, and a half-written file sets `node_textfile_scrape_error 1` and discards the whole scrape's textfile
   metrics — so the collector writes a temp file that does **not** end in `.prom` and `os.replace()`s it.
