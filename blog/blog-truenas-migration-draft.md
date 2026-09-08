@@ -3307,3 +3307,75 @@ that cancels fixed costs and yields a marginal per-file rate — was still runni
 session ended, so the question "is 1,048,576 files per client tens of minutes or hours"
 is still open. It is the first thing to run next session, and it needs five minutes, not
 an evening.
+
+---
+
+## Power optimisation: measured, then abandoned on the evidence (2026-09-08)
+
+Asked to plan power optimisation for the NAS. Measured first, and the measurements killed the project —
+which is the useful outcome, because the alternative was a week of tuning for noise.
+
+**Lever 1: drive spindown. Dead.** The 36 h workload sampler (`tests/truenas-workload/`) had 25.2 h of
+per-dataset counters at 60 s. Contiguous idle windows:
+
+```
+samples with delta: 1513  (~25.2 h at 60s)
+zero-IO minutes:    0  (0.0%)
+longest zero run:   0 min
+total bytes moved:  534.9 GiB
+```
+
+**Not one 60-second window with zero pool IO in 25 hours.** Spindown needs minutes of idle to be worth the
+spin-up cost and the Load_Cycle_Count wear; it has zero. Where the IO comes from:
+
+| dataset | ops | bytes |
+|---|---|---|
+| `tank/timemachine/macmini` | 1.14 M | **327.5 GiB** |
+| `tank/media` | 2.40 M | 123.6 GiB |
+| `tank/timemachine/mba` | 0.49 M | 38.8 GiB |
+| `tank/keepers` | 0.62 M | 37.2 GiB |
+| `tank/s3/meta` | **1.69 M** | 5.8 GiB |
+
+Time Machine is 366 GiB — 68 % of all bytes. But note `tank/s3/meta`: **1.69 M ops for 5.8 GiB**, the
+highest op-to-byte ratio on the box. That is garage's metadata under Loki's chunk writes, and it is a
+continuous small-IO trickle. Even if both Macs stopped backing up, the cluster alone guarantees the pool
+never idles.
+
+**Lever 2: CPU. Already optimal.**
+
+```
+governor = powersave, driver = intel_pstate
+C10 residency = 1,113,371 s of ~1,187,000 s total = 93.8% in the DEEPEST C-state
+```
+
+A Xeon E-2146G spending 93.8 % of its life in C10 has nothing left to give.
+
+**Lever 3: the ceiling and the floor, from 15 days of plug data.** The Shelly plug predates the pool, so
+the burn-in period is preserved as a natural full-load reference:
+
+```
+08-25 -> 08-27   81-84 W    badblocks burn-in: 6 drives at full tilt
+08-28 -> today   67-72 W    production
+quietest hours   65.8 W     observed floor
+```
+
+Current draw is **~3 W above the observed floor**, and the entire span from full-tilt to floor is ~17 W.
+So removing *all* workload would save about 3 W — inside the +/-1.5 W noise band the `truenas` control
+established during the same day's Ceph decommission measurement.
+
+**Conclusion: do nothing.** 6x HUS726040 at ~6.9 W idle is ~41 W, which after PSU conversion is roughly
+70 % of the box's 69 W. The spindles ARE the power budget and they cannot stop. ASPM is still at
+`[default]` rather than `powersave` and could be worth 1-3 W, but that is unmeasurable here and carries
+real risk with the ConnectX-4 — not a trade worth making for a number you cannot verify.
+
+**The only real lever is hardware, and it is a future purchase decision, not a tuning task:** fewer,
+larger, slower drives. Six 7200 RPM 4 TB spindles for 24 TB raw is the expensive way to hold this data;
+two or three 5400 RPM 12-16 TB drives would deliver the same capacity at roughly a third of the spindle
+power. That is a pool rebuild, so it belongs to the next capacity cycle rather than to a power project.
+
+**Worth keeping as method:** the honest answer here came from three independent measurements that each
+could have been guessed wrong. "Spin the drives down" is the obvious first suggestion and it is
+impossible. "Tune the CPU" is the obvious second and it is already done. And the plug history happened to
+contain a full-load reference nobody planned to capture, which is what turned "current draw" into
+"current draw relative to a floor and a ceiling" — the only framing in which 3 W is recognisable as
+noise rather than opportunity.
