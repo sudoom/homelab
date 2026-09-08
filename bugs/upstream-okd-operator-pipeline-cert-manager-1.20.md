@@ -139,6 +139,54 @@ $ echo $?
 Verified against a fresh `--branch cert-manager-1.20` checkout, 7 OKD strings present afterwards, zero remaining
 `Red Hat` / `redhat` / `valid-subscription` occurrences.
 
+## PLANNED NEXT: in-cluster bundle test via the internal registry
+
+The one remaining gap is that the bundle has never been resolved by OLM on a real 4.21 cluster. That is testable
+**without** solving the arm64/amd64 problem, because a bundle image is metadata only (~300 kB, no compiled
+binaries) and therefore architecture-independent. This is the same method already used successfully on this
+cluster to prove the nmstate ImageStream defect (okderators-catalog-index#45 → okd-operator-pipeline#19); the
+leftover images were still on the workstation as
+`default-route-openshift-image-registry.apps.okd.sudops.pl/openshift/nmstate-test-catalog-*`.
+
+**Steps (all operator-run — they push to a registry and create a CatalogSource):**
+
+1. Log the local podman into the cluster registry:
+   ```bash
+   oc registry login --skip-check
+   REG=default-route-openshift-image-registry.apps.okd.sudops.pl/openshift
+   ```
+2. Build and push ONLY the bundle image (skip `build_containers` — not needed for a resolution test):
+   ```bash
+   cd cert-manager/operator
+   make bundle BUNDLE_VERSION=1.20.0-<date> IMG=$REG/cert-manager-operator:1.20.0-<date>
+   podman build -f bundle.Dockerfile -t $REG/cert-manager-bundle:1.20.0-<date> .
+   podman push $REG/cert-manager-bundle:1.20.0-<date>
+   ```
+3. Render a single-package test catalog around it and push:
+   ```bash
+   opm render $REG/cert-manager-bundle:1.20.0-<date> -o yaml > catalog/cert-manager.yaml
+   # add the olm.package + olm.channel stanzas (copy the shape from
+   # okderators catalog/cert-manager-operator/cert-manager-operator.yaml)
+   opm validate catalog/
+   podman build -f catalog.Containerfile -t $REG/cert-manager-test-catalog:v1 .
+   podman push $REG/cert-manager-test-catalog:v1
+   ```
+4. Create a **temporary** CatalogSource pointing at it (NOT the okderators one -- do not disturb the live
+   catalog), in `openshift-marketplace`, then a Subscription in a scratch namespace with
+   `installPlanApproval: Manual`.
+5. **The assertion:** the InstallPlan is created and reaches `Complete` (or at least resolves all components
+   without `UnsupportedResource`). That is exactly the failure mode nmstate exhibited, and exactly what a catalog
+   contribution needs to prove.
+6. Tear down: delete the Subscription, InstallPlan, CSV, scratch namespace and the temporary CatalogSource.
+
+**Known limitation:** the CSV references the operator/cert-manager/acme-solver images by tag, and those will not
+exist unless `build_containers` has also been run and pushed. So the operator POD will not start. That is fine for
+this test -- resolution and InstallPlan creation happen before any image pull, and that is the layer a catalog bug
+lives in.
+
+**Do not run this while the cluster is under other load.** It pushes to the internal registry (which is backed by
+Ceph) and `nvme-replicated` is at ~81.6% against an 85% nearfull threshold.
+
 ## What has NOT been verified
 
 Honest scope, so a reviewer knows what to re-check:
