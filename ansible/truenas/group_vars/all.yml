@@ -528,7 +528,7 @@ truenas_garage:
 # separate), so this survives an OS upgrade.
 truenas_node_exporter:
   app_name: node-exporter
-  image: quay.io/prometheus/node-exporter:v1.9.1
+  image: quay.io/prometheus/node-exporter:v1.12.1
   # Host networking is REQUIRED, not incidental: node_exporter must see the
   # host's real interfaces for `node_network_*` -- which is the only way to get
   # the 10G storage backnet's throughput onto the cluster dashboard.
