@@ -191,15 +191,21 @@
 #
 # The script must live on the DATA pool: the TrueNAS root filesystem is mounted
 # read-only (`boot-pool/ROOT/<ver> zfs ro,...`), so /usr/local/bin is not
-# writable. `tank/monitoring` is converged by truenas-storage, which runs first.
+# writable. `tank/monitoring/bin` is converged by truenas-storage (which runs
+# first) and is owned by the automation account precisely so this copy works --
+# see the dataset's comment in group_vars for why that is the mechanism and why
+# `filesystem.put` is not.
+#
+# No `owner:`/`group:` here: this playbook does not use become, so it cannot
+# chown to root, and asking would fail the task. The file is owned by the
+# automation account and executed by the root cron job, which is fine -- that
+# account is already root-equivalent through the middleware.
 # ---------------------------------------------------------------------------
 - name: Install the node_exporter textfile collector
   ansible.builtin.copy:
     src: node-exporter-textfile.py
     dest: "{{ truenas_textfile_collector.script_path }}"
     mode: "0755"
-    owner: root
-    group: root
 
 # Runs as root because smartctl requires it -- as a non-root user every device
 # read returns "Permission denied" and the SMART block silently emits nothing.

@@ -118,6 +118,33 @@ truenas_datasets:
     recordsize: 128K
     comments: "node_exporter --collector.textfile.directory. Tiny *.prom files, rewritten by cron."
     quota: 0
+  # Holds the collector script. A SEPARATE dataset with explicit ownership,
+  # because this playbook runs as `truenas_admin` with NO become (inventory.yml:
+  # sudo on this box requires a password, deliberately) and the other two
+  # datasets are root:root 0755 -- `ansible.builtin.copy` into them fails with
+  # "Destination /mnt/tank/monitoring not writable".
+  #
+  # The middleware's own `filesystem.put` WOULD write as root, but midclt cannot
+  # drive it: `midclt call --job filesystem.put ... < file` returns
+  # "ValueError: Pipe 'input' is not open" and `midclt call` has no pipe flag at
+  # all. So ownership is the mechanism, and it is scoped to this one directory
+  # rather than loosening `monitoring` or `monitoring/textfile`.
+  #
+  # NOT a privilege boundary being crossed: `truenas_admin` is a member of
+  # `builtin_administrators` (gid 544), which is exactly what authorises the
+  # middleware socket -- the account can already do anything midclt can do, i.e.
+  # anything root can. A directory it may write grants it nothing new. The
+  # cron job still runs as root and still writes into the root-owned
+  # `monitoring/textfile`.
+  #
+  # 950 is truenas_admin's uid on this install. Confirm with `id truenas_admin`
+  # after any rebuild -- same coupling as immich's 1000980000 below.
+  - name: monitoring/bin
+    recordsize: 128K
+    comments: "node_exporter textfile collector script. Owned by the automation account so ansible can write it."
+    quota: 0
+    owner_uid: 950
+    owner_gid: 950
 
   # ---- SMB datasets for humans ---------------------------------------
   # THREE PROPERTIES BELOW ARE CREATE-TIME-ONLY AND CANNOT BE CHANGED LATER.
@@ -598,7 +625,7 @@ truenas_smart_cronjobs:
 # (`truenas_textfile_collector_last_run_timestamp_seconds`) meaningful. SMART
 # reads use `-n standby` so a sleeping disk is never spun up to be measured.
 truenas_textfile_collector:
-  script_path: /mnt/tank/monitoring/node-exporter-textfile.py
+  script_path: /mnt/tank/monitoring/bin/node-exporter-textfile.py
   cron: "*/5 * * * *"
   description: "node_exporter textfile collector (managed by ansible/truenas)"
 

@@ -3819,3 +3819,52 @@ hours each.
 Nothing was broken. The task ran, decided correctly by its own rules, and left the pool unverified — and there was
 no signal anywhere that would have told anyone. That is precisely the class of thing this whole exercise exists to
 surface, and it turned up before the collector was even deployed. `TrueNASPoolNeverScrubbed` now covers it.
+
+### The install step failed, and `become` was the wrong instinct
+
+First playbook run after shipping phase 2:
+
+```
+TASK [truenas-tasks : Install the node_exporter textfile collector] ***
+[ERROR]: Task failed: Module failed: Destination /mnt/tank/monitoring not writable
+```
+
+`/mnt/tank/monitoring` is `root:root 0755`; the playbook connects as `truenas_admin`. The reflex fix is
+`become: true`, and this repo had already written down why that is wrong — in `inventory.yml`, months ago:
+
+> NO become. [...] `sudo` on this box REQUIRES A PASSWORD (`sudo -n true` -> "a password is required"), so a
+> `become: true` role would hang on the prompt or need the become password in the vault. **Do not "fix" a
+> permission error by adding become** -- if a midclt method is refused, the account's ROLE is what to look at.
+
+So the question became: what writes a file as root without sudo? The middleware runs as root and exposes
+`filesystem.put`. It is not usable from the CLI:
+
+```
+$ midclt call --job filesystem.put /mnt/tank/monitoring/.puttest '{"mode": 493}' < /tmp/puttest.txt
+ValueError: Pipe 'input' is not open
+
+$ midclt call --help
+usage: midclt call [-h] [-q] [-j] [-jp {progressbar,description}] method [method ...]
+```
+
+`filesystem.put` receives its content over the WebSocket upload channel, and `midclt call` has no flag to open one.
+Worth recording, because "midclt can do anything the UI can" is the working assumption everywhere else in this
+topic and this is the first place it does not hold.
+
+That leaves ownership as the mechanism, which is what the garage role already does for its host_paths. Rather than
+loosening the two existing datasets, the script gets **its own dataset** with declared ownership:
+
+```yaml
+  - name: monitoring/bin
+    owner_uid: 950
+    owner_gid: 950
+```
+
+`monitoring` and `monitoring/textfile` stay `root:root`; the cron job still runs as root and still writes its
+`.prom` files into the root-owned directory. And this is not a privilege boundary being crossed — `truenas_admin`
+is a member of `builtin_administrators` (gid 544), which is precisely what authorises the middleware socket. That
+account can already do anything `midclt` can do, which is anything root can do. A directory it may write grants it
+nothing it did not already have; pretending otherwise would be security theatre with a real cost in complexity.
+
+The declarative bit is the part worth keeping: no new mechanism, no shell step, no chown task in the tasks role —
+one entry in `truenas_datasets`, converged by the storage role that already runs first.
