@@ -2101,3 +2101,47 @@ Worth internalising as a general lesson, and it is the same one as the 2026-08-0
 trap: **when a monitoring gap and an incident share a start time, the gap IS the evidence.** Here it happens to
 be benign — but if I had been looking at this dashboard at 08:00 I would have seen a flat line and read it as
 "nothing happening" rather than "nothing being measured."
+
+### Closing the last deployment (and the re-adoption trap not re-firing)
+
+Step 5 of the sequence above — `oc -n rook-ceph delete deploy rook-ceph-osd-<n>` — is easy to leave for later
+because everything that matters is already done by step 4. It is worth knowing what "later" looks like: the
+deployment does **not** self-clean. With the drive physically out, `osd.5`'s pod sat in `Init:CrashLoopBackOff`
+for hours, its init container failing to find a device that no longer exists. Rook does not reap it, because
+Rook never created a *removal* intent — the purge happened in Ceph, not in the CR.
+
+```
+$ oc -n rook-ceph delete deploy rook-ceph-osd-5
+deployment.apps "rook-ceph-osd-5" deleted from rook-ceph namespace
+```
+
+Post-state, and this is the line the whole "purge does not remove the BlueStore signature" section was building
+toward — **nothing came back**:
+
+```
+$ oc -n rook-ceph get deploy -l app=rook-ceph-osd -o name
+deployment.apps/rook-ceph-osd-0
+deployment.apps/rook-ceph-osd-1
+deployment.apps/rook-ceph-osd-2
+
+$ oc -n rook-ceph get pods -l app=rook-ceph-osd
+rook-ceph-osd-0-799f4858c9-w9fgg   Running
+rook-ceph-osd-1-5ddc6d4dfc-czwr7   Running
+rook-ceph-osd-2-7ddfcd98df-kvv2s   Running
+
+# mgr metrics via the apiserver proxy (readonly SA -- no toolbox exec needed)
+ceph_osd_up{ceph_daemon="osd.0"} 1.0    ceph_osd_in{ceph_daemon="osd.0"} 1.0
+ceph_osd_up{ceph_daemon="osd.1"} 1.0    ceph_osd_in{ceph_daemon="osd.1"} 1.0
+ceph_osd_up{ceph_daemon="osd.2"} 1.0    ceph_osd_in{ceph_daemon="osd.2"} 1.0
+```
+
+`osd.3` came back 25 minutes after its purge when the disk was still seated. `osd.5` was purged behind a drive
+that had already left the chassis, and it stayed gone across every reconcile since. That is the difference the
+signature makes, stated as cleanly as this cluster is ever going to state it.
+
+Cluster health at the close is `HEALTH_WARN` on exactly one detail — `2 OSD(s) experiencing slow operations in
+BlueStore`, the known-benign hair-trigger on no-PLP consumer NVMe. Note what is *not* in Ceph's own health output:
+the `nvme-replicated` fill warning. Ceph's `nearfull` trips at 85% and the pool is at 80.35%, so the alert that
+fired today (`CephNvmeTierNearFull`) is **ours**, from `prometheusrule-cluster-utilization.yaml`, deliberately set
+below Ceph's own threshold so there is room to act. Working exactly as designed, and worth remembering before
+someone reads `HEALTH_WARN`-with-one-detail as "capacity is fine."
