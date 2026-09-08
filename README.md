@@ -157,30 +157,50 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   invisible in the cluster's Grafana. Every other subsystem — cluster, Ceph, switch, power — has a dashboard. This is
   the largest observability hole in the homelab, and it is worse than it looks: the two consumers that moved off Ceph
   on 2026-09-07 (Loki, OADP) moved ONTO an unmonitored box.
-  **Surfaces surveyed on the box 2026-09-08, which settles the design:**
-  * **netdata is NOT usable** — `tank/.system/netdata-*` exists but nothing listens on `:19999`
-    (`curl` -> `000`), so the "just scrape netdata's `/api/v1/allmetrics?format=prometheus`" shortcut is out.
-  * **`/proc/spl/kstat/zfs/` IS present** (`arcstats`, `abdstats`, per-pool) — that is exactly what
-    node_exporter's `zfs` collector reads, so ARC / ZIL / pool IO come free.
+  **Surfaces re-surveyed on the box 2026-09-08 (this supersedes the first survey, which got netdata wrong):**
+  * **netdata IS running and DOES serve Prometheus — the earlier "nothing listens on :19999" was a wrong-port
+    probe.** `/usr/sbin/netdata -D` is TrueNAS 25.10's own reporting backend, bound `127.0.0.1:6999`, and
+    `/api/v1/allmetrics?format=prometheus` returns **200**. It is still the wrong source, for reasons that are
+    durable rather than accidental: (a) localhost-bound, and un-binding it means editing
+    `/etc/netdata/netdata.conf`, which middleware owns and rewrites — **not code-only, and it reverts on upgrade**;
+    (b) it is **v1.37.1** (2022); (c) that same conf **deliberately disables `/proc/diskstats`, `/proc/meminfo` and
+    `/proc/stat`**, so there is no disk IO, no memory and no CPU in it at all; (d) the naming is
+    `netdata_<chart>_<dim>_average{chart=,family=,dimension=}` carrying **pre-averaged** values, so `rate()` is
+    meaningless on them and no community dashboard matches. Do not reopen this without answering (c) and (d).
+  * **`/proc/spl/kstat/zfs/` is present and rich** — `arcstats`, `abdstats`, **`zil`**, `zfetchstats`, per-pool
+    (`tank`, `boot-pool`). That is exactly what node_exporter's `zfs` collector reads. Live at survey: ARC
+    25.1 GiB of 30.2 GiB `c_max`, hits 526.9M vs misses 11.3M = **97.9% hit ratio**, and
+    **`zil_commit_count` 687,912** — which is the one that matters, because it turns the one-off SLOG study into a
+    standing signal.
+  * **`/proc/net/rpc/nfsd` is present** → node_exporter's `nfsd` collector gives NFS ops for free.
   * **`zpool list -H -o name,health,capacity,fragmentation` works** (`tank ONLINE 45% 1%`) — pool state needs a
     shell, not an API.
-  **Proposed shape:** (1) node_exporter as a **TrueNAS app declared in `ansible/truenas/roles/truenas-apps/`** —
-  that role already manages garage, so this is an extension of a proven pattern rather than a new mechanism, and it
-  keeps the box code-only; (2) a **textfile-collector cron** for what only the shell knows — pool health, scrub
-  age/errors, per-dataset capacity, SMART attributes, newest-snapshot age. Cron is the right vehicle because
-  TrueNAS 25.10 removed smartd and `truenas-tasks` **already creates cron jobs** for SMART, so this extends an
-  existing pattern too; (3) scrape it from the cluster with Service + Endpoints + ServiceMonitor.
+  **Mechanism — the first design said "declare node_exporter in `truenas-apps` like garage"; that does not work
+  as written.** There is **no `node-exporter` in any TrueNAS catalog train** (430 apps available; the nearest are
+  `netdata`, `prometheus`, `scrutiny`, `glances`, `beszel-hub`), so there is no `catalog_app` to name. The fix keeps
+  the same role and the same `midclt` call: **`app.create` accepts `custom_app: true` + `custom_compose_config`**
+  (confirmed in the method schema), so node_exporter ships as a **custom compose app** — host network, `pid: host`,
+  `/`,`/proc`,`/sys` bind-mounted read-only, `--path.rootfs=/host`.
+  **Shape:** (1) node_exporter as that custom app in `ansible/truenas/roles/truenas-apps/`; (2) a
+  **textfile-collector cron** for what only the shell knows — pool health, scrub age/errors, per-dataset capacity,
+  SMART attributes, newest-snapshot age — created with `cronjob.create`, which `truenas-tasks` **already uses** for
+  the SMART jobs, so this extends an existing pattern; (3) scrape it from the cluster with **Service + selectorless
+  Endpoints + ServiceMonitor** — note there is **no `ScrapeConfig` CRD on this cluster** (only `ServiceMonitor`), so
+  the selectorless-Endpoints wrapper is the only route for an off-cluster target, and it would be the repo's first.
   **Two constraints that will bite if forgotten:** the scrape MUST target **`192.168.1.25` (frontnet)** — a
   pod cannot reach `192.168.10.0/24`, which is the same trap that broke the Velero BSL on 2026-08-28; and
   **do not build on the REST API**, removed in TrueNAS 26 — `midclt` is the sanctioned path.
-  **Dashboard content:** pool capacity/health/fragmentation, scrub recency, per-disk SMART + temperature, ARC size
-  and hit ratio, **`zil_commit` rate** (makes the one-off SLOG study a standing signal), NFS ops/latency, 10G
-  backnet throughput, and the existing `shelly_power_watts{instance="truenas"}` series.
+  **Dashboard:** node_exporter naming is itself an argument for this route — grafana.com **1860** drops in via the
+  `grafanaCom: id:` pattern `grafana-config` already uses for the Ceph dashboards, so the generic half is free and
+  only the TrueNAS-specific panel set is hand-built: pool capacity/health/fragmentation, scrub recency, per-disk
+  SMART + temperature, ARC size and hit ratio, `zil_commit` rate, NFS ops/latency, 10G backnet throughput, and the
+  existing `shelly_power_watts{instance="truenas"}` series.
+  **Note on who runs it:** the role change lands in git from here, but `ansible/truenas/playbook.yml` needs
+  `--ask-vault-pass` since 2026-08-31, so **the operator runs the playbook** — this cannot be a Claude-executed step.
   **Decide deliberately, do not just inherit it:** a single pane has a single failure mode. Grafana runs on the
   cluster with its PVC on Ceph, and CLAUDE.md already warns not to rely on Grafana during a storage incident.
   Folding TrueNAS in extends that blindness to NAS incidents. Keep a break-glass path that does not depend on the
   cluster (the box's own UI/console) and say so on the dashboard itself.
-
 
 - [ ] **OLMv1 `operator-controller` catalog-cache leak — node5 `/var` filling (HIGH, found 2026-08-16; NOT yet remediated).** `openshift-operator-controller`'s `cache` **emptyDir** holds **161 GiB in 2097 orphaned `.openshift-redhat-operators-<rand>` unpack temp dirs**, accumulated since the pod started 2026-07-25 (10-min poll, temp dir never cleaned; the other three ClusterCatalogs have exactly 1 dir each). node5 `/var` was **76 % used and growing ~9.7 GiB/day — ~9 days to full**, which on a no-drain 3-node cluster means kubelet eviction + crio failure + a mon down together. Surfaced only as **`CephMonDiskspaceLow`** (mons are on `dataDirHostPath`, so it is a node-disk alert wearing a Ceph costume). **All of it is waste: `oc get clusterextensions` returns 0** — every operator here comes via OLM **v0** CatalogSources (`okderators`, `community-operators`, `operatorhubio-catalog`), and `OperatorHub/cluster` already has `disableAllDefaultSources: true` — which **does not gate OLMv1 ClusterCatalogs**, so all four still poll every 10 min. **Actions (guardrail-gated, operator-run):** (1) delete the operator-controller pod to reclaim ~161 GiB immediately (emptyDir dies with the pod; safe at 0 ClusterExtensions, but it re-leaks); (2) `oc patch clustercatalog openshift-redhat-operators --type=merge -p '{"spec":{"availabilityMode":"Unavailable"}}'` — field verified via `oc explain`, but **unverified whether it sticks**, so re-read the object after applying; (3) file upstream against `operator-framework/operator-controller`. **Also add the missing detection**: a `predict_linear` alert on `node_filesystem_avail_bytes` for `/var` per node — cAdvisor cannot see this class of leak at all (`container_fs_usage_bytes` covers writable layers only; the 161 GiB pod reads ~0). Separately, node4 `/var` is growing ~2.3 GiB/day and accelerating — undiagnosed. Full diagnosis: `blog/blog-olmv1-catalog-cache-leak-draft.md`. **RE-MEASURED 2026-08-31 AND IT HAS MOVED + GROWN: now on NODE6 at 114.05 GiB.** Read off `/api/v1/nodes/node6.okd.sudops.pl/proxy/stats/summary` — `openshift-operator-controller/operator-controller-controller-manager` is the single largest ephemeral-storage consumer on that node by two orders of magnitude (next is haproxy at 1.02 GiB). It alone accounts for node6 sitting at **69.5% root-fs used, 113.4 GiB free**, which has now pushed Ceph over `mon_data_avail_warn` (30% free) and produced a NEW cluster warning: **`mon b is low on available space`** — mon-b runs on node6. So this is no longer cosmetic: it is generating a HEALTH_WARN on the storage layer. Immediate mitigation is `oc -n openshift-operator-controller delete pod -l control-plane=operator-controller-controller-manager` (the cache is ephemeral, so a restart reclaims it) — operator-run, and it should drop node6 to ~39%. The item stays open because a restart is a workaround, not a fix, and the leak evidently follows the pod between nodes.
 - [ ] **Alert on `net.ipv4.conf.br-ex.forwarding == 0` (node-level) — NOW TWICE-JUSTIFIED, RAISE THE PRIORITY.** **2026-08-07:** ~5 h undetected, trigger was the 10G switch reboot. **2026-09-08:** ~3.5 h undetected, trigger was a bare keepalived VRRP failover — i.e. **no operator action, no scheduled event, nothing to post-check.** Both times an OVN gateway reconcile zeroed this sysctl on all 3 nodes, killing cluster-wide pod egress and pod→ClusterIP, while all 3 `ovnkube-node` pods stayed `Ready` — nothing in their readiness probe reads it. The 09-08 run also left **both CNPG clusters not archiving WAL offsite for 3.5 h**, which is the only part with real data-loss exposure and is invisible unless the condition is asserted explicitly. This is the only signal for that failure that is both instant and unambiguous. Validate: `sysctl -n net.ipv4.conf.br-ex.forwarding` per node should be `1`. See `blog/blog-ovn-brex-forwarding-outage-draft.md`.
