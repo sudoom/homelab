@@ -175,7 +175,13 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   * **`/proc/net/rpc/nfsd` is present** → node_exporter's `nfsd` collector gives NFS ops for free.
   * **`zpool list -H -o name,health,capacity,fragmentation` works** (`tank ONLINE 45% 1%`) — pool state needs a
     shell, not an API.
-  **PHASE 1 SHIPPED 2026-09-08 — the code is in, the NAS-side playbook run is the operator's step.** Mechanism,
+  **PHASE 1 SHIPPED AND VERIFIED LIVE 2026-09-08.** The playbook has run; `app.query` reports
+  `node-exporter RUNNING custom=True`, it listens on `192.168.1.25:9100` (frontnet only, as designed), and the full
+  path is proven end to end — `oc get --raw
+  "/api/v1/namespaces/truenas-exporter/services/http:truenas-exporter:9100/proxy/metrics"` returns **683 metric
+  families / 3,459 series**, with `node_zfs_arc_*` 147, `node_zfs_zil_*` 20, `node_nfsd_*` 90, `node_hwmon_temp_*`
+  112, and `node_textfile_scrape_error 0`. Counter values cross-check against direct reads on the box taken an hour
+  earlier (ARC hits 526.9M → 529.8M, `zil_commit_count` 687,912 → 693,589), so these are live, not cached. Mechanism,
   settled by reading the middleware rather than guessing: there is **no `node-exporter` in any TrueNAS catalog
   train** (430 apps; nearest are `netdata`, `prometheus`, `scrutiny`, `glances`, `beszel-hub`), so there is no
   `catalog_app` to name — but `app.create` takes `custom_app: true` + a compose payload, and the middleware's
@@ -188,11 +194,14 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   `roles/truenas-apps/tasks/main.yml`; `components/cluster-config/truenas-exporter/` (socat forwarder + Service +
   ServiceMonitor, `instance="truenas"`); root-app entry at wave 5; grafana.com **1860** wired into
   `grafana-config`.
-  **Still to do — phase 2:** the **textfile-collector cron** for what only the shell knows (pool health, scrub
-  age/errors, per-dataset capacity, SMART attributes, newest-snapshot age), written with `cronjob.create` — which
-  `truenas-tasks` **already uses** for the SMART jobs — plus the hand-built ZFS/SMART/NFS panel set that 1860 does
-  not cover. `truenas_node_exporter.textfile_dir` already exists and is already passed to the collector, so phase 2
-  is purely "write files into it".
+  **Still to do — phase 2, and the live scrape now says exactly what is missing.** node_exporter's zfs collector
+  gives ARC, ZIL and per-dataset IO counters (`node_zfs_zpool_dataset_nread`/`nwritten`) for free, but exposes
+  **no pool health, no capacity, no fragmentation and no SMART at all** — confirmed by grepping the live output.
+  So phase 2 is the **textfile-collector cron** for precisely: `zpool list -H -o name,health,capacity,fragmentation`,
+  scrub recency + error counts, per-dataset capacity, SMART attributes, and newest-snapshot age. Write it with
+  `cronjob.create`, which `truenas-tasks` **already uses** for the SMART jobs. The plumbing is done and proven —
+  `tank/monitoring/textfile` exists, the collector reads it, and `node_textfile_scrape_error` is `0` — so phase 2 is
+  purely "write `.prom` files into it", plus the hand-built ZFS/SMART/NFS panel set that 1860 does not cover.
   **The trap that shaped the design, recorded so nobody re-derives it:** the textbook way to scrape an off-cluster
   target is a selectorless Service + a hand-written `Endpoints` object. **That cannot work here.** OpenShift GitOps
   ships `resource.exclusions` on the ArgoCD CR excluding **both `Endpoints` and `EndpointSlice`** (apiGroups `""` +
@@ -214,9 +223,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   only the TrueNAS-specific panel set is hand-built: pool capacity/health/fragmentation, scrub recency, per-disk
   SMART + temperature, ARC size and hit ratio, `zil_commit` rate, NFS ops/latency, 10G backnet throughput, and the
   existing `shelly_power_watts{instance="truenas"}` series.
-  **Next action is yours:** `ansible/truenas/playbook.yml` needs `--ask-vault-pass` since 2026-08-31, so the
-  playbook run cannot be a Claude-executed step. Until it runs, the cluster-side target simply reports DOWN — which
-  is the correct, visible failure mode rather than a silent one.
+  **Note for future runs:** `ansible/truenas/playbook.yml` needs `--ask-vault-pass` since 2026-08-31, so any
+  NAS-side change here is operator-run, not Claude-run.
   **Decide deliberately, do not just inherit it:** a single pane has a single failure mode. Grafana runs on the
   cluster with its PVC on Ceph, and CLAUDE.md already warns not to rely on Grafana during a storage incident.
   Folding TrueNAS in extends that blindness to NAS incidents. Keep a break-glass path that does not depend on the

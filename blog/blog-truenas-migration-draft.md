@@ -3622,3 +3622,64 @@ is part of the platform. And the thing that makes this one worth remembering is 
 that a dropped resource produces a **green** Application. `Synced`/`Healthy` means "everything I am willing to look
 at matches", not "everything you wrote exists". Counting the objects in `status.resources` against the objects in
 `helm template` is a five-second check that would have caught it immediately.
+
+### It works
+
+The operator ran the playbook. The custom compose app deployed exactly as the middleware source said it would:
+
+```
+$ midclt call app.query | ...
+  node-exporter RUNNING custom=True
+  garage        RUNNING custom=False
+
+$ ss -lnt | grep 9100
+LISTEN 0  4096  192.168.1.25:9100  0.0.0.0:*
+
+$ zfs list -H -o name -r tank/monitoring
+tank/monitoring
+tank/monitoring/textfile
+```
+
+`network_mode: host` and the read-only rootfs bind were accepted without comment — as expected once the validation
+turned out to be a bare `docker compose config`. Note the listener: **frontnet only**, not `0.0.0.0`. The box also
+holds `192.168.10.10` on the storage backnet and there is no reason to offer metrics on an interface nothing can
+scrape them from.
+
+The full path — apiserver → Service → socat → NAS — proves out through the readonly kubeconfig, no exec needed:
+
+```
+$ oc get --raw "/api/v1/namespaces/truenas-exporter/services/http:truenas-exporter:9100/proxy/metrics"
+metric families: 683       total series: 3459
+  node_zfs_arc_*      147
+  node_zfs_zil_*       20
+  node_nfsd_*          90
+  node_filesystem_*   495
+  node_hwmon_temp_*   112
+  node_textfile_scrape_error 0
+```
+
+Worth doing the arithmetic rather than trusting the shape. Against the direct on-box reads taken about an hour
+earlier:
+
+| | direct read, earlier | via the cluster, now |
+|---|---|---|
+| `arc_hits` | 526,889,641 | 529,761,242 |
+| `arc_misses` | 11,322,871 | 11,352,736 |
+| `zil_commit_count` | 687,912 | 693,589 |
+
+Monotonically increasing counters, not a cached snapshot. `zil_commit_count` moving by 5,677 in an hour is the
+SLOG question turning into a standing signal instead of a study someone has to remember to repeat.
+
+`node_textfile_scrape_error 0` is the small quiet win: the collector found its directory and read it without
+complaint, which is the dataset-not-mkdir decision paying off before anything has even been written there.
+
+**And the live scrape settles the scope of phase 2 better than my design notes did.** The zfs collector gives ARC,
+ZIL and per-dataset IO counters (`node_zfs_zpool_dataset_nread`/`nwritten`) for free — but grepping the actual
+output shows **no pool health, no capacity, no fragmentation, and no SMART whatsoever**. So the textfile cron is
+not a nice-to-have refinement; it is the only route to the four things an operator actually looks at when a NAS is
+unwell. Phase 2 is now specified by observation rather than by guess.
+
+What I still could not verify from here is that Prometheus is *ingesting* it under `instance="truenas"` — the
+readonly SA has no path to the UWM Prometheus API (`prometheuses/api` needs CREATE; the `federate` port rejects the
+apiserver-proxy token). That is a documented limitation of the read-only posture, not a gap in the work, and
+Grafana answers it in one panel.
