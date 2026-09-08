@@ -2053,3 +2053,51 @@ Reclaim work is queued in the README: verify `node-fstrim` is actually returning
 `discard` mountOption, which previously hid ~245 GiB of stale Loki-WAL allocation), then audit the CNPG
 `ceph-rbd-snapshot` snapshots on 7d retention — `rbd du` reports 246 GiB allocated against 377 GiB pool-stored, and
 snapshots are the likeliest source of that ~114 GiB gap.
+
+### What it actually saved (measured, with a control)
+
+Three Shelly plugs feed `shelly_power_watts` via json_exporter (`components/cluster-config/shelly-exporter/`):
+`rack` (whole homelab, upstream of the PDU), `node6` (one node — the only per-node meter) and `truenas`.
+Pulled from user-workload Prometheus, 5-minute steps:
+
+| plug | 00:00-05:00 baseline | 09:00-10:00 pre-pull | 11:00+ post | delta |
+|---|---|---|---|---|
+| `rack` | 212.4 W | 213.7 W | 197.7 W | **-16.0 W (-7.5%)** |
+| `node6` (1 node, 1 drive) | 50.1 W | 50.3 W | 46.9 W | **-3.4 W** |
+| `truenas` (control) | 70.9 W | 72.3 W | 70.8 W | -1.5 W |
+
+The README's estimate for the whole decommission was "~15-20 W". Measured **-16.0 W** — inside the range,
+which is a rare thing for a hand-waved hardware estimate.
+
+At the dashboard's own implied tariff (~1.27 PLN/kWh, back-derived from its 216.6 W -> 198.49 PLN/30d tile),
+16 W is ~11.5 kWh/month, i.e. **~14.70 PLN/month, ~176 PLN/year**. Not a reason to do the work on its own,
+but it is the recurring half of the payoff — the one-off half is three 3.5" bays freed.
+
+**Three caveats, because a single clean-looking number here would be misleading:**
+
+1. **`truenas` is the control and it drifted -1.5 W** across the same window with nothing done to it. So read
+   the rack figure as -16 +/- ~1.5 W, not as three significant figures.
+2. **The rack drop is bigger than three node6-equivalents.** node6's directly-metered drop for its one drive
+   was -3.4 W; x3 = -10.2 W, against a rack-level -16.0 W. node6 is the only per-node plug so there is nothing
+   to attribute the extra ~6 W to — the node4/node5 drives may simply have been less idle than node6's. I am
+   not inventing a mechanism for it.
+3. **The post window is 5 samples over 25 minutes, and node6 had rebooted 20 minutes earlier.** Re-read once
+   the cluster has been settled for a day.
+
+**Unplanned bonus: the power series independently records the morning's outage.** The `rack` metric has a hard
+gap from 05:10 to 09:00 — no scrapes at all — which is the `br-ex.forwarding` window, because the exporter is a
+pod and pod egress was dead. Hourly `rack` means for the day:
+
+```
+00:00  212.2W  n=12      04:00  212.5W  n=12
+01:00  211.7W  n=12      05:00  208.4W  n=2    <- gap starts
+02:00  213.7W  n=12      [ 05:10 - 09:00 NO DATA -- pod egress dead ]
+03:00  212.2W  n=12      09:00  213.7W  n=11   <- restored
+                         10:00  204.1W  n=11   <- reboot windows (min 162, max 230)
+                         11:00  197.7W  n=5    <- all three drives out
+```
+
+Worth internalising as a general lesson, and it is the same one as the 2026-08-07 `node_network_carrier_changes_total`
+trap: **when a monitoring gap and an incident share a start time, the gap IS the evidence.** Here it happens to
+be benign — but if I had been looking at this dashboard at 08:00 I would have seen a flat line and read it as
+"nothing happening" rather than "nothing being measured."
