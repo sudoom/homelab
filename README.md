@@ -201,35 +201,37 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   `roles/truenas-apps/tasks/main.yml`; `components/cluster-config/truenas-exporter/` (socat forwarder + Service +
   ServiceMonitor, `instance="truenas"`); root-app entry at wave 5; grafana.com **1860** wired into
   `grafana-config`.
-  **Still to do — phase 2, and the live scrape now says exactly what is missing.** node_exporter's zfs collector
-  gives ARC, ZIL and per-dataset IO counters (`node_zfs_zpool_dataset_nread`/`nwritten`) for free, but exposes
-  **no pool health, no capacity, no fragmentation and no SMART at all** — confirmed by grepping the live output.
-  So phase 2 is the **textfile-collector cron** for precisely: `zpool list -H -o name,health,capacity,fragmentation`,
-  scrub recency + error counts, per-dataset capacity, SMART attributes, and newest-snapshot age. Write it with
-  `cronjob.create`, which `truenas-tasks` **already uses** for the SMART jobs. The plumbing is done and proven —
-  `tank/monitoring/textfile` exists, the collector reads it, and `node_textfile_scrape_error` is `0` — so phase 2 is
-  purely "write `.prom` files into it", plus the hand-built ZFS/SMART/NFS panel set that 1860 does not cover.
-  **The trap that shaped the design, recorded so nobody re-derives it:** the textbook way to scrape an off-cluster
-  target is a selectorless Service + a hand-written `Endpoints` object. **That cannot work here.** OpenShift GitOps
-  ships `resource.exclusions` on the ArgoCD CR excluding **both `Endpoints` and `EndpointSlice`** (apiGroups `""` +
-  `discovery.k8s.io`, clusters `*`), so ArgoCD **silently drops** the object — it never enters the Application's
-  resource tree, nothing is applied, and the app still reports `Synced`/`Healthy`. The first cut of this chart
-  shipped exactly that and the target simply never existed. Both escape hatches are excluded, so EndpointSlice is
-  not an out either, and there is no `ScrapeConfig` CRD on this cluster. Hence a one-container **socat L4
-  forwarder** with a real selector — which also matches how `shelly-exporter`/`mikrotik-exporter` reach external
-  devices. Re-check with `oc -n openshift-gitops get cm argocd-cm -o jsonpath='{.data.resource\.exclusions}'`
-  before revisiting. Second, quieter decision in the same chart: the pod's probe is a **TCP check on socat's own
-  listener, not an HTTP check against the NAS** — an HTTP probe would mark the pod NotReady while the NAS is down,
-  dropping it from the Service and making the Prometheus target **vanish**, which is much less visible than a
-  present target reporting `up == 0`.
-  **Two constraints that will bite if forgotten:** the scrape MUST target **`192.168.1.25` (frontnet)** — a
-  pod cannot reach `192.168.10.0/24`, which is the same trap that broke the Velero BSL on 2026-08-28; and
-  **do not build on the REST API**, removed in TrueNAS 26 — `midclt` is the sanctioned path.
-  **Dashboard:** node_exporter naming is itself an argument for this route — grafana.com **1860** drops in via the
-  `grafanaCom: id:` pattern `grafana-config` already uses for the Ceph dashboards, so the generic half is free and
-  only the TrueNAS-specific panel set is hand-built: pool capacity/health/fragmentation, scrub recency, per-disk
-  SMART + temperature, ARC size and hit ratio, `zil_commit` rate, NFS ops/latency, 10G backnet throughput, and the
-  existing `shelly_power_watts{instance="truenas"}` series.
+  **PHASE 2 SHIPPED 2026-09-08 — code in, playbook run is yours.** The live scrape settled the scope: node_exporter's
+  zfs collector gives ARC, ZIL and per-dataset IO counters and **nothing else** — no pool health, no capacity, no
+  fragmentation, no scrub state, no SMART. All of those now come from a Python **textfile collector**
+  (`ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py`) on a 5-minute `cronjob.create`, emitting
+  `truenas_zpool_*`, `truenas_dataset_*`, `truenas_snapshot_age_seconds`, `truenas_disk_*` and staleness guards.
+  Plus **11 alerts** (`components/cluster-config/truenas-exporter/templates/prometheusrule.yaml`) and a custom
+  **TrueNAS — single pane** dashboard (15 panels) that puts `shelly_power_watts{instance="truenas"}` on the same
+  page as ARC/ZIL/SMART.
+  **Graphite/InfluxDB were evaluated and rejected, with evidence** — `reporting.exporters.exporter_schemas` offers
+  exactly one type, `GRAPHITE` (there is no InfluxDB exporter on 25.10), and it is fed by netdata, whose shape
+  cannot express these metrics: both pools' usage series carry **identical labels**
+  (`chart="truenas_pool.usage"` for boot-pool AND tank, indistinguishable except by magnitude), disk temps are
+  **one metric name per disk** with the serial baked into the name (so no `avg by (disk)`, no single alert rule),
+  and scrub / fragmentation / snapshot age have **zero series**. It would also need a graphite_exporter deployment
+  plus a mapping config in-cluster — more moving parts, to deliver two of six metrics badly.
+  **Two defects the collector's own test run caught, both now guarded:** (1) run as non-root, `smartctl` prints its
+  permission error to **stdout** and exits non-zero, so the run looked clean while producing zero SMART series —
+  hence `truenas_disk_smart_scanned` vs `truenas_disk_smart_read_ok` and the `TrueNASSmartUnreadable` alert;
+  (2) `boot-pool`'s OS-image datasets and TrueNAS upgrade snapshots were being exported, and those snapshots are
+  legitimately weeks old, so any "stale snapshot" alert would have fired forever on datasets that are supposed to
+  look that way — `boot-pool` is now excluded wholesale from dataset/snapshot collection (its capacity still
+  reaches Prometheus via `truenas_zpool_*`).
+  **Atomicity is load-bearing and is documented in the script:** node_exporter reads whatever is in the directory at
+  scrape time, and a half-written file sets `node_textfile_scrape_error 1` and discards the whole scrape's textfile
+  metrics — so the collector writes a temp file that does **not** end in `.prom` and `os.replace()`s it.
+  **FINDING WORTH ACTING ON: `tank` has NEVER been scrubbed.** `pool.query` returns every `scan` field null, 11 days
+  after the pool was created (2026-08-28). The monthly task is correct (1st, 03:00) but its 35-day threshold skipped
+  the 09-01 run because the pool was 4 days old — and 10-01 is 34 days out, so it is likely to skip again, putting
+  the first parity verification in **November**, ~2 months after the data landed, on a cohort of wear-matched
+  43k-hour drives. `TrueNASPoolNeverScrubbed` now catches this class; consider a one-off
+  `midclt call pool.scrub <id> START` rather than waiting.
   **Note for future runs:** `ansible/truenas/playbook.yml` needs `--ask-vault-pass` since 2026-08-31, so any
   NAS-side change here is operator-run, not Claude-run.
   **Decide deliberately, do not just inherit it:** a single pane has a single failure mode. Grafana runs on the

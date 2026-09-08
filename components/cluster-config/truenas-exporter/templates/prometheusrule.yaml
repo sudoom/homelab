@@ -1,0 +1,187 @@
+# ---------------------------------------------------------------------------
+# Alerts for the NAS.
+#
+# Until 2026-09-08 this box had NO representation in monitoring at all, while
+# holding media, keepers, the pending Immich library, Loki's chunks and Velero's
+# backup target. Every rule here covers something that was previously invisible
+# and would have been noticed only by someone happening to open the TrueNAS UI.
+#
+# Metric source: the textfile collector at
+# ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py, plus
+# node_exporter's own zfs collector.
+# ---------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: truenas
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: truenas-exporter
+spec:
+  groups:
+    - name: truenas-availability
+      rules:
+        # The base case. Everything below is silent if the exporter is gone, so
+        # this has to fire first and loudest.
+        - alert: TrueNASExporterDown
+          expr: up{job="truenas-exporter"} == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "TrueNAS node_exporter unreachable for 10m"
+            description: |
+              Prometheus cannot scrape node_exporter on the NAS. The scrape path
+              is apiserver -> Service -> socat forwarder pod -> 192.168.1.25:9100,
+              so check in that order: `oc -n {{ .Values.namespace }} get pods`,
+              then whether the app is running on the box
+              (`midclt call app.query`) and listening
+              (`ss -lnt | grep 9100`).
+
+              While this fires, EVERY other TrueNAS alert is blind -- including
+              pool health and backup-target capacity.
+
+        # A cron job that stops running leaves its last .prom file in place
+        # forever. Without this, pool health, scrub age and SMART would all keep
+        # reporting their last-known-good values indefinitely and look healthy.
+        - alert: TrueNASTextfileCollectorStale
+          expr: |
+            time() - truenas_textfile_collector_last_run_timestamp_seconds > 1800
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "TrueNAS textfile collector has not run for 30m"
+            description: |
+              The 5-minute cron on the NAS has not produced a fresh file. Pool,
+              scrub, dataset, snapshot and SMART metrics are now STALE and are
+              still being served -- they will look healthy whatever the truth is.
+              Check `midclt call cronjob.query` and /var/log/messages on the box.
+
+        # smartctl prints its permission error to STDOUT and exits non-zero, so
+        # a SMART collector that reads nothing at all still looks like a clean
+        # run. This comparison is the only thing that catches it -- found while
+        # testing the collector as a non-root user on 2026-09-08.
+        - alert: TrueNASSmartUnreadable
+          expr: truenas_disk_smart_read_ok < truenas_disk_smart_scanned
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SMART data unreadable for {{ "{{" }} $value {{ "}}" }} disk(s) on the NAS"
+            description: |
+              `smartctl --scan` found more disks than the collector could parse.
+              Usually the cron job is no longer running as root. Drive health is
+              unmonitored until this clears.
+
+    - name: truenas-pools
+      rules:
+        - alert: TrueNASPoolNotHealthy
+          expr: truenas_zpool_healthy == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ZFS pool {{ "{{" }} $labels.pool {{ "}}" }} is not ONLINE"
+            description: |
+              The exact state string is on the `truenas_zpool_state_info` series
+              for this pool (DEGRADED / SUSPENDED / FAULTED / UNAVAIL).
+              `tank` is RAIDZ2 and survives two drive failures, but this is a
+              six-drive cohort of 5-year-old datacenter pulls all within ~400
+              power-on hours of each other, so correlated failure is the
+              expected shape. Run `zpool status -v tank` on the box.
+
+        - alert: TrueNASPoolCapacityHigh
+          expr: truenas_zpool_capacity_ratio{pool="tank"} > 0.80
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "TrueNAS pool {{ "{{" }} $labels.pool {{ "}}" }} above 80%"
+            description: |
+              ZFS performance degrades well before a pool is full, and this pool
+              now backs Loki's chunks and Velero's backups as well as media --
+              so filling it takes out logging and backups together, not just
+              playback. Check `truenas_dataset_used_bytes` for the growth.
+
+        # A pool that has never been scrubbed has never had its parity verified.
+        # On 2026-09-08 `tank` was in exactly this state 11 days after creation:
+        # the scrub task's 35-day threshold skipped the 09-01 run because the
+        # pool was 4 days old, and would likely skip 10-01 too (34 days).
+        - alert: TrueNASPoolNeverScrubbed
+          expr: truenas_zpool_scrub_ever == 0
+          for: 24h
+          labels:
+            severity: warning
+          annotations:
+            summary: "ZFS pool {{ "{{" }} $labels.pool {{ "}}" }} has never been scrubbed"
+            description: |
+              Nothing has ever verified this pool's parity. Scrub is what detects
+              bit rot so RAIDZ2 can self-heal from it, and this is a cohort of
+              wear-matched 43k-hour drives. If the monthly task keeps being
+              skipped by its own threshold, run one by hand:
+              `midclt call pool.scrub <pool_id> START`.
+
+        - alert: TrueNASPoolScrubOverdue
+          expr: truenas_zpool_scrub_age_seconds > 60 * 60 * 24 * 45
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "ZFS pool {{ "{{" }} $labels.pool {{ "}}" }} not scrubbed in 45 days"
+            description: |
+              The task is monthly with a 35-day skip threshold, so 45 days means
+              it is not completing. Check `midclt call pool.scrub.query`.
+
+        - alert: TrueNASScrubFoundErrors
+          expr: truenas_zpool_scrub_errors > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "Last scrub of {{ "{{" }} $labels.pool {{ "}}" }} reported {{ "{{" }} $value {{ "}}" }} error(s)"
+            description: |
+              Unrepairable errors mean data loss, not just a degraded disk.
+              `zpool status -v {{ "{{" }} $labels.pool {{ "}}" }}` lists the affected files.
+
+    - name: truenas-disks
+      rules:
+        - alert: TrueNASDiskSmartFailing
+          expr: truenas_disk_smart_healthy == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SMART self-assessment FAILED on {{ "{{" }} $labels.serial {{ "}}" }}"
+            description: |
+              Disk {{ "{{" }} $labels.device {{ "}}" }} ({{ "{{" }} $labels.model {{ "}}" }},
+              serial {{ "{{" }} $labels.serial {{ "}}" }}) is predicting its own failure.
+              Reference the drive by SERIAL, never /dev/sdX -- device names
+              re-enumerate on any reseat.
+
+        # Reallocated sectors on a used drive are expected; sectors reallocating
+        # NOW are the signal. delta() over 24h keeps the alert quiet for a drive
+        # that arrived with a count and has been stable since.
+        - alert: TrueNASDiskSectorsGrowing
+          expr: |
+            delta(truenas_disk_reallocated_sectors[24h]) > 0
+            or delta(truenas_disk_pending_sectors[24h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "Reallocated/pending sectors growing on {{ "{{" }} $labels.serial {{ "}}" }}"
+            description: |
+              These drives are 43k-hour datacenter pulls, so a NON-ZERO count is
+              normal and is deliberately not alerted on. A count that is MOVING
+              is the failure signal. Plan a replacement before the next scrub.
+
+        - alert: TrueNASDiskTemperatureHigh
+          expr: truenas_disk_temperature_celsius > 50
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disk {{ "{{" }} $labels.serial {{ "}}" }} at {{ "{{" }} $value {{ "}}" }}C"
+            description: |
+              Sustained above 50C. HGST datacenter drives are rated to 60C but
+              sustained heat is the main controllable driver of failure rate.
+              Check chassis airflow.

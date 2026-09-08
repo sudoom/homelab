@@ -253,3 +253,32 @@ spec:
   datasources:{{ $bindings }}
   grafanaCom:
     id: 1860
+---
+# TrueNAS — single pane (custom)
+#
+# The NAS-specific half that grafana.com 1860 does not cover: pool health,
+# capacity and scrub recency, ARC hit ratio / size, ZIL commit rate, per-disk
+# SMART keyed by SERIAL, NFS server ops, and the Shelly power draw.
+#
+# The power panel is the reason this dashboard justifies the name: node_exporter
+# and shelly-exporter are different jobs, but the ServiceMonitor in
+# components/cluster-config/truenas-exporter stamps `instance="truenas"` to match
+# the plug's label, so "how hard is the NAS working" and "what is it drawing"
+# sit on one page with no join.
+#
+# Metrics prefixed `truenas_` come from the textfile collector at
+# ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py; those
+# prefixed `node_` are node_exporter's own collectors.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: truenas-single-pane
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: metrics
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  json: |
+{{ .Files.Get "files/truenas-single-pane.json" | indent 4 }}

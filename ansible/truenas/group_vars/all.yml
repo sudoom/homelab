@@ -580,6 +580,28 @@ truenas_smart_cronjobs:
 
 # Snapshot retention, per dataset. media is deliberately minimal (re-downloadable);
 # backup is frequent (it is the tree that matters).
+# ---- node_exporter textfile collector -------------------------------------
+# Phase 2 of the Grafana single pane. node_exporter's zfs collector gives ARC,
+# ZIL and per-dataset IO counters and NOTHING else -- verified against the live
+# scrape 2026-09-08: no pool health, no capacity, no fragmentation, no scrub
+# state, no SMART. This cron writes those as *.prom files into the directory
+# node_exporter is already reading.
+#
+# WHY NOT the native GRAPHITE reporting exporter (the only type TrueNAS offers;
+# there is no InfluxDB one): it is fed by netdata, whose shape cannot express
+# these. Both pools' usage series carry IDENTICAL labels, disk temps are one
+# metric NAME per disk with the serial baked in, and scrub/fragmentation/
+# snapshot age are absent entirely. Full reasoning in the script header.
+#
+# Every 5 minutes: pool state and scrub age change slowly, but a cheap job with
+# a fresh timestamp makes the staleness guard
+# (`truenas_textfile_collector_last_run_timestamp_seconds`) meaningful. SMART
+# reads use `-n standby` so a sleeping disk is never spun up to be measured.
+truenas_textfile_collector:
+  script_path: /mnt/tank/monitoring/node-exporter-textfile.py
+  cron: "*/5 * * * *"
+  description: "node_exporter textfile collector (managed by ansible/truenas)"
+
 truenas_snapshot_tasks:
   - dataset: media
     recursive: true

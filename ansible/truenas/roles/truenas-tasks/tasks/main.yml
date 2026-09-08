@@ -181,3 +181,51 @@
   loop_control:
     label: "{{ item.description }}"
   when: item.description not in truenas_cron_descs
+
+# ---------------------------------------------------------------------------
+# node_exporter textfile collector (phase 2 of the Grafana single pane).
+#
+# Lives in THIS role rather than truenas-apps because it is a cron job and this
+# is where cron jobs are created -- but it feeds the node_exporter custom app
+# that truenas-apps deploys. See `truenas_node_exporter` in group_vars.
+#
+# The script must live on the DATA pool: the TrueNAS root filesystem is mounted
+# read-only (`boot-pool/ROOT/<ver> zfs ro,...`), so /usr/local/bin is not
+# writable. `tank/monitoring` is converged by truenas-storage, which runs first.
+# ---------------------------------------------------------------------------
+- name: Install the node_exporter textfile collector
+  ansible.builtin.copy:
+    src: node-exporter-textfile.py
+    dest: "{{ truenas_textfile_collector.script_path }}"
+    mode: "0755"
+    owner: root
+    group: root
+
+# Runs as root because smartctl requires it -- as a non-root user every device
+# read returns "Permission denied" and the SMART block silently emits nothing.
+# stdout hidden (the script is silent on success, and TrueNAS mails any cron job
+# whose stdout is non-empty); stderr deliberately NOT hidden, so a collector
+# that starts failing is loud rather than quietly serving stale files.
+- name: Create the textfile-collector cron job
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - cronjob.create
+      - "{{ _job | to_json }}"
+  vars:
+    _f: "{{ truenas_textfile_collector.cron.split() }}"
+    _job:
+      user: root
+      command: "/usr/bin/python3 {{ truenas_textfile_collector.script_path }} {{ truenas_node_exporter.textfile_dir }}"
+      description: "{{ truenas_textfile_collector.description }}"
+      schedule:
+        minute: "{{ _f[0] }}"
+        hour: "{{ _f[1] }}"
+        dom: "{{ _f[2] }}"
+        month: "{{ _f[3] }}"
+        dow: "{{ _f[4] }}"
+      enabled: true
+      stdout: true
+      stderr: false
+  when: truenas_textfile_collector.description not in truenas_cron_descs
