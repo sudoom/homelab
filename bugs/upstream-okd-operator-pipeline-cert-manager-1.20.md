@@ -371,6 +371,100 @@ verification, for three separate reasons:
 amd64) and push to zot, then run it against a cluster that is not serving this one's certificates — or accept
 the CRD-ownership collision as the expected, and safe, failure mode and read only the resolution result.
 
+## IN-CLUSTER amd64 BUILD — DONE. The arch gap is closed.
+
+The workstation is arm64 and the cluster is amd64, which is why every earlier note here said the images
+"cannot run on the cluster". Solved by building them **on** the cluster with OpenShift binary builds and
+pushing to zot. Four `BuildConfig`s in a scratch namespace, `source.type: Binary`, `strategy: Docker`, and --
+because the internal registry is `Removed` and the usual ImageStream output has nowhere to go --
+`output.to.kind: DockerImage` pointing straight at zot:
+
+```yaml
+  output:
+    to:
+      kind: DockerImage
+      name: zot.apps.okd.sudops.pl/okd-test/cert-manager-operator:1.20.0-2026-09-08-220000
+```
+
+No push secret: zot declares no `auth`/`accessControl`, so the push is anonymous. Prerequisites worth
+checking before copying this recipe elsewhere: `system:build-strategy-docker-binding` must exist (it does
+here, so Docker strategy is allowed) and `builds.config.openshift.io/cluster` should be empty of overrides.
+
+All four succeeded, ~11.5 min each, all scheduled onto node6:
+
+| build | duration | pushed digest |
+|---|---|---|
+| `cm-istio-csr` | 12m10s | `cert-manager-istio-csr@sha256:9643363178744…` |
+| `cm-cert-manager` | 11m36s | `cert-manager@sha256:0065cebf7abf43…` |
+| `cm-acme-solver` | 11m31s | `cert-manager-acme-solver@sha256:1413c36eb4f41a…` |
+| `cm-operator` | 11m31s | `cert-manager-operator@sha256:6a6903db17a6ff…` |
+
+**Order the builds cheapest-context-first.** They were run istio-csr (1.1 MB) -> cert-manager (16 MB) ->
+acme-solver (16 MB) -> operator (326 MB), fail-fast. The first build is what proves the whole path -- binary
+upload, base-image pull, Go module egress, and the zot push -- for the price of the smallest upload. The
+operator's 326 MB context is mostly `operator/vendor` (164 MB), which is required by `-mod=vendor`.
+
+The one genuinely unknown step was whether a build pod could push to zot through its own ingress route
+(`zot.apps.okd.sudops.pl` resolves to the ingress VIP on frontnet). It can:
+
+```
+Successfully pushed zot.apps.okd.sudops.pl/okd-test/cert-manager-istio-csr@sha256:9643363178744…
+Push successful
+```
+
+If it had not, the fallback is the in-cluster Service `zot.zot.svc.cluster.local:5000` with `insecure: true`.
+
+### Bundle rebuilt against the amd64 images, with digests
+
+With the operand images actually present in a registry, `--use-image-digests` works for the first time (the
+earlier local runs had to drop it -- operator-sdk resolves every `RELATED_IMAGE_*` against the registry and
+failed `UNAUTHORIZED` on unpushed quay tags). The regenerated CSV:
+
+```
+name:      cert-manager-operator.v1.20.0-2026-09-08-220000
+skipRange: '>=1.0.0 <1.20.0-2026-09-08-220000'
+replaces:  null
+cert-manager-operator   -> zot.../cert-manager-operator@sha256:6a6903db17a6ff…
+cert_manager_controller -> zot.../cert-manager@sha256:0065cebf7abf43…
+cert-manager-acmesolver -> zot.../cert-manager-acme-solver@sha256:1413c36eb4f41a…
+cert-manager-istiocsr   -> zot.../cert-manager-istio-csr@sha256:9643363178744…
+```
+
+`trust-manager` correctly stays on `quay.io/jetstack/trust-manager` -- the pipeline does not rebuild it.
+
+**Cosmetic upstream quirk, NOT introduced here:** the generated `relatedImages` contains an entry with an
+empty `name`. The already-published okderators 1.18 bundle has the same thing (two of them), so it is
+operator-sdk behaviour rather than a regression from this change. Flagging, not fixing.
+
+### Catalog image
+
+Built with an explicit `--platform linux/amd64` (the workstation would otherwise produce an arm64 catalog that
+cannot run on the cluster -- the operand images were safe from this only because the cluster built them):
+
+```
+$ podman image inspect …/cert-manager-test-catalog:v1 --format '{{.Architecture}}/{{.Os}}'
+amd64/linux
+$ opm validate /cat && echo OK
+OK
+```
+
+### What is left, and why it stops here
+
+Everything needed for a cluster test is now in zot. The remaining step is an OLM resolution test, scripted at
+`scratchpad/olm-resolution-test.sh` in two deliberately separated stages:
+
+- `--catalog` (safe): a **namespace-scoped** `CatalogSource` in the scratch namespace. Because it is not in
+  `openshift-marketplace` it is invisible to every Subscription outside that namespace, so the live
+  cert-manager Subscription cannot see or resolve against it. Asserts the catalog serves and OLM parses the
+  package and channel.
+- `--subscribe` (opt-in): adds an `OperatorGroup` scoped to that namespace and a `Manual` Subscription, and
+  asserts an InstallPlan naming the 1.20 CSV is generated. **The InstallPlan is deliberately never approved.**
+
+Approving it would install a second cert-manager operator whose CSV owns the same seven cluster-scoped CRDs
+(`Certificate`, `Issuer`, `ClusterIssuer`, …) as the operator issuing this cluster's wildcard and API
+certificates. Resolution and InstallPlan generation happen before any of that, and they are the layer a
+catalog defect lives in -- so stopping there is the right trade, not a limitation.
+
 ## SUPERSEDED PLAN (kept for the steps, which still apply if the internal registry is ever re-enabled)
 ## PLANNED NEXT: in-cluster bundle test via the internal registry
 
