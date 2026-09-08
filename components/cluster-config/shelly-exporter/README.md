@@ -88,3 +88,31 @@ oc -n shelly-exporter exec deploy/shelly-exporter -- \
 ```
 
 Should return Prometheus exposition format with the five metrics.
+
+
+## Label shape — why a plug is ONE series (2026-09-08)
+
+The ServiceMonitor stamps `instance` per plug (`node6` / `rack` / `truenas`) via `relabelings`, and
+then **drops `pod` and `container` in `metricRelabelings`**.
+
+That second part is not cosmetic. A Shelly plug is a *physical device*; `pod` describes the exporter
+that read it, and it changes every time that Deployment is rescheduled. Without the drop, one plug
+forks into a new series on every restart, which produces two visible faults:
+
+- Grafana renders **two legend entries with the same name** (two `rack`, two `truenas`, …), because
+  every panel legends on `{{instance}}`.
+- Any `avg_over_time` / `predict_linear` spanning the restart sees a **brand-new series with almost no
+  history** and returns nonsense. (Same class of bug as the `CephNodeDiskspaceWarning` false positive
+  documented in CLAUDE.md, where a `sdb4` -> `sda4` device rename made `predict_linear` claim the
+  emptiest node was about to fill.)
+
+Both were observed on 2026-09-08 and fixed at three layers, all of which are needed:
+
+1. `metricRelabelings: labeldrop pod|container` — the root fix; series stay continuous.
+2. `strategy: Recreate` on the Deployment — REQUIRED consequence. With `pod` dropped, two overlapping
+   pods would emit identical label sets and Prometheus would reject them as duplicate samples for the
+   same timestamp. A single-replica poller gains nothing from a surge.
+3. `avg by (instance) (...)` in every panel of `grafana-config/files/shelly-power.json` — merges the
+   series that were ALREADY forked, rather than waiting out the 15-day retention.
+
+`namespace` is deliberately **kept**: OpenShift user-workload monitoring uses it for tenancy/RBAC.
