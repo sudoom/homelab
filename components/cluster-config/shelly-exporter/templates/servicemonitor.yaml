@@ -34,4 +34,20 @@ spec:
           sourceLabels: []
           targetLabel: instance
           replacement: {{ .instance | quote }}
+      # Drop the exporter's own identity from the sample. A Shelly plug is a
+      # PHYSICAL device; `pod` and `container` describe the thing that read it,
+      # not the thing being measured -- and `pod` CHANGES every time the
+      # exporter is rescheduled. That silently forks the series: Grafana then
+      # renders two legend entries both labelled `rack`, and any
+      # avg_over_time/predict_linear over a window spanning the restart sees a
+      # brand-new series with almost no history. Both were observed 2026-09-08
+      # (duplicate legend entries, and a range query that had to be split by
+      # pod to be readable). Dropping them makes the series continuous across
+      # restarts, which is the correct shape for an external-device metric.
+      #
+      # `namespace` is deliberately KEPT: OpenShift user-workload monitoring
+      # uses it for tenancy/RBAC, so dropping it is not safe here.
+      metricRelabelings:
+        - action: labeldrop
+          regex: "pod|container"
     {{- end }}

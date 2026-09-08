@@ -7,6 +7,13 @@ metadata:
     app.kubernetes.io/name: shelly-exporter
 spec:
   replicas: 1
+  # Recreate, not RollingUpdate: with `pod` dropped in the ServiceMonitor's
+  # metricRelabelings, two overlapping pods would emit IDENTICAL label sets
+  # and Prometheus would reject them as duplicate samples for the same
+  # timestamp. A single-replica poller has nothing to gain from a surge
+  # anyway; a few seconds of scrape gap on redeploy is the correct trade.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: shelly-exporter
