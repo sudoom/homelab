@@ -3712,3 +3712,110 @@ $ count by (job) ({instance="truenas"})
 the same physical box under the same name, so one dashboard variable spans both and "how hard is the NAS working"
 sits next to "what is it drawing" with no join hack. That is what a single pane actually means, and it cost one
 `relabelings` stanza.
+
+## Phase 2 — the textfile collector, and why not Graphite
+
+With node_exporter live, the obvious next question was whether TrueNAS's own reporting exporter could supply the
+rest instead of writing a collector. It offers exactly one type:
+
+```
+$ midclt call reporting.exporters.exporter_schemas | jq -r '.[].key'
+GRAPHITE
+```
+
+No InfluxDB — TrueNAS dropped that when reporting moved to netdata. So the real question is whether netdata's
+metric set, shipped over Graphite, covers pool health / capacity / fragmentation / scrub / SMART / snapshot age.
+It does not, and the reasons are worth writing down because "TrueNAS already exports metrics, just use that" is a
+reasonable-sounding shortcut:
+
+```
+$ curl -s 'http://127.0.0.1:6999/api/v1/allmetrics?format=prometheus' | grep -i pool
+netdata_pool_usage_bytes_average{chart="truenas_pool.usage",family="pool.usage",dimension="available"} 454708050000
+netdata_pool_usage_bytes_average{chart="truenas_pool.usage",family="pool.usage",dimension="used"}      7269391300
+netdata_pool_usage_bytes_average{chart="truenas_pool.usage",family="pool.usage",dimension="total"}     461977400000
+netdata_pool_usage_bytes_average{chart="truenas_pool.usage",family="pool.usage",dimension="available"} 8515349650000
+...
+```
+
+**Both pools carry identical label sets.** boot-pool and tank are distinguishable only by magnitude — as Prometheus
+series they collide outright. Disk temperature is worse in a different way:
+
+```
+netdata_Temperature_for__serial_lunid_K7GE897L_5000cca269c607f9_disk_Celsius_average{...} 39
+netdata_Temperature_for__serial_lunid_BTWA64640719480FGN_55cd2e414d882542_disk_Celsius_average{...} 33.85
+```
+
+One **metric name** per disk, with the serial and lunid baked into the name. No `avg by (disk)`, no single alert
+rule covering all seven drives, no dashboard that keeps working when a drive is replaced. And:
+
+```
+$ ... | grep -icE "scrub|fragment|snapshot"
+0
+```
+
+Nothing at all for the three remaining metrics. So Graphite would mean standing up a `graphite_exporter` plus a
+mapping config in the cluster, to deliver two of six metrics in a shape nothing can query. The textfile collector
+writes all six correctly, through the scrape path that already exists.
+
+### What the collector emits, and the two bugs its own test run found
+
+A Python script on a 5-minute cron, writing `truenas_zpool_*`, `truenas_dataset_*`,
+`truenas_snapshot_age_seconds`, `truenas_disk_*` and a set of staleness guards. It lives on the data pool because
+the root filesystem is read-only.
+
+I ran it on the box before shipping it, as `truenas_admin` rather than root. Two things fell out that I would not
+have found by reading it:
+
+**1. A completely broken SMART collector reported itself perfectly healthy.**
+
+```
+truenas_textfile_collector_errors 0
+$ grep -c "^truenas_disk_" /tmp/tf-out/truenas.prom
+0
+```
+
+Zero errors, zero disk metrics. Run as non-root, `smartctl` prints `Permission denied` **to stdout** and exits
+non-zero — so the helper that treats "non-zero exit AND no stdout" as failure saw output and counted nothing, and
+the JSON parse then failed inside a `continue`. This is the same shape as the garage bucket that had a key and no
+permission between them: everything converges, nothing works. The fix is to export the comparison rather than a
+boolean:
+
+```
+truenas_disk_smart_scanned 7
+truenas_disk_smart_read_ok 0
+```
+
+`read_ok < scanned` is now an alert. Under root it should read 7/7.
+
+**2. boot-pool's OS snapshots would have made a "stale snapshot" alert useless.** The first version exported every
+dataset, including `boot-pool/ROOT/25.10.5/{audit,conf,etc,...}` and their TrueNAS upgrade snapshots — which are
+legitimately 43 days old. Any sensible "newest snapshot is too old" rule would have fired permanently on datasets
+that are supposed to look exactly like that, and the alert would have been muted within a week. `boot-pool` is now
+excluded wholesale from dataset and snapshot collection; its capacity still reaches Prometheus via
+`truenas_zpool_*`, which is the only boot-pool fact worth acting on.
+
+One design note that is easy to get wrong: **the write must be atomic.** node_exporter reads whatever is in the
+directory at scrape time, and a half-written file does not just lose one metric — it sets
+`node_textfile_scrape_error 1` and discards the *entire* scrape's textfile metrics. So the collector writes to a
+temp file that deliberately does **not** end in `.prom` (the collector only globs `*.prom`) and `os.replace()`s it
+into place.
+
+### The thing the monitoring found before it was even deployed
+
+```
+$ midclt call pool.query | jq '.[] | {name, scan}'
+tank  scan: {"function": null, "state": null, "start_time": null, "end_time": null, "errors": null, ...}
+```
+
+**`tank` has never been scrubbed.** Every scan field is null, 11 days after the pool was created on 2026-08-28.
+
+The scrub task itself is correct — 1st of the month at 03:00, exactly as declared. What happened is its own
+threshold: `truenas_scrub_threshold: 35` skips a scheduled scrub if the pool was scrubbed more recently than 35
+days, and on 09-01 the pool was 4 days old. The next run, 10-01, falls at 34 days — still inside the threshold. So
+the first parity verification on this pool may not happen until **November**, roughly two months after 3.5 TiB of
+media plus Loki's chunks and Velero's backups landed on it, across six wear-matched drives with ~43,500 power-on
+hours each.
+
+Nothing was broken. The task ran, decided correctly by its own rules, and left the pool unverified — and there was
+no signal anywhere that would have told anyone. That is precisely the class of thing this whole exercise exists to
+surface, and it turned up before the collector was even deployed. `TrueNASPoolNeverScrubbed` now covers it.

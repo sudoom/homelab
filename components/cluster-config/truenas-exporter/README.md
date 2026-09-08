@@ -17,6 +17,7 @@ ServiceMonitor around it.
 | `templates/deployment.yaml` | socat, `TCP-LISTEN:9100,fork` → `192.168.1.25:9100` |
 | `templates/service.yaml` | Headless Service with a real selector |
 | `templates/servicemonitor.yaml` | Scrape config; stamps `instance="truenas"`, drops `pod`/`container` |
+| `templates/prometheusrule.yaml` | 11 alerts: exporter down, collector stale, SMART unreadable, pool health/capacity/scrub, disk SMART/sectors/temperature |
 | `values.yaml` | Target address/port, image, instance label, scrape interval, resources |
 
 ## Why a forwarder pod instead of a selectorless Service + Endpoints
@@ -92,8 +93,33 @@ grafana.com **1860** (Node Exporter Full) is wired in
 `job` + `instance`; `instance="truenas"` is deliberately the same value the
 Shelly plug uses, so power and system metrics for this box share a name.
 
-ZFS pool health, scrub recency, SMART, ARC hit ratio, `zil_commit` rate and NFS
-latency are **not** in 1860 — see the TrueNAS TODO in the root `README.md`.
+**TrueNAS — single pane** (`grafana-config/files/truenas-single-pane.json`) is
+the NAS-specific half 1860 does not cover: pool health/capacity/scrub, ARC hit
+ratio and size, ZIL commit rate, per-disk SMART keyed by serial, NFS server ops,
+and the Shelly power draw on the same page.
+
+Those `truenas_*` metrics come from the textfile collector at
+`ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py`, which
+exists because node_exporter's zfs collector exposes ARC, ZIL and per-dataset IO
+counters and **nothing else** — no pool health, capacity, fragmentation, scrub
+state or SMART.
+
+### Why not the native Graphite exporter
+
+`reporting.exporters.exporter_schemas` on TrueNAS 25.10 offers exactly one type,
+`GRAPHITE` — there is no InfluxDB exporter. It is fed by netdata, and netdata's
+shape cannot express these metrics:
+
+* pool usage exists, but **both pools carry identical labels**
+  (`chart="truenas_pool.usage"` for boot-pool *and* tank) — indistinguishable
+  except by magnitude;
+* disk temps are **one metric name per disk**, serial and lunid baked into the
+  name, so `avg by (disk)` and a single alert rule are both impossible;
+* scrub, fragmentation and snapshot age: **zero series**;
+* values are pre-averaged (`_average`), so `rate()` is meaningless.
+
+It would also need a graphite_exporter deployment plus a mapping config in the
+cluster — more moving parts, for two of six metrics delivered badly.
 
 ## Why the Service is not headless
 
