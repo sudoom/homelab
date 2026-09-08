@@ -262,3 +262,45 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 
 Full chronology, decisions and the gaps found in the original plan:
 `blog/blog-truenas-migration-draft.md`.
+
+## Updating the node_exporter custom app
+
+`garage` is a **catalog** app: TrueNAS tracks the upstream version, sets
+`upgrade_available`, and the UI offers a button.
+
+`node-exporter` is a **custom (compose)** app, and that button will never appear
+for it. There is no catalog entry to compare against, so `app.query` reports
+`upgrade_available: false` permanently and `version` is a synthetic `1.0.0` that
+never moves. `app.outdated_docker_images` does not help either — it only detects
+a **mutable** tag (`:latest`) whose digest changed upstream; against a pinned tag
+it returns `[]` forever.
+
+So nothing on the box will ever tell you the image is old. The update path is:
+
+1. **Renovate opens a PR.** `renovate.json` has a `customManagers` entry watching
+   the pinned tag in `group_vars/all.yml` (`truenas_node_exporter.image`), using
+   the `docker` datasource — the same treatment every other image in this repo
+   gets.
+2. **Merge it.**
+3. **Run the playbook.** `truenas-apps` compares the declared image against
+   `app.query`'s `active_workloads.images` and calls `app.update` with the new
+   compose when they differ.
+
+```bash
+cd ansible/truenas && ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass
+```
+
+Step 3 is not optional and is easy to forget: the role was **create-only** when
+first written, which meant editing the tag changed nothing on the box while the
+play still reported converged — the same "declared but never applied" trap as the
+auto-created scrub task and the un-applied dataset quota. The reconcile task now
+closes it.
+
+To check what is actually running:
+
+```bash
+midclt call app.query | python3 -c "
+import json,sys
+for a in json.load(sys.stdin):
+    print(a['name'], a.get('custom_app'), a.get('active_workloads',{}).get('images'))"
+```

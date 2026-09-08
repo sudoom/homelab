@@ -3,7 +3,9 @@
   "extends": [
     "config:recommended"
   ],
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "kubernetes": {
     "fileMatch": [
       "components/.+\\.yaml$"
@@ -21,32 +23,55 @@
   },
   "packageRules": [
     {
-      "description": "Automerge patch updates for the media + keepers stacks (non-load-bearing apps). Uses matchFileNames with the REAL paths components/apps/{media,keepers}/** — the old matchPaths:[media/**,keepers/**] matched ZERO files (there is no root media/ or keepers/ dir), so this rule never fired and patch bumps were merged by hand. matchPaths is also deprecated.",
-      "matchFileNames": ["components/apps/media/**", "components/apps/keepers/**"],
-      "matchUpdateTypes": ["patch"],
+      "description": "Automerge patch updates for the media + keepers stacks (non-load-bearing apps). Uses matchFileNames with the REAL paths components/apps/{media,keepers}/** \u2014 the old matchPaths:[media/**,keepers/**] matched ZERO files (there is no root media/ or keepers/ dir), so this rule never fired and patch bumps were merged by hand. matchPaths is also deprecated.",
+      "matchFileNames": [
+        "components/apps/media/**",
+        "components/apps/keepers/**"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "automerge": true
     },
     {
       "description": "Immich server + machine-learning MUST bump together (identical app version, or Immich breaks) and are reviewed, never automerged. repository: is set explicitly in components/apps/immich/values.yaml so the helm-values manager can resolve a datasource and track the app tag. A MAJOR bump (v3.x) is breaking (OAuth/API/env changes + forward-only DB migrations) and also wants a matching newer immich-charts chart -> do it by hand after a verified DB backup, not via a Renovate merge.",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["ghcr.io/immich-app/immich-server", "ghcr.io/immich-app/immich-machine-learning"],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/immich-app/immich-server",
+        "ghcr.io/immich-app/immich-machine-learning"
+      ],
       "groupName": "immich"
     },
     {
       "description": "CNPG Postgres operand + backup images are SUPERVISED, never Renovate-bumped. The operand tag encodes a Postgres major (cloudnative-pg/postgresql:18) or pg-major+extension (cloudnative-vectorchord:18-1.1.1) -> a major bump is a DB migration event (vchord also needs an in-DB ALTER EXTENSION). The barman-cloud plugin image (plugin-barman-cloud) is pinned to a vendored install manifest in components/operators/cnpg-barman-plugin/templates/plugin.yaml -> a tag bump alone would desync the manifest (same trap as sealed-secrets/rook), and the new plugin version must be re-checked against the running CNPG minor. Same gate class as ceph/rook.",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["ghcr.io/tensorchord/cloudnative-vectorchord", "ghcr.io/cloudnative-pg/postgresql", "ghcr.io/cloudnative-pg/plugin-barman-cloud"],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/tensorchord/cloudnative-vectorchord",
+        "ghcr.io/cloudnative-pg/postgresql",
+        "ghcr.io/cloudnative-pg/plugin-barman-cloud"
+      ],
       "enabled": false
     },
     {
       "description": "Rook is a manual, supervised, version-coherent bump (CLAUDE.md 'Upgrading Rook/Ceph'). Renovate must NOT auto-propose it: the 2026-06-12 v1.19.5->v1.20.0 auto-bump (#134) broke CSI (operator changed the CSI ServiceAccount naming, ceph-csi-*-sa went missing). Both charts bump together, by hand, after a helm-dependency-update chart-exists check + an oc-diff of the CSI SA/RBAC delta.",
-      "matchPackageNames": ["rook-ceph", "rook-ceph-cluster"],
+      "matchPackageNames": [
+        "rook-ceph",
+        "rook-ceph-cluster"
+      ],
       "enabled": false
     },
     {
       "description": "Ceph image bumps are gated on Rook<->Ceph compatibility (a Rook minor supports a bounded Ceph range; allowUnsupported:false refuses an unsupported Ceph) AND a planned degraded window (no drain headroom on the 3-OSD no-drain topology). Renovate must NOT auto-propose it; bump the Ceph image by hand only after the running Rook is confirmed to support the target. (Live example: #117 v19.2.4->v20.2.2 major Squid->Tentacle, unsupported by Rook 1.19.5.)",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["quay.io/ceph/ceph"],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "quay.io/ceph/ceph"
+      ],
       "enabled": false
     }
   ],
@@ -54,5 +79,18 @@
     "bootstrap/**",
     "*-values.yaml",
     "monitoring/**"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "node_exporter runs on the TrueNAS box as a CUSTOM (compose) app, so TrueNAS itself will never offer an update: custom apps have no catalog entry to compare against and app.query always reports upgrade_available=false. app.outdated_docker_images only helps for mutable tags like :latest, and this one is pinned. Renovate is therefore the ONLY thing that will ever tell us a new node_exporter exists. Applying the bump still needs an operator playbook run (--ask-vault-pass).",
+      "fileMatch": [
+        "^ansible/truenas/group_vars/all\\.yml$"
+      ],
+      "matchStrings": [
+        "image:\\s+(?<depName>[^:\\s]+):(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "docker"
+    }
   ]
 }

@@ -403,6 +403,32 @@
 # runs FIRST -- same reasoning as garage's host_path tree, and the reason this
 # role does no mkdir of its own. If the collector logs "failed to read textfile
 # directory" on every scrape, the storage role did not run, not this one.
+# Defined ONCE and used by both the create and the update below. Keeping two
+# copies of a compose payload is how they drift.
+- name: Build the node_exporter compose definition
+  ansible.builtin.set_fact:
+    _ne_compose:
+      services:
+        node-exporter:
+          image: "{{ truenas_node_exporter.image }}"
+          # `unless-stopped`, not `always`: an operator who stops this app
+          # from the UI should have it stay stopped across a reboot.
+          restart: unless-stopped
+          # Both are required for a host-accurate view. Without pid:host the
+          # process/context-switch counters describe the container, not the
+          # NAS.
+          network_mode: host
+          pid: host
+          command:
+            - "--path.rootfs=/host"
+            - "--web.listen-address={{ truenas_node_exporter.listen_address }}"
+            - "--collector.textfile.directory=/host{{ truenas_node_exporter.textfile_dir }}"
+          volumes:
+            # rslave so ZFS datasets mounted after the container starts are
+            # still visible inside it -- without it, a dataset created later
+            # is invisible to the filesystem collector until a restart.
+            - "/:/host:ro,rslave"
+
 - name: Deploy the node_exporter custom app
   ansible.builtin.command:
     argv:
@@ -410,33 +436,7 @@
       - call
       - --job
       - app.create
-      - "{{ _app | to_json }}"
-  vars:
-    _ne: "{{ truenas_node_exporter }}"
-    _app:
-      app_name: "{{ _ne.app_name }}"
-      custom_app: true
-      custom_compose_config:
-        services:
-          node-exporter:
-            image: "{{ _ne.image }}"
-            # `unless-stopped`, not `always`: an operator who stops this app
-            # from the UI should have it stay stopped across a reboot.
-            restart: unless-stopped
-            # Both are required for a host-accurate view. Without pid:host the
-            # process/context-switch counters describe the container, not the
-            # NAS.
-            network_mode: host
-            pid: host
-            command:
-              - "--path.rootfs=/host"
-              - "--web.listen-address={{ _ne.listen_address }}"
-              - "--collector.textfile.directory=/host{{ _ne.textfile_dir }}"
-            volumes:
-              # rslave so ZFS datasets mounted after the container starts are
-              # still visible inside it -- without it, a dataset created later
-              # is invisible to the filesystem collector until a restart.
-              - "/:/host:ro,rslave"
+      - "{{ {'app_name': truenas_node_exporter.app_name, 'custom_app': true, 'custom_compose_config': _ne_compose} | to_json }}"
   when: truenas_node_exporter.app_name not in truenas_app_names
   register: truenas_ne_deploy
   failed_when: false
@@ -461,3 +461,45 @@
       node_exporter {{ 'already present' if truenas_node_exporter.app_name in truenas_app_names else 'DEPLOYED' }}
       -- metrics at http://{{ truenas_node_exporter.listen_address }}/metrics;
       the cluster scrapes it via components/cluster-config/truenas-exporter
+
+# ---------------------------------------------------------------------------
+# Image updates for a CUSTOM app.
+#
+# THIS TASK IS THE WHOLE UPDATE MECHANISM, and without it the role is a trap:
+# a create-only role means bumping `truenas_node_exporter.image` in group_vars
+# changes NOTHING on the box while the play still reports "ok" and converged.
+# That is the same "declared but never applied" shape that hid the auto-created
+# scrub task and the un-applied dataset quota.
+#
+# Why it has to be us: garage is a CATALOG app, so TrueNAS tracks an upstream
+# version, sets `upgrade_available`, and offers a button. node-exporter is a
+# CUSTOM app -- there is no catalog entry to compare against, `app.query`
+# reports `upgrade_available: false` permanently, and `version` is a synthetic
+# `1.0.0` that never moves. `app.outdated_docker_images` only detects a MUTABLE
+# tag (`:latest`) whose digest changed upstream; against a pinned tag it returns
+# `[]` forever. So nothing on the box will ever tell you node_exporter is old.
+# Renovate watches the pinned tag instead (see customManagers in renovate.json)
+# and opens a PR; merging it makes this task the thing that applies it.
+- name: Reconcile the node_exporter image
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.update
+      - "{{ truenas_node_exporter.app_name }}"
+      - "{{ {'custom_compose_config': _ne_compose} | to_json }}"
+  vars:
+    _live: "{{ (truenas_app_q.stdout | from_json
+                | selectattr('name', 'equalto', truenas_node_exporter.app_name)
+                | first).active_workloads.images | default([]) }}"
+  when:
+    - truenas_node_exporter.app_name in truenas_app_names
+    - truenas_node_exporter.image not in _live
+
+- name: Report the node_exporter image in use
+  ansible.builtin.debug:
+    msg: >-
+      node_exporter image declared {{ truenas_node_exporter.image }}
+      -- TrueNAS will never flag this as upgradable (custom apps have no catalog);
+      Renovate watches the tag, and this role applies the bump.
