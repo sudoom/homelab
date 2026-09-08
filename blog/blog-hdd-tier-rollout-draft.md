@@ -1993,3 +1993,63 @@ from the node outage.
 **Ordering fix: wait for `active+clean` before purging, not after.** Then the OSD is still down but
 the PG condition is satisfied, and the gate gives a real answer instead of a shrug. Costs a couple
 of minutes of recovery wait and turns a bypassed check into a passed one.
+
+### Phase 4 complete — and the number the HDDs were hiding
+
+All three purged, drives out, `ceph osd crush class ls` down to one entry:
+
+```
+$ ceph osd tree
+-1         1.39737  root default
+ -7         0.46579   host node4-okd-sudops-pl  ->  osd.0  nvme  up
+ -3         0.46579   host node5-okd-sudops-pl  ->  osd.1  nvme  up
+-11         0.46579   host node6-okd-sudops-pl  ->  osd.2  nvme  up
+
+$ ceph osd crush class ls
+[ "nvme" ]
+```
+
+Phase 4b dropped the 11 orphan CRUSH rules the retired pools left behind (`ceph osd crush rule rm` refuses if a
+pool references the rule, so it is self-gating — all 11 went without complaint), leaving `replicated_rule` and
+`nvme-replicated`. Health is back to the two known-benign warnings.
+
+**The reboot rule, now confirmed three times.** I predicted node5's and node6's reboots would zero
+`br-ex.forwarding` on all three nodes, because both hold a VIP and the morning's outage had zeroed all three.
+Wrong, three for three:
+
+```
+node4 reboot ->  node4=0  node5=1  node6=1
+node5 reboot ->  node5=0  node4=1  node6=1
+node6 reboot ->  node6=0  node4=1  node5=1
+```
+
+**A reboot zeroes that node's sysctl and only that node's**, even when the reboot causes a VIP failover — the
+ingress VIP moved node5 -> node6 -> node4 across these windows and never once broke a node that stayed up. So the
+morning's all-three event was not the VIP move; it was the frontnet blip hitting every node's addresses at once.
+Blast radius equals the set of nodes whose own addresses changed. Measure all three, restart what reads 0.
+
+Also worth recording: **the backnet NIC came back UP with the correct address on all three nodes, all three
+times.** CLAUDE.md warns it can return `DOWN` and that has cost real time before; it did not happen here.
+
+**And the thing nobody was looking for.** With the HDD OSDs gone, the cluster totals stopped lying:
+
+```
+$ ceph df
+POOL             ID  PGS   STORED  OBJECTS   USED  %USED  MAX AVAIL
+nvme-replicated   1  128  377 GiB  121.04k  1.1 TiB  80.35     89 GiB
+.mgr              3    1   17 MiB        6   52 MiB   0.02     89 GiB
+```
+
+**80.35%, with `nearfull` at 85%.** An hour earlier the same pool read 76.6%. This was invisible all along because
+`ceph -s` reported `11 TiB / 12 TiB avail` — cluster-wide free space across a 12 TiB pool of which 11 TiB was empty
+HDD that no rule could ever place data on. The pool's own `MAX AVAIL` was always the real number, and nobody was
+reading it.
+
+That is the honest lesson of the whole decommission: removing the dead tier did not create a capacity problem, it
+*revealed* one that had been there for weeks behind a reassuring headline figure. **Read per-pool `MAX AVAIL`, never
+cluster `avail`.**
+
+Reclaim work is queued in the README: verify `node-fstrim` is actually returning blocks (`ceph-nvme-block` has no
+`discard` mountOption, which previously hid ~245 GiB of stale Loki-WAL allocation), then audit the CNPG
+`ceph-rbd-snapshot` snapshots on 7d retention — `rbd du` reports 246 GiB allocated against 377 GiB pool-stored, and
+snapshots are the likeliest source of that ~114 GiB gap.
