@@ -34,17 +34,74 @@ MINOR=18            # <- drives submodule branches via ${OCP_SHORT}
 1.20 is the newest buildable option, and it covers 4.21 *and* 4.22 in one bump — so the not-yet-created
 `release-4.22` catalog branch needs no follow-up.
 
-## What the PR changes (5 files, 18/18)
+## What the PR changes (5 files, 42/19)
 
 ```
- .gitmodules                         |  4 ++--   cert-manager-1.18 -> 1.20, release-1.18 -> 1.20
- cert-manager/build.sh               |  2 +-    MINOR=18 -> 20
- cert-manager/cert-manager           |  2 +-    gitlink -> ddde1aa46c46994890adf8234266504f3efc0607
- cert-manager/operator               |  2 +-    gitlink -> bd768238b709eea3edc6f3fbf6cd50a480369b28
- cert-manager/patches/operator.patch | 26 +++--- REGENERATED (see below)
+ .gitmodules                         |  4 +--   cert-manager-1.18 -> 1.20, release-1.18 -> 1.20
+ cert-manager/build.sh               |  2 +-   MINOR=18 -> 20
+ cert-manager/cert-manager           |  2 +-   gitlink -> ddde1aa46c46994890adf8234266504f3efc0607
+ cert-manager/operator               |  2 +-   gitlink -> bd768238b709eea3edc6f3fbf6cd50a480369b28
+ cert-manager/patches/operator.patch | 51 ++--- REGENERATED + Makefile guard (see below)
 ```
 
-## The non-obvious part: the patch had to be regenerated
+## VERIFIED BY BUILDING IT
+
+```
+$ make bundle BUNDLE_VERSION=1.20.0-2026-09-08-200000 \
+    IMG=quay.io/sudoom/cert-manager/operator:1.20.0-2026-09-08-200000 ...
+> downloading operator-sdk v1.25.1
+Building sigs.k8s.io/kustomize/kustomize/v5...
+Building sigs.k8s.io/controller-tools/cmd/controller-gen...
+... operator-sdk generate bundle -q --overwrite=false --version 1.20.0-2026-09-08-200000
+... operator-sdk bundle validate ./bundle
+level=info msg="All validation tests have completed successfully"
+$ echo $?
+0
+```
+
+Generated CSV:
+
+```
+name:        cert-manager-operator.v1.20.0-2026-09-08-200000
+version:     1.20.0-2026-09-08-200000
+displayName: cert-manager Operator for OKD
+support:     OKD Community
+advertises:  cert-manager v1.20.3
+OKD strings: 7    Red Hat strings: 1 (see residue note below)
+```
+
+The generated name/version match okderators' existing scheme exactly, so the channel entry slots in unchanged.
+
+## Second blocker, only findable by running the build: a new semver guard
+
+The 1.20 Makefile added a guard that 1.18 does not have:
+
+```make
+define validate-semver
+$(shell echo '$(1)' | grep -Eq '^([0-9]+\.[0-9]+\.[0-9]+|latest)$$' && echo valid)
+endef
+...
+ifneq ($(call validate-semver,$(BUNDLE_VERSION)),valid)
+$(error BUNDLE_VERSION '$(BUNDLE_VERSION)' is not valid semver (expected: Major.Minor.Patch))
+endif
+```
+
+It accepts only bare `X.Y.Z`. But `common.sh` builds `OCP_DATE="${MAJOR}.${MINOR}.0-${DATE}"`, so the very first
+`make bundle` hard-errors:
+
+```
+Makefile:42: *** BUNDLE_VERSION '1.20.0-2026-09-08-200000' is not valid semver (expected: Major.Minor.Patch).  Stop.
+```
+
+The date suffix is load-bearing for this catalog — `cert-manager-operator.yaml` already lists **two** builds of
+`1.18.0` distinguished only by it. And `1.20.0-2026-09-08-200000` **is** valid semver: the spec allows a
+hyphen-prefixed pre-release identifier, so the guard is stricter than the thing it is named after. The patch
+therefore relaxes it to `^([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?|latest)$` with a comment explaining why.
+
+This is worth raising upstream separately — arguably `openshift/cert-manager-operator` should accept full semver
+rather than a subset — but patching it here unblocks the bump without waiting on that.
+
+## The other non-obvious part: the patch had to be regenerated
 
 `common.sh` applies it with `git am -3`, and the existing patch's hunk context contains a version-specific line:
 
@@ -86,11 +143,16 @@ Verified against a fresh `--branch cert-manager-1.20` checkout, 7 OKD strings pr
 
 Honest scope, so a reviewer knows what to re-check:
 
-- **No container build was run.** The submodule bump and patch application are verified; `build_containers` /
-  `build_bundle` are not. Our build host is arm64 and the target is amd64, so a local build would not have
-  produced usable images anyway.
-- **The bundle was not installed on a cluster.** The 1.20 CSV base declares `minKubeVersion: 1.27.0` and the
-  1.20 branch targets cert-manager v1.20.3, but end-to-end install on OKD 4.21 is untested.
+- **No container images were built.** `make bundle` is verified end to end; `build_containers` is not. The build
+  host is arm64 and the target amd64, and the Containerfiles use `CGO_ENABLED=1` with
+  `strictfipsruntime,openssl` — a cross-arch emulated CGO build would prove little even if it succeeded.
+- **The bundle was not installed on a cluster.** `operator-sdk bundle validate` passes, but an actual
+  `InstallPlan` on OKD 4.21 is untested.
+- **Cosmetic residue, deliberately not fixed:** the generated CSV still contains one `redhat.com` string —
+  `"email": "aos-ci-cd@redhat.com"` inside the `alm-examples` annotation, sourced from
+  `config/samples/letsencrypt/cert-manager.io_v1_issuer.yaml`. It is a sample ACME registration address in an
+  example CR, not user-visible branding, and the existing OKDify patch never touched `config/samples/`. Flagging
+  rather than silently extending the patch's scope.
 
 ## Also worth a maintainer's attention (separate finding, same catalog)
 

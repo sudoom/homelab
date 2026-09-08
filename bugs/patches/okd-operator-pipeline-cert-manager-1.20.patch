@@ -1,28 +1,51 @@
-From fda8866b6ce48c2a7b4b0d019c7a9b1bd467532d Mon Sep 17 00:00:00 2001
+From 3b1f3a86cd2677906c1b0066c7b3f5805c289600 Mon Sep 17 00:00:00 2001
 From: sudoom <20szynkarka_skrzywiony@icloud.com>
 Date: Tue, 8 Sep 2026 20:07:54 +0200
 Subject: [PATCH] [cert-manager] Bump to 1.20
 
 cert-manager 1.18 supports Kubernetes 1.29-1.33 and went EOL on 2026-03-10.
-OKD 4.21 is Kubernetes 1.34, so the operator built from this branch is out of
-its supported range on the OKD version it ships with.
+OKD 4.21 is Kubernetes 1.34, so the operator built from this branch is outside
+its supported Kubernetes range on the OKD version it ships alongside.
 
-1.20 covers Kubernetes 1.32-1.35, which spans OKD 4.19 through 4.22 -- one bump
-clears both the current 4.21 and the upcoming 4.22, with no follow-up needed.
+1.20 covers Kubernetes 1.32-1.35 = OKD 4.19 through 4.22, so one bump clears
+both the current 4.21 and the upcoming 4.22. (1.21 is not an option: there is no
+cert-manager-1.21 branch in openshift/cert-manager-operator.)
 
-The OKDify patch had to be regenerated: its context included
-'olm.skipRange: >=1.18.0 <1.18.1', so 'git am -3' failed against the 1.20 CSV
-base with "sha1 information is lacking or useless". The regenerated patch makes
-the same eight substitutions and applies cleanly.
+Two things beyond the version bump were required, both found by running the
+build rather than by inspection:
+
+1. patches/operator.patch had to be regenerated. Its hunk context contained
+   'olm.skipRange: >=1.18.0 <1.18.1', so 'git am -3' failed against the 1.20 CSV
+   base with "sha1 information is lacking or useless / could not build fake
+   ancestor". The regenerated patch makes the same substitutions and applies
+   cleanly to a fresh cert-manager-1.20 checkout.
+
+2. The 1.20 Makefile added a validate-semver guard that 1.18 does not have, and
+   it accepts only bare X.Y.Z. common.sh builds OCP_DATE as
+   ${MAJOR}.${MINOR}.0-${DATE}, so 'make bundle BUNDLE_VERSION=1.20.0-<date>'
+   hard-errors. The patch now also relaxes that guard to accept a semver
+   pre-release suffix, which is what the version already is per semver.org --
+   the guard is stricter than the spec it is named after. The date suffix is
+   load-bearing here: the catalog already carries two builds of 1.18.0
+   distinguished only by it.
+
+Verified locally: 'make bundle BUNDLE_VERSION=1.20.0-2026-09-08-200000' runs to
+completion and 'operator-sdk bundle validate ./bundle' reports "All validation
+tests have completed successfully". Generated CSV is
+cert-manager-operator.v1.20.0-2026-09-08-200000, advertises cert-manager v1.20.3,
+and carries OKD branding.
+
+Not verified: no container images were built (build host is arm64, target
+amd64), and the bundle was not installed on a cluster.
 
 Refs: https://cert-manager.io/docs/releases/
 ---
- .gitmodules                         |  4 ++--
+ .gitmodules                         |  4 +--
  cert-manager/build.sh               |  2 +-
  cert-manager/cert-manager           |  2 +-
  cert-manager/operator               |  2 +-
- cert-manager/patches/operator.patch | 26 +++++++++++++-------------
- 5 files changed, 18 insertions(+), 18 deletions(-)
+ cert-manager/patches/operator.patch | 51 +++++++++++++++++++++--------
+ 5 files changed, 42 insertions(+), 19 deletions(-)
 
 diff --git a/.gitmodules b/.gitmodules
 index 3ae491d..38ffe84 100644
@@ -70,25 +93,49 @@ index 1bc9f0f..bd76823 160000
 -Subproject commit 1bc9f0ff0b2049a876f33ac9a5d52c8197458bad
 +Subproject commit bd768238b709eea3edc6f3fbf6cd50a480369b28
 diff --git a/cert-manager/patches/operator.patch b/cert-manager/patches/operator.patch
-index 7202f6f..fed01c3 100644
+index 7202f6f..39404a0 100644
 --- a/cert-manager/patches/operator.patch
 +++ b/cert-manager/patches/operator.patch
-@@ -1,6 +1,6 @@
+@@ -1,20 +1,43 @@
 -From 1bc9f0ff0b2049a876f33ac9a5d52c8197458bad Mon Sep 17 00:00:00 2001
 -From: Owen Howard <owen@ziax.com>
 -Date: Fri, 30 May 2025 14:09:06 +0100
-+From 4b9f1fb0488d072849334c0893bb50f4f135dd3f Mon Sep 17 00:00:00 2001
++From dadf2d44cadb40e64c42c484898b513e0fb1ed46 Mon Sep 17 00:00:00 2001
 +From: OKD Community <maintainers@okd.io>
 +Date: Tue, 8 Sep 2026 20:06:52 +0200
  Subject: [PATCH] OKDify
  
  ---
-@@ -8,13 +8,13 @@ Subject: [PATCH] OKDify
-  1 file changed, 10 insertions(+), 12 deletions(-)
++ Makefile                                      | 10 ++++++---
+  ...anager-operator.clusterserviceversion.yaml | 22 +++++++++----------
+- 1 file changed, 10 insertions(+), 12 deletions(-)
++ 2 files changed, 17 insertions(+), 15 deletions(-)
  
++diff --git a/Makefile b/Makefile
++index 4b3edb2e..738d96d5 100644
++--- a/Makefile
+++++ b/Makefile
++@@ -21,10 +21,14 @@ export XDG_CONFIG_HOME ?= $(PROJECT_ROOT)/_output/.config
++ # DEFAULT_VERSION is the default version to use for image tags when not set.
++ DEFAULT_VERSION := 1.20.0
++ 
++-# Helper function to validate semver (Major.Minor.Patch format)
++-# Returns 'valid' if the version matches semver (X.Y.Z) or 'latest', empty string otherwise
+++# Helper function to validate semver (Major.Minor.Patch[-prerelease] format)
+++# Returns 'valid' if the version matches semver (X.Y.Z or X.Y.Z-prerelease) or
+++# 'latest', empty string otherwise.
+++# The pre-release suffix is permitted because it is part of the semver spec and
+++# downstream rebuilds distinguish multiple builds of the same upstream version
+++# that way (e.g. 1.20.0-2026-09-08-200000).
++ define validate-semver
++-$(shell echo '$(1)' | grep -Eq '^([0-9]+\.[0-9]+\.[0-9]+|latest)$$' && echo valid)
+++$(shell echo '$(1)' | grep -Eq '^([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?|latest)$$' && echo valid)
++ endef
++ 
++ # Formats version for image tags: adds 'v' prefix for semver, keeps 'latest' as-is
  diff --git a/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml b/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml
 -index fb30c009..de341c84 100644
-+index 9f3841f..4ad9ee0 100644
++index 9f3841f1..4ad9ee07 100644
  --- a/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml
  +++ b/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml
  @@ -19,19 +19,17 @@ metadata:
@@ -99,7 +146,7 @@ index 7202f6f..fed01c3 100644
  -    operator.openshift.io/uninstall-message: The cert-manager Operator for Red Hat
  -      OpenShift will be removed from cert-manager-operator namespace. If your Operator
  +    operator.openshift.io/uninstall-message: The cert-manager Operator for OKD
-@@ -34,14 +34,14 @@ index fb30c009..de341c84 100644
+@@ -34,14 +57,14 @@ index fb30c009..de341c84 100644
     labels:
       operatorframework.io/arch.amd64: supported
       operatorframework.io/arch.arm64: supported
@@ -117,7 +164,7 @@ index 7202f6f..fed01c3 100644
  +    For more information, see the [cert-manager Operator for OKD documentation](https://docs.openshift.com/container-platform/latest/security/cert_manager_operator/index.html).
  +  displayName: cert-manager Operator for OKD
     icon:
-@@ -50,7 +50,7 @@ index fb30c009..de341c84 100644
+@@ -50,7 +73,7 @@ index fb30c009..de341c84 100644
       mediatype: image/png
     install:
       spec:
@@ -126,7 +173,7 @@ index 7202f6f..fed01c3 100644
     - name: Documentation
       url: https://github.com/openshift/cert-manager-operator/blob/master/README.md
     maintainers:
-@@ -59,12 +59,12 @@ index fb30c009..de341c84 100644
+@@ -59,12 +82,12 @@ index fb30c009..de341c84 100644
  +  - email: maintainers@okd.io
  +    name: OKD Community
     maturity: stable
