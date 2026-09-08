@@ -1,0 +1,148 @@
+From fda8866b6ce48c2a7b4b0d019c7a9b1bd467532d Mon Sep 17 00:00:00 2001
+From: sudoom <20szynkarka_skrzywiony@icloud.com>
+Date: Tue, 8 Sep 2026 20:07:54 +0200
+Subject: [PATCH] [cert-manager] Bump to 1.20
+
+cert-manager 1.18 supports Kubernetes 1.29-1.33 and went EOL on 2026-03-10.
+OKD 4.21 is Kubernetes 1.34, so the operator built from this branch is out of
+its supported range on the OKD version it ships with.
+
+1.20 covers Kubernetes 1.32-1.35, which spans OKD 4.19 through 4.22 -- one bump
+clears both the current 4.21 and the upcoming 4.22, with no follow-up needed.
+
+The OKDify patch had to be regenerated: its context included
+'olm.skipRange: >=1.18.0 <1.18.1', so 'git am -3' failed against the 1.20 CSV
+base with "sha1 information is lacking or useless". The regenerated patch makes
+the same eight substitutions and applies cleanly.
+
+Refs: https://cert-manager.io/docs/releases/
+---
+ .gitmodules                         |  4 ++--
+ cert-manager/build.sh               |  2 +-
+ cert-manager/cert-manager           |  2 +-
+ cert-manager/operator               |  2 +-
+ cert-manager/patches/operator.patch | 26 +++++++++++++-------------
+ 5 files changed, 18 insertions(+), 18 deletions(-)
+
+diff --git a/.gitmodules b/.gitmodules
+index 3ae491d..38ffe84 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -81,11 +81,11 @@
+ [submodule "cert-manager/operator"]
+ 	path = cert-manager/operator
+ 	url = https://github.com/openshift/cert-manager-operator.git
+-	branch = cert-manager-1.18
++	branch = cert-manager-1.20
+ [submodule "cert-manager/cert-manager"]
+ 	path = cert-manager/cert-manager
+ 	url = https://github.com/openshift/jetstack-cert-manager.git
+-	branch = release-1.18
++	branch = release-1.20
+ [submodule "cert-manager/istio-csr"]
+ 	path = cert-manager/istio-csr
+ 	url = https://github.com/openshift/cert-manager-istio-csr.git
+diff --git a/cert-manager/build.sh b/cert-manager/build.sh
+index 2502583..615908e 100755
+--- a/cert-manager/build.sh
++++ b/cert-manager/build.sh
+@@ -2,7 +2,7 @@
+ 
+ NAMESPACE="cert-manager"
+ MAJOR=1
+-MINOR=18
++MINOR=20
+ 
+ source ../common.sh
+ 
+diff --git a/cert-manager/cert-manager b/cert-manager/cert-manager
+index 686afa6..ddde1aa 160000
+--- a/cert-manager/cert-manager
++++ b/cert-manager/cert-manager
+@@ -1 +1 @@
+-Subproject commit 686afa62160249022a0205d3a9bf5f059476c684
++Subproject commit ddde1aa46c46994890adf8234266504f3efc0607
+diff --git a/cert-manager/operator b/cert-manager/operator
+index 1bc9f0f..bd76823 160000
+--- a/cert-manager/operator
++++ b/cert-manager/operator
+@@ -1 +1 @@
+-Subproject commit 1bc9f0ff0b2049a876f33ac9a5d52c8197458bad
++Subproject commit bd768238b709eea3edc6f3fbf6cd50a480369b28
+diff --git a/cert-manager/patches/operator.patch b/cert-manager/patches/operator.patch
+index 7202f6f..fed01c3 100644
+--- a/cert-manager/patches/operator.patch
++++ b/cert-manager/patches/operator.patch
+@@ -1,6 +1,6 @@
+-From 1bc9f0ff0b2049a876f33ac9a5d52c8197458bad Mon Sep 17 00:00:00 2001
+-From: Owen Howard <owen@ziax.com>
+-Date: Fri, 30 May 2025 14:09:06 +0100
++From 4b9f1fb0488d072849334c0893bb50f4f135dd3f Mon Sep 17 00:00:00 2001
++From: OKD Community <maintainers@okd.io>
++Date: Tue, 8 Sep 2026 20:06:52 +0200
+ Subject: [PATCH] OKDify
+ 
+ ---
+@@ -8,13 +8,13 @@ Subject: [PATCH] OKDify
+  1 file changed, 10 insertions(+), 12 deletions(-)
+ 
+ diff --git a/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml b/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml
+-index fb30c009..de341c84 100644
++index 9f3841f..4ad9ee0 100644
+ --- a/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml
+ +++ b/config/manifests/bases/cert-manager-operator.clusterserviceversion.yaml
+ @@ -19,19 +19,17 @@ metadata:
+      features.operators.openshift.io/token-auth-azure: "true"
+      features.operators.openshift.io/token-auth-gcp: "true"
+-     olm.skipRange: '>=1.18.0 <1.18.1'
++     olm.skipRange: '>=1.19.0 <1.20.0'
+ -    operator.openshift.io/uninstall-message: The cert-manager Operator for Red Hat
+ -      OpenShift will be removed from cert-manager-operator namespace. If your Operator
+ +    operator.openshift.io/uninstall-message: The cert-manager Operator for OKD
+@@ -34,14 +34,14 @@ index fb30c009..de341c84 100644
+    labels:
+      operatorframework.io/arch.amd64: supported
+      operatorframework.io/arch.arm64: supported
+-@@ -112,11 +110,11 @@ spec:
++@@ -126,11 +124,11 @@ spec:
+        name: certmanagers.operator.openshift.io
+        version: v1alpha1
+    description: |
+--    The cert-manager Operator for Red Hat OpenShift provides seamless support for [cert-manager v1.18.4](https://github.com/cert-manager/cert-manager/tree/v1.18.4), which automates certificate management.
++-    The cert-manager Operator for Red Hat OpenShift provides seamless support for [cert-manager v1.20.3](https://github.com/cert-manager/cert-manager/tree/v1.20.3), which automates certificate management.
+ -    For more information, see the [cert-manager Operator for Red Hat OpenShift documentation](https://docs.openshift.com/container-platform/latest/security/cert_manager_operator/index.html).
+ -  displayName: cert-manager Operator for Red Hat OpenShift
+-+    The cert-manager Operator for OKD provides seamless support for [cert-manager v1.18.4](https://github.com/cert-manager/cert-manager/tree/v1.18.4), which automates certificate management.
+++    The cert-manager Operator for OKD provides seamless support for [cert-manager v1.20.3](https://github.com/cert-manager/cert-manager/tree/v1.20.3), which automates certificate management.
+ +    For more information, see the [cert-manager Operator for OKD documentation](https://docs.openshift.com/container-platform/latest/security/cert_manager_operator/index.html).
+ +  displayName: cert-manager Operator for OKD
+    icon:
+@@ -50,7 +50,7 @@ index fb30c009..de341c84 100644
+      mediatype: image/png
+    install:
+      spec:
+-@@ -143,11 +141,11 @@ spec:
++@@ -158,11 +156,11 @@ spec:
+    - name: Documentation
+      url: https://github.com/openshift/cert-manager-operator/blob/master/README.md
+    maintainers:
+@@ -59,12 +59,12 @@ index fb30c009..de341c84 100644
+ +  - email: maintainers@okd.io
+ +    name: OKD Community
+    maturity: stable
+-   minKubeVersion: 1.27.0
++   minKubeVersion: 1.31.0
+    provider:
+ -    name: Red Hat
+ +    name: OKD Community
+-   replaces: cert-manager-operator.v1.18.0
+-   version: 1.18.1
++   replaces: cert-manager-operator.v1.19.0
++   version: 1.20.0
+ -- 
+-2.53.0
++2.50.1 (Apple Git-155)
+ 
+-- 
+2.50.1 (Apple Git-155)
+
