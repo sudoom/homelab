@@ -330,7 +330,7 @@
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 6,
+        "w": 2,
         "x": 18,
         "y": 1
       },
@@ -377,6 +377,56 @@
         "overrides": []
       },
       "description": "Health of the COLLECTION, not of the disks -- this is how many disks the collector could read, out of how many `smartctl --scan` found. The disks' own health is the table in the Disks row below. read_ok below scanned means the cron stopped running as root and drive health is unmonitored (it read 0 of 7 during development for exactly that reason)."
+    },
+    {
+      "id": 7,
+      "title": "node_exporter version",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_exporter_build_info{instance=\"truenas\"}",
+          "legendFormat": "{{version}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "textMode": "name",
+        "graphMode": "none",
+        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "description": "Read from `node_exporter_build_info`, i.e. the RUNNING BINARY -- not the tag that was requested and not TrueNAS's Application Info panel. That panel shows `App Version: custom / Version: 1.0.0` for this app and always will: those are hardcoded constants in catalog_reader/custom_app.py (`APP_VERSION='custom'`, `VERSION='1.0.0'`) returned by a function whose own docstring calls it a stub. `app.create` accepts a `version` field but only honours it for CATALOG apps. So this panel is the authoritative version for the NAS exporter.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
     },
     {
       "id": 101,
@@ -1288,7 +1338,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_network_receive_bytes_total{instance=\"truenas\",device!~\"lo|veth.*|docker.*|br-.*\"}[5m]) * 8",
+          "expr": "rate(node_network_receive_bytes_total{instance=\"truenas\",device!~\"lo|veth.*|docker.*|br-.*\"}[2m]) * 8",
           "legendFormat": "{{device}} rx",
           "refId": "A"
         },
@@ -1297,7 +1347,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(node_network_transmit_bytes_total{instance=\"truenas\",device!~\"lo|veth.*|docker.*|br-.*\"}[5m]) * 8",
+          "expr": "rate(node_network_transmit_bytes_total{instance=\"truenas\",device!~\"lo|veth.*|docker.*|br-.*\"}[2m]) * 8",
           "legendFormat": "{{device}} tx",
           "refId": "B"
         }
@@ -1312,7 +1362,7 @@
         },
         "overrides": []
       },
-      "description": "eno1 is the 1G frontnet; the 10G backnet interface carries the NFS data path. Every node_* query here is scoped {instance=\"truenas\"}: Grafana's datasource is thanos-querier, which merges PLATFORM metrics, so an unscoped node_network_* query silently returns the 3 OKD nodes' interfaces (ceph-shim, ovs-system, genev_sys_6081) alongside the NAS's."
+      "description": "eno1 is the 1G frontnet; the 10G backnet interface carries the NFS data path. Every node_* query here is scoped {instance=\"truenas\"}: Grafana's datasource is thanos-querier, which merges PLATFORM metrics, so an unscoped node_network_* query silently returns the 3 OKD nodes' interfaces (ceph-shim, ovs-system, genev_sys_6081) alongside the NAS's. Window is [2m], not [5m]: the scrape interval is 30s and the convention is a rate window of at least 4x that. Measured on the same hour, [5m] peaked at 130 Mb/s and [2m] at 152 -- [5m] was over-smoothing. NOTE this will never match TrueNAS's own graph at the peaks: netdata samples every 2 SECONDS and reported 314 Mb/s for the same window. The hourly MEANS agree almost exactly (46.6 vs 47.2 Mb/s), which is the check that proves neither is wrong -- a 2-second burst cannot survive a 30-second sample, and even irate() tops out at 161.8 here. Use TrueNAS's UI for burst peaks, this for sustained load."
     }
   ],
   "description": "Single pane for the TrueNAS box. node_exporter runs ON the NAS as an Ansible-managed custom app; pool/scrub/SMART come from its textfile collector; power comes from the Shelly plug, which shares instance=\"truenas\". BREAK-GLASS NOTE: this dashboard runs on the OKD cluster with its PVC on Ceph, so it goes dark exactly when cluster storage is in trouble. If you cannot reach it, the NAS's own UI at https://192.168.1.25 is the independent path."

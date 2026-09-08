@@ -411,6 +411,20 @@
       services:
         node-exporter:
           image: "{{ truenas_node_exporter.image }}"
+          # TrueNAS's own Application Info panel shows `App Version: custom` and
+          # `Version: 1.0.0` for EVERY custom app and always will -- those are
+          # hardcoded constants in catalog_reader/custom_app.py returned by a
+          # function its own docstring calls a stub, and the `version` field
+          # app.create accepts is honoured only for CATALOG apps. These labels
+          # are the closest the box gets to a truthful version: `docker inspect`
+          # and the container view show them. The authoritative source stays
+          # `node_exporter_build_info`, which reports the running binary rather
+          # than the tag that was asked for.
+          labels:
+            org.opencontainers.image.version: "{{ truenas_node_exporter.image | regex_replace('^.*:', '') }}"
+            org.opencontainers.image.source: "https://github.com/prometheus/node_exporter"
+            org.opencontainers.image.title: "node_exporter"
+            pl.sudops.managed-by: "ansible/truenas/roles/truenas-apps"
           # `unless-stopped`, not `always`: an operator who stops this app
           # from the UI should have it stay stopped across a reboot.
           restart: unless-stopped

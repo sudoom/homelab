@@ -4148,3 +4148,72 @@ Identical before and after. Reading the changelog line more carefully, it disamb
 
 So the net position is arguably better than the catalog app's button: a reviewed PR, then one playbook run, with
 the version verifiable from the binary rather than from the tag that was asked for.
+
+### Two graphs disagreeing, and neither being wrong
+
+The operator put TrueNAS's own interface graph next to the Grafana panel and they did not match:
+
+```
+TrueNAS (netdata):   Sent  Max 314 Mb/s   Mean 47.2 Mb/s
+Grafana panel:       peak ~130 Mb/s at 17:01:30
+```
+
+A 2.4x gap on the peak invites the conclusion that one of them is broken. Neither is. Measuring the same hour
+through different rate windows:
+
+```
+rate[1m]  peak 161.8 Mb/s        irate  peak 161.8 Mb/s
+rate[2m]  peak 152.0 Mb/s
+rate[5m]  peak 130.3 Mb/s   <- what the panel showed
+rate[15m] peak  96.9 Mb/s
+mean (any window)  46.6 Mb/s     vs TrueNAS's 47.2
+```
+
+**The means agree to within rounding.** That is the check that settles it: both are integrating the same bytes.
+They differ only on the peak, and the peak difference is pure sampling resolution — netdata's `update_every` is
+**2 seconds**, our ServiceMonitor scrapes every **30**. A two-second burst cannot survive a thirty-second sample,
+which is why even `irate()` — the last two points, the most responsive form available — stops at 161.8.
+
+There is no fix for that short of scraping at netdata's resolution, and it is not worth doing: the panel exists to
+show sustained load, and TrueNAS's UI is right there for burst peaks. The panel now says so.
+
+One thing *was* wrong though, and the comparison surfaced it: `[5m]` on a 30-second scrape is over-smoothed. The
+convention is a rate window of at least 4x the scrape interval, making `[2m]` the floor. Moving to it recovers
+130 -> 152 Mb/s for nothing, and still averages 4 samples.
+
+### "Proper versioning" that cannot come from where it is being asked for
+
+The Application Info panel reads:
+
+```
+Name: node-exporter    App Version: custom    Version: 1.0.0    Source: N/A
+```
+
+That cannot be improved, and the source says so unambiguously:
+
+```python
+# catalog_reader/custom_app.py
+APP_VERSION = 'custom'
+VERSION = '1.0.0'
+
+def get_version_details() -> dict:
+    """
+    This is basically a stub which will be used in middleware to get version details of custom app
+    """
+```
+
+Hardcoded module constants behind a function whose own docstring calls it a stub. `app.create` *does* accept a
+`version` field — but the custom path calls `get_version_details()` and never consults it; `version` is for
+`catalog_app` installs. Every custom app on every TrueNAS shows `custom / 1.0.0`, forever. Editing the module is not
+an option either: the root filesystem is read-only, and an upgrade would revert it regardless.
+
+So the honest answer is that the version has to live where it is actually true, and there are two places:
+
+1. **`node_exporter_build_info{version="1.12.1"}`** — now its own stat panel on the dashboard. This reports the
+   **running binary**, which is strictly better than any of the alternatives: the image tag says what was
+   *requested*, and the Application Info panel says nothing at all.
+2. **OCI labels on the compose service** (`org.opencontainers.image.version` etc.), so `docker inspect` on the box
+   is self-describing even without Prometheus.
+
+Worth noting the general shape, because it recurs: when a UI cannot express something, the reflex is to make the UI
+lie less. The better move is usually to find the place where the fact is already true and surface it there.
