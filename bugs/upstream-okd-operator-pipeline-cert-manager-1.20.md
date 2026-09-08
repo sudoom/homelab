@@ -339,8 +339,20 @@ exist unless `build_containers` has also been run and pushed. So the operator PO
 this test -- resolution and InstallPlan creation happen before any image pull, and that is the layer a catalog bug
 lives in.
 
-**Do not run this while the cluster is under other load.** It pushes to the internal registry (which is backed by
-Ceph) and `nvme-replicated` is at ~81.6% against an 85% nearfull threshold.
+**GATE CURRENTLY FAILING (2026-09-08 evening).** This plan set its own precondition on pool headroom, and the
+pool has moved the wrong way since: `nvme-replicated` now reads **84.53% / 70 GiB MAX AVAIL** against the 85%
+nearfull threshold, down from 89 GiB the same morning. Cause is unrelated to this work (CNPG volume snapshots
+have never been pruned — see `blog/blog-cnpg-draft.md` 2026-09-08 and the README storage TODO), but the internal
+registry is Ceph-backed, so pushing operand images into it now would spend headroom the cluster does not have.
+**Deferred until the snapshot reclaim lands.** The bundle-only variant (~300 kB) is not meaningfully gated by
+capacity, but it still needs a CatalogSource + Subscription, which is a mutation next to the live cert-manager
+operator and therefore an explicit operator decision, not an unattended one.
+
+**Better variant once the gate clears — build the operand images IN the cluster and solve the arch problem at
+the same time.** The nodes are amd64, so a BuildConfig against this branch produces artefacts that can actually
+run, which the arm64 workstation build never will. That turns the "operator POD will not start" limitation below
+into a real end-to-end install test rather than a resolution-only one. Cost is the same Ceph headroom, so it
+queues behind the same reclaim.
 
 ## What has NOT been verified
 
