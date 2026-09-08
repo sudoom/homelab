@@ -19,11 +19,11 @@ Pin these when generating manifests or commands — mismatched versions are the 
 
 | Tool            | Version        | Notes                                                                 |
 |---|---|---|
-| OKD             | 4.20.0-okd-scos.17 | Kube API ≈ upstream **1.33** (mapping: OKD `4.N` → Kube `1.(N+13)`, so 4.21→1.34, 4.22→1.35). SCOS 10 / kernel 6.12.0-142.el10 |
+| OKD             | **4.21.0-okd-scos.11** (upgraded from 4.20 on 2026-09-08) | Kube API ≈ upstream **1.34** (mapping: OKD `4.N` → Kube `1.(N+13)`, so 4.22→1.35). SCOS 10, kubelet v1.34.6, cri-o 1.33.4. **4.22 is DEFERRED — `quay.io/okderators/catalog-index:4.22` does not exist.** |
 | Helm            | v3             | Helm v2 syntax is invalid; no Tiller                                  |
 | ArgoCD          | v3.1.11+cc053b2     | Server-side apply + sync-wave annotations used throughout             |
 | OLM             | OKD-bundled    | `okderators` + `community-operators` CatalogSources                   |
-| cert-manager    | v1.18.2     | Installed via OLM from `okderators`                                   |
+| cert-manager    | v1.18.2     | OLM from `okderators`. **OUT OF MATRIX + EOL:** 1.18 supports Kube 1.29–1.33 and died 2026-03-10; we are on Kube 1.34. **No catalog offers newer** (okderators 1.18.0, community-operators 1.16.5, operatorhubio 1.16.5), so the only routes are the upstream Helm chart (built + parked on branch `cert-manager-helm-fallback`) or the upstream pipeline PR. **First ACME renewal on the out-of-matrix version: `homelab-wildcard` 2026-09-21.** |
 | oc / kubectl    | matching 4.20  | Prefer `oc` for OpenShift-only kinds (Route, SCC, ImageStream)        |
 | kubeconform     | latest         | Use with OpenShift CRD schema location (see Validation)               |
 | Renovate        | GitHub App     | Handles image tag bumps; PRs labeled `dependencies`                   |
@@ -86,7 +86,7 @@ For operators bringing CRDs, use **intra-chart** sync-wave annotations: `Subscri
 
 ### OLM catalogs
 
-- `okderators` (`quay.io/okderators/catalog-index:4.20`) — OKD community operators. Use for **cert-manager**.
+- `okderators` (`quay.io/okderators/catalog-index:4.21` — bumped 2026-09-08 after the 4.21 hop) — OKD community operators. Use for **cert-manager**. **The tag flip delivered NOTHING**: cert-manager head is still v1.18.0, gitops still v1.19.0, and `cluster-logging` head is v6.3.0 — *older* than the installed v6.5.0. Zero InstallPlans generated. **All five okderators subscriptions were switched to `installPlanApproval: Manual` before the flip** (cert-manager, gitops, cluster-logging, loki, oadp) — do not revert that; on Automatic a tag flip auto-upgrades all five at once, including the operator running ArgoCD.
 - `community-operators` — upstream OperatorHub.io. Use for **NMState** (the okderators build has an ImageStream bug).
 
 ### Operator patterns
@@ -125,6 +125,31 @@ The 2026-06-12 CSI outage was a **version-coherence** failure. The mechanics tha
 4. Sync the OPERATOR app first; verify operator image + `oc -n rook-ceph get sa | grep ceph-csi` (the 4 `ceph-csi-{rbd,cephfs}-{node,ctrl}plugin-sa` present) + CSI pods Running, before touching the cluster app or Ceph.
 5. Only then bump the Ceph image (`cephClusterSpec`/`cephImage.tag`) — gate on Ceph HEALTH_OK, quiet IO, 2h+ headroom (rolls all 3 OSDs in series, degraded-window each).
 6. **Renovate must NOT auto-bump Rook or Ceph.** These are manual, supervised, version-coherent, compatibility-checked bumps. **Enforced 2026-06-18 in `renovate.json`**: `packageRules` → `enabled: false` for `rook-ceph` + `rook-ceph-cluster` + `quay.io/ceph/ceph`, and both Rook `Chart.lock` files are now committed (un-gitignored) so the deployed subchart version is pinned + reviewable. (Was the third storage-version Renovate incident in one day before the lockdown.)
+
+### Node drain — a single-instance CNPG cluster blocks it unconditionally
+
+Found the hard way during the 4.20 → 4.21 upgrade (2026-09-08): node6's drain stalled ~20 minutes and would
+never have completed on its own.
+
+```
+E0908 drain_controller: error when evicting pods/"immich-postgres-1" -n "immich"
+  (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+```
+
+CNPG creates a `minAvailable: 1` PDB over the **primary**. CLAUDE.md already noted these are "permanently 0 by
+construction" and "do NOT block draining a node that holds a *replica*" — both true, and both miss the corollary:
+**`immich-postgres` is `instances: 1`, so every node is the primary's node.** The budget can never be satisfied
+and the eviction retries forever. `media-postgres` (3 instances) drained fine — CNPG just moved the primary.
+
+**Unblock:** `oc -n immich delete pod immich-postgres-1` — CNPG recreates it on another node (the draining one is
+cordoned). Two gotchas: the delete takes **>120 s** (graceful Postgres shutdown + RBD unmount), long enough that
+the drain controller hits its 10-minute threshold and backs off to a **5-minute retry** — so the unblock is not
+instant. And `oc` may fail `Unauthorized` at that exact moment, because the `authentication` operator updates
+during the upgrade and an `oauth-openshift` replica can be Pending on the cordoned node: **this is what the
+break-glass kubeconfig is for** (SA token, not OAuth).
+
+**Before the 4.22 hop:** either scale `immich-postgres` to 2 instances (needs NVMe headroom we do not currently
+have) or make the pod deletion an explicit runbook step. It will recur.
 
 ### Topology
 
