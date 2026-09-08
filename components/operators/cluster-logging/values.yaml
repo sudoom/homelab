@@ -5,4 +5,13 @@ subscription:
   channel: alpha
   source: okderators
   sourceNamespace: openshift-marketplace
-  installPlanApproval: Automatic
+  # Manual, deliberately (set 2026-09-08, before the 4.21 catalog flip).
+  # The okderators CatalogSource is pinned per-OKD-minor and these subscriptions
+  # carry no startingCSV, so the moment its tag moves 4.20 -> 4.21 OLM re-resolves
+  # this channel head. On Automatic that upgrade lands unsupervised, and it does so
+  # for ALL FIVE okderators operators at once -- cert-manager, gitops (ArgoCD
+  # itself), cluster-logging, loki and oadp. CNPG already showed how this ends:
+  # it auto-advanced 1.29.1 -> 1.30.0 with nobody deciding to.
+  # Manual means the InstallPlan waits: `oc -n <ns> get installplan` then patch
+  # `spec.approved: true` one operator at a time, verifying between each.
+  installPlanApproval: Manual
