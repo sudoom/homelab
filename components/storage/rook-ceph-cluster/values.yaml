@@ -152,7 +152,14 @@ rook-ceph-cluster:
         - name: "node4.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            - name: "/dev/disk/by-path/pci-0000:00:17.0-ata-1"   # 3.5" bay (HDD tier)
+            # HDD bay removed 2026-09-08 (phase 4a of the HDD-tier decommission).
+            # osd.3 held 0 PGs and `ceph osd safe-to-destroy 3` passed, so this is
+            # NOT a degraded-window change -- `ceph osd out` moves zero data. The
+            # device must leave the spec BEFORE the deployment is scaled down and
+            # purged, or Rook recreates the OSD on its next reconcile.
+            # Drive stays physically seated; the pull is a separate event (the
+            # 3.5" bay is not hot-swap, so it costs a power-cycle, and every node
+            # reboot re-trips the br-ex.forwarding cascade).
         - name: "node5.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
