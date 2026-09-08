@@ -181,7 +181,14 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   "/api/v1/namespaces/truenas-exporter/services/http:truenas-exporter:9100/proxy/metrics"` returns **683 metric
   families / 3,459 series**, with `node_zfs_arc_*` 147, `node_zfs_zil_*` 20, `node_nfsd_*` 90, `node_hwmon_temp_*`
   112, and `node_textfile_scrape_error 0`. Counter values cross-check against direct reads on the box taken an hour
-  earlier (ARC hits 526.9M → 529.8M, `zil_commit_count` 687,912 → 693,589), so these are live, not cached. Mechanism,
+  earlier (ARC hits 526.9M → 529.8M, `zil_commit_count` 687,912 → 693,589), so these are live, not cached.
+  **Prometheus ingestion confirmed too** (break-glass read, since the readonly SA has no path to the UWM
+  Prometheus API): `up{job="truenas-exporter"} == 1`, `node_zfs_arc_size` = 25.0 GiB carrying labels
+  `[__name__, endpoint, instance, job, namespace, service]` — i.e. the `pod`/`container` labeldrop worked and the
+  series will not fork when the forwarder reschedules. **And the single pane is real:** a
+  `count by (job) ({instance="truenas"})` returns **`shelly-exporter` 13** and **`truenas-exporter` 3504** — two
+  jobs, one `instance`, so a single dashboard variable spans the box's power draw and its ZFS/NFS behaviour.
+  Dashboard CR reports `DashboardSynchronized=True`. Mechanism,
   settled by reading the middleware rather than guessing: there is **no `node-exporter` in any TrueNAS catalog
   train** (430 apps; nearest are `netdata`, `prometheus`, `scrutiny`, `glances`, `beszel-hub`), so there is no
   `catalog_app` to name — but `app.create` takes `custom_app: true` + a compose payload, and the middleware's

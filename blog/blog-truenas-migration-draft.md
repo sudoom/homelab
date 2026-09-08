@@ -3679,7 +3679,36 @@ output shows **no pool health, no capacity, no fragmentation, and no SMART whats
 not a nice-to-have refinement; it is the only route to the four things an operator actually looks at when a NAS is
 unwell. Phase 2 is now specified by observation rather than by guess.
 
-What I still could not verify from here is that Prometheus is *ingesting* it under `instance="truenas"` — the
-readonly SA has no path to the UWM Prometheus API (`prometheuses/api` needs CREATE; the `federate` port rejects the
-apiserver-proxy token). That is a documented limitation of the read-only posture, not a gap in the work, and
-Grafana answers it in one panel.
+The readonly SA has no path to the UWM Prometheus API (`prometheuses/api` needs CREATE; the `federate` port
+rejects the apiserver-proxy token), so the last mile — is Prometheus actually *ingesting* this — needed a
+break-glass read:
+
+```
+$ oc -n openshift-user-workload-monitoring exec prometheus-user-workload-0 -c prometheus -- \
+    wget -qO- 'http://localhost:9090/api/v1/query?query=up{job="truenas-exporter"}'
+up = 1   instance=truenas  job=truenas-exporter  service=truenas-exporter
+```
+
+Two things to check beyond `up == 1`. First, that the labeldrop actually fired on real samples:
+
+```
+node_zfs_arc_size -> labels: [__name__, endpoint, instance, job, namespace, service]   value 25.0 GiB
+```
+
+No `pod`, no `container`. (`up` itself still carries them — synthetic scrape metrics are added *after*
+`metric_relabel_configs`, so the labeldrop cannot reach them. That is expected, and harmless: nothing plots `up`
+across a reschedule.) This is the fix that stops the series forking every time the forwarder moves node — the
+failure `shelly-exporter` demonstrated earlier the same day, applied prophylactically here.
+
+Second, and the actual point of the exercise:
+
+```
+$ count by (job) ({instance="truenas"})
+  shelly-exporter    13
+  truenas-exporter 3504
+```
+
+**Two jobs, one `instance`.** The Shelly plug's 13 power series and node_exporter's 3,504 system series describe
+the same physical box under the same name, so one dashboard variable spans both and "how hard is the NAS working"
+sits next to "what is it drawing" with no join hack. That is what a single pane actually means, and it cost one
+`relabelings` stanza.
