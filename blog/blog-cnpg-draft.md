@@ -1128,8 +1128,26 @@ settled       74.66% used, 114 GiB MAX AVAIL, 346 GiB stored
 ```
 
 RAW went 80.30% -> 70.99%. **+44 GiB of pool headroom, and the 85% nearfull cliff went from
-0.5pp away to 10pp away.** It kept drifting down for a few minutes after the script finished, so
-re-measure a little later rather than reading the number the instant it exits.
+0.5pp away to 10pp away.**
+
+**And then it kept going, by a lot.** Re-measured a few hours later, with no further action and
+after the in-cluster builds had *added* ~1.3 GB of images to zot:
+
+```
+--- POOLS ---
+POOL             ID  PGS   STORED  OBJECTS     USED  %USED  MAX AVAIL
+nvme-replicated   1  128  269 GiB   75.11k  805 GiB  59.39    183 GiB
+```
+
+**59.39% / 183 GiB MAX AVAIL.** Snapshot and volume counts were unchanged (15 `csi-snap`, 29
+`csi-vol`) and RBD trash was empty, so this is not more deletion -- it is Ceph trimming the
+already-deleted snapshot data in the background, long after the API objects were gone.
+
+So the real numbers for this reclaim are **stored 396 -> 269 GiB, MAX AVAIL 70 -> 183 GiB: ~127
+GiB, not the 48 GiB visible when the script exited.** The immediate measurement understated it by
+more than 2.5x. "Re-measure a little later" turns out to mean hours, not minutes -- and if you
+size a decision on the number the tool prints as it finishes, you will badly underestimate what a
+snapshot prune buys you.
 
 The RBD side is the cleanest confirmation that only snapshots went:
 
