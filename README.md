@@ -331,7 +331,43 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Track upstream fixes for `kubernetes-nmstate-operator` (community-operators) CSV — THREE RBAC defects** — (a) discovered 2026-05-11: `use` on the `privileged` SCC, missing → new handler pods rejected at admission; (b) same day: `get/list/watch apiservers.config.openshift.io`, missing → handler crashes on startup fetching the cluster TLS profile. Existing pods (15 days old, 20-36 restarts) survived because once admitted and past the startup TLS read, the watch loop doesn't re-check either permission. **PR filed for (a)+(b) at https://github.com/okd-project/okd-operator-pipeline/pull/19.** (c) discovered 2026-08-06 and **NOT covered by PR #19**: the CSV's own `nmstate-monitor` + `prometheus-k8s` RoleBindings in ns `nmstate` bind subject `prometheus-k8s` in namespace `monitoring` — a namespace that does not exist on OpenShift (it's `openshift-monitoring`; the value comes from `MONITORING_NAMESPACE`, which the okderators build sets correctly and operatorhub.io leaves at the upstream default). Platform Prometheus therefore couldn't list/watch pods/services/endpoints there, **nmstate metrics were never scraped at all**, and `PrometheusKubernetesListWatchFailures` fired for 12 days. Unlike (a)/(b) the bindings EXIST and are merely wrong, and the subject is a *different* SA — so no pod ever restarts and nothing surfaces it; the closing note in the (a)/(b) bug file predicted a third defect but assumed it would appear via a handler pod. Needs its own upstream issue (`bugs/upstream-community-operators-nmstate-csv-prometheus-rolebinding-wrong-namespace.md`). Track all three to merge, then bump the local subscription past the fixed version and remove the workaround chart pieces (`components/operators/nmstate/templates/handler-scc-binding.yaml` + `handler-apiserver-rbac.yaml` + `prometheus-metrics-rbac.yaml`).
 
 ### Queued — platform expansion
-- [ ] **OKD upgrade 4.20 → 4.21 → 4.22 (Kube 1.33 → 1.34 → 1.35)** — goal is 4.22; path is mandatorily sequential (two all-node-reboot windows). Full compat matrix + runbook in `blog/blog-okd-4.22-upgrade-draft.md` (adversarially-verified workflow, 2026-06-11). **Driver/OS layer CLEARED** (no kernel-major jump — all three are SCOS 10 / kernel 6.12; ConnectX-4 Lx/`mlx5_core` fw 14.32.2004 + `e1000e`/I219-LM fully supported, no firmware-mismatch). **Hop-1 blockers (fix on 4.20 first):** (a) okderators catalog-index has **no `:4.21`/`:4.22` tag** (issue #44 open) → migrate cert-manager off okderators to upstream; (b) cert-manager **1.18 is EOL + caps at Kube 1.33** → bump to 1.20.2 (NOT 1.19.0/1.20.0). Also clear the loki/cluster-logging Degraded state first. **Hop-2 gates (all unreleased → defer):** GitOps has no OCP-4.22 release yet (app-of-apps = hard gate), Logging 6.6 unreleased, OADP 1.5 caps at 4.21 → 1.6/Velero 1.18. **cgroup-v1 removed at 1.35** — confirm all 3 nodes cgroup v2 before 4.22 (a cgroup-v1 node hard-fails kubelet = lost OSD on no-drain topology). **Plan:** land 4.21 (`.11`) after pre-fixes, then sit there; **DEFER 4.22** (only `.0/.1/.2`, ~4wk old, deps unreleased) until ~`scos.4+` + GitOps/Logging 4.22 releases ship. Trigger stays `oc adm upgrade` (NOT a chart — selfHeal would fight a paused upgrade); per-node reboot uses the CLAUDE.md network pre-flight + `ethtool -i` NIC re-check.
+- [ ] **OKD upgrade 4.20 → 4.21 → 4.22 (Kube 1.33 → 1.34 → 1.35) — RE-ASSESSED 2026-09-08; hop 1 is now
+  unblocked, hop 2 is not.** Path is mandatorily sequential (two all-node-reboot windows). Full matrix + runbook +
+  the September re-assessment in `blog/blog-okd-4.22-upgrade-draft.md`.
+  **CLEARED since the June plan:** (a) **`quay.io/okderators/catalog-index:4.21` now EXISTS** (published
+  2026-07-13; repo default branch is `release-4.21`) — this was hop 1's #1 blocker; (b) the loki/cluster-logging
+  **Degraded** state is gone — `oc get co` returns zero unhealthy (it cleared on its own, root cause never
+  established, so it could return); (c) driver/OS layer was already cleared (all three minors are SCOS 10 /
+  kernel 6.12).
+  **STILL BLOCKING HOP 1:** **cert-manager is still v1.18.0** (EOL 2026-03-10, caps at Kube 1.33) → bump to
+  **1.20.2** (NOT 1.19.0 — re-issuance bug; NOT 1.20.0 — issuer-finalizer RBAC blocker).
+  **NEW PREREQUISITE the June plan could not know — `nvme-replicated` is at ~81.5%** (`MAX AVAIL` 86.2 GiB,
+  stored 379.3 GiB) and Ceph `nearfull` trips at **85%**. The reboots themselves consume no capacity (failure
+  domain `host` across 3 hosts = a downed OSD cannot backfill, PGs sit undersized at 2/3 and serve), but an
+  upgrade is hours of continued writes and **crossing 85% mid-hop does not break the cluster, it breaks the
+  signal you steer by** — the runbook gates each node on Ceph HEALTH_OK, and a permanently `nearfull` pool makes
+  that gate meaningless. Reclaim below ~75% first (fstrim → CNPG `ceph-rbd-snapshot` audit).
+  **NEW RISK: five of eight subscriptions resolve from okderators** — cert-manager, **gitops-operator (ArgoCD
+  itself)**, cluster-logging, loki, oadp — wider than the June draft assumed. And **all eight are
+  `installPlanApproval: Automatic`**, which is a live hazard inside a multi-hour upgrade window. Evidence it
+  matters: **CNPG has since auto-advanced 1.29.1 → 1.30.0** unsupervised (we survived only because the
+  barman-cloud *plugin* was chosen over in-tree `barmanObjectStore`). Switch the load-bearing subscriptions to
+  **Manual before either hop**.
+  **BLAST RADIUS SHRANK** thanks to the 2026-09-07/08 decommission: the RGW-vs-router `:80` anti-affinity drain
+  constraint is **gone**, the CephFS stale-globalmount hazard is **gone**, there are **3 OSDs not 6**, and Loki's
+  chunks + Velero's target now live on TrueNAS garage — so a Ceph problem during an upgrade no longer takes out
+  logging and backups at the same time.
+  **RE-VERIFIED CLEAN:** cgroup v2 is structurally satisfied (SCOS 10 = RHEL 10 lineage, which removed cgroup v1
+  entirely); deprecated-API usage is only `endpoints v1` with **no removal release**; the VGS CRDs present are
+  `groupsnapshot.storage.**openshift**.io` (v1beta1, **0 objects**) — a different API group from the
+  `groupsnapshot.storage.k8s.io` the June plan worried about, so that concern did not apply.
+  **HOP 2 STAYS DEFERRED, single trigger condition: `okderators:4.22` does not exist.** Re-check that tag. Also
+  still open before 4.22: a supervised, version-coherent **Rook bump to a CSI-working v1.20.x+** (v1.19.5 sits at
+  the exact top of its Kube window at 1.35, zero slack), plus GitOps/Logging releases documenting 4.22.
+  **Caveat:** okderators issue **#44** (logging/loki 4.21 compatibility) is **still OPEN**, last touched
+  2026-05-14 — two months before the 4.21 tag was built. Verify the bundles RESOLVE; do not trust tag presence.
+  Trigger stays `oc adm upgrade` (NOT a chart — selfHeal would fight a paused upgrade). Bundle the `core`
+  SSH-key MachineConfig into hop 1 (it is an MCO reroll either way).
 - [ ] **Service mesh evaluation(OKDerator)** — Istio (already in repo as `istio-values.yaml`) vs OpenShift Service Mesh vs nothing. Decide based on actual use cases: mTLS between namespaces, traffic shifting for app rollouts, request-level observability. Don't adopt without a workload that benefits.
 - [ ] **KubeVirt** — run VMs alongside containers (nested control plane, legacy workloads, isolated dev environments). Needs CPU/RAM headroom audit first; OSDs already eat 5–6 GiB per node and the autoscaler is fragile under memory pressure.
 - [ ] **Migrate apps from old cluster (media stack + keepers)** — port over the workloads still running on the previous cluster. Media stack now lives in tree (`components/apps/media/`); 3 of the 4 servarrs (Sonarr/Radarr/Prowlarr) on shared CNPG Postgres as of 2026-05-15. **Keepers stack ported 2026-05-15** (`components/apps/keepers/`, transmission + webtlo, shipped `enabled: false` pending `vpn-creds` SealedSecret re-seal for the keepers namespace). Remaining migration work is **config-only** (no DB data to bring across): re-apply each app's config via its web UI on the new cluster, re-seal each keeper Secret on the new cluster's sealed-secrets controller (per-controller pubkey means old blobs don't transplant). Pattern matches the in-repo Cloudflare token + GitHub OAuth client secret.

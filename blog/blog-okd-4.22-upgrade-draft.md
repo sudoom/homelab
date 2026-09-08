@@ -136,3 +136,136 @@ plane is on the new minor (IF staying on okderators rather than migrating cert-m
 - VGS v1beta1 removal at 4.21 — low blast radius (none used) but confirm Rook's bundled sidecar emits only v1beta2.
 - CNPG upstream doesn't officially test OpenShift — runs fine but technically unvalidated on 4.21/4.22.
 - Each per-node reboot (6 across the two hops) re-trips the OVN-egress + RBD-VA cascade and can re-expose the DDF false-etcd-alert symptom — operational, compounding on a no-drain cluster.
+
+---
+
+## Re-assessment 2026-09-08 (three months on) — hop 1 is now unblocked, hop 2 is not
+
+The June plan's verdict was "land 4.21 after pre-fixes, defer 4.22". Re-verifying every gate against the live
+cluster and the upstream catalogs today: **that verdict holds, but the reasons have moved.**
+
+### The gate that cleared
+
+**`quay.io/okderators/catalog-index:4.21` now EXISTS** — published **2026-07-13**, a month after the June capture.
+The repo's default branch is now `release-4.21`. This was hop 1's #1 blocker and the reason the June plan pushed
+migrating cert-manager off okderators as a "durable de-risk".
+
+```
+4.21          Mon, 13 Jul 2026 14:15:00
+testing-4.21  Fri, 19 Jun 2026 11:37:43
+4.20          Mon, 13 Jul 2026 14:17:21
+4.22          — DOES NOT EXIST
+```
+
+**`:4.22` still does not exist.** So hop 2 remains hard-blocked at the supply-chain layer, exactly as predicted,
+and the DEFER verdict for 4.22 stands on its own merits regardless of the operator matrix.
+
+Caveat worth carrying: **okderators issue #44** ("logging-operator and loki-operator have to be updated to be
+compatible with 4.21") is **still OPEN**, last touched 2026-05-14 — two months *before* the 4.21 tag was built. The
+tag existing is not proof the logging bundles in it resolve. Verify by resolution, not by tag presence.
+
+### The other gate that cleared, quietly
+
+The June plan's pre-hop-1 step 1 was "clear the loki/cluster-logging **Degraded** state; root cause not yet
+diagnosed". Today `oc get co` returns **zero** operators not `Available=True / Progressing=False / Degraded=False`.
+It cleared at some point in the intervening months, root cause never established. Recording that honestly: this is
+a blocker that went away rather than one that was fixed, so it could come back.
+
+### What is still blocking hop 1
+
+**cert-manager is still `v1.18.0`** — EOL since 2026-03-10, caps at Kube 1.33. It is the one unchanged hard
+blocker, and it issues every `*.apps` and API serving cert. Bump target unchanged: **1.20.2** (not 1.19.0
+— re-issuance bug; not 1.20.0 — OpenShift issuer-finalizer RBAC blocker), or 1.21.x if it has since GA'd.
+
+### Two things the June plan could not have known
+
+**1. The okderators dependency is WIDER than the plan says.** Five of eight subscriptions resolve from it:
+
+```
+cert-manager-operator   alpha  okderators   Automatic
+gitops-operator         alpha  okderators   Automatic     <- ArgoCD itself
+cluster-logging         alpha  okderators   Automatic
+loki-operator           alpha  okderators   Automatic
+oadp-operator           alpha  okderators   Automatic
+```
+
+The June draft framed this as a cert-manager and logging problem. **`gitops-operator` is on it too** — which means
+a broken catalog on the new minor takes out the resolution path for the operator that runs the entire app-of-apps.
+Installed CSVs keep running on a stale catalog, so this is not an instant outage; but it means no operator can be
+*upgraded* on 4.21, which is precisely what the plan requires before hop 2.
+
+**Also: every one of the eight is `installPlanApproval: Automatic`.** That is a live hazard during a multi-hour
+upgrade window — an operator can auto-advance mid-hop, unsupervised, while the platform is in motion. The README
+already carries a TODO to switch CNPG to Manual; the evidence it was right is that **CNPG has since auto-advanced
+1.29.1 → 1.30.0** with nobody deciding to. We survived only because the barman-cloud *plugin* path was chosen over
+in-tree `barmanObjectStore` — the exact scenario that choice was made for. Broaden the TODO: the load-bearing
+subscriptions should be Manual **before** either hop.
+
+**2. The storage blast radius has changed in both directions, because of the 2026-09-07/08 decommission.**
+
+*Smaller:*
+- **The RGW/router `:80` anti-affinity drain blocker is GONE** — the object store is retired. The June runbook's
+  "only 1 router-free node for RGW" constraint no longer exists.
+- **The CephFS stale-globalmount recovery hazard is GONE** — CephFS is retired.
+- **3 OSDs instead of 6** — each per-node reboot has half the OSD surface to bring back.
+- **Loki's chunks and Velero's backup target moved off Ceph to TrueNAS garage.** A Ceph problem during an upgrade
+  no longer takes out logging and backups at the same time. That is a genuine, material improvement in upgrade
+  safety, and it happened for unrelated reasons.
+
+*Larger, and this is a NEW prerequisite the June plan does not contain:*
+
+```
+ceph_pool_max_avail{nvme-replicated}   92.58 GB  =  86.2 GiB
+ceph_pool_stored  {nvme-replicated}   407.34 GB  = 379.3 GiB   -> ~81.5% full
+```
+
+**The NVMe pool is at ~81.5% with ~86 GiB free, and Ceph's `nearfull` trips at 85%.** The reboot itself does not
+consume capacity — with failure domain `host` across exactly three hosts, a downed OSD cannot backfill anywhere, so
+PGs sit `undersized` at 2/3 and serve at `min_size=2` without a rebalance storm. The risk is subtler: an upgrade is
+a multi-hour window of continued normal writes, and **crossing 85% mid-hop does not break the cluster, it breaks
+the signal you are steering by.** The runbook's per-node discipline is "gate on Ceph HEALTH_OK before touching the
+next node". A pool that goes `nearfull` on its own makes HEALTH_WARN permanent and that gate meaningless.
+
+So: **reclaim NVMe capacity before hop 1**, not as general hygiene but as an upgrade prerequisite. Levers, in
+order: verify `node-fstrim` is actually returning freed RBD blocks, then audit the CNPG `ceph-rbd-snapshot` 7d
+snapshots (`rbd du` showed 246 GiB allocated against 377 GiB pool-stored).
+
+### Gates re-verified clean today
+
+- **cgroup v2 (the Kube 1.35 hard gate):** `nodes.config.openshift.io/cluster` has `cgroupMode` unset = default,
+  and the nodes run **CentOS Stream CoreOS 10** (`10.0.20251023-0`). RHEL 10 lineage **removed cgroup v1 support
+  entirely**, so this gate is structurally satisfied rather than merely configured — a cgroup-v1 node is not
+  constructible on this OS. Still worth an explicit check immediately before hop 2.
+- **Deprecated APIs:** the only entry in `apiserver_requested_deprecated_apis` is
+  `{group="", resource="endpoints", version="v1", removed_release=""}` — deprecated in favour of EndpointSlice but
+  with **no removal release scheduled**. Zero blocking usage.
+- **VolumeGroupSnapshot:** the June plan worried about `groupsnapshot.storage.k8s.io/v1beta1` being removed at
+  4.21. The CRDs actually present are **`groupsnapshot.storage.openshift.io`** — a different API group,
+  OpenShift-managed, serving `v1beta1` only, with **0 objects** in use. Different group, zero blast radius either
+  way. The concern as written did not apply.
+- **Available targets:** `4.21.0-okd-scos.4 … .11` offered in `stable-scos-4`; no 4.22 edge is offered from 4.20,
+  which is Cincinnati behaving correctly (adjacent minor only).
+
+### Revised sequence
+
+**PRE-HOP-1 (on 4.20), in dependency order:**
+1. **Reclaim NVMe capacity below ~75%** — new, and the one that gates the health signal. (fstrim → CNPG snapshots)
+2. **Bump cert-manager 1.18.0 → 1.20.2** — the sole unchanged hard blocker. Verify `oc get certificate -A` all
+   `Ready=True` afterwards; Cloudflare DNS-01 solver config unchanged.
+3. **Switch load-bearing subscriptions to `installPlanApproval: Manual`** — at minimum gitops, cert-manager, CNPG,
+   Rook-adjacent. Prevents an unsupervised operator advance inside the upgrade window.
+4. **Confirm the 4.21 catalog actually resolves** logging/loki/gitops/oadp bundles (okderators #44 still open —
+   test resolution, do not trust the tag).
+5. Capture the `ethtool -i` NIC baseline per node; re-confirm cgroup v2.
+6. **Bundle the `core` SSH-key MachineConfig** into this hop — it is an MCO reroll either way, and the README
+   TODO explicitly says not to spend a standalone reroll on it.
+
+**HOP 1 → `4.21.0-okd-scos.11`.** Unchanged discipline: network pre-flight per node, restart ALL 3
+`ovnkube-node` + repo-server after each node settles, gate on Ceph HEALTH_OK between nodes, verify mlx5/e1000e
+bind clean and the backnet 10G link before proceeding. Now materially safer than the June plan assumed: no RGW
+scheduling constraint, no CephFS, half the OSDs, and logging/backups no longer sharing fate with Ceph.
+
+**THEN SIT ON 4.21.** Hop 2 stays deferred, and now for a cleanly stateable reason: **`okderators:4.22` does not
+exist.** Re-check that tag as the single trigger condition. Alongside it, the June prerequisites still stand —
+a supervised, version-coherent **Rook bump to a CSI-working v1.20.x+** (v1.19.5 sits at the exact top of its Kube
+window at 1.35, zero slack), plus GitOps/Logging releases that document 4.22.
