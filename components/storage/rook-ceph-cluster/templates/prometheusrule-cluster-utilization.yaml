@@ -45,9 +45,12 @@ spec:
 
               Act now: identify the largest consumer
               (`ceph df` from the toolbox), evict / shrink trashed RBD
-              images (`rbd trash ls -p nvme-replicated`), or schedule
-              the next storage expansion (bulk HDD addition; see
-              TODO in README.md).
+              images (`rbd trash ls -p nvme-replicated`), or reclaim via
+              fstrim. NOTE (2026-09-08): the HDD tier is retired, so this
+              cluster is single-class and this rule is no longer diluted --
+              it now tracks the NVMe rule below closely. "Expand the
+              cluster" is no longer a lever: there are 3 nodes, 1 NVMe
+              each, and no free M.2 slots.
     # Per-device-class NVMe-tier utilization. The cluster-total rule above is
     # BLIND to a full NVMe tier: this cluster has 3 NVMe OSDs (~1.5 TiB raw) and
     # 3 HDD OSDs (~12 TiB raw), so the 12 TiB HDD capacity dilutes the total —
@@ -78,8 +81,11 @@ spec:
             description: |
               NVMe-tier (device_class=nvme, backs `nvme-replicated` /
               `ceph-nvme-block`) raw utilization has been >75% for 30m
-              ({{`{{ $value | humanizePercentage }}`}}). The cluster-total
-              alert will NOT catch this — the HDD tier dilutes it.
+              ({{`{{ $value | humanizePercentage }}`}}). HISTORICALLY the
+              cluster-total alert would NOT catch this because the HDD tier
+              diluted it; since the 2026-09-08 HDD decommission there is one
+              device class, so both rules now see the same bytes. This one
+              still fires EARLIER (75% vs 80%), which is the point.
 
               Act now, while there is headroom and fstrim still works:
               trigger a reclaim (`oc -n node-fstrim delete pod -l app=node-fstrim`
