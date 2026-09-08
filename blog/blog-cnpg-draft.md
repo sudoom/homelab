@@ -1009,3 +1009,103 @@ the ovnkube-node(s) of the node(s) that actually rebooted/were-disrupted, not th
 **No deadlock this time:** immich-postgres stayed Ready through the 21h (its 10Gi PVC absorbed
 21h of low-rate WAL without filling), so unlike the 2026-07-02 media incident there was no
 `Not enough disk space` safe-mode deadlock — the gap simply closed once egress returned.
+
+---
+
+## 2026-09-08 — `retentionPolicy: 7d` has never deleted a single volume snapshot
+
+Found while checking capacity before pushing test images to the internal registry. It is not a
+CNPG failure so much as a wrong assumption baked into our chart, and it has been quietly eating
+the NVMe pool since May.
+
+`nvme-replicated` had moved from 80.35% / 89 GiB MAX AVAIL earlier the same day to:
+
+```
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph df
+--- POOLS ---
+POOL             ID  PGS   STORED  OBJECTS     USED  %USED  MAX AVAIL
+nvme-replicated   1  128  396 GiB  125.34k  1.1 TiB  84.53     70 GiB
+```
+
+84.53% against a **85% nearfull** threshold. RBD trash was clean (`rbd trash ls -p
+nvme-replicated` → 0 entries), so the trash-purge schedule is doing its job and was not the
+cause. The snapshots were:
+
+```
+$ oc get volumesnapshot -A --no-headers | awk '{print $1}' | sort | uniq -c
+ 101 media
+  81 immich
+
+$ oc get volumesnapshot -A --sort-by=.metadata.creationTimestamp --no-headers | head -1
+media   media-postgres-daily-20260521040000   ...   110d
+```
+
+**110 days of daily snapshots, under a policy that says 7 days.** The RBD side agrees — snapshot
+images outnumber real volumes six to one:
+
+```
+$ oc -n rook-ceph exec deploy/rook-ceph-tools -- \
+    rbd ls -p nvme-replicated | sed 's/-[0-9a-f-]\{36\}$//' | sort | uniq -c
+ 173 csi-snap
+  29 csi-vol
+```
+
+And the CNPG `Backup` objects confirm which path is leaking:
+
+```
+$ oc get backup -A -o jsonpath='{range .items[*]}{.spec.method}{"\n"}{end}' | sort | uniq -c
+  70 plugin
+ 183 volumeSnapshot
+```
+
+### The actual mistake
+
+`components/apps/cnpg-clusters/values.yaml` sets `backup.retentionPolicy: "7d"` next to the
+`volumeSnapshot` config, and the comment above it reads as though the two are connected:
+
+```yaml
+      volumeSnapshotClassName: ceph-rbd-snapshot
+      # 7d retention vs the previous 30d barman target — snapshots are
+      retentionPolicy: "7d"
+```
+
+**`spec.backup.retentionPolicy` only governs the barman object-store path.** For
+`method: volumeSnapshot` CNPG creates the `VolumeSnapshot` and the `Backup` CR and then leaves
+both alone — there is no snapshot GC. So the field is not being ignored due to a bug; it simply
+does not apply to the backend we pointed it at, and nothing warns you. The `plugin` (barman →
+R2) backups are fine: retention there is enforced on the object store, which is why the R2 side
+has not grown the same way.
+
+### How much is it holding
+
+`rbd du` attributes shared blocks to the parent image, so the snapshot images themselves
+report zero:
+
+```
+csi-snap        0.0 GiB
+csi-vol       277.7 GiB
+<TOTAL>        3.1 TiB provisioned / 278 GiB used
+```
+
+The pool reports **396 GiB stored** while live volume contents account for **278 GiB**. That
+~118 GiB delta is blocks that are only still allocated because a snapshot pins them — roughly
+30% of the pool, on a pool with 70 GiB of headroom left.
+
+### Not fixed in this session
+
+Deleting 183 backups is a destructive, hard-to-reverse action on the thing that *is* the backup,
+so it is the operator's call, not something to fire off unattended. Written up, added to the
+README TODO, and left for an explicit decision. Options, in the order I would rank them:
+
+1. **Prune by hand once**, oldest-first, keeping the last ~7 per cluster, and re-measure. This is
+   the immediate reclaim and it is reversible in the sense that R2 still holds 30d of PITR.
+2. **Then automate it**, because CNPG will not. Either a small CronJob that deletes
+   `Backup`/`VolumeSnapshot` objects older than N days per cluster, or move local backups onto
+   the barman path where `retentionPolicy` actually works and keep snapshots for ad-hoc use only.
+3. **Fix the misleading comment + field** in `cnpg-clusters/values.yaml` either way, so the next
+   reader does not re-derive the same false assumption.
+
+Worth noting for the capacity story: this is the answer to the open question in CLAUDE.md, which
+already guessed correctly — *"the CNPG `ceph-rbd-snapshot` volume snapshots on 7d retention …
+snapshots are the likeliest gap."* They were. The guess just needed the 110-day-old snapshot to
+prove it.
