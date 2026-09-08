@@ -14,13 +14,14 @@ spec:
       path: /metrics
       interval: {{ .Values.scrapeInterval }}
       scheme: http
-      # Stamp a stable, human `instance` instead of the default
-      # `192.168.1.25:9100`. Two reasons: dashboard 1860's host selector reads
+      # Stamp a stable, human `instance` instead of the default `<podIP>:9100`.
+      # Three reasons: the pod IP changes on every reschedule (which would fork
+      # every series), grafana.com dashboard 1860's host selector reads
       # `instance`, and matching the Shelly plug's `instance="truenas"` lets one
-      # dashboard show power beside ZFS/NFS for the same box.
+      # dashboard show power beside ZFS/NFS for the same physical box.
       #
       # `action: replace` is spelled out even though it is the default --
-      # prometheus-operator stamps it onto the live object, and omitting it here
+      # prometheus-operator stamps it onto the live object, and omitting it
       # leaves ArgoCD permanently OutOfSync against the rendered manifest (the
       # same drift already documented in shelly-exporter).
       relabelings:
@@ -28,7 +29,17 @@ spec:
           sourceLabels: []
           targetLabel: instance
           replacement: {{ .Values.instanceLabel | quote }}
-      # There is no exporter pod here -- the target is a bare IP -- so unlike
-      # shelly-exporter there are no `pod`/`container` labels to drop. Nothing
-      # to do, noted so a future reader does not go looking for the labeldrop
-      # that chart needed.
+      # Drop the forwarder's own identity from the sample. These metrics
+      # describe the NAS; `pod` and `container` describe the socat process that
+      # relayed them, and `pod` CHANGES on every reschedule -- which silently
+      # forks the series, duplicates Grafana legend entries, and gives
+      # rate()/predict_linear over a restart window a brand-new series with
+      # almost no history. All three were observed on shelly-exporter
+      # 2026-09-08. Paired with maxSurge: 0 in the Deployment, which stops two
+      # pods ever emitting the same label set at the same timestamp.
+      #
+      # `namespace` is deliberately KEPT: OpenShift user-workload monitoring
+      # uses it for tenancy/RBAC, so dropping it is not safe.
+      metricRelabelings:
+        - action: labeldrop
+          regex: "pod|container"

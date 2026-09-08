@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# L4 forwarder to the NAS's node_exporter.
+#
+# WHY A POD EXISTS AT ALL, when the exporter is off-cluster and the natural
+# expression is a selectorless Service + a hand-written Endpoints object:
+# OpenShift GitOps ships `resource.exclusions` that excludes BOTH `Endpoints`
+# and `EndpointSlice` (apiGroups "" and discovery.k8s.io, clusters "*") on the
+# ArgoCD CR. ArgoCD therefore silently DROPS such an object -- it never appears
+# in the application's resource tree, nothing is applied, and the app still
+# reports Synced/Healthy. Confirmed the hard way on 2026-09-08. Both escape
+# hatches are excluded, so "just use an EndpointSlice" is not available either.
+#
+# A real Deployment behind a real selector sidesteps the exclusion entirely and
+# keeps every object in this chart ArgoCD-managed. It also matches how
+# shelly-exporter and mikrotik-exporter already reach external devices.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: truenas-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: truenas-exporter
+spec:
+  replicas: 1
+  # maxSurge: 0 -- the old pod terminates BEFORE the new one starts, so two
+  # never coexist. Required because the ServiceMonitor drops `pod` in
+  # metricRelabelings: overlapping pods would emit IDENTICAL label sets and
+  # Prometheus would reject them as duplicate samples for the same timestamp.
+  # (`type: Recreate` says this more directly but cannot be applied to an
+  # existing Deployment -- the API server defaults spec.strategy.rollingUpdate
+  # and SSA will not remove it. Same trap already documented in
+  # shelly-exporter's deployment.)
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: truenas-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: truenas-exporter
+    spec:
+      containers:
+        - name: socat
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-d"
+            - "TCP-LISTEN:{{ .Values.port }},fork,reuseaddr"
+            - "TCP:{{ .Values.target.address }}:{{ .Values.target.port }}"
+          ports:
+            - containerPort: {{ .Values.port }}
+              name: metrics
+              protocol: TCP
+          # A TCP probe on the LISTENER only -- it does NOT reach through to the
+          # NAS, and that is deliberate. An HTTP probe against /metrics would go
+          # NotReady whenever the NAS is down, which drops this pod out of the
+          # Service's endpoints and makes the Prometheus target VANISH. A
+          # disappeared target is far less visible than a present one reporting
+          # `up == 0`. Keep the pod Ready whenever socat is alive and let `up`
+          # carry the NAS's health.
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

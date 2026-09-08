@@ -185,19 +185,27 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   preference: the TrueNAS root filesystem is mounted **read-only** (`boot-pool/ROOT/25.10.6 zfs ro,...`), so there
   is nowhere to put a binary or a unit file. Apps live on `tank/ix-apps` (data pool), so this survives OS upgrades.
   **Landed:** `truenas_node_exporter` in `group_vars/all.yml` + the custom-app tasks in
-  `roles/truenas-apps/tasks/main.yml`; `components/cluster-config/truenas-exporter/` (Service + selectorless
-  Endpoints + ServiceMonitor, `instance="truenas"`); root-app entry at wave 5; grafana.com **1860** wired into
+  `roles/truenas-apps/tasks/main.yml`; `components/cluster-config/truenas-exporter/` (socat forwarder + Service +
+  ServiceMonitor, `instance="truenas"`); root-app entry at wave 5; grafana.com **1860** wired into
   `grafana-config`.
   **Still to do — phase 2:** the **textfile-collector cron** for what only the shell knows (pool health, scrub
   age/errors, per-dataset capacity, SMART attributes, newest-snapshot age), written with `cronjob.create` — which
   `truenas-tasks` **already uses** for the SMART jobs — plus the hand-built ZFS/SMART/NFS panel set that 1860 does
   not cover. `truenas_node_exporter.textfile_dir` already exists and is already passed to the collector, so phase 2
   is purely "write files into it".
-  **Trap recorded in the chart, do not undo it:** `helm lint` flags `v1 Endpoints` as deprecated in 1.33+. It stays.
-  UWM's Prometheus has `spec.serviceDiscoveryRole` **unset** → prometheus-operator's default `Endpoints` discovery
-  role, which watches the Endpoints API; mirroring only runs Endpoints → EndpointSlice, never the reverse, so
-  "modernising" it makes the target vanish **silently** with the ServiceMonitor still valid and ArgoCD still Synced.
-  (There is no `ScrapeConfig` CRD on this cluster, which is what would otherwise express this in one object.)
+  **The trap that shaped the design, recorded so nobody re-derives it:** the textbook way to scrape an off-cluster
+  target is a selectorless Service + a hand-written `Endpoints` object. **That cannot work here.** OpenShift GitOps
+  ships `resource.exclusions` on the ArgoCD CR excluding **both `Endpoints` and `EndpointSlice`** (apiGroups `""` +
+  `discovery.k8s.io`, clusters `*`), so ArgoCD **silently drops** the object — it never enters the Application's
+  resource tree, nothing is applied, and the app still reports `Synced`/`Healthy`. The first cut of this chart
+  shipped exactly that and the target simply never existed. Both escape hatches are excluded, so EndpointSlice is
+  not an out either, and there is no `ScrapeConfig` CRD on this cluster. Hence a one-container **socat L4
+  forwarder** with a real selector — which also matches how `shelly-exporter`/`mikrotik-exporter` reach external
+  devices. Re-check with `oc -n openshift-gitops get cm argocd-cm -o jsonpath='{.data.resource\.exclusions}'`
+  before revisiting. Second, quieter decision in the same chart: the pod's probe is a **TCP check on socat's own
+  listener, not an HTTP check against the NAS** — an HTTP probe would mark the pod NotReady while the NAS is down,
+  dropping it from the Service and making the Prometheus target **vanish**, which is much less visible than a
+  present target reporting `up == 0`.
   **Two constraints that will bite if forgotten:** the scrape MUST target **`192.168.1.25` (frontnet)** — a
   pod cannot reach `192.168.10.0/24`, which is the same trap that broke the Velero BSL on 2026-08-28; and
   **do not build on the REST API**, removed in TrueNAS 26 — `midclt` is the sanctioned path.

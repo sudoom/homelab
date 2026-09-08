@@ -1,9 +1,8 @@
 apiVersion: v2
 name: truenas-exporter
 description: |
-  Scrape wiring for the node_exporter running ON the TrueNAS box (192.168.1.25).
-  This chart deploys NO workload -- the exporter itself is an Ansible-managed
-  custom app on the NAS (ansible/truenas/roles/truenas-apps). All that lives
-  here is the Service + selectorless Endpoints + ServiceMonitor that let
-  user-workload Prometheus reach an off-cluster target.
-version: 0.1.0
+  Scrape path for the node_exporter running ON the TrueNAS box (192.168.1.25).
+  The exporter itself is an Ansible-managed custom app on the NAS; this chart is
+  a minimal socat L4 forwarder plus the Service and ServiceMonitor that let
+  user-workload Prometheus reach it.
+version: 0.2.0

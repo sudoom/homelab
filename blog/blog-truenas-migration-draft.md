@@ -3501,7 +3501,7 @@ zpool list -H             tank ONLINE 45% 1%
 `zil` is the one worth calling out: it turns the one-off SLOG study into a standing signal instead of a
 measurement someone has to remember to repeat.
 
-### The cluster side, and a deprecation warning that must be ignored
+### The cluster side, and the exclusion that broke the obvious design
 
 ARC, ZIL, SMART and NFS server stats only exist on the box, so unlike `shelly-exporter` and `mikrotik-exporter`
 (both of which run the exporter as a pod here and reach out), this needs an agent there and a bare scrape target
@@ -3509,24 +3509,61 @@ here. There is no `ScrapeConfig` CRD on this cluster — only `ServiceMonitor` �
 Service plus a hand-written Endpoints object**, which is the same trick `kube-system/kubelet` and
 `default/kubernetes` already use.
 
-`helm lint` objects:
+I shipped that, and it did not work. The Application went `Synced`/`Healthy` — and the Endpoints object did not
+exist:
 
 ```
-[WARNING] templates/service-endpoints.yaml: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice
+$ oc -n truenas-exporter get endpoints
+No resources found in truenas-exporter namespace.
+
+$ oc -n openshift-gitops get application truenas-exporter \
+    -o jsonpath='{range .status.resources[*]}{.kind}/{.name} {.status}{"\n"}{end}'
+Namespace/truenas-exporter Synced
+Service/truenas-exporter Synced
+ServiceMonitor/truenas-exporter Synced
 ```
 
-**Do not act on it.**
+Three resources where the chart renders four. The Endpoints object is not failing — it is **not there at all**:
 
 ```
-$ oc -n openshift-user-workload-monitoring get prometheus user-workload -o jsonpath='{.spec.serviceDiscoveryRole}'
-(empty)
+$ oc -n openshift-gitops get cm argocd-cm -o jsonpath='{.data.resource\.exclusions}'
+- apiGroups:
+  - ""
+  - discovery.k8s.io
+  clusters:
+  - '*'
+  kinds:
+  - Endpoints
+  - EndpointSlice
 ```
 
-Unset means prometheus-operator's default `Endpoints` service-discovery role, which watches the Endpoints API.
-Mirroring runs Endpoints → EndpointSlice and **never the reverse**, so replacing the object with an EndpointSlice
-leaves that role nothing to find. The failure is silent in the worst way: ServiceMonitor still valid, ArgoCD still
-`Synced`/`Healthy`, series just stop. Deprecated-but-discovered beats modern-but-invisible, and the condition to
-re-check is written into the chart.
+OpenShift GitOps excludes **both** `Endpoints` and `EndpointSlice` cluster-wide. Excluded kinds are filtered out of
+the manifest set before apply, so ArgoCD never touches them — and, because it does not track them either, the
+Application reports perfect health while the thing it was supposed to create does not exist. That is the worst
+failure shape in this whole repo: green everywhere, silent underneath. It is also the precise hazard I had written
+a paragraph about in the chart README an hour earlier, arriving from a direction I had not checked.
+
+Both escape hatches are excluded, so "use an EndpointSlice instead" is not an out, and there is no `ScrapeConfig`
+CRD on this cluster. That leaves two real choices: relax the exclusion on the ArgoCD CR (a cluster-wide change to
+an operator-owned object that is not in git, and it would make ArgoCD watch every Endpoints object in the cluster —
+among the highest-churn resources there are), or give the Service something real to select. We took the second.
+
+So the chart ships a **one-container socat forwarder**:
+
+```
+socat -d TCP-LISTEN:9100,fork,reuseaddr TCP:192.168.1.25:9100
+```
+
+socat rather than nginx because Prometheus speaks plain HTTP over TCP and needs nothing rewritten — an L4 forward
+is the entire job, and socat needs no config file, no writable directory and no privileged port, which makes it
+trivially compatible with OpenShift's `restricted-v2` arbitrary UID. An nginx image would need a ConfigMap plus
+writable temp paths to do strictly less.
+
+One non-obvious decision inside it: the pod's probe is a **TCP check on socat's own listener, and deliberately does
+not reach through to the NAS.** An HTTP probe against `/metrics` would mark the pod NotReady whenever the NAS is
+down → pod drops out of the Service's endpoints → the Prometheus target **disappears**. A vanished target is far
+less visible than a present one reporting `up == 0`. Keep the pod Ready whenever socat is alive and let `up` carry
+the NAS's health.
 
 The scrape targets `192.168.1.25`, the **frontnet** address — a pod cannot route to `192.168.10.0/24`, which is the
 trap that broke the Velero BackupStorageLocation on 2026-08-28. The exporter is bound to that same address on the
@@ -3560,3 +3597,11 @@ Both mistakes were the same mistake: **I probed once, got a result, and wrote th
 system.** Port 19999 was empty, so "netdata is not usable". The compose runner was undocumented, so "unknown
 whether host networking works". In both cases the authoritative answer was on the box — a config file and a
 hundred lines of middleware Python — and reading it took less time than writing the hedge did.
+
+The Endpoints exclusion is the same lesson a third time, and the most expensive: I checked whether the *cluster*
+supported the pattern (`ScrapeConfig` CRD absent, `serviceDiscoveryRole` unset → Endpoints role) and concluded the
+design was sound, without checking whether **ArgoCD would carry it**. The tool between the manifest and the cluster
+is part of the platform. And the thing that makes this one worth remembering is not the exclusion itself — it is
+that a dropped resource produces a **green** Application. `Synced`/`Healthy` means "everything I am willing to look
+at matches", not "everything you wrote exists". Counting the objects in `status.resources` against the objects in
+`helm template` is a five-second check that would have caught it immediately.

@@ -1,56 +1,76 @@
 # truenas-exporter
 
-Scrape wiring for the `node_exporter` running **on the TrueNAS box**
-(`192.168.1.25`). This chart deploys **no workload** — it is three objects that
-let user-workload Prometheus reach an off-cluster target.
+Scrape path for the `node_exporter` running **on the TrueNAS box**
+(`192.168.1.25`). The exporter is not deployed here — it is an Ansible-managed
+custom app on the NAS
+(`ansible/truenas/roles/truenas-apps/tasks/main.yml`, configured by
+`truenas_node_exporter` in `ansible/truenas/group_vars/all.yml`).
 
-The exporter itself is not here. It is an Ansible-managed custom app on the NAS:
-`ansible/truenas/roles/truenas-apps/tasks/main.yml`, configured by
-`truenas_node_exporter` in `ansible/truenas/group_vars/all.yml`.
+What this chart deploys is a **one-container socat forwarder** and the Service /
+ServiceMonitor around it.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `templates/namespace.yaml` | `truenas-exporter` ns, `openshift.io/cluster-monitoring: "false"` (this is a user workload) |
-| `templates/service-endpoints.yaml` | Selectorless `Service` + hand-written `Endpoints` pointing at the NAS IP |
-| `templates/servicemonitor.yaml` | Scrape config; stamps `instance="truenas"` |
-| `values.yaml` | Target address/port, instance label, scrape interval |
+| `templates/namespace.yaml` | `truenas-exporter` ns, `openshift.io/cluster-monitoring: "false"` (user workload) |
+| `templates/deployment.yaml` | socat, `TCP-LISTEN:9100,fork` → `192.168.1.25:9100` |
+| `templates/service.yaml` | Headless Service with a real selector |
+| `templates/servicemonitor.yaml` | Scrape config; stamps `instance="truenas"`, drops `pod`/`container` |
+| `values.yaml` | Target address/port, image, instance label, scrape interval, resources |
+
+## Why a forwarder pod instead of a selectorless Service + Endpoints
+
+That is the textbook way to scrape an off-cluster target, and **it does not work
+on this cluster.** OpenShift GitOps ships `resource.exclusions` on the ArgoCD CR
+that excludes both `Endpoints` and `EndpointSlice`:
+
+```yaml
+- apiGroups: ["", "discovery.k8s.io"]
+  clusters: ["*"]
+  kinds: [Endpoints, EndpointSlice]
+```
+
+ArgoCD therefore **silently drops** such an object: it never appears in the
+Application's resource tree, nothing is applied, and the app still reports
+`Synced`/`Healthy`. Confirmed on 2026-09-08 — the first cut of this chart shipped
+exactly that pair and the target simply never existed. Both escape hatches are
+excluded, so "use an EndpointSlice instead" is not available.
+
+A real Deployment behind a real selector keeps every object here
+ArgoCD-managed, and matches how `shelly-exporter` and `mikrotik-exporter`
+already reach external devices.
+
+Verify the exclusion is still in force before revisiting:
+
+```bash
+oc -n openshift-gitops get cm argocd-cm -o jsonpath='{.data.resource\.exclusions}'
+```
+
+## Why socat and not nginx
+
+Prometheus speaks plain HTTP over TCP and needs nothing rewritten, so an L4
+forward is the entire job. socat needs no config file, no writable directory and
+no privileged port, which makes it trivially compatible with OpenShift's
+`restricted-v2` arbitrary UID. An nginx image would need a ConfigMap and
+writable temp paths to do strictly less.
 
 ## The two things that will bite
 
-**1. The target address must be the frontnet one (`192.168.1.25`).**
+**1. The target must be the frontnet address (`192.168.1.25`).**
 TrueNAS is also on the 10G storage backnet at `192.168.10.10`, and a pod on the
-OVN pod network **cannot route there**. Everything that reaches the backnet today
-does so from the host stack (Ceph is `network.provider: host`; the NFS CSI pods
-are `hostNetwork`). Pointing this at `.10` gives a silent scrape timeout with
-zero inbound SYNs on the NAS — the exact failure that broke the Velero
-BackupStorageLocation on 2026-08-28.
+OVN pod network **cannot route there** — everything reaching the backnet today
+does so from the host stack. Pointing this at `.10` gives a silent scrape timeout
+with zero inbound SYNs on the NAS, the exact failure that broke the Velero
+BackupStorageLocation on 2026-08-28. Pod → frontnet LAN is proven
+(`synology-cert-sync` reaches `192.168.1.2` nightly).
 
-**2. `helm lint` warns that `v1 Endpoints` is deprecated. Ignore it.**
-This cluster's user-workload Prometheus has `spec.serviceDiscoveryRole` unset, so
-prometheus-operator uses its default `Endpoints` service-discovery role, which
-watches the **Endpoints** API. Mirroring only runs Endpoints → EndpointSlice,
-never the reverse, so "modernising" this into an `EndpointSlice` makes the target
-vanish **silently**: the ServiceMonitor stays valid and ArgoCD stays
-Synced+Healthy while the series simply stop.
-
-Re-check before ever switching:
-
-```bash
-oc -n openshift-user-workload-monitoring get prometheus user-workload \
-  -o jsonpath='{.spec.serviceDiscoveryRole}'
-```
-
-Empty or `Endpoints` → keep this chart as-is. `EndpointSlice` → the two objects
-can collapse into one.
-
-## Why not an in-cluster exporter
-
-`shelly-exporter` and `mikrotik-exporter` both run the exporter as a pod here and
-reach out to the device. That shape does not work for the NAS: ARC, ZIL, per-disk
-SMART and NFS server stats only exist **on the box**. Hence an agent there and a
-bare scrape target here.
+**2. The liveness probe deliberately does not reach the NAS.**
+It is a TCP probe on socat's own listener. An HTTP probe against `/metrics` would
+mark the pod NotReady whenever the NAS is down, dropping it from the Service's
+endpoints and making the Prometheus target **vanish** — which is far less visible
+than a target that is present and reporting `up == 0`. Keep the pod Ready
+whenever socat is alive and let `up` carry the NAS's health.
 
 ## Validate
 
@@ -59,10 +79,10 @@ helm lint components/cluster-config/truenas-exporter/
 helm template truenas-exporter components/cluster-config/truenas-exporter/ \
   -f components/cluster-config/truenas-exporter/values.yaml
 
-# target should be UP once the NAS-side playbook has run
-oc -n truenas-exporter get endpoints truenas-exporter
-oc get --raw "/api/v1/namespaces/openshift-user-workload-monitoring/services/http:prometheus-user-workload:9090/proxy/api/v1/targets?state=active" \
-  | python3 -c 'import json,sys;[print(t["labels"],t["health"]) for t in json.load(sys.stdin)["data"]["activeTargets"] if "truenas" in t["labels"].get("job","")]'
+oc -n truenas-exporter get deploy,svc,endpoints
+# metrics should flow once the NAS-side playbook has run:
+oc -n truenas-exporter exec deploy/truenas-exporter -- \
+  sh -c 'wget -qO- http://127.0.0.1:9100/metrics | head -5'
 ```
 
 ## Dashboard
@@ -72,5 +92,5 @@ grafana.com **1860** (Node Exporter Full) is wired in
 `job` + `instance`; `instance="truenas"` is deliberately the same value the
 Shelly plug uses, so power and system metrics for this box share a name.
 
-ZFS/SMART/scrub/NFS panels are **not** in 1860 and are still to be built — see
-the TrueNAS TODO in the root `README.md`.
+ZFS pool health, scrub recency, SMART, ARC hit ratio, `zil_commit` rate and NFS
+latency are **not** in 1860 — see the TrueNAS TODO in the root `README.md`.
