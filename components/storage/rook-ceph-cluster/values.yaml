@@ -163,7 +163,7 @@ rook-ceph-cluster:
         - name: "node5.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            - name: "/dev/disk/by-path/pci-0000:00:17.0-ata-4"   # 3.5" bay (HDD tier)
+            # HDD bay removed 2026-09-08 (phase 4a) -- osd.4. See node4 above.
         - name: "node6.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
