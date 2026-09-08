@@ -1109,3 +1109,42 @@ Worth noting for the capacity story: this is the answer to the open question in 
 already guessed correctly — *"the CNPG `ceph-rbd-snapshot` volume snapshots on 7d retention …
 snapshots are the likeliest gap."* They were. The guess just needed the 110-day-old snapshot to
 prove it.
+
+### The prune, same evening
+
+167 snapshots deleted (94 media, 73 immich), keeping the newest 7 per cluster. Batched 20 at a
+time with a Ceph health check between batches, aborting on `HEALTH_ERR`. Zero failures.
+
+The reclaim tracked the deletions almost linearly — worth recording, because it means the space
+really was snapshot-pinned rather than something else that happened to correlate:
+
+```
+before        84.57% used,  70 GiB MAX AVAIL, 396 GiB stored
+[120/167]     76.91% used, 104 GiB MAX AVAIL, 358 GiB stored
+[140/167]     76.25% used, 107 GiB MAX AVAIL, 355 GiB stored
+[160/167]     75.93% used, 109 GiB MAX AVAIL, 353 GiB stored
+after +60s    74.94% used, 113 GiB MAX AVAIL, 348 GiB stored
+settled       74.66% used, 114 GiB MAX AVAIL, 346 GiB stored
+```
+
+RAW went 80.30% -> 70.99%. **+44 GiB of pool headroom, and the 85% nearfull cliff went from
+0.5pp away to 10pp away.** It kept drifting down for a few minutes after the script finished, so
+re-measure a little later rather than reading the number the instant it exits.
+
+The RBD side is the cleanest confirmation that only snapshots went:
+
+```
+$ rbd ls -p nvme-replicated | sed 's/-[0-9a-f-]\{36\}$//' | sort | uniq -c
+  15 csi-snap        # was 173
+  29 csi-vol         # unchanged
+```
+
+29 volumes before, 29 after. Both clusters stayed `Ready` with `ContinuousArchiving=True` and
+their `lastSuccessfulBackup` timestamps intact, and all ArgoCD apps stayed Synced+Healthy.
+
+The 15 remaining `csi-snap` are the 14 kept dailies plus `immich-postgres-prev3-20260706`, the
+July restore-drill snapshot, deliberately left out of a batch labelled "daily retention".
+
+**This fixed the symptom, not the cause.** CNPG will create another snapshot tonight and will
+not collect it either. Without the automation follow-up this recurs at roughly 0.5 GiB/day per
+cluster, which is how 110 days became 118 GiB.
