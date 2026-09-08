@@ -331,43 +331,46 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Track upstream fixes for `kubernetes-nmstate-operator` (community-operators) CSV — THREE RBAC defects** — (a) discovered 2026-05-11: `use` on the `privileged` SCC, missing → new handler pods rejected at admission; (b) same day: `get/list/watch apiservers.config.openshift.io`, missing → handler crashes on startup fetching the cluster TLS profile. Existing pods (15 days old, 20-36 restarts) survived because once admitted and past the startup TLS read, the watch loop doesn't re-check either permission. **PR filed for (a)+(b) at https://github.com/okd-project/okd-operator-pipeline/pull/19.** (c) discovered 2026-08-06 and **NOT covered by PR #19**: the CSV's own `nmstate-monitor` + `prometheus-k8s` RoleBindings in ns `nmstate` bind subject `prometheus-k8s` in namespace `monitoring` — a namespace that does not exist on OpenShift (it's `openshift-monitoring`; the value comes from `MONITORING_NAMESPACE`, which the okderators build sets correctly and operatorhub.io leaves at the upstream default). Platform Prometheus therefore couldn't list/watch pods/services/endpoints there, **nmstate metrics were never scraped at all**, and `PrometheusKubernetesListWatchFailures` fired for 12 days. Unlike (a)/(b) the bindings EXIST and are merely wrong, and the subject is a *different* SA — so no pod ever restarts and nothing surfaces it; the closing note in the (a)/(b) bug file predicted a third defect but assumed it would appear via a handler pod. Needs its own upstream issue (`bugs/upstream-community-operators-nmstate-csv-prometheus-rolebinding-wrong-namespace.md`). Track all three to merge, then bump the local subscription past the fixed version and remove the workaround chart pieces (`components/operators/nmstate/templates/handler-scc-binding.yaml` + `handler-apiserver-rbac.yaml` + `prometheus-metrics-rbac.yaml`).
 
 ### Queued — platform expansion
-- [ ] **OKD upgrade 4.20 → 4.21 → 4.22 (Kube 1.33 → 1.34 → 1.35) — RE-ASSESSED 2026-09-08; hop 1 is now
-  unblocked, hop 2 is not.** Path is mandatorily sequential (two all-node-reboot windows). Full matrix + runbook +
-  the September re-assessment in `blog/blog-okd-4.22-upgrade-draft.md`.
-  **CLEARED since the June plan:** (a) **`quay.io/okderators/catalog-index:4.21` now EXISTS** (published
-  2026-07-13; repo default branch is `release-4.21`) — this was hop 1's #1 blocker; (b) the loki/cluster-logging
-  **Degraded** state is gone — `oc get co` returns zero unhealthy (it cleared on its own, root cause never
-  established, so it could return); (c) driver/OS layer was already cleared (all three minors are SCOS 10 /
-  kernel 6.12).
-  **STILL BLOCKING HOP 1:** **cert-manager is still v1.18.0** (EOL 2026-03-10, caps at Kube 1.33) → bump to
-  **1.20.2** (NOT 1.19.0 — re-issuance bug; NOT 1.20.0 — issuer-finalizer RBAC blocker).
-  **NEW PREREQUISITE the June plan could not know — `nvme-replicated` is at ~81.5%** (`MAX AVAIL` 86.2 GiB,
-  stored 379.3 GiB) and Ceph `nearfull` trips at **85%**. The reboots themselves consume no capacity (failure
-  domain `host` across 3 hosts = a downed OSD cannot backfill, PGs sit undersized at 2/3 and serve), but an
-  upgrade is hours of continued writes and **crossing 85% mid-hop does not break the cluster, it breaks the
-  signal you steer by** — the runbook gates each node on Ceph HEALTH_OK, and a permanently `nearfull` pool makes
-  that gate meaningless. Reclaim below ~75% first (fstrim → CNPG `ceph-rbd-snapshot` audit).
-  **NEW RISK: five of eight subscriptions resolve from okderators** — cert-manager, **gitops-operator (ArgoCD
-  itself)**, cluster-logging, loki, oadp — wider than the June draft assumed. And **all eight are
-  `installPlanApproval: Automatic`**, which is a live hazard inside a multi-hour upgrade window. Evidence it
-  matters: **CNPG has since auto-advanced 1.29.1 → 1.30.0** unsupervised (we survived only because the
-  barman-cloud *plugin* was chosen over in-tree `barmanObjectStore`). Switch the load-bearing subscriptions to
-  **Manual before either hop**.
-  **BLAST RADIUS SHRANK** thanks to the 2026-09-07/08 decommission: the RGW-vs-router `:80` anti-affinity drain
-  constraint is **gone**, the CephFS stale-globalmount hazard is **gone**, there are **3 OSDs not 6**, and Loki's
-  chunks + Velero's target now live on TrueNAS garage — so a Ceph problem during an upgrade no longer takes out
-  logging and backups at the same time.
-  **RE-VERIFIED CLEAN:** cgroup v2 is structurally satisfied (SCOS 10 = RHEL 10 lineage, which removed cgroup v1
-  entirely); deprecated-API usage is only `endpoints v1` with **no removal release**; the VGS CRDs present are
-  `groupsnapshot.storage.**openshift**.io` (v1beta1, **0 objects**) — a different API group from the
-  `groupsnapshot.storage.k8s.io` the June plan worried about, so that concern did not apply.
-  **HOP 2 STAYS DEFERRED, single trigger condition: `okderators:4.22` does not exist.** Re-check that tag. Also
-  still open before 4.22: a supervised, version-coherent **Rook bump to a CSI-working v1.20.x+** (v1.19.5 sits at
-  the exact top of its Kube window at 1.35, zero slack), plus GitOps/Logging releases documenting 4.22.
-  **Caveat:** okderators issue **#44** (logging/loki 4.21 compatibility) is **still OPEN**, last touched
-  2026-05-14 — two months before the 4.21 tag was built. Verify the bundles RESOLVE; do not trust tag presence.
-  Trigger stays `oc adm upgrade` (NOT a chart — selfHeal would fight a paused upgrade). Bundle the `core`
-  SSH-key MachineConfig into hop 1 (it is an MCO reroll either way).
+- [ ] **OKD upgrade — HOP 1 DONE 2026-09-08: cluster is on 4.21.0-okd-scos.11 (Kube 1.34). Hop 2 (4.22) still
+  blocked.** ~95 min, 3/3 nodes Ready on v1.34.6, zero degraded ClusterOperators, Ceph recovered to the benign
+  slow-op warning only. Full execution write-up in `blog/blog-okd-4.22-upgrade-draft.md`.
+  **THE BLOCKER NOBODY LISTED — fix before hop 2: a single-instance CNPG cluster blocks node drain
+  unconditionally.** `immich-postgres` is `instances: 1`; CNPG puts a `minAvailable: 1` PDB over the primary, and
+  with no replica to fail over to the budget can never be satisfied — the drain retried forever and stalled node6
+  for ~20 min. `media-postgres` (3 instances) was untouched. CLAUDE.md correctly said these PDBs "do NOT block
+  draining a node that holds a *replica*"; the missing corollary is that **for a single-instance cluster every node
+  is the primary's node.** Fix was `oc -n immich delete pod immich-postgres-1` (CNPG rebuilt it on node4), but note
+  the delete took >120 s so the drain controller had already backed off to a 5-min retry — the unblock is not
+  instant. **Before hop 2: scale immich to 2 instances (needs NVMe headroom we lack) or make the pod deletion an
+  explicit runbook step.**
+  **cert-manager: the planned fix is NOT REACHABLE from any catalog, and this is now the critical path.**
+  v1.18.0 is EOL and caps at Kube 1.33; we are on 1.34. After flipping okderators to `:4.21` the alpha head is
+  **still v1.18.0**, community-operators v4.21 offers **v1.16.5**, operatorhubio offers **v1.16.5** — all equal or
+  older. So the June draft's "durable de-risk" (**migrate cert-manager off okderators**) is the only route, and it
+  points at the **upstream Helm chart**, not another catalog. **Measured deadline:** pods 3/3 Running 0 restarts
+  and all 5 certs Ready today; `barman-cloud-*` renews **2026-09-10** (internal CA, the canary) and
+  `homelab-wildcard` renews **2026-09-21** — the first Let's Encrypt DNS-01 renewal on an out-of-matrix
+  cert-manager, which is the real deadline.
+  **The 4.21 catalog flip delivered nothing else either:** zero InstallPlans generated; `gitops-operator` head is
+  identical (v1.19.0) and `cluster-logging` head is **v6.3.0-2025-08-08, OLDER than the installed v6.5.0** — which
+  is okderators issue **#44** (still open) as a fact rather than a caveat. Nothing downgrades (OLM only walks
+  forward, and all five okderators subs were switched to `installPlanApproval: Manual` before the flip — that
+  precaution is what made flipping safe).
+  **Runbook predictions that did NOT fire:** the LokiStack `MinAvailable=2` PDB (all loki PDBs sat at `allowed=1`);
+  `br-ex.forwarding` zeroing on reboot (**all three nodes read 1 after every reboot** — the rule is probably better
+  stated as "an event that changes host addresses *without* restarting ovnkube-node", since a reboot restarts it
+  and it re-asserts the sysctl); and the backnet NIC returning linkdown, including on node6 which did exactly that
+  on 2026-07-25.
+  **Known-benign transients seen mid-upgrade:** `network` Degraded with `ApplyOperatorConfig ... connection reset
+  by peer` to the API VIP; `kube-apiserver`/`-controller-manager`/`-scheduler` Degraded with
+  `NodeControllerDegraded: master nodes not ready: node6`. Both self-cleared. `etcd` never degraded. Also expect one
+  API blip per node drain (a bare `oc` can return `Unauthorized` if OAuth replicas are mid-move — **that is the
+  break-glass kubeconfig's purpose**, it is an SA token and keeps working).
+  **HOP 2 REMAINS BLOCKED — trigger condition unchanged: `quay.io/okderators/catalog-index:4.22` does not exist.**
+  Also still open: a supervised, version-coherent Rook bump to a CSI-working v1.20.x+ (v1.19.5 is at the exact top
+  of its Kube window at 1.35, zero slack), and GitOps/Logging releases documenting 4.22. **4.22 is no longer
+  "too fresh"** — z-streams `.6`-`.9` are now offered, which weakens one of the June DEFER arguments; the catalog
+  and Rook gates are what hold it.
 - [ ] **Service mesh evaluation(OKDerator)** — Istio (already in repo as `istio-values.yaml`) vs OpenShift Service Mesh vs nothing. Decide based on actual use cases: mTLS between namespaces, traffic shifting for app rollouts, request-level observability. Don't adopt without a workload that benefits.
 - [ ] **KubeVirt** — run VMs alongside containers (nested control plane, legacy workloads, isolated dev environments). Needs CPU/RAM headroom audit first; OSDs already eat 5–6 GiB per node and the autoscaler is fragile under memory pressure.
 - [ ] **Migrate apps from old cluster (media stack + keepers)** — port over the workloads still running on the previous cluster. Media stack now lives in tree (`components/apps/media/`); 3 of the 4 servarrs (Sonarr/Radarr/Prowlarr) on shared CNPG Postgres as of 2026-05-15. **Keepers stack ported 2026-05-15** (`components/apps/keepers/`, transmission + webtlo, shipped `enabled: false` pending `vpn-creds` SealedSecret re-seal for the keepers namespace). Remaining migration work is **config-only** (no DB data to bring across): re-apply each app's config via its web UI on the new cluster, re-seal each keeper Secret on the new cluster's sealed-secrets controller (per-controller pubkey means old blobs don't transplant). Pattern matches the in-repo Cloudflare token + GitHub OAuth client secret.
