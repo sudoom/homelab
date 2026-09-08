@@ -296,6 +296,11 @@ play still reported converged — the same "declared but never applied" trap as 
 auto-created scrub task and the un-applied dataset quota. The reconcile task now
 closes it.
 
+**Proven end to end on 2026-09-08**: the customManagers entry was committed, Renovate opened
+[#175](https://github.com/sudoom/homelab/pull/175) (`v1.9.1` -> `v1.12.1`) within minutes against that very commit,
+and one playbook run moved the box. Verify with `node_exporter_build_info` rather than the tag — the tag proves
+what was requested, `build_info` proves what is running.
+
 To check what is actually running:
 
 ```bash

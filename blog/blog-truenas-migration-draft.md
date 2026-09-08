@@ -4080,3 +4080,71 @@ cannot take the operation somewhere it was not aimed.
 The harness survives: both datasets, both NFS exports, both StorageClasses and the 1M/16K recordsize settings stay
 declared, so the next grid provisions a fresh PVC and re-lays. The cost of the reclaim is precisely that layout
 pass, which is the trade the operator chose knowingly.
+
+### The custom-app update path, proven end to end within the hour
+
+The operator's question — "garage gets an update button, how do I deal with the custom one?" — turned out to expose
+a real defect in what I had shipped, not just a documentation gap.
+
+TrueNAS will never offer that button for a custom app:
+
+```
+$ midclt call app.query | ...
+node-exporter  custom_app: True | upgrade_available: False | version: 1.0.0
+               images: ['quay.io/prometheus/node-exporter:v1.9.1']
+$ midclt call app.outdated_docker_images node-exporter
+[]
+```
+
+`upgrade_available` is false *permanently* — there is no catalog entry to compare against — and `version` is a
+synthetic `1.0.0` that never moves. `app.outdated_docker_images` only detects a **mutable** tag (`:latest`) whose
+digest changed upstream; against a pinned tag it returns `[]` forever. So nothing on the box will ever tell you the
+image is old.
+
+Worse, my role was **create-only** (`when: app_name not in truenas_app_names`), which meant bumping the tag in
+group_vars would have changed nothing on the box while the play still reported converged. That is the third
+instance in this repo of the same shape — the auto-created scrub task, the un-applied dataset quota, and now this.
+The fix is a reconcile task comparing the declared image against `app.query`'s `active_workloads.images`, plus a
+`set_fact` so the compose payload exists once rather than twice.
+
+The other half is Renovate. It had no visibility into an image tag living in an Ansible vars file, so
+`renovate.json` gained a `customManagers` entry (`fileMatch` on `group_vars/all.yml`, `datasourceTemplate: docker`
+— worth checking the schema for that field name, `managerFilePatterns` is *not* valid inside customManagers).
+
+It worked faster than expected. The PR appeared within minutes, with a base SHA equal to the commit that added the
+manager:
+
+```
+#175  chore(deps): update quay.io/prometheus/node-exporter docker tag to v1.9.1 -> v1.12.1
+      base: aaba476   (the customManagers commit itself)
+      1 file changed: ansible/truenas/group_vars/all.yml, +1 -1
+```
+
+Merge, `ansible-playbook`, and:
+
+```
+$ midclt call app.query | ...
+   ['quay.io/prometheus/node-exporter:v1.12.1'] state=RUNNING
+$ curl -s http://192.168.1.25:9100/metrics | grep node_exporter_build_info
+node_exporter_build_info{...,version="1.12.1"} 1
+$ up{job="truenas-exporter"}   1
+$ truenas_textfile_collector_errors   0
+```
+
+`build_info` rather than the tag, deliberately — a tag proves what was requested, `build_info` proves what is
+actually running.
+
+**One prediction of mine did not come true, which is worth recording as much as the ones that do.** I flagged
+v1.12.0's `[ENHANCEMENT] hwmon: disambiguate colliding chip labels` as a likely series-fork on
+`node_hwmon_temp_celsius`. It changed nothing here:
+
+```
+chip=0000:00:01_1_0000:02:00_0   chip=platform_coretemp_0
+chip=target0:0:0_0:0:0:0 ... chip=target4:0:0_4:0:0:0
+```
+
+Identical before and after. Reading the changelog line more carefully, it disambiguates chip labels that *collide*
+— and ours are already distinct. A correct caution, an incorrect application of it.
+
+So the net position is arguably better than the catalog app's button: a reviewed PR, then one playbook run, with
+the version verifiable from the binary rather than from the tag that was asked for.
