@@ -448,7 +448,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "truenas_dataset_used_bytes{dataset!~\".*@.*\"}",
+          "expr": "truenas_dataset_used_bytes{instance=\"truenas\",dataset!=\"tank\"}",
           "legendFormat": "{{dataset}}",
           "refId": "A"
         }
@@ -463,7 +463,7 @@
         },
         "overrides": []
       },
-      "description": "Which dataset is actually growing. boot-pool and the .system/ix-apps trees are deliberately excluded by the collector."
+      "description": "Which dataset is actually growing. The POOL ROOT `tank` is excluded: it is the sum of every child, so it dominates the axis and flattens everything the panel exists to show. Pool-level usage is already on `truenas_zpool_allocated_bytes` / the capacity gauge, which is also the more correct number (it includes RAIDZ parity overhead; `zfs used` on the root does not). The same sum-of-children effect applies at smaller scale to the intermediate parents `tank/s3`, `tank/timemachine` and `tank/monitoring` -- they are kept because at their size the overlap is readable, but read them as totals, not as leaves. boot-pool and the .system/ix-apps trees are excluded by the collector itself."
     },
     {
       "id": 105,
