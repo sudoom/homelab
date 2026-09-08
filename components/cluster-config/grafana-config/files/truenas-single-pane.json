@@ -981,7 +981,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "truenas_disk_temperature_celsius{instance=\"truenas\"}",
+          "expr": "sum by (serial) (truenas_disk_temperature_celsius{instance=\"truenas\"})",
           "format": "table",
           "instant": true,
           "refId": "B"
@@ -991,7 +991,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "truenas_disk_power_on_hours{instance=\"truenas\"}",
+          "expr": "sum by (serial) (truenas_disk_power_on_hours{instance=\"truenas\"})",
           "format": "table",
           "instant": true,
           "refId": "C"
@@ -1001,7 +1001,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "truenas_disk_reallocated_sectors{instance=\"truenas\"}",
+          "expr": "sum by (serial) (truenas_disk_reallocated_sectors{instance=\"truenas\"})",
           "format": "table",
           "instant": true,
           "refId": "D"
@@ -1011,7 +1011,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "truenas_disk_pending_sectors{instance=\"truenas\"}",
+          "expr": "sum by (serial) (truenas_disk_pending_sectors{instance=\"truenas\"})",
           "format": "table",
           "instant": true,
           "refId": "E"
@@ -1021,7 +1021,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "truenas_disk_uncorrectable_sectors{instance=\"truenas\"}",
+          "expr": "sum by (serial) (truenas_disk_uncorrectable_sectors{instance=\"truenas\"})",
           "format": "table",
           "instant": true,
           "refId": "F"
@@ -1069,7 +1069,16 @@
               "Value #E": "Pending (197)",
               "Value #F": "Uncorrectable (198)"
             },
-            "indexByName": {}
+            "indexByName": {
+              "serial": 0,
+              "model": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5,
+              "Value #E": 6,
+              "Value #F": 7
+            }
           }
         }
       ],
