@@ -455,3 +455,100 @@ Add a node-level alert on `net.ipv4.conf.br-ex.forwarding == 0`. Nothing in `ovn
 readiness probe reads it, so all three pods reported healthy for the full five hours while the
 cluster had no egress. This single check would have cut detection from hours to minutes, and it is
 the only signal that is both unambiguous and instant.
+
+---
+
+## Recurrence 2026-09-08 — a bare keepalived VIP failover is enough
+
+Second confirmed instance, and it widens the trigger class in a way that matters: **there was no
+reboot, no MCO reroll, no nmstate enactment, and no 10G switch event.** The whole thing was a
+VRRP re-election on the frontnet.
+
+Found at the session-start sweep, ~3.5 h after onset. Every check that mattered was already red:
+
+```
+oc -n openshift-gitops get applications      # 43/43 apps sync=Unknown
+oc get csv -A | awk '$NF!="Succeeded"'       # cloudnative-pg.v1.30.0 flapping Failed/InstallReady
+```
+
+Both symptom shapes from the 08-07 diagnosis, side by side:
+
+```
+# repo-server -- pod to EXTERNAL
+grpc.error="failed to list refs: dial tcp 140.82.121.3:22: connect: connection timed out"
+
+# collect-profiles -- pod to CLUSTERIP
+Error: failed to get server groups: Get "https://172.30.0.1:443/api": dial tcp 172.30.0.1:443: i/o timeout
+```
+
+The sysctl check settled it in one shot — **all three nodes**, and note `mp0` is still 1, exactly as
+the mechanism predicts (OVN-K re-asserts `mp0` on reconcile but only sets `br-ex` on full gateway
+init):
+
+```
+node5.okd.sudops.pl  br-ex=0  mp0=1
+node4.okd.sudops.pl  br-ex=0  mp0=1
+node6.okd.sudops.pl  br-ex=0  mp0=1
+```
+
+### The trigger
+
+```
+oc -n openshift-kni-infra logs keepalived-node4.okd.sudops.pl -c keepalived --since=6h \
+  | grep -Ei "MASTER|BACKUP|Entering"
+
+Tue Sep  8 05:09:58 2026: (okd_API_0) Master received advert from 192.168.1.8 with same priority 68 but higher IP address than ours
+Tue Sep  8 05:09:58 2026: (okd_API_0) Entering BACKUP STATE
+Tue Sep  8 05:09:59 2026: (okd_INGRESS_0) Master received advert from 192.168.1.8 with same priority 80 but higher IP address than ours
+Tue Sep  8 05:09:59 2026: (okd_INGRESS_0) Entering BACKUP STATE
+```
+
+node4 lost both VIPs at 05:09:58; node5 held the API VIP for 33 s and handed it to node6. Two
+addresses moved across three hosts inside a second. That is a host-address change on every node,
+which is precisely the OVN-K gateway-reconcile trigger — so `br-ex.forwarding` was zeroed
+cluster-wide by a keepalived tie-break.
+
+The VIPs landed where `k8s.ovn.org/host-cidrs` now shows them:
+
+```
+node4  ["192.168.1.7/24","192.168.10.16/24","192.168.10.2/24"]
+node5  ["192.168.1.241/32","192.168.1.8/24","192.168.10.17/24","192.168.10.3/24"]
+node6  ["192.168.1.240/32","192.168.1.9/24","192.168.10.18/24","192.168.10.4/24"]
+```
+
+The same frontnet blip also cost Ceph its mon quorum and marked the OSDs down — `ceph -s` reported
+`quorum a,b,c (age 3h)` and `6 up (since 3h)` against an 05:09 event, and the `rook` mgr module
+crashed at 05:31:44 on node6 when it lost the kube API. Ceph recovered on its own; all 129 PGs were
+`active+clean` by the time I looked. **Mons advertise frontnet addresses, so a frontnet blip is a
+Ceph event too** — worth remembering, because the storage backnet was never touched and stayed UP
+with correct IPs on all three nodes throughout.
+
+### Why this recurrence is the important one
+
+The 08-07 trigger list read as a list of *scheduled* events — you reboot a node, you upgrade switch
+firmware, you enact an NNCP, so you know to re-check the sysctl afterwards. A VRRP tie-break is not
+scheduled by anyone. It can happen at 05:09 on a Tuesday from a momentary frontnet hiccup, and
+nothing in the cluster reports it: all three `ovnkube-node` pods stayed Ready, all nodes stayed
+Ready, every workload kept serving.
+
+What actually broke, silently, for 3.5 h:
+
+- **Both CNPG clusters stopped archiving WAL offsite** (`ContinuousArchiving=False` at 05:35 and
+  05:38). This is the one with real data-loss exposure, and it is invisible unless you assert the
+  condition explicitly. Note the 08-07 heuristic — "one archiving and one not = node-scoped egress
+  break" — inverts cleanly here: **both** failing pointed at all-three-nodes, and that was right.
+- All 43 ArgoCD apps blind (`ComparisonError: DeadlineExceeded`). GitOps was not enforcing anything.
+- `cnpg-controller-manager` and `barman-cloud` crashlooping on the kube API (32 and 21 restarts).
+- OLM `collect-profiles` failing every 15 min; the CNPG CSV flapping `Failed`/`InstallReady`, which
+  looks like a bad operator upgrade and is not.
+
+That last one is the trap worth naming: **the CSV flap is a symptom, not a cause.** Walking into
+this cold, `cloudnative-pg.v1.30.0 Failed` in a `get csv -A` sweep reads as "the CNPG upgrade broke"
+and sends you into OLM. It is OLM's install-plan check failing to reach the API server.
+
+### Follow-up, restated with more force
+
+The alert proposed at the end of the 08-07 write-up — page on
+`net.ipv4.conf.br-ex.forwarding == 0` — was not built. Had it existed, detection would have been
+~2 min instead of 3.5 h, and the WAL-archiving gap would have been near-zero. Two incidents, same
+undetected-for-hours shape, same one-line signal. Build it.
