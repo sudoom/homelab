@@ -248,3 +248,32 @@
   when:
     - (truenas_pool ~ '/' ~ item.name) in truenas_ds_ids
     - truenas_ds_recordsize[truenas_pool ~ '/' ~ item.name] | default('') != item.recordsize
+
+# ---------------------------------------------------------------------------
+# Pool properties.
+#
+# `pool.update` takes autotrim as "ON"/"OFF" (enum, uppercase). Read-then-write
+# so a converged run reports no change, same shape as every other reconcile in
+# this role.
+# ---------------------------------------------------------------------------
+- name: Read current pool autotrim settings
+  ansible.builtin.command:
+    argv: [midclt, call, pool.query]
+  register: truenas_pool_props_q
+  changed_when: false
+  check_mode: false
+
+- name: Reconcile pool autotrim
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - pool.update
+      - "{{ (truenas_pool_props_q.stdout | from_json | selectattr('name', 'equalto', item.key) | first).id | string }}"
+      - "{{ {'autotrim': item.value} | to_json }}"
+  loop: "{{ truenas_pool_properties | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} autotrim={{ item.value }}"
+  when:
+    - truenas_pool_props_q.stdout | from_json | selectattr('name', 'equalto', item.key) | list | length > 0
+    - ((truenas_pool_props_q.stdout | from_json | selectattr('name', 'equalto', item.key) | first).autotrim.parsed | default('') | string | upper) != item.value

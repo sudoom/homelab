@@ -234,7 +234,17 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   **Atomicity is load-bearing and is documented in the script:** node_exporter reads whatever is in the directory at
   scrape time, and a half-written file sets `node_textfile_scrape_error 1` and discards the whole scrape's textfile
   metrics — so the collector writes a temp file that does **not** end in `.prom` and `os.replace()`s it.
-  **FINDING WORTH ACTING ON: `tank` has NEVER been scrubbed.** `pool.query` returns every `scan` field null, 11 days
+  **CPU / load / RAM were always collected** — node_exporter ships them and grafana.com **1860** renders them in
+  depth; they are now also on the single pane (System row) alongside scrub progress. One reading trap is documented
+  in that panel: **ZFS ARC is not page cache**, so it counts as USED and `MemAvailable` excludes it — this box reads
+  ~8.1 GiB available of 33.6 GiB while ~25 GiB of the gap is reclaimable ARC. Judge pressure by
+  `MemTotal - MemAvailable - ARC`, not by `MemAvailable`.
+  **`autotrim` is now declared in `truenas_pool_properties` and converged by the storage role** (enabled by hand on
+  the box 2026-09-08; code-only means it has to exist in git or the next rebuild loses it silently). **On `tank` it
+  is a no-op** — `zpool status -t` reports `(trim unsupported)` for every vdev because all six members are spinning
+  HUS726040ALA610s. `boot-pool` is the only pool with an SSD and therefore the only place autotrim could act, but
+  `pool.query` does not return it (the middleware manages data pools only), so `pool.update` cannot address it.
+  **FINDING BEING ACTED ON: `tank` had NEVER been scrubbed — a manual scrub was started 2026-09-08 16:46.** `pool.query` returns every `scan` field null, 11 days
   after the pool was created (2026-08-28). The monthly task is correct (1st, 03:00) but its 35-day threshold skipped
   the 09-01 run because the pool was 4 days old — and 10-01 is 34 days out, so it is likely to skip again, putting
   the first parity verification in **November**, ~2 months after the data landed, on a cohort of wear-matched

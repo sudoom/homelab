@@ -550,6 +550,30 @@ truenas_node_exporter:
   # does not log an error on every scrape.
   textfile_dir: /mnt/tank/monitoring/textfile
 
+# ---- Pool properties ------------------------------------------------------
+# Declared here because the box is code-only: a property set through the web UI
+# survives, but nothing in git says it should be true, so the next rebuild
+# silently loses it and no run ever reports the difference. Same rule as every
+# other setting in this topic.
+#
+# autotrim was enabled on `tank` by hand on 2026-09-08. Recording it as declared
+# state, with the caveat that ON THIS POOL IT DOES NOTHING: `zpool status -t`
+# reports "(trim unsupported)" for every vdev, because all six members are
+# HUS726040ALA610 spinning disks (`/sys/block/sd*/queue/rotational` = 1). TRIM is
+# an SSD/NVMe operation. It is harmless, and left ON so the declared state
+# matches the box rather than fighting it -- but do not expect a benefit, and do
+# not cite it as a reason the pool is faster.
+#
+# `boot-pool` is the one pool here with an SSD (INTEL SSDSC2BB480G6) and the only
+# place autotrim could act -- but it is deliberately NOT listed below, because
+# `pool.query` does not return it at all (the middleware manages data pools
+# only), so `pool.update` has no id to address it by. Managing it would mean
+# dropping to `zpool set` over SSH, which is outside how this topic works. It is
+# also not worth it: the boot pool holds the OS, writes are small and mostly
+# static, and it is not where reclaim matters.
+truenas_pool_properties:
+  tank: ON
+
 # ---- Data protection ------------------------------------------------------
 truenas_scrub_day_of_month: "1"     # monthly
 truenas_scrub_threshold: 35         # days; skip a scheduled scrub if scrubbed more recently

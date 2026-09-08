@@ -3960,3 +3960,70 @@ The table is keyed by **serial**, never `/dev/sdX`. That is the same hazard that
 `CephNodeDiskspaceWarning` on the OKD nodes the same day, when pulling a drive moved every node's boot disk from
 `sdb` to `sda` and started a brand-new `node_filesystem_*` series that a 48-hour `predict_linear` then extrapolated
 into nonsense.
+
+### First scrub, and an autotrim that does nothing
+
+The operator started a manual scrub rather than waiting for the threshold to let one through. It shows up in the
+new metrics immediately, which is the first end-to-end proof that the scrub path works:
+
+```
+$ zpool status tank | grep -A2 scan:
+  scan: scrub in progress since Tue Sep  8 16:46:21 2026
+	9.60T / 10.0T scanned at 10.9G/s, 545G / 10.0T issued at 621M/s
+	0B repaired, 5.33% done, 04:26:14 to go
+
+$ midclt call pool.query | ...
+tank {"function": "SCRUB", "state": "SCANNING", "percentage": 5.42, "errors": 0, "end_time": null}
+
+$ grep scrub /mnt/tank/monitoring/textfile/truenas.prom
+truenas_zpool_scrub_ever{pool="tank"} 0
+truenas_zpool_scrub_errors{pool="tank"} 0
+truenas_zpool_scrub_in_progress{pool="tank"} 1
+```
+
+`state: "SCANNING"` was a guess when I wrote the collector; a live scrub confirms it. The `percentage` field was
+being thrown away, so the collector now exports `truenas_zpool_scrub_percent_complete` too and the dashboard has a
+progress gauge. Note `scrub_ever` is still 0 and correctly so — it keys off `end_time`, and nothing has *completed*
+yet.
+
+Autotrim was enabled on `tank` at the same time. Two things about that.
+
+**It does nothing on this pool.**
+
+```
+$ zpool status -t tank | grep -i trim
+	    41e7a725-...  ONLINE  0 0 0  (trim unsupported)
+	    b559dfb7-...  ONLINE  0 0 0  (trim unsupported)
+	    ...
+$ for d in /sys/block/sd*; do echo "$(basename $d) rota=$(cat $d/queue/rotational) $(cat $d/device/model)"; done
+sda rota=1 HUS726040ALA610      ... sdf rota=1 HUS726040ALA610
+sdg rota=0 INTEL SSDSC2BB480G6
+```
+
+All six `tank` members are spinning disks; TRIM is an SSD/NVMe operation. Harmless, but not a performance change,
+and worth saying plainly so nobody later cites it as one. The single SSD is `boot-pool`, which is the only place
+autotrim could act — and `pool.query` does not return `boot-pool` at all (the middleware manages data pools only),
+so `pool.update` has no id to address it by. Managing it would mean dropping to `zpool set` over SSH, outside how
+this topic works, for a pool that holds a mostly-static OS.
+
+**It was set outside Ansible, on a box whose whole premise is code-only.** Nothing reverts it, which is exactly what
+makes this the dangerous kind of drift: the setting works, nobody notices it is undeclared, and it disappears on the
+next rebuild with no run ever reporting a difference. It is now in `truenas_pool_properties` and reconciled by the
+storage role, and `truenas_zpool_autotrim` is exported so the live value is visible rather than merely present.
+
+### CPU, load and RAM — and the ZFS memory trap
+
+These were never missing; node_exporter collects them and grafana.com 1860 renders them in depth. They were just
+not on the *single pane*, which now has a System row. One panel needed a warning written into it:
+
+```
+node_memory_MemTotal_bytes      33.56 GB
+node_memory_MemAvailable_bytes   8.12 GB
+node_zfs_arc_size               25.13 GB
+```
+
+8 GiB "available" out of 33 GiB reads like a box about to start swapping. It is not. **ZFS ARC is not Linux page
+cache** — it is allocated memory that the kernel does not count in `MemAvailable`, even though ARC gives it back
+under pressure. On any ZFS system the honest figure is `MemTotal - MemAvailable - ARC`, and the panel plots that
+explicitly as `used (excl. ARC)`. Low available memory with a large ARC is ZFS working exactly as designed, and it
+is the single most common way a ZFS box gets misdiagnosed as short of RAM.

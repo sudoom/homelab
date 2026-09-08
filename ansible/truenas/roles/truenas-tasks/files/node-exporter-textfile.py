@@ -168,9 +168,25 @@ def collect_scrub(out):
         if scan.get("errors") is not None:
             out.metric("zpool_scrub_errors", scan["errors"],
                        "Errors reported by the last scrub.", pool=name)
+        # Verified against a live scrub 2026-09-08: the middleware reports
+        # state "SCANNING" with a `percentage` float while one is running.
         out.metric("zpool_scrub_in_progress",
                    1 if scan.get("state") == "SCANNING" else 0,
                    "1 while a scrub is running.", pool=name)
+        if scan.get("percentage") is not None:
+            out.metric("zpool_scrub_percent_complete", round(float(scan["percentage"]), 2),
+                       "Progress of the running scrub, 0-100.", pool=name)
+
+        # autotrim, exported so a setting made outside Ansible is VISIBLE rather
+        # than merely present. Note that on `tank` this is a no-op: every vdev
+        # reports "(trim unsupported)" because all six are HUS726040ALA610
+        # spinning disks. It would only do something on `boot-pool` (the Intel
+        # SSD), where it is currently off.
+        at = p.get("autotrim") or {}
+        atv = at.get("parsed") if isinstance(at, dict) else at
+        if atv is not None:
+            out.metric("zpool_autotrim", 1 if str(atv).lower() in ("on", "true") else 0,
+                       "1 if pool autotrim is enabled.", pool=name)
 
 
 def collect_datasets(out):

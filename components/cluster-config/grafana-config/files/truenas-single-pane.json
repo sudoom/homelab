@@ -466,6 +466,240 @@
       "description": "Which dataset is actually growing. boot-pool and the .system/ix-apps trees are deliberately excluded by the collector."
     },
     {
+      "id": 105,
+      "type": "row",
+      "title": "System",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 50,
+      "title": "CPU utilisation",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 0,
+        "y": 15
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "1 - avg(rate(node_cpu_seconds_total{instance=\"truenas\",mode=\"idle\"}[5m]))",
+          "legendFormat": "busy",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (mode) (rate(node_cpu_seconds_total{instance=\"truenas\",mode=~\"iowait|system\"}[5m])) / on() group_left count(count by (cpu) (node_cpu_seconds_total{instance=\"truenas\"}))",
+          "legendFormat": "{{mode}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "description": "`busy` is 1 - idle across all cores. iowait and system are broken out because on a NAS they are the interesting ones: sustained iowait means the disks, not the CPU, are the constraint."
+    },
+    {
+      "id": 51,
+      "title": "Load average",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 6,
+        "y": 15
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_load1{instance=\"truenas\"}",
+          "legendFormat": "1m",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_load5{instance=\"truenas\"}",
+          "legendFormat": "5m",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_load15{instance=\"truenas\"}",
+          "legendFormat": "15m",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count(count by (cpu) (node_cpu_seconds_total{instance=\"truenas\"}))",
+          "legendFormat": "cores",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "description": "Compare against the `cores` line, not against zero: load equal to the core count is fully busy, not overloaded. On ZFS a scrub or resilver drives load up legitimately."
+    },
+    {
+      "id": 52,
+      "title": "Memory",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 12,
+        "y": 15
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_memory_MemTotal_bytes{instance=\"truenas\"}",
+          "legendFormat": "total",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_memory_MemAvailable_bytes{instance=\"truenas\"}",
+          "legendFormat": "available",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_zfs_arc_size{instance=\"truenas\"}",
+          "legendFormat": "ARC",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "node_memory_MemTotal_bytes{instance=\"truenas\"} - node_memory_MemAvailable_bytes{instance=\"truenas\"} - node_zfs_arc_size{instance=\"truenas\"}",
+          "legendFormat": "used (excl. ARC)",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "description": "READ THIS BEFORE PANICKING ABOUT `available`. ZFS ARC is not Linux page cache, so it counts as USED and MemAvailable does NOT include it -- at survey time this box read 8.1 GiB available of 33.6 GiB, while 25 GiB of the difference was ARC, which is reclaimable on demand. `used (excl. ARC)` is the number that actually reflects pressure. Low available with a large ARC is ZFS working correctly, not a leak."
+    },
+    {
+      "id": 53,
+      "title": "Scrub progress",
+      "type": "gauge",
+      "gridPos": {
+        "h": 7,
+        "w": 4,
+        "x": 20,
+        "y": 15
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_zpool_scrub_percent_complete{pool=\"tank\"}",
+          "legendFormat": "{{pool}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "percent",
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Only populated while a scrub is running. Scrub is what verifies parity so RAIDZ2 can heal bit rot; on this six-drive cohort of ~43,700-hour pulls it is the single most valuable periodic operation."
+    },
+    {
       "id": 102,
       "type": "row",
       "title": "ZFS behaviour",
@@ -473,7 +707,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 22
       },
       "collapsed": false,
       "panels": []
@@ -486,7 +720,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 15
+        "y": 23
       },
       "datasource": {
         "type": "prometheus",
@@ -523,7 +757,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 15
+        "y": 23
       },
       "datasource": {
         "type": "prometheus",
@@ -568,7 +802,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 15
+        "y": 23
       },
       "datasource": {
         "type": "prometheus",
@@ -613,7 +847,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 30
       },
       "collapsed": false,
       "panels": []
@@ -626,7 +860,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 31
       },
       "datasource": {
         "type": "prometheus",
@@ -680,7 +914,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 31
       },
       "datasource": {
         "type": "prometheus",
@@ -725,7 +959,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 39
       },
       "datasource": {
         "type": "prometheus",
@@ -975,7 +1209,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 47
       },
       "collapsed": false,
       "panels": []
@@ -988,7 +1222,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 48
       },
       "datasource": {
         "type": "prometheus",
@@ -1033,7 +1267,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 48
       },
       "datasource": {
         "type": "prometheus",
