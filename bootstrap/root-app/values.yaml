@@ -85,10 +85,15 @@ applications:
     namespace: openshift-nmstate
     syncWave: "1"
 
+  # Namespace is `cert-manager`, NOT `cert-manager-operator`: since 2026-09-08
+  # this chart wraps the UPSTREAM jetstack chart instead of an OLM Subscription,
+  # so it deploys cert-manager itself rather than an operator that deploys it.
+  # The three Deployment names it renders match the ones the old operator left
+  # behind, so ArgoCD adopts them in place.
   cert-manager-operator:
     enabled: true
     path: components/operators/cert-manager
-    namespace: cert-manager-operator
+    namespace: cert-manager
     syncWave: "1"
 
   rook-ceph-operator:

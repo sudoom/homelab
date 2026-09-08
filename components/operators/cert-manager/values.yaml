@@ -1,4 +1,50 @@
-namespace: cert-manager-operator
-channel: alpha
-source: okderators
-sourceNamespace: openshift-marketplace
+# Values for the upstream jetstack/cert-manager chart (see Chart.yaml deps).
+cert-manager:
+  # THE ONE SETTING THAT MUST NOT BE LOST IN THE MIGRATION.
+  # Carried over verbatim from the OLM operator's CertManager/cluster CR
+  # (spec.controllerConfig.overrideArgs). The Cloudflare DNS-01 solver resolves
+  # the _acme-challenge TXT record via these public resolvers because cluster
+  # DNS cannot resolve external domains -- without the override every ACME
+  # challenge fails self-check and no certificate is ever issued. This is
+  # documented in CLAUDE.md under "TLS / cert-manager".
+  extraArgs:
+    - --dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53
+    - --dns01-recursive-nameservers-only
+
+  crds:
+    # The CRDs already exist on this cluster (installed by the OLM operator's
+    # operand) and carry `helm.sh/resource-policy: keep`. Enabling them here
+    # lets the chart UPDATE them in place to the 1.20 schema, which is required
+    # -- CRs are not touched by a CRD schema update.
+    enabled: true
+    # Never delete the CRDs on uninstall. Deleting them would cascade-delete
+    # every Certificate, Issuer, ClusterIssuer, Order and Challenge on the
+    # cluster. There are 5 Certificates, 1 ClusterIssuer and 1 Issuer today.
+    keep: true
+
+  # OpenShift runs restricted-v2 with an arbitrary UID, so let the platform
+  # assign it rather than pinning one from the chart defaults.
+  global:
+    leaderElection:
+      # kube-system is the chart default and works on OKD; named explicitly so a
+      # future chart default change cannot move it silently.
+      namespace: kube-system
+
+  # Disabled deliberately. The chart ships this as a Helm post-install hook Job
+  # that curls the API to prove the webhook works. Under ArgoCD a hook Job
+  # becomes a sync hook, and Jobs are IMMUTABLE -- this repo has already been
+  # bitten by exactly that ("ArgoCD app stuck OutOfSync, Job is invalid:
+  # spec.selector: Required value" is in the CLAUDE.md teardown symptom table).
+  # The check it performs is one we do by hand anyway: `oc get certificate -A`
+  # all Ready=True after the cutover.
+  startupapicheck:
+    enabled: false
+
+  resources:
+    requests: { cpu: 10m, memory: 64Mi }
+  webhook:
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+  cainjector:
+    resources:
+      requests: { cpu: 10m, memory: 128Mi }

@@ -17,6 +17,9 @@ Chart.lock
 # review of this chart was reviewing fiction — unacceptable now that media +
 # immich are about to depend on it.
 !components/storage/nfs-csi/Chart.lock
+# cert-manager wraps the upstream jetstack chart since 2026-09-08 -- pin the
+# subchart version so a bump is a reviewable diff, same as the Rook charts.
+!components/operators/cert-manager/Chart.lock
 
 # AND the sealed-secrets chart is VENDORED (tgz + lock committed) so a fresh
 # bootstrap never depends on a remote Helm repo — it's bootstrap-critical (it
