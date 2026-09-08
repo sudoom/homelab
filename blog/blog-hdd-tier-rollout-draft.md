@@ -1850,11 +1850,27 @@ op-mon: [rook-ceph] updating deployment "rook-ceph-mon-a" after verifying it is 
 op-mon: [rook-ceph] Monitors in quorum: [a b c]
 ```
 
-**Any `CephCluster` spec change triggers a full Rook reconcile, and Rook rolls the mons as part of
-it.** Quorum holds throughout (Rook checks `safe to stop` and goes one at a time), so it is safe —
-but it is a real disruption window, it takes a couple of minutes, and phase 4a incurs it **three
-times**, once per node commit. Worth waiting for `3/3 mons 2/2 Running` between nodes rather than
-stacking an OSD purge on top of a mon roll.
+I wrote that up as "any `CephCluster` spec change rolls the mons" — and **the very next change
+falsified it.** node5's edit was structurally identical (one device removed from one node's list),
+propagated to the live CR at 10:07:15, and rolled nothing: mon ages stayed at 25–26 m, quorum age
+25 m.
 
-The lesson generalises: on this chart, "I only changed the device list" is never the whole blast
-radius. The unit of change is the CephCluster CR, not the field.
+So what actually happened at 09:41 is **not established**. What is observable:
+
+- A full three-mon roll at ~09:41, coincident with the first spec change reaching the live CR
+  (09:40:49).
+- No roll at all on the second, structurally identical spec change at 10:07:15.
+- The operator did **not** restart across either (`rook-ceph-operator` up since 2026-09-07T17:38:51,
+  0 restarts), so this was not a fresh-operator full reconcile.
+
+The confounder I cannot rule out is that the cluster had just come through the `br-ex.forwarding`
+outage and three `ovnkube-node` restarts that morning, so the 09:41 reconcile may have been Rook
+flushing state that had nothing to do with my edit.
+
+**The operational advice survives the retraction regardless of cause:** wait for `3/3 mons 2/2
+Running` and `129 active+clean` between node commits, rather than stacking an OSD purge on top of
+whatever else the operator has decided to do. Cheap insurance, and it costs a two-minute wait on a
+step that is already irreversible.
+
+What I should not have done is state a causal rule from a single coincident observation. One
+sample is a coincidence; I presented it as a mechanism.
