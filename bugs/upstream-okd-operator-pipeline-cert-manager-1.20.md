@@ -339,12 +339,11 @@ exist unless `build_containers` has also been run and pushed. So the operator PO
 this test -- resolution and InstallPlan creation happen before any image pull, and that is the layer a catalog bug
 lives in.
 
-**GATE CURRENTLY FAILING (2026-09-08 evening).** This plan set its own precondition on pool headroom, and the
-pool has moved the wrong way since: `nvme-replicated` now reads **84.53% / 70 GiB MAX AVAIL** against the 85%
-nearfull threshold, down from 89 GiB the same morning. Cause is unrelated to this work (CNPG volume snapshots
-have never been pruned — see `blog/blog-cnpg-draft.md` 2026-09-08 and the README storage TODO), but the internal
-registry is Ceph-backed, so pushing operand images into it now would spend headroom the cluster does not have.
-**Deferred until the snapshot reclaim lands.** The bundle-only variant (~300 kB) is not meaningfully gated by
+**GATE NOW CLEAR (2026-09-08, later the same evening).** This plan set its own precondition on pool headroom.
+It briefly failed — `nvme-replicated` hit **84.53% / 70 GiB MAX AVAIL** against the 85% nearfull threshold — for
+a reason unrelated to this work: CNPG volume snapshots had never been pruned. After deleting the 167-snapshot
+backlog the pool reads **74.66% / 114 GiB MAX AVAIL** (see `blog/blog-cnpg-draft.md` 2026-09-08). The internal
+registry is Ceph-backed, so that headroom is the constraint that matters, and there is now ~10pp of it. The bundle-only variant (~300 kB) is not meaningfully gated by
 capacity, but it still needs a CatalogSource + Subscription, which is a mutation next to the live cert-manager
 operator and therefore an explicit operator decision, not an unattended one.
 
