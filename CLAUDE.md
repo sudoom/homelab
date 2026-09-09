@@ -490,6 +490,51 @@ Claude should refuse these actions and explain why briefly:
 - **No OKD version bumps or cluster-wide CR changes** without an explicit ask — those are upgrade events, not routine edits.
 - **Do not disable `automated.prune` or `selfHeal`** to "fix" a sync issue. Fix the manifest instead.
 
+## Skills — the `superpowers` plugin
+
+Installed 2026-09-09. Not every skill fits this repo; three of them contradict rules stated elsewhere in this
+file. **A skill never overrides a guardrail.** If a skill's instructions conflict with the Guardrails section or
+with a rule below, the repo rule wins and I say which one I am following and why.
+
+**Use these by default, without being asked:**
+
+- **`systematic-debugging`** — before proposing a fix for any incident, failed sync, or unexpected output. It
+  guards against exactly this repo's recurring failure: guessing a cause from a plausible-looking signal. Real
+  examples that would have been caught — reading "N OSDs slow" as "the HDDs" when it was NVMe osd.0/osd.1
+  (2026-06-15); reading `.gitmodules` and concluding nmstate was on 4.21 when the gitlinks were 4.20
+  (2026-09-09); assuming `PodNetworkConnectivityCheck` localises a `br-ex.forwarding` break when its source is a
+  single-replica Deployment.
+- **`verification-before-completion`** — before claiming anything is done, fixed, or passing, and before every
+  commit. Pair it with the Validation workflow. This repo has repeatedly shipped a confident claim that was
+  wrong: "27 of 27 orphaned VolumeAttachments" (my own broken check), "the collector is crashing" (my own manual
+  run, not cron), the 2026-09-08 `br-ex.forwarding` cause I wrote up and retracted the same day.
+- **`brainstorming`** — before designing something new: a new chart, a monitoring surface, a migration plan, an
+  upstream contribution's shape. Not for routine edits, version bumps, or doc updates.
+- **`writing-plans` / `executing-plans`** — multi-step supervised work with a degraded window or a rollback
+  story: OKD minor upgrades, Rook/Ceph bumps, storage migrations, teardown+rebuild. These pair with the
+  "no drain headroom" and "30-minute cap" rules rather than replacing them.
+- **`requesting-code-review` / `receiving-code-review`** — upstream PR work, and any change to a chart that a
+  degraded-window procedure depends on.
+
+**These conflict with existing rules — the repo rule wins:**
+
+- **`using-git-worktrees`, `finishing-a-development-branch`** assume a feature-branch workflow. This repo commits
+  **direct to `master`** (ArgoCD watches it) — no feature branches, no PRs, per the standing instruction. Do not
+  create a branch or worktree for homelab changes. **Exception:** upstream contribution clones under the
+  scratchpad (`okd-operator-pipeline`, etc.) are separate repos with their own conventions, and there branches
+  are correct.
+- **`dispatching-parallel-agents`, `subagent-driven-development`** assume spawning subagents. The operating
+  instructions for this project say not to use the Agent tool or workflows unless the user asks for it. Do not
+  invoke these on my own initiative; suggest one if a task genuinely warrants it and let the user decide.
+- **`test-driven-development`** assumes a unit-test suite. There isn't one. The analogue here is the
+  **Validation workflow** (`helm lint` → `helm template` → `kubeconform` → `oc diff`) and, for upstream work,
+  actually running `build_containers` / `make bundle` / `opm validate` before claiming a change works. Apply the
+  spirit — demonstrate the failure, then demonstrate the fix — not the letter. The 2026-09-09 cert-manager PR is
+  the model: `opm validate` was shown failing on the unfixed graph *and* passing on the fixed one.
+
+**`using-superpowers`** is the meta-index for finding the others. **`writing-skills`** only applies when
+authoring a new skill.
+
 ## Upstream PRs and comments — always draft first, always plain
 
 Applies to every PR body, PR comment, and issue I write on an upstream repo.
