@@ -4217,3 +4217,41 @@ So the honest answer is that the version has to live where it is actually true, 
 
 Worth noting the general shape, because it recurs: when a UI cannot express something, the reflex is to make the UI
 lie less. The better move is usually to find the place where the fact is already true and surface it there.
+
+### 2026-09-09 — the scrub gauge that lies when idle
+
+Spotted from the dashboard rather than from an alert. The "Scrub progress" gauge read **96.2%**, which
+I read as a scrub running and nearly finished. The TrueNAS UI disagreed:
+
+```
+Last Scan:          Finished Scrub on 2026-09-08 20:36:48
+Last Scan Errors:   0
+Last Scan Duration: 3 hours 50 minutes 27 seconds
+```
+
+The scrub had been done for ~22 h. The `Days since scrub` panel on the same dashboard said `0.902 day`
+and was correct all along — two panels disagreeing, and I believed the wrong one.
+
+Cause, from the middleware directly:
+
+```
+$ midclt call pool.query | ...
+tank state=FINISHED pct=96.2175965309143 errors=0 fn=SCRUB
+```
+
+**`pool.query` keeps returning the last `percentage` after the scrub ends.** The collector emitted
+`zpool_scrub_percent_complete` whenever `percentage` was non-null, gated on nothing, so the gauge parked
+at the final value indefinitely. It had `zpool_scrub_in_progress` right there and did not use it.
+
+Two things worth carrying forward:
+
+**A finished ZFS scrub does not report 100%.** It landed at 96.22. ZFS counts blocks examined against an
+*estimated* total, and the estimate runs high, so a clean completion lands a few percent short. Anyone
+treating "<100%" as "incomplete" will be wrong every time.
+
+**A metric that is only meaningful in one state must not be published in the others.** The fix is to emit
+progress only while `state == SCANNING`, so the series is simply absent when idle and the gauge shows
+`idle` rather than a stale number. "Did the scrub pass" is answered by `zpool_scrub_age_seconds` and
+`zpool_scrub_errors`, which were always correct.
+
+Needs an `ansible/truenas` playbook run to land the collector change; the dashboard half ships via ArgoCD.

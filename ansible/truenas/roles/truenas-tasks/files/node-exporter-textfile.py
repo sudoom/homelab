@@ -173,9 +173,18 @@ def collect_scrub(out):
         out.metric("zpool_scrub_in_progress",
                    1 if scan.get("state") == "SCANNING" else 0,
                    "1 while a scrub is running.", pool=name)
-        if scan.get("percentage") is not None:
+        # Emit progress ONLY while a scrub is actually running. The middleware
+        # keeps returning the last `percentage` after the scrub ends -- on
+        # 2026-09-09, hours after a clean finish, pool.query still reported
+        # `state=FINISHED pct=96.2175965309143`. Publishing that unconditionally
+        # left the Grafana gauge parked at 96.2% forever, which reads as "a scrub
+        # is almost done" when none is running. It also never reaches 100: ZFS
+        # counts blocks examined against an ESTIMATED total, so a completed scrub
+        # lands a few percent short. Use zpool_scrub_age_seconds for "when did it
+        # last run" and zpool_scrub_errors for "did it pass".
+        if scan.get("state") == "SCANNING" and scan.get("percentage") is not None:
             out.metric("zpool_scrub_percent_complete", round(float(scan["percentage"]), 2),
-                       "Progress of the running scrub, 0-100.", pool=name)
+                       "Progress of the RUNNING scrub, 0-100. Absent when idle.", pool=name)
 
         # autotrim, exported so a setting made outside Ansible is VISIBLE rather
         # than merely present. Note that on `tank` this is a no-op: every vdev

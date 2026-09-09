@@ -743,11 +743,12 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "idle"
         },
         "overrides": []
       },
-      "description": "Only populated while a scrub is running. Scrub is what verifies parity so RAIDZ2 can heal bit rot; on this six-drive cohort of ~43,700-hour pulls it is the single most valuable periodic operation."
+      "description": "Progress of a RUNNING scrub. Shows 'idle' when none is running: the metric is only emitted while state=SCANNING. A finished scrub does not read 100% -- ZFS counts examined blocks against an estimated total, so it lands a few percent short (tank finished at 96.2% on 2026-09-08). Use 'Days since scrub' and the error count to judge a completed scrub."
     },
     {
       "id": 102,
