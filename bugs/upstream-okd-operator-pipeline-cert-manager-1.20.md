@@ -7,6 +7,28 @@
 | [#28](https://github.com/okd-project/okd-operator-pipeline/pull/28) | cert-manager -> 1.20 | `main` |
 | [#29](https://github.com/okd-project/okd-operator-pipeline/pull/29) | cert-manager -> 1.20 (cherry-pick of the same 3 commits, identical diff) | `release-4.21` |
 | [#30](https://github.com/okd-project/okd-operator-pipeline/pull/30) | nmstate gitlinks release-4.20 -> release-4.21 | `release-4.21` |
+| [#31](https://github.com/okd-project/okd-operator-pipeline/issues/31) | *issue* — publish a per-branch operator support matrix | — |
+
+**#31 came out of a question rather than a defect, and the tone matters.** The first draft was an audit:
+three failure classes, red crosses, two implementation proposals. Rewritten against the register of
+[argo-cd#12276](https://github.com/argoproj/argo-cd/issues/12276) — Summary / Motivation / Proposal, first
+person from an actual use case, ~230 words instead of ~500, acknowledging the current state before critiquing,
+and citing Argo CD's own tested-versions table as precedent. The CI pin-check proposal was cut entirely: it is
+a second ask and belongs in its own issue if this one lands.
+
+**Evidence gathered for it, all from `build.sh` + `.gitmodules` across the three branches:**
+
+| branch | builds OKD | cert-manager | gitops | nmstate declares |
+|---|---|---|---|---|
+| `release-4.20` | 4.20.0-okd-scos.6 | 1.18 | 1.19 | `release-4.20` |
+| `release-4.21` | 4.21.0-okd-scos.10 | 1.18 | 1.19 | `release-4.21` |
+| `main` | 4.22.0-okd-scos.2 | 1.18 | 1.19 | `release-4.21` |
+
+Two findings beyond the cert-manager one this file already covers. **`main`'s nmstate declares `release-4.21`
+while `main` builds 4.22** and its other 39 submodules pin `release-4.22` — a third nmstate defect, distinct
+from the gitlink drift #30 fixes. And **gitops is pinned three minors behind**: 1.19 ships Argo CD 3.1, which
+predates Argo CD's tested-versions table (3.3/3.4/3.5 against K8s 1.32-1.36); OpenShift GitOps 1.20 ships
+Argo CD 3.3, and `rh-gitops-midstream/release` carries `release-1.20` through `release-1.22`.
 
 **Why two cert-manager PRs — a branch model I had wrong at first.** The pipeline has per-release branches
 (`release-4.18`, `release-4.20`, `release-4.21`) and `main` has moved on to 4.22: `main`'s `common.sh` sets
