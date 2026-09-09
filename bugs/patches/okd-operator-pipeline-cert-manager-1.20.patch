@@ -1,4 +1,4 @@
-From 089ad7de3dbbeae06410419023775caa4b16616e Mon Sep 17 00:00:00 2001
+From de099301d34f73c278824059081de57ee8df2b33 Mon Sep 17 00:00:00 2001
 From: Vadzim Dziadziulia <vadzim.dziadziulia@keemail.me>
 Date: Tue, 8 Sep 2026 20:42:38 +0200
 Subject: [PATCH 1/3] [cert-manager] Update to 1.20
@@ -40,9 +40,9 @@ itself has not been run.
  cert-manager/cert-manager               |  2 +-
  cert-manager/cert-manager.Containerfile |  2 +-
  cert-manager/operator                   |  2 +-
- cert-manager/operator.Containerfile     | 21 +++++++++-
+ cert-manager/operator.Containerfile     | 12 +++++-
  cert-manager/patches/operator.patch     | 51 ++++++++++++++++++-------
- 8 files changed, 63 insertions(+), 23 deletions(-)
+ 8 files changed, 54 insertions(+), 23 deletions(-)
 
 diff --git a/.gitmodules b/.gitmodules
 index 3ae491d..38ffe84 100644
@@ -110,10 +110,10 @@ index 1bc9f0f..bd76823 160000
 -Subproject commit 1bc9f0ff0b2049a876f33ac9a5d52c8197458bad
 +Subproject commit bd768238b709eea3edc6f3fbf6cd50a480369b28
 diff --git a/cert-manager/operator.Containerfile b/cert-manager/operator.Containerfile
-index 5c33f6e..ab287e5 100644
+index 5c33f6e..6876807 100644
 --- a/cert-manager/operator.Containerfile
 +++ b/cert-manager/operator.Containerfile
-@@ -1,9 +1,26 @@
+@@ -1,9 +1,17 @@
 -FROM registry.access.redhat.com/ubi9/go-toolset:1.24 AS builder
 +FROM registry.access.redhat.com/ubi9/go-toolset:1.26 AS builder
  
@@ -121,18 +121,9 @@ index 5c33f6e..ab287e5 100644
  COPY --chown=default operator/LICENSE /licenses/
  
 -RUN make build --warn-undefined-variables
-+# Build the binary directly rather than via `make build`.
-+#
-+# From cert-manager-1.20 onward `make build` depends on the `generate` target,
-+# which runs hack/update-clientgen.sh and needs k8s.io/code-generator. That is
-+# not vendored, so with -mod=vendor the build fails:
-+#   cannot find module providing package k8s.io/code-generator/cmd/client-gen:
-+#   import lookup disabled by -mod=vendor
-+# The generated code is already committed, so regenerating it at image-build
-+# time is unnecessary. The ENV block and `go build` invocation below are copied
-+# from Red Hat's published cert-manager Dockerfiles for this operator's operand
-+# images (istio-csr, acmesolver, controller, webhook, ca-injector), which all
-+# build this way; see `scripts/rhcatalog.sh containerfiles cert-manager 4.21`.
++# `make build` depends on `generate`, which needs k8s.io/code-generator -- not
++# vendored, so it fails under -mod=vendor. The generated code is already
++# committed. Build directly instead, as Red Hat's operand Dockerfiles do.
 +ENV GO_BUILD_TAGS=strictfipsruntime,openssl
 +ENV GOEXPERIMENT=strictfipsruntime
 +ENV CGO_ENABLED=1
@@ -244,7 +235,7 @@ index 7202f6f..39404a0 100644
 2.50.1 (Apple Git-155)
 
 
-From 4c6352fb8c4c609130bd45ceffebf00d23b02559 Mon Sep 17 00:00:00 2001
+From dc35d85e277e04eee82c3623897415dc48982257 Mon Sep 17 00:00:00 2001
 From: Vadzim Dziadziulia <vadzim.dziadziulia@keemail.me>
 Date: Tue, 8 Sep 2026 21:41:50 +0200
 Subject: [PATCH 2/3] [cert-manager] Update the istio-csr builder to Go 1.26
@@ -274,7 +265,7 @@ index de5981b..51aab62 100644
 2.50.1 (Apple Git-155)
 
 
-From 1705858e66528ae7f0ce4c071440041f6529221f Mon Sep 17 00:00:00 2001
+From fd314fc5f053e032cdfb3d52cc1bb19ee7c23dc7 Mon Sep 17 00:00:00 2001
 From: Vadzim Dziadziulia <vadzim.dziadziulia@keemail.me>
 Date: Tue, 8 Sep 2026 21:41:50 +0200
 Subject: [PATCH 3/3] [cert-manager] Set the okderators upgrade graph on the
@@ -293,11 +284,11 @@ library OLM resolves skipRange with:
 Widen the range to cover every published okderators build and drop the dangling
 replaces, as kube-descheduler and vertical-pod-autoscaler already do.
 ---
- cert-manager/build.sh | 15 +++++++++++++++
- 1 file changed, 15 insertions(+)
+ cert-manager/build.sh | 9 +++++++++
+ 1 file changed, 9 insertions(+)
 
 diff --git a/cert-manager/build.sh b/cert-manager/build.sh
-index 615908e..6896485 100755
+index 615908e..7b760e4 100755
 --- a/cert-manager/build.sh
 +++ b/cert-manager/build.sh
 @@ -13,6 +13,8 @@ IMG_ISTIO_CSR="${REGISTRY}/istio-csr:${OCP_DATE}"
@@ -309,18 +300,12 @@ index 615908e..6896485 100755
  init() {
      submodule_initialize istio-csr main
      submodule_initialize cert-manager release-${OCP_SHORT}
-@@ -60,6 +62,19 @@ build_bundle() {
+@@ -60,6 +62,13 @@ build_bundle() {
       .env |= map(select(.name == \"OPERATOR_IMAGE_VERSION\").value = \"${OCP_DATE}\")
      )" ./config/manager/manager.yaml
  
-+    # The upstream CSV describes Red Hat's upgrade graph, not okderators'.
-+    # It carries `olm.skipRange: '>=1.19.0 <1.20.0'` and
-+    # `replaces: cert-manager-operator.v1.19.0`, but okderators has never
-+    # published a 1.19 build -- its published history is 1.14.0, 1.15.0 and
-+    # 1.18.0. Left as-is, the 1.20 bundle offers no upgrade edge any okderators
-+    # user can take, so a cluster on 1.18.0 would simply never be offered it.
-+    # Widen the range to cover every published okderators build and drop the
-+    # dangling `replaces`, matching kube-descheduler and vertical-pod-autoscaler.
++    # Upstream's graph targets 1.19, which OKD never published (1.14, 1.15, 1.18),
++    # so the bundle would offer no upgrade edge any okderators user can take.
 +    export OLM_SKIP_RANGE=">=1.0.0 <${OCP_DATE}"
 +    yq e -i '.metadata.annotations["olm.skipRange"] = strenv(OLM_SKIP_RANGE)' "${CSV_BASE}"
 +    yq e -i 'del(.spec.replaces)' "${CSV_BASE}"
