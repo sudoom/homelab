@@ -4255,3 +4255,147 @@ progress only while `state == SCANNING`, so the series is simply absent when idl
 `zpool_scrub_errors`, which were always correct.
 
 Needs an `ansible/truenas` playbook run to land the collector change; the dashboard half ships via ArgoCD.
+
+---
+
+## 2026-09-09 — replacing Synology Drive Client: why Syncthing, and why not Nextcloud
+
+The Synology Drive Client was still running on the MacBook, two-way syncing
+`/Users/vadzimdziadziulia-laptop/Projects` against `nas.homelab.sudops.pl`. It
+is one of the last real client dependencies on the DS418, and the job it does
+is narrow: keep `~/Projects` identical between the Mac mini and the MacBook Air.
+
+### Grepping first, which changed the shape of the answer
+
+Before proposing anything I searched the repo, per the standing rule. Three
+things came back that mattered:
+
+- `tank/personal` and `tank/work` are already declared, 128K recordsize, and
+  the README lists the *human* SMB shares as the known-open half of
+  `truenas-smb`.
+- Time Machine SMB targets are already managed for both Macs. So **backup was
+  never the thing Drive Client provided** — that was already covered.
+- `truenas-apps` already deploys custom compose apps (`app.create` with
+  `custom_app: true`), which is how garage and node_exporter run.
+
+The second point is the one that reframed it. If backup is covered, what is
+actually needed is multi-device availability, and that is a different problem
+with a different right answer.
+
+### The one-way door I nearly walked through
+
+The obvious place to put a `~/Projects` mirror is `tank/work`. That would have
+been a mistake twice over.
+
+`tank/work` is earmarked as a human SMB share, and the NAS's Syncthing folder
+has to be **receive-only** — which means Syncthing reverts anything written
+into it on its next scan. Someone saving a file into that share over SMB would
+watch it disappear with no error. Two writers, one directory tree.
+
+And `tank/work` carries this in `group_vars`:
+
+```
+# THE DEADLINE IS NOT A DATE, IT IS THE FIRST BYTE WRITTEN.
+```
+
+`casesensitivity` is fixed by ZFS at create time. `tank/work` is still empty
+and still undecided, so putting the sync there would have forced that decision
+by accident, in a commit that was ostensibly about something else. A separate
+`tank/sync` dataset avoids both problems and leaves the `work` decision open.
+
+For `tank/sync` itself the property *is* decidable, and that is worth writing
+down because it is the reverse of the usual reasoning: nothing will ever mount
+it over SMB, so the only writer is Syncthing on the Linux side receiving from
+two case-**insensitive** APFS volumes. A pair of names differing only by case
+cannot arrive. `SENSITIVE` therefore has nothing to collide, and it stores the
+names it was given rather than normalising them.
+
+### Nextcloud, evaluated properly
+
+My first pass dismissed Nextcloud in half a sentence as "heavier", which it
+deserved better than. The honest comparison:
+
+The topologies differ — Syncthing is a peer mesh with no server of record,
+Nextcloud is client-server where the server *is* the truth — but that is not
+the problem. The property we wanted (the NAS never originates a change) is
+satisfied either way, since Nextcloud forbids writing into its data directory
+outside the app anyway.
+
+**The payload is the problem.** `~/Projects` is git working trees: tens of
+thousands of small files under `.git/objects`. Nextcloud's desktop client does
+per-file HTTP operations against the server; Syncthing runs a block-exchange
+protocol over one persistent connection. That is an architectural difference,
+not a tuning gap, and a small-file corpus is exactly where it shows — the same
+metadata-bound shape the storage benchmark work already measured at 4.61
+ms/file. Nextcloud's server-side per-file versioning would also fire on every
+`.git/index` rewrite, duplicating what the ZFS snapshots do; you would turn it
+off, having installed a database to get it.
+
+The costs are concrete in *this* repo: PostgreSQL, Redis and PHP-FPM as a
+second stateful service with its own backup and its own stepwise major
+upgrades, plus TLS — which means `truenas-cert-sync`, an item the README
+explicitly parks behind the cert-alerting work. Nextcloud pulls a deferred
+item onto the critical path.
+
+And two of its three big draws already have owners here: immich has the photos
+(`tank/personal` literally says so), and the code is on GitHub. What is
+genuinely uncovered is share links and phone access — neither of which
+Syncthing does, and neither of which was being asked for. Recorded as the
+condition under which the decision should be revisited rather than as a
+rejection.
+
+### What the NAS is actually for
+
+Worth being clear, because it is not what the framing suggests: **the two Macs
+peer directly. The NAS is not load-bearing for the sync.** It earns its place
+as the always-on third node, and — the real reason — as the snapshot host.
+
+Two-way sync propagates a deletion to every peer within seconds. Drive Client
+had a recycle bin; the replacement is a ZFS periodic snapshot task on
+`tank/sync`, every 2 h kept 30 days. That is denser than anything else on this
+pool, deliberately: everywhere else a snapshot sits under data that changes on
+purpose, and here it sits under a daemon reacting to two laptops.
+
+The quota is the same class of reasoning. 200 GiB on a dataset whose contents
+are written by a daemon reacting to two laptops, where a mis-scoped folder on
+either Mac — a home directory instead of `~/Projects` — writes at line rate.
+
+### The seam
+
+Syncthing's folder definition and device pairings are **not** converged. It
+rewrites `config.xml` at runtime, so a templated file would fight the
+container. They are recorded as documented state in the README instead, with
+the device-ID table left to fill in.
+
+Phase 2 could converge them over Syncthing's own REST API with
+`ansible.builtin.uri`. That is legitimate here despite this topic deliberately
+avoiding `uri` for TrueNAS itself — that avoidance was specifically about
+TrueNAS's REST API being removed in 26, and Syncthing's is stable. It needs an
+API key in the vault.
+
+### Two things that would have bitten on the first run
+
+**Migration order.** If the two Macs' trees are not already identical when
+Syncthing pairs them, the result is the *union* of both plus a scattering of
+`.sync-conflict-*` files. Drive Client has to finish and be removed first.
+
+**The ignore list has to be synced, not configured.** `.stignore` is not itself
+synced by Syncthing, so three hand-maintained copies would drift silently. The
+idiom is a one-line `.stignore` containing `#include .stignore-shared`, with
+the real list in the included file — which *is* synced. Committed as
+`ansible/truenas/files/projects-stignore-shared`.
+
+`.git` stays out of that ignore list on purpose. Ignoring it would leave the
+peers sharing a working tree with no branch and no history, and would make the
+NAS copy useless as a restore source. The cost is a behavioural rule no setting
+substitutes for: don't have the same repo open and being written on both Macs
+at once.
+
+### Unverified
+
+The image tag `syncthing/syncthing:2.0.0` is a guess — the Docker Hub tag
+lookup was blocked in the session that wrote this. The failure mode is loud
+(`app.create` fails on an unresolvable tag) rather than silent, and Renovate
+corrects it on its first PR. Confirm before the run.
+
+Nothing is on the box yet; this needs an operator playbook run.

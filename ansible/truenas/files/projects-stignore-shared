@@ -1,0 +1,46 @@
+// Shared Syncthing ignore list for the ~/Projects folder.
+//
+// Goes at ~/Projects/.stignore-shared on EVERY peer (both Macs and the NAS).
+// Each peer's own .stignore is then a single line:
+//
+//     #include .stignore-shared
+//
+// .stignore is not itself synced by Syncthing; this file is. That indirection
+// is the only reason the three nodes cannot quietly drift apart on what they
+// ignore -- editing it on one Mac updates all three.
+
+// .git IS DELIBERATELY NOT IGNORED. Ignoring it would leave the peers sharing
+// a working tree with no branch, no history, and no way to restore a repo from
+// this node -- the NAS copy would be a file dump rather than a backup. The
+// cost is the rule in the README: do not have the same repo open and being
+// written on both Macs at once.
+
+// Build output and dependency trees. Large, high-churn, and reproducible from
+// the manifests that ARE synced, so syncing them buys nothing and costs the
+// small-file throughput this folder is already bound by.
+(?d)node_modules
+(?d).venv
+(?d)venv
+(?d)__pycache__
+(?d)*.pyc
+(?d)target
+(?d)dist
+(?d)build
+(?d).direnv
+(?d).tox
+(?d).pytest_cache
+(?d).mypy_cache
+(?d).ruff_cache
+
+// Helm vendored subcharts. This repo gitignores components/**/charts/ and
+// re-fetches them with `helm dependency update`; syncing them would propagate
+// a stale subchart from one machine to another, which is the exact failure the
+// Rook version-coherence rule exists to prevent.
+(?d)charts
+
+// macOS and editor noise.
+(?d).DS_Store
+(?d)._*
+(?d).Spotlight-V100
+(?d).Trashes
+(?d)*.swp

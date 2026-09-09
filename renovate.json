@@ -83,7 +83,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "node_exporter runs on the TrueNAS box as a CUSTOM (compose) app, so TrueNAS itself will never offer an update: custom apps have no catalog entry to compare against and app.query always reports upgrade_available=false. app.outdated_docker_images only helps for mutable tags like :latest, and this one is pinned. Renovate is therefore the ONLY thing that will ever tell us a new node_exporter exists. Applying the bump still needs an operator playbook run (--ask-vault-pass).",
+      "description": "node_exporter and syncthing run on the TrueNAS box as CUSTOM (compose) apps, so TrueNAS itself will never offer an update: custom apps have no catalog entry to compare against and app.query always reports upgrade_available=false. app.outdated_docker_images only helps for mutable tags like :latest, and these are pinned. Renovate is therefore the ONLY thing that will ever tell us a newer image exists. This manager matches every `image:` line in the file rather than one named variable, so a new custom app is covered without editing it. Applying the bump still needs an operator playbook run (--ask-vault-pass).",
       "fileMatch": [
         "^ansible/truenas/group_vars/all\\.yml$"
       ],

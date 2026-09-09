@@ -517,3 +517,142 @@
       node_exporter image declared {{ truenas_node_exporter.image }}
       -- TrueNAS will never flag this as upgradable (custom apps have no catalog);
       Renovate watches the tag, and this role applies the bump.
+
+# ---------------------------------------------------------------------------
+# Syncthing — replaces Synology Drive Client for ~/Projects.
+#
+# This box is a RECEIVE-ONLY peer: the two Macs are the writers, and what this
+# node contributes is being awake when one of them is not, plus the ZFS
+# snapshot history under tank/sync. Full rationale, and why not Nextcloud, sits
+# above `truenas_syncthing` in group_vars/all.yml.
+#
+# The folder and device pairing are NOT converged here. Syncthing rewrites its
+# own config.xml at runtime, so templating it would fight the container; the
+# device IDs and folder settings are recorded in the README as documented
+# state instead. See the README's "Syncthing" section for the one-time pairing
+# walkthrough and for the phase-2 note on doing this over Syncthing's REST API
+# with ansible.builtin.uri.
+# ---------------------------------------------------------------------------
+
+# Same reasoning as garage's paths: the datasets are created by truenas-storage
+# (which runs first), so this role never mkdirs. It only fixes ownership, and
+# only when it is actually wrong -- the container runs as 568 and cannot write
+# into a root-owned mountpoint.
+- name: Stat the syncthing storage paths
+  ansible.builtin.command:
+    argv: [midclt, call, filesystem.stat, "{{ item.value }}"]
+  register: truenas_st_stat
+  changed_when: false
+  check_mode: false
+  loop: "{{ truenas_syncthing.paths | dict2items }}"
+  loop_control:
+    label: "{{ item.value }}"
+
+- name: Chown the syncthing storage paths to the apps account
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - filesystem.chown
+      - "{{ {'path': item.item.value, 'uid': truenas_syncthing.run_as_uid, 'gid': truenas_syncthing.run_as_gid, 'options': {'recursive': true, 'traverse': false}} | to_json }}"
+  loop: "{{ truenas_st_stat.results }}"
+  loop_control:
+    label: "{{ item.item.value }}"
+  when: (item.stdout | from_json).uid != truenas_syncthing.run_as_uid
+
+# Defined ONCE and used by both the create and the update below, same as the
+# node_exporter payload above. Two copies of a compose definition drift.
+- name: Build the syncthing compose definition
+  ansible.builtin.set_fact:
+    _st_compose:
+      services:
+        syncthing:
+          image: "{{ truenas_syncthing.image }}"
+          # Custom apps always report `App Version: custom` / `1.0.0` in the UI
+          # -- those are hardcoded stubs, see the node_exporter note above.
+          # These labels are the closest the box gets to a truthful version.
+          labels:
+            org.opencontainers.image.version: "{{ truenas_syncthing.image | regex_replace('^.*:', '') }}"
+            org.opencontainers.image.source: "https://github.com/syncthing/syncthing"
+            org.opencontainers.image.title: "syncthing"
+            pl.sudops.managed-by: "ansible/truenas/roles/truenas-apps"
+          restart: unless-stopped
+          # REQUIRED, not a convenience: local peer discovery is a broadcast on
+          # UDP 21027 and does not cross a bridged docker network. Without it
+          # the Macs can only find this node by a hardcoded address.
+          network_mode: host
+          environment:
+            # The image honours these; the mountpoints are chowned to match.
+            PUID: "{{ truenas_syncthing.run_as_uid }}"
+            PGID: "{{ truenas_syncthing.run_as_gid }}"
+            # Pin the GUI to the frontnet address. Host networking would
+            # otherwise expose it on the storage backnet too, which is the same
+            # trap node_exporter's explicit --web.listen-address avoids.
+            STGUIADDRESS: "{{ truenas_syncthing.gui_address }}"
+            # Set the config dir EXPLICITLY rather than relying on the image's
+            # default home, so the bind below lands where Syncthing actually
+            # reads from regardless of what the base image changes.
+            STHOMEDIR: /var/syncthing/config
+            # Without this, first start creates a default ~/Sync folder and
+            # offers it to every peer that pairs -- noise on a node whose only
+            # folder is meant to be receive-only.
+            STNODEFAULTFOLDER: "1"
+          volumes:
+            - "{{ truenas_syncthing.paths.config }}:/var/syncthing/config"
+            # The path to enter when adding the folder in the GUI.
+            - "{{ truenas_syncthing.paths.data }}:/var/syncthing/projects"
+
+- name: Deploy the syncthing custom app
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.create
+      - "{{ {'app_name': truenas_syncthing.app_name, 'custom_app': true, 'custom_compose_config': _st_compose} | to_json }}"
+  when: truenas_syncthing.app_name not in truenas_app_names
+  register: truenas_st_deploy
+  failed_when: false
+
+- name: Read the app.create job record if the syncthing deploy failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.create"]]']
+  register: truenas_st_job
+  changed_when: false
+  when: (truenas_st_deploy.rc | default(0)) != 0
+
+- name: Fail with the real syncthing reason
+  ansible.builtin.fail:
+    msg: "syncthing app.create failed: {{ (truenas_st_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_st_deploy.rc | default(0)) != 0
+
+- name: Report syncthing state
+  ansible.builtin.debug:
+    msg: >-
+      syncthing {{ 'already present' if truenas_syncthing.app_name in truenas_app_names else 'DEPLOYED' }}
+      -- GUI at http://{{ truenas_syncthing.gui_address }}/. The folder and the
+      two Mac devices are paired ONCE by hand; see the README. This node must
+      be set RECEIVE-ONLY, or it becomes a third writer.
+
+# Same trap as node_exporter: custom apps have no catalog entry, so TrueNAS
+# reports upgrade_available=false forever and nothing on the box will ever say
+# syncthing is old. Renovate watches the pinned tag (the customManager in
+# renovate.json matches every `image:` line in group_vars/all.yml, so this app
+# needed no new manager) and this task is what applies the bump.
+- name: Reconcile the syncthing image
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.update
+      - "{{ truenas_syncthing.app_name }}"
+      - "{{ {'custom_compose_config': _st_compose} | to_json }}"
+  vars:
+    _live: "{{ (truenas_app_q.stdout | from_json
+                | selectattr('name', 'equalto', truenas_syncthing.app_name)
+                | first).active_workloads.images | default([]) }}"
+  when:
+    - truenas_syncthing.app_name in truenas_app_names
+    - truenas_syncthing.image not in _live

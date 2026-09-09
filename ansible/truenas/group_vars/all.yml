@@ -83,6 +83,16 @@ truenas_datasets:
     recordsize: 128K
     comments: "On-pool tooling that must survive TrueNAS updates (NUT script, oc binary, kubeconfig). /root and /etc do NOT survive updates."
     quota: 0
+  - name: apps/syncthing
+    recordsize: 128K
+    comments: "Syncthing's own state (TLS key, device ID, config.xml). Tiny, and losing it re-pairs every device."
+    quota: 0
+    # THE DEVICE ID IS DERIVED FROM THE TLS KEY IN HERE. Syncthing identifies
+    # peers by that ID, never by hostname or address, so destroying this
+    # dataset does not merely reset settings -- it makes this box a STRANGER
+    # to both Macs, and each one has to accept a new device before sync
+    # resumes. A child dataset rather than a subdirectory of `apps` so it gets
+    # its own snapshots, same reasoning as the s3 children below.
   # ---- garage S3 (Velero BackupStorageLocation) -----------------------
   # Parent MUST be listed before its children: pool.dataset.create will not
   # create intermediate datasets, and this list is applied in order.
@@ -255,6 +265,23 @@ truenas_datasets:
     # THE DEADLINE IS NOT A DATE, IT IS THE FIRST BYTE WRITTEN. ZFS emits no
     # warning at that moment and the property keeps reporting a valid value
     # forever after. Decide before anything mounts this.
+  - name: sync
+    recordsize: 128K
+    comments: "Syncthing mirror of ~/Projects (Mac mini <-> MacBook Air). Receive-only here; the snapshots are the version history."
+    quota: 214748364800             # 200 GiB
+    # CASESENSITIVITY IS DECIDED HERE, unlike `work` above, and it is decidable
+    # precisely because nothing will ever mount this over SMB. The only writer
+    # is Syncthing on the Linux side, receiving from two case-INSENSITIVE APFS
+    # volumes -- so a pair of names differing only by case cannot arrive, and
+    # SENSITIVE therefore has nothing to collide. It is also the faithful
+    # choice: it stores the names it was given instead of normalising them.
+    casesensitivity: SENSITIVE
+    # A QUOTA RATHER THAN 0, and it is the point rather than housekeeping.
+    # This is the only dataset on the box whose contents are written by a
+    # daemon reacting to two laptops. A mis-scoped folder on either Mac (a home
+    # directory instead of ~/Projects, say) writes here at line rate, and the
+    # pool-level ceiling is the only other thing in the way. 200 GiB is ~200x
+    # the corpus and still leaves 14 TiB untouchable.
   - name: timemachine
     # Parent container only -- the SHARES point at the two children below, so
     # no Mac ever mounts this path. It exists to hold the total ceiling and to
@@ -550,6 +577,64 @@ truenas_node_exporter:
   # does not log an error on every scrape.
   textfile_dir: /mnt/tank/monitoring/textfile
 
+# ---- Syncthing (Mac mini <-> MacBook Air sync of ~/Projects) --------------
+# REPLACES SYNOLOGY DRIVE CLIENT, one of the last things still tying a laptop
+# to the DS418. Drive Client was doing exactly one job here: two-way sync of
+# ~/Projects between the two Macs.
+#
+# WHY SYNCTHING AND NOT NEXTCLOUD (evaluated 2026-09-09, rejected for THIS
+# payload): ~/Projects is git working trees, so it is tens of thousands of
+# small files under .git/objects. Nextcloud's desktop client does per-file
+# HTTP operations against the server; Syncthing runs a block-exchange protocol
+# over one persistent connection. That is an architectural difference rather
+# than a tuning gap, and a small-file corpus is exactly where it shows -- the
+# same metadata-bound shape the storage benchmark hit at 4.61 ms/file.
+# Nextcloud would also add PostgreSQL, Redis and PHP-FPM, and it wants TLS,
+# which means truenas-cert-sync -- an item the README deliberately parks
+# behind the cert-alerting work. It stays the right answer if the goal ever
+# becomes share links or phone access; Syncthing does neither.
+#
+# WHY THIS BOX IS IN THE MESH AT ALL: the two Macs can peer directly, so the
+# NAS is not load-bearing for sync. It earns its place twice. As the always-on
+# third node, so a change on the MacBook lands somewhere while the mini is
+# asleep. And as the SNAPSHOT HOST -- two-way sync propagates a deletion to
+# every peer within seconds, so the ZFS task on `tank/sync` is the only thing
+# standing between a bad `rm -rf` and losing it on both Macs at once. Drive
+# Client had a recycle bin; that task is its replacement.
+#
+# RECEIVE-ONLY, set on the folder itself (see the README): this node never
+# originates a change, so it adds no third conflict source. The consequence to
+# remember is the mirror image of that -- Syncthing REVERTS anything written
+# into /mnt/tank/sync by hand on its next scan. It is not a share.
+truenas_syncthing:
+  app_name: syncthing
+  # TAG NOT VERIFIED AT THE TIME OF WRITING: the Docker Hub lookup was blocked
+  # in the session that added this. Confirm before the first run. The failure
+  # mode is loud rather than silent (app.create fails on an unresolvable tag),
+  # and Renovate corrects it on its first PR -- the existing customManager in
+  # renovate.json matches every `image:` line in this file, so no new manager
+  # was needed for this app.
+  image: docker.io/syncthing/syncthing:2.0.0
+  # Host networking is REQUIRED, not incidental: local peer discovery is a
+  # broadcast on UDP 21027 and does not survive a bridged docker network.
+  # Same shape as node_exporter above, and the same consequence -- it would
+  # otherwise listen on every address this box holds, including the backnet --
+  # so the GUI is pinned to the frontnet address explicitly.
+  #
+  # PORTS USED: 22000/tcp + 22000/udp (sync), 21027/udp (local discovery),
+  # 8384/tcp (GUI). Check these against `ss -lnt` before the first run the way
+  # 9100 was checked; the known-taken set on this box is
+  # 22/80/111/139/443/445/2049/5357/6000/6999 plus garage's 30186-30190.
+  gui_address: "192.168.1.25:8384"
+  # The TrueNAS apps account, same as garage. The image honours PUID/PGID, and
+  # the paths below are chowned to match -- without that the container writes
+  # as root into a dataset the rest of the box cannot manage.
+  run_as_uid: 568
+  run_as_gid: 568
+  paths:
+    config: /mnt/tank/apps/syncthing
+    data: /mnt/tank/sync
+
 # ---- Pool properties ------------------------------------------------------
 # Declared here because the box is code-only: a property set through the web UI
 # survives, but nothing in git says it should be true, so the next rebuild
@@ -669,3 +754,13 @@ truenas_snapshot_tasks:
     lifetime_value: 90
     lifetime_unit: DAY
     schedule: { minute: "0", hour: "*/6", dom: "*", month: "*", dow: "*" }
+  # DENSER THAN THE OTHERS ON PURPOSE. Everywhere else on this pool a snapshot
+  # is a safety net under data that changes deliberately. Here it is the
+  # recycle bin for a two-way sync: a deletion on either Mac reaches this box
+  # within seconds and there is no other copy of an untracked file. Two hours
+  # bounds what a mistake can cost; 30 days is long enough to notice one.
+  - dataset: sync
+    recursive: true
+    lifetime_value: 30
+    lifetime_unit: DAY
+    schedule: { minute: "0", hour: "*/2", dom: "*", month: "*", dow: "*" }

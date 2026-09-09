@@ -50,6 +50,7 @@ Rejected alternatives:
 | SMB Time Machine targets for the Macs | `truenas-smb` | global flag + groups/users/shares matched on name; dataset ACLs on owner/acltype/ACE drift |
 | Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
 | garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
+| node_exporter + Syncthing custom apps | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
 
 ## What it deliberately does NOT manage
 
@@ -87,6 +88,15 @@ not fight, and anything **added** here must never again be changed in the UI.
   service. What is still open is the *human* file shares: they need a user and
   group model for people rather than machines, and `tank/work` has an
   undecided `casesensitivity` (see the create-time-only note below).
+- **Syncthing's folder and device pairing.** The app, its dataset, its
+  ownership and its snapshot task are all converged; the *folder* definition
+  and the three device pairings are not. Syncthing rewrites `config.xml` at
+  runtime, so a templated file would fight the container. They are recorded as
+  documented state under "Syncthing" below instead. Phase 2 could converge them
+  over Syncthing's own REST API with `ansible.builtin.uri` — legitimate here
+  even though this topic avoids `uri` for TrueNAS itself, because that
+  avoidance was about TrueNAS's REST API being removed in 26, and Syncthing's
+  is stable. It needs an API key in the vault.
 - **`config.save`.** TrueNAS's config export is DR, not IaC: a SQLite DB inside
   a tar that cannot be diffed, reviewed, or partially applied, and restoring it
   reboots the box. With `secretseed: true` it decrypts every stored credential,
@@ -187,6 +197,14 @@ empty this costs nothing; once data lands the fix is copy-out / destroy /
 re-create / copy-back. `tank/work` is currently empty with an undecided
 `casesensitivity` — decide before anything mounts it.
 
+`tank/sync` (2026-09-09) is the counter-example: it was created `SENSITIVE`
+deliberately, and it could be decided precisely because nothing will ever mount
+it over SMB. Its only writer is Syncthing on the Linux side, receiving from two
+case-**insensitive** APFS volumes, so a pair of names differing only by case
+cannot arrive and `SENSITIVE` has nothing to collide. Note what this did *not*
+do: the Syncthing work deliberately landed on its own dataset rather than in
+`tank/work`, so it did not force the open decision above.
+
 ## Time Machine
 
 Two Macs, one dataset each, one SMB share each, one account each:
@@ -224,6 +242,81 @@ quota, so one Mac could eat the other's space), `timemachine_quota: 0` (the ZFS
 quota is the real ceiling; the SMB value only lies to the client about disk size,
 and two ceilings that can disagree is worse than one).
 
+## Syncthing
+
+Replaces Synology Drive Client, which was doing exactly one job here: two-way
+sync of `~/Projects` between the Mac mini and the MacBook Air.
+
+| | |
+|---|---|
+| app | `syncthing` — custom compose app, host network |
+| GUI | `http://192.168.1.25:8384/` |
+| data | `tank/sync` → `/var/syncthing/projects` in the container |
+| state | `tank/apps/syncthing` → `/var/syncthing/config` |
+| snapshots | every 2 h, kept 30 days |
+| this node's folder type | **Receive Only** |
+
+**The two Macs peer directly; this box is not load-bearing for the sync
+itself.** It earns its place twice — as the always-on third node, so a change
+on the MacBook lands somewhere while the mini is asleep, and as the snapshot
+host. Two-way sync propagates a deletion to every peer within seconds, so the
+ZFS task on `tank/sync` is the entirety of the recycle bin Drive Client used to
+provide. That is the reason this node exists in the mesh at all.
+
+Host networking is required rather than convenient: local peer discovery is a
+broadcast on UDP 21027 and does not cross a bridged docker network. The
+consequence is the same one node_exporter has — it would otherwise listen on
+the storage backnet too — so `STGUIADDRESS` pins the GUI to the frontnet
+address.
+
+### One-time pairing
+
+Not converged by Ansible (see "What it deliberately does NOT manage"). Do this
+once, then record the device IDs in the table below.
+
+0. **Let Drive Client finish first, then stop it.** If the two Macs' trees are
+   not already identical when Syncthing pairs them, you get the *union* of both
+   plus a scattering of `.sync-conflict-*` files. Confirm Drive Client shows
+   both Macs in sync, then remove its sync task before continuing.
+1. Both Macs: `brew install syncthing && brew services start syncthing`.
+2. On the Mac holding the canonical tree, add `~/Projects` as a folder, type
+   **Send & Receive**, and share it with the other Mac and with this box.
+3. On this box's GUI, accept the shared folder, set its path to
+   `/var/syncthing/projects`, and set folder type to **Receive Only**. This is
+   the step that keeps the NAS from becoming a third writer — it is not a
+   default.
+4. On the second Mac, accept the same folder at `~/Projects`, type
+   **Send & Receive**.
+5. Ignore list: copy `files/projects-stignore-shared` to
+   `~/Projects/.stignore-shared`, then set each of the three peers' `.stignore`
+   to the single line `#include .stignore-shared`. Syncthing does not sync
+   `.stignore` itself, which is exactly why the real list lives in an included
+   file that *is* synced — otherwise the three nodes drift on what they ignore.
+
+| node | device ID |
+|---|---|
+| mac mini | _fill in once paired_ |
+| macbook air | _fill in once paired_ |
+| truenas | _fill in once paired_ |
+
+### Rules nothing enforces
+
+- **Never write into `/mnt/tank/sync` by hand.** Receive-only reverts it on the
+  next scan. It is not a share and is deliberately not exported over NFS or SMB.
+- **Do not have the same repo open and being written on both Macs at once.**
+  Syncthing writes `.sync-conflict-*` files, and inside `.git` those are
+  genuinely unpleasant to unpick. This is the same rule Drive Client silently
+  needed; it is behavioural, and no setting substitutes for it.
+- **`.git` is synced on purpose.** Ignoring it would leave the peers sharing a
+  working tree with no branch and no history, and would make this node useless
+  as a restore source.
+- **LAN-only.** Global discovery and relays stay off: the MacBook does not sync
+  while away, and `git push` covers tracked work in the meantime. Turning them
+  on would route traffic through third-party relays; the alternative is a real
+  overlay network, which the homelab does not have.
+- **No offsite.** Tracked content is on GitHub; the untracked half lives on two
+  Macs and this box, all one site.
+
 ## Day-2
 
 ```bash
@@ -256,20 +349,21 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `roles/truenas-shares/` | NFS exports + service enablement |
 | `roles/truenas-smb/` | SMB Time Machine targets: `aapl_extensions`, per-Mac users/groups, dataset ACLs, shares, service |
 | `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots |
-| `roles/truenas-apps/` | garage S3 server (Velero BSL): app deploy/update + layout/key/bucket bootstrap |
+| `roles/truenas-apps/` | garage S3 server (Velero BSL) + the node_exporter and Syncthing custom apps: deploy/update, and garage's layout/key/bucket bootstrap |
+| `files/projects-stignore-shared` | Syncthing ignore list for `~/Projects`. Copied to `~/Projects/.stignore-shared` on every peer; not applied by Ansible |
 | `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
 | `destroy-empty-dataset.sh` | One-shot gated destroy of an **empty** dataset — the only remedy for create-time-only property drift (deliberately NOT in the playbook) |
 
 Full chronology, decisions and the gaps found in the original plan:
 `blog/blog-truenas-migration-draft.md`.
 
-## Updating the node_exporter custom app
+## Updating a custom app (node_exporter, syncthing)
 
 `garage` is a **catalog** app: TrueNAS tracks the upstream version, sets
 `upgrade_available`, and the UI offers a button.
 
-`node-exporter` is a **custom (compose)** app, and that button will never appear
-for it. There is no catalog entry to compare against, so `app.query` reports
+`node-exporter` and `syncthing` are **custom (compose)** apps, and that button
+will never appear for either. There is no catalog entry to compare against, so `app.query` reports
 `upgrade_available: false` permanently and `version` is a synthetic `1.0.0` that
 never moves. `app.outdated_docker_images` does not help either — it only detects
 a **mutable** tag (`:latest`) whose digest changed upstream; against a pinned tag
@@ -277,10 +371,11 @@ it returns `[]` forever.
 
 So nothing on the box will ever tell you the image is old. The update path is:
 
-1. **Renovate opens a PR.** `renovate.json` has a `customManagers` entry watching
-   the pinned tag in `group_vars/all.yml` (`truenas_node_exporter.image`), using
-   the `docker` datasource — the same treatment every other image in this repo
-   gets.
+1. **Renovate opens a PR.** `renovate.json` has a `customManagers` entry
+   watching every pinned `image:` line in `group_vars/all.yml`, using the
+   `docker` datasource — the same treatment every other image in this repo
+   gets. It matches on the field name rather than on a variable name, so
+   `syncthing` was picked up without a second manager being written.
 2. **Merge it.**
 3. **Run the playbook.** `truenas-apps` compares the declared image against
    `app.query`'s `active_workloads.images` and calls `app.update` with the new
