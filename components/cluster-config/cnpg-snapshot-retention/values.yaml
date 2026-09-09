@@ -8,10 +8,11 @@ image: quay.io/openshift/origin-cli:4.22
 # races the backup it would otherwise be counting.
 schedule: "30 5 * * *"
 
-# SHIPS INERT. With dryRun: true the job logs exactly what it would delete and
-# deletes nothing. Read one run's log, confirm the set is what you expect, then
-# flip to false. Deleting backups is not a change to make sight-unseen.
-dryRun: true
+# Live since 2026-09-09. Was shipped inert (dryRun: true) and flipped only after
+# an in-cluster run confirmed the selection: 3 objects, both clusters landing on
+# the floor of 7, drill and plugin backups untouched. Set back to true if the
+# selection ever needs re-checking -- the job then logs and deletes nothing.
+dryRun: false
 
 retention:
   # Delete scheduled volumeSnapshot backups older than this...
