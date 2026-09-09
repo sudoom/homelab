@@ -1,7 +1,27 @@
 # [cert-manager] Bump to 1.20 — OPEN as okd-operator-pipeline#28
 
-**PR: https://github.com/okd-project/okd-operator-pipeline/pull/28** (opened 2026-09-09, ready for review)
-State at open: `MERGEABLE` / `CLEAN` against `main`; the repo has no CI, so this is a human review.
+**PRs (opened 2026-09-09, all `MERGEABLE`/`CLEAN`; the repo has no CI, so these are human reviews):**
+
+| PR | change | base |
+|---|---|---|
+| [#28](https://github.com/okd-project/okd-operator-pipeline/pull/28) | cert-manager -> 1.20 | `main` |
+| [#29](https://github.com/okd-project/okd-operator-pipeline/pull/29) | cert-manager -> 1.20 (cherry-pick of the same 3 commits, identical diff) | `release-4.21` |
+| [#30](https://github.com/okd-project/okd-operator-pipeline/pull/30) | nmstate gitlinks release-4.20 -> release-4.21 | `release-4.21` |
+
+**Why two cert-manager PRs — a branch model I had wrong at first.** The pipeline has per-release branches
+(`release-4.18`, `release-4.20`, `release-4.21`) and `main` has moved on to 4.22: `main`'s `common.sh` sets
+`OKD_VERSION=4.22.0-okd-scos.2` and 39 of its submodules pin `release-4.22`, whereas `release-4.21` sets
+`4.21.0-okd-scos.10`. **`release-4.21` still carries `MINOR=18`,** so a fix landing only on `main` would have
+fixed the 4.22 catalog and left `catalog-index:4.21` — the tag this cluster actually consumes — on the EOL
+cert-manager. I targeted `main` first without checking that. #29 is the one that matters for us.
+
+**The nmstate finding (#30), which came out of assuming the same thing in reverse.** `.gitmodules` declares
+`branch = release-4.21` for both nmstate submodules on *both* branches, but the committed gitlinks are
+release-4.20 commits (`b29ee7b` is an ancestor of release-4.20, 8 behind its tip; `0fd2bc0` likewise, 21 behind).
+Reading `.gitmodules` alone says "already on 4.21" and is wrong. What decides the build is the gitlink, because
+`submodule_reset()` **ignores its `branch` argument entirely** and resets to the recorded hash — only `update`,
+which is not run by default, consults the branch. So `init` pinned 4.20 content while every piece of metadata
+claimed 4.21.
 `sudoom:feature/cert-manager-1.20` @ `fd314fc` -> `okd-project:main` @ `73f8e01`, 3 commits, 9 files, 64/24.
 
 **Still to do:** the companion `okderators-catalog-index` change adding the `olm.channel` entry. It cannot be
