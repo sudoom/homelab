@@ -1,4 +1,12 @@
-# [cert-manager] Bump to 1.20 — PR ready for `okd-project/okd-operator-pipeline`
+# [cert-manager] Bump to 1.20 — OPENED as okd-operator-pipeline#28 (draft)
+
+**PR: https://github.com/okd-project/okd-operator-pipeline/pull/28** (draft, opened 2026-09-09)
+`sudoom:feature/cert-manager-1.20` @ `fd314fc` -> `okd-project:main` @ `73f8e01`, 3 commits, 9 files, 64/24.
+
+**Still to do:** the companion `okderators-catalog-index` change adding the `olm.channel` entry. It cannot be
+written until this PR merges and a build is published, because the entry has to name the resulting
+`cert-manager-operator.v1.20.0-<date>` CSV.
+
 
 **Upstream:** https://github.com/okd-project/okd-operator-pipeline
 **Ready-to-apply patch:** `bugs/patches/okd-operator-pipeline-cert-manager-1.20.patch`
