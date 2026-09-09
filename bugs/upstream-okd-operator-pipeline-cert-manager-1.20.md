@@ -448,6 +448,32 @@ $ opm validate /cat && echo OK
 OK
 ```
 
+### VERIFIED ON THE CLUSTER: OLM resolves the channel head to 1.20
+
+The catalog image was served to OLM through a **namespace-scoped** `CatalogSource` in the scratch namespace
+(not `openshift-marketplace`, so it is invisible to every Subscription outside it -- the live cert-manager
+Subscription cannot see or resolve against it). The catalog pod came up `READY` on the first try, which also
+confirms the `--platform linux/amd64` catalog build was necessary and correct:
+
+```
+$ oc -n cert-manager-build get pods
+cert-manager-120-test-jw72p   1/1   Running
+
+$ oc -n cert-manager-build get packagemanifest cert-manager-operator -o jsonpath=...
+channel      = alpha
+currentCSV   = cert-manager-operator.v1.20.0-2026-09-08-220000
+version      = 1.20.0-2026-09-08-220000
+skipRange    = >=1.0.0 <1.20.0-2026-09-08-220000
+installModes = OwnNamespace=true SingleNamespace=true MultiNamespace=false AllNamespaces=true
+```
+
+**`currentCSV` is the 1.20 bundle.** That is the whole fix, confirmed by OLM on a live OKD 4.21 cluster rather
+than by reasoning: with the corrected graph OLM computes 1.20 as the head of the `alpha` channel, and the
+`olm.skipRange` it parsed is the widened one this PR sets. Taken together with the `opm validate` negative
+result -- where the shipped `replaces: cert-manager-operator.v1.19.0` produces *two disconnected channel
+heads* and 1.18 stays the head -- the defect and its fix are now demonstrated at both the catalog-build layer
+and the cluster resolution layer.
+
 ### What is left, and why it stops here
 
 Everything needed for a cluster test is now in zot. The remaining step is an OLM resolution test, scripted at
