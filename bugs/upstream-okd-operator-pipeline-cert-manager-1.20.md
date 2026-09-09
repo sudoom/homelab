@@ -474,6 +474,37 @@ result -- where the shipped `replaces: cert-manager-operator.v1.19.0` produces *
 heads* and 1.18 stays the head -- the defect and its fix are now demonstrated at both the catalog-build layer
 and the cluster resolution layer.
 
+### And OLM generates a valid InstallPlan for it
+
+Second stage: a namespace-scoped `OperatorGroup` plus a `Manual` Subscription in the same scratch namespace.
+
+```
+=== InstallPlan ===
+name=install-pbw5k
+approved=false
+phase=RequiresApproval
+csvs=["cert-manager-operator.v1.20.0-2026-09-08-220000"]
+```
+
+OLM resolved the subscription to the 1.20 CSV and produced an InstallPlan for it. **It was deliberately not
+approved** -- approving would install a second cert-manager operator whose CSV owns the same seven
+cluster-scoped CRDs as the one issuing this cluster's wildcard and API certificates. Resolution and InstallPlan
+generation are the layer a catalog defect lives in, so this is the end of the useful test, not a limitation.
+
+**The isolation was verified, not assumed.** After both stages, the live operator was untouched:
+
+```
+$ oc -n cert-manager-operator get subscription cert-manager-operator -o jsonpath=...
+installedCSV = cert-manager-operator.v1.18.0-2025-12-25-214537
+state        = AtLatestKnown
+source       = okderators
+```
+
+No new InstallPlan appeared in any namespace other than the scratch one, the live CSV stayed `Succeeded`, and
+every `Certificate` in the cluster stayed `Ready`. That is the point of putting the `CatalogSource` outside
+`openshift-marketplace`: a catalog there is global and would have been a candidate upgrade source for the live
+Subscription, whereas a namespace-scoped one is only visible to Subscriptions in its own namespace.
+
 ### What is left, and why it stops here
 
 Everything needed for a cluster test is now in zot. The remaining step is an OLM resolution test, scripted at
