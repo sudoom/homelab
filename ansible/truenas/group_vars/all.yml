@@ -614,7 +614,7 @@ truenas_syncthing:
   # and Renovate corrects it on its first PR -- the existing customManager in
   # renovate.json matches every `image:` line in this file, so no new manager
   # was needed for this app.
-  image: docker.io/syncthing/syncthing:2.0.0
+  image: docker.io/syncthing/syncthing:2.1.5
   # Host networking is REQUIRED, not incidental: local peer discovery is a
   # broadcast on UDP 21027 and does not survive a bridged docker network.
   # Same shape as node_exporter above, and the same consequence -- it would
