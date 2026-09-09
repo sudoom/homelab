@@ -521,6 +521,12 @@ the thing that makes the PR useful; the prose around it is not.
 **Test before posting:** would this read the same if a stranger wrote it about someone else's work? If it only
 makes sense as *my* account of *my* afternoon, rewrite it.
 
+**Match the length to the change.** A PR body is sized by what a reviewer has to decide, not by how much work
+went into it. A cherry-pick, backport or follow-up says what it is, why that branch needs it, and links the
+original — three or four lines. It does NOT restate the original's rationale or repeat its verification; that is
+what the link is for. Reserve the full treatment for the PR that actually carries the argument. Likewise a
+one-line version bump does not need headings.
+
 ## Commit and branch conventions
 
 - Work on `develop`, PR into `master`. ArgoCD watches `master`.
