@@ -40,6 +40,18 @@ Rejected alternatives:
   repo with no Terraform, and models `zpool` only as a raw `topology_json`
   escape hatch. Not worth it for one appliance.
 
+**Corollary for anything OUTSIDE this topic that wants to drive the box
+(added 2026-09-09).** The same wall stops a cluster-side caller. A CronJob in
+`components/` — the natural shape for a `truenas-cert-sync` ported from
+`synology-cert-sync` — cannot speak JSON-RPC over websocket from a shell
+script either, and its three exits are all worse than they look: the
+deprecated REST is a rewrite scheduled for TrueNAS 26; SSH-plus-`midclt` from
+a pod puts a private key in the cluster and makes the cluster an administrator
+of the NAS, inverting the dependency direction this split exists to preserve;
+and a websocket client is more machinery than the chart it would be copying.
+So "just write a CronJob for it" is not the cheap option it appears to be —
+check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
+
 ## What this manages
 
 | Area | Role | Idempotency |

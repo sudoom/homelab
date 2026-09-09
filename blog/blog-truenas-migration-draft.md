@@ -118,6 +118,13 @@ because each is a real hole, not a style note:
 
 ### Certificate / DNS path — already built, needs porting not designing
 
+> **Superseded in part, 2026-09-09.** The *shape* below still holds and the
+> wildcard still covers the name. The **delivery mechanism does not** — the
+> "open" transport question at the end of this section was answered later by
+> unrelated work, against this plan. See "certificates for TrueNAS and its
+> apps" at the end of this draft before acting on anything here.
+
+
 Verified live rather than assumed:
 
 ```
@@ -4415,3 +4422,123 @@ This repo pins exact tags everywhere and lets Renovate propose the moves, and
 that trade holds here.
 
 Nothing is on the box yet; this needs an operator playbook run.
+
+---
+
+## 2026-09-09 — certificates for TrueNAS and its apps: the August plan does not survive contact
+
+Revisited after the Syncthing work added a third HTTP endpoint to the box. The
+short version: the delivery mechanism this draft recorded in August is weaker
+than it looked, and the half of the problem worth solving is not the half that
+looks like the problem.
+
+### What August already settled, and still holds
+
+`*.homelab.sudops.pl` covers `truenas.homelab.sudops.pl` with zero cert-manager
+work — verified live at the time, `notAfter Oct 21 2026`. DNS is one line in
+`ansible/technitium/group_vars/all.yml`; `homelab_records` currently has `nas`
+and `dns` and no `truenas`. None of that has changed.
+
+### What has changed
+
+That section left one thing open:
+
+> **Open:** which API generation 25.10 Goldeye exposes — SCALE has been moving
+> from REST v2.0 to a JSON-RPC websocket API, so `certificate.create` +
+> `system.general.update{ui_certificate}` is the right *shape* but not yet the
+> right transport.
+
+Current repo state answers it, and answers it against the plan. `ansible/truenas`
+exists in its present form *because* `ansible.builtin.uri` cannot speak
+JSON-RPC-over-websocket and REST is removed in TrueNAS 26. A cluster CronJob
+porting `synology-cert-sync` hits the identical wall, and every exit is bad:
+
+- **Deprecated REST** — works on 25.10, gone in 26. A scheduled rewrite, which
+  is the exact thing rejected when this topic chose `midclt` over `uri`.
+- **SSH + midclt from a pod** — puts an SSH private key in the cluster and makes
+  the cluster an administrator of the NAS. The dependency direction this repo
+  keeps deliberately pointed the other way.
+- **A websocket client in the pod** — more machinery than the Synology chart,
+  and that chart's embedded interpreter inside a quoted shell string is already
+  this repo's documented cause of a month-long silent failure.
+
+So "needs porting not designing" was true of the *shape* and false of the
+*mechanism*. Worth writing down as its own lesson: an open question parked in a
+design note can be answered later by unrelated work, and nobody re-reads the
+note to notice.
+
+### The half that matters is not the half that looks like it
+
+Checked rather than assumed:
+
+```
+$ oc get backupstoragelocation -A -o jsonpath=…
+openshift-adp/truenas-garage    aws  http://192.168.1.25:30188
+
+$ oc -n openshift-logging get secret loki-storage -o jsonpath='{.data.endpoint}' | base64 -d
+http://192.168.1.25:30188
+```
+
+| endpoint | what TLS protects | cost |
+|---|---|---|
+| TrueNAS UI `:443` | a browser warning | one `ui_certificate` call |
+| **garage `:30188`** | **Velero backups + Loki chunks** | garage does not terminate TLS; needs a proxy, and `:443` belongs to the UI |
+| syncthing GUI `:8384` | a browser warning | drop `https-cert.pem` into the config dataset |
+| node_exporter `:9100` | metrics on the LAN | not worth it |
+
+**Velero backups contain Kubernetes Secrets, and they cross the LAN in
+plaintext today.** That is the only part of this with a real consequence, and
+the TrueNAS UI certificate — the obvious reading of "a cert for TrueNAS" — does
+nothing about it. The cheap half is cosmetic and the valuable half is the hard
+one. Both consumers also address the box by IP, which no wildcard can cover.
+
+### Fronting garage with a cluster Route — considered, rejected
+
+Tempting: an Endpoints/Service pointing at `192.168.1.25:30188`, a Route with
+the existing wildcard, TLS terminated at the router, zero cert delivery to the
+NAS.
+
+Rejected. **You cannot restore a dead cluster through the dead cluster's own
+ingress.** The backups exist for the case where the cluster is broken, so
+putting the cluster on their access path defeats them. Same principle that
+keeps DNS in `ansible/` rather than in `components/`.
+
+### Native ACME on TrueNAS — the option August did not consider
+
+TrueNAS SCALE has had built-in ACME with DNS authenticators. If 25.10 still
+does, the box renews its own certificate and **there is no delivery path to
+break** — which retires the exact failure class that hid for a month on the
+Synology: a no-op path running daily, a replacement path running quarterly, and
+the quarterly one broken.
+
+The costs are real though. A second ACME client and a second Cloudflare token,
+this one in the Ansible vault. A second Let's Encrypt certificate for a name the
+existing wildcard already covers. And a divergence from "cert-manager issues for
+this homelab", which is worth something on its own.
+
+**Verify against `core.get_methods`, not documentation.** 25.10 removed smartd,
+the `smart.*` API and the test scheduler; "24.x had it" proves nothing about
+this box. Same epistemics as the SMB `purpose` enum.
+
+### The dependency chain nobody escapes
+
+Any option needs the `truenas` A record, and then both consumers switched from
+`192.168.1.25` to the hostname — a change to the Velero BSL and to the
+`loki-storage` secret. Cluster DNS has no explicit forwarding for this zone:
+
+```
+$ oc get dnses.operator.openshift.io default -o jsonpath='{.spec.upstreamResolvers.upstreams}'
+[{"port":53,"type":"SystemResolvConf"}]
+```
+
+So pod resolution of `truenas.homelab.sudops.pl` inherits whatever the nodes
+resolve with. That wants confirming *before* the consumers are switched, not
+after — a BSL that cannot resolve its endpoint is a backup path that fails
+quietly, which is the shape of failure this whole thread is about.
+
+### Decision
+
+Recorded, not built. The README gate still stands — the queued
+blackbox-exporter TLS-expiry probe measures where a *client* stands, and that
+is what nothing was doing when the Synology cert expired while cert-manager
+reported healthy. Whatever lands here should land after something is watching.
