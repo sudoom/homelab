@@ -4391,11 +4391,27 @@ NAS copy useless as a restore source. The cost is a behavioural rule no setting
 substitutes for: don't have the same repo open and being written on both Macs
 at once.
 
-### Unverified
+### The tag, which I got wrong
 
-The image tag `syncthing/syncthing:2.0.0` is a guess — the Docker Hub tag
-lookup was blocked in the session that wrote this. The failure mode is loud
-(`app.create` fails on an unresolvable tag) rather than silent, and Renovate
-corrects it on its first PR. Confirm before the run.
+I pinned `syncthing/syncthing:2.0.0` while the Docker Hub lookup was blocked,
+and flagged it as a guess rather than pretending otherwise. It was wrong — the
+current release is **2.1.5**:
+
+```
+$ curl -s "https://hub.docker.com/v2/repositories/syncthing/syncthing/tags?page_size=10&ordering=last_updated" | jq -r '.results[].name'
+2.1.5
+2.1
+2
+latest
+edge
+2.1.4
+```
+
+Worth noting what the registry also shows: syncthing publishes moving tags
+(`2`, `2.1`, `latest`, `edge`). Those are the one case
+`app.outdated_docker_images` can actually detect, since it compares digests on
+a mutable tag — but they also let the box change under a run nobody asked for.
+This repo pins exact tags everywhere and lets Renovate propose the moves, and
+that trade holds here.
 
 Nothing is on the box yet; this needs an operator playbook run.

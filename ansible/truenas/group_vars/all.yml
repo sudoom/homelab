@@ -608,13 +608,14 @@ truenas_node_exporter:
 # into /mnt/tank/sync by hand on its next scan. It is not a share.
 truenas_syncthing:
   app_name: syncthing
-  # TAG NOT VERIFIED AT THE TIME OF WRITING: the Docker Hub lookup was blocked
-  # in the session that added this. Confirm before the first run. The failure
-  # mode is loud rather than silent (app.create fails on an unresolvable tag),
-  # and Renovate corrects it on its first PR -- the existing customManager in
-  # renovate.json matches every `image:` line in this file, so no new manager
-  # was needed for this app.
-  image: docker.io/syncthing/syncthing:2.0.0
+  # Pinned to an exact tag, not to the moving `2` / `2.1` / `latest` that
+  # syncthing also publishes. Same convention as node_exporter, and the reason
+  # is in the README: a mutable tag is the ONE case app.outdated_docker_images
+  # can detect, but it also means the box can change underneath a run nobody
+  # asked for. An exact tag plus Renovate is the trade this repo makes
+  # everywhere else. The customManager in renovate.json matches every `image:`
+  # line in this file, so no new manager was needed for this app.
+  image: docker.io/syncthing/syncthing:2.1.5
   # Host networking is REQUIRED, not incidental: local peer discovery is a
   # broadcast on UDP 21027 and does not survive a bridged docker network.
   # Same shape as node_exporter above, and the same consequence -- it would
