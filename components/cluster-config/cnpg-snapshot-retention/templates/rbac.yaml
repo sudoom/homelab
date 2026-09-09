@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cnpg-snapshot-retention
+  namespace: {{ .Values.namespace }}
+{{- /*
+  Deliberately NO ClusterRole. One Role + RoleBinding per target namespace, so
+  the job's reach is exactly the namespaces listed in values.clusters and
+  nothing else. Verbs are get/list/delete only -- it never creates or patches.
+*/}}
+{{- range .Values.clusters }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cnpg-snapshot-retention
+  namespace: {{ .namespace }}
+rules:
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["backups"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cnpg-snapshot-retention
+  namespace: {{ .namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: cnpg-snapshot-retention
+    namespace: {{ $.Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cnpg-snapshot-retention
+{{- end }}

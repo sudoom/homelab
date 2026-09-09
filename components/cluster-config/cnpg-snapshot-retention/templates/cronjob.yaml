@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cnpg-snapshot-retention
+  namespace: {{ .Values.namespace }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Do not let a missed window fire a catch-up run hours later, next to whatever
+  # else is happening. The next scheduled run does the same work.
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: cnpg-snapshot-retention
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: prune
+              image: {{ .Values.image }}
+              command: ["/bin/bash", "/script/prune.sh"]
+              env:
+                - name: MAX_AGE_DAYS
+                  value: {{ .Values.retention.maxAgeDays | quote }}
+                - name: FLOOR
+                  value: {{ .Values.retention.floor | quote }}
+                - name: DRY_RUN
+                  value: {{ .Values.dryRun | quote }}
+                - name: CLUSTERS
+                  value: {{ range $i, $c := .Values.clusters }}{{ if $i }} {{ end }}{{ $c.namespace }}/{{ $c.name }}{{ end }}
+              volumeMounts:
+                - name: script
+                  mountPath: /script
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi
+          volumes:
+            - name: script
+              configMap:
+                name: cnpg-snapshot-retention
+                defaultMode: 0555

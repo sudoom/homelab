@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cnpg-snapshot-retention
+  namespace: {{ .Values.namespace }}
+data:
+  prune.sh: |
+    #!/bin/bash
+    # Prune CNPG volumeSnapshot backups. CNPG does not do this itself: its
+    # spec.backup.retentionPolicy applies to the barman object-store path only.
+    set -uo pipefail
+
+    CUTOFF="$(date -u -d "${MAX_AGE_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)"
+    echo "cutoff=${CUTOFF} floor=${FLOOR} dryRun=${DRY_RUN}"
+
+    fail=0
+    grand_total=0
+
+    for entry in ${CLUSTERS}; do
+      ns="${entry%%/*}"
+      cluster="${entry##*/}"
+
+      # Only backups that (a) belong to this cluster, (b) were created by a
+      # ScheduledBackup, and (c) used the volumeSnapshot method. The
+      # scheduled-backup label is what keeps manual and restore-drill backups
+      # out of scope -- those carry no such label and are never touched.
+      mapfile -t rows < <(
+        oc -n "${ns}" get backup \
+             -l "cnpg.io/cluster=${cluster},cnpg.io/scheduled-backup" \
+             --sort-by=.metadata.creationTimestamp \
+             -o jsonpath='{range .items[*]}{.spec.method}{" "}{.metadata.creationTimestamp}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+          | awk '$1 == "volumeSnapshot" { print $2, $3 }'
+      )
+
+      total=${#rows[@]}
+      prunable=$(( total - FLOOR ))
+      if (( prunable <= 0 )); then
+        echo "${ns}/${cluster}: ${total} scheduled snapshot backups, floor ${FLOOR} -> nothing prunable"
+        continue
+      fi
+
+      # rows are oldest-first, so the first entry newer than the cutoff ends the
+      # scan -- everything after it is newer still.
+      deleted=0
+      for (( i=0; i<prunable; i++ )); do
+        ts="${rows[$i]%% *}"
+        name="${rows[$i]##* }"
+        [[ "${ts}" < "${CUTOFF}" ]] || break
+
+        if [ "${DRY_RUN}" = "true" ]; then
+          echo "  would delete ${ns}/${name} (${ts})"
+          deleted=$(( deleted + 1 ))
+          continue
+        fi
+
+        # VolumeSnapshot first: it is what holds the Ceph space. Selected by
+        # label rather than by name so a cluster with a separate WAL volume
+        # (two snapshots per backup) is handled correctly.
+        if oc -n "${ns}" delete volumesnapshot -l "cnpg.io/backupName=${name}" --ignore-not-found >/dev/null 2>&1 \
+           && oc -n "${ns}" delete backup "${name}" --ignore-not-found >/dev/null 2>&1; then
+          echo "  deleted ${ns}/${name} (${ts})"
+          deleted=$(( deleted + 1 ))
+        else
+          echo "  FAILED ${ns}/${name} (${ts})"
+          fail=1
+        fi
+      done
+
+      echo "${ns}/${cluster}: ${total} backups, ${prunable} beyond floor, ${deleted} pruned"
+      grand_total=$(( grand_total + deleted ))
+    done
+
+    echo "done: ${grand_total} pruned, dryRun=${DRY_RUN}"
+    exit "${fail}"

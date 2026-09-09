@@ -319,6 +319,15 @@ applications:
     namespace: openshift-logging
     syncWave: "6"
 
+  # Prunes CNPG volumeSnapshot backups; CNPG's retentionPolicy does not cover
+  # them. Wave 6 so it lands after the CNPG clusters it reads (wave 5).
+  # SHIPS WITH dryRun: true -- it logs and deletes nothing until that is flipped.
+  cnpg-snapshot-retention:
+    enabled: true
+    path: components/cluster-config/cnpg-snapshot-retention
+    namespace: cnpg-snapshot-retention
+    syncWave: "6"
+
   # Periodic CronJob that evicts pods violating node affinity / taints /
   # inter-pod anti-affinity. Designed to unstick the post-MCO-reroll
   # clustering pattern (routers, RGW, etc. landing on suboptimal nodes).

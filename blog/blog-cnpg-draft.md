@@ -1166,3 +1166,55 @@ July restore-drill snapshot, deliberately left out of a batch labelled "daily re
 **This fixed the symptom, not the cause.** CNPG will create another snapshot tonight and will
 not collect it either. Without the automation follow-up this recurs at roughly 0.5 GiB/day per
 cluster, which is how 110 days became 118 GiB.
+
+### 2026-09-09 — automating it, and what the dry run found
+
+The manual prune bought headroom; it did not stop the leak. Two more uncollected snapshots landed
+overnight (15 → 17), which is the expected ~1/day/cluster. Shipped
+`components/cluster-config/cnpg-snapshot-retention/` to close it.
+
+The design question that mattered was not "age or count" but **what happens when backups stop**.
+An age-only rule implementing `retentionPolicy: 7d` literally has a bad failure mode: if the
+ScheduledBackup breaks for eight days, everything ages out and the next prune deletes every local
+restore point, exactly when you are least able to afford it. So: delete older than
+`maxAgeDays`, but **always keep a floor of the newest N regardless of age**. If backups stop,
+pruning stops on its own.
+
+Two findings shaped the implementation, both from looking at real labels rather than assuming:
+
+**The pruner has to iterate `Backup` CRs, not `VolumeSnapshot`s.** The label that distinguishes a
+scheduled backup from a manual one — `cnpg.io/scheduled-backup` — lives on the Backup CR. The
+VolumeSnapshot does not carry it:
+
+```
+$ oc -n immich get volumesnapshot immich-postgres-prev3-20260706 -o jsonpath='{.metadata.labels}'
+{"app.kubernetes.io/managed-by":"cloudnative-pg","cnpg.io/backupName":"immich-postgres-prev3-20260706",
+ "cnpg.io/cluster":"immich-postgres", ...}          # no cnpg.io/scheduled-backup
+```
+
+That snapshot is the July restore drill, 65 days old. Selecting on the snapshot's labels, it is
+indistinguishable from a scheduled backup and an age rule deletes it. Selecting on the Backup CR's
+`cnpg.io/scheduled-backup`, drill and manual artefacts are simply invisible to the pruner. That is a
+better property than remembering to exclude them by name, which is what I did by hand last night.
+
+**Dry-run against live data found an orphan the manual prune missed.** The script was run in the real
+image (`quay.io/openshift/origin-cli:4.22`, `--platform linux/amd64` — there is no arm64 build) with the
+read-only kubeconfig and `DRY_RUN=true`:
+
+```
+cutoff=2026-09-02T15:30:05Z floor=7 dryRun=true
+  would delete media/media-postgres-daily-20260530040000 (2026-06-08T13:28:33Z)
+  would delete media/media-postgres-daily-20260902040000 (2026-09-02T04:00:00Z)
+media/media-postgres: 9 backups, 2 beyond floor, 2 pruned
+  would delete immich/immich-postgres-daily-20260902043000 (2026-09-02T04:30:00Z)
+immich/immich-postgres: 8 backups, 1 beyond floor, 1 pruned
+```
+
+`media-postgres-daily-20260530040000` is a **Backup CR with no VolumeSnapshot** — named for 05-30,
+created 06-08. It explains the 102-vs-101 count discrepancy noted yesterday and never chased: last
+night's manual prune walked the *snapshot* list and deleted the matching Backup for each, so a Backup
+whose snapshot was already gone was never in the list. Iterating Backups finds it. Both clusters land
+on exactly 7 afterwards, which is the floor doing its job.
+
+Shipped with `dryRun: true`. Deleting backups automatically, unattended, forever is not a change to
+enable sight-unseen — read one run's log first, then flip it.

@@ -1,0 +1,31 @@
+# Namespace the CronJob itself runs in. RBAC is granted per target namespace
+# below, NOT cluster-wide -- there is no ClusterRole in this chart.
+namespace: cnpg-snapshot-retention
+
+image: quay.io/openshift/origin-cli:4.22
+
+# Offset from the ScheduledBackups (media 04:00, immich 04:30) so a prune never
+# races the backup it would otherwise be counting.
+schedule: "30 5 * * *"
+
+# SHIPS INERT. With dryRun: true the job logs exactly what it would delete and
+# deletes nothing. Read one run's log, confirm the set is what you expect, then
+# flip to false. Deleting backups is not a change to make sight-unseen.
+dryRun: true
+
+retention:
+  # Delete scheduled volumeSnapshot backups older than this...
+  maxAgeDays: 7
+  # ...but ALWAYS keep at least this many newest per cluster, whatever their age.
+  # This is the safety property: if backups stop being created, everything ages
+  # past maxAgeDays, and without the floor the next run would delete every local
+  # restore point. With it, pruning simply stops.
+  floor: 7
+
+# One entry per CNPG cluster. Each gets a Role + RoleBinding in its own
+# namespace; the chart grants nothing anywhere else.
+clusters:
+  - namespace: media
+    name: media-postgres
+  - namespace: immich
+    name: immich-postgres

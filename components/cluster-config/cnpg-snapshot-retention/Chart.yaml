@@ -1,0 +1,17 @@
+apiVersion: v2
+name: cnpg-snapshot-retention
+description: |
+  Prunes CNPG volumeSnapshot backups, which CloudNativePG never garbage-collects.
+
+  `Cluster.spec.backup.retentionPolicy` governs the barman object-store path ONLY.
+  For `method: volumeSnapshot` CNPG creates the VolumeSnapshot and the Backup CR
+  and then leaves both alone forever. On this cluster that accumulated 182
+  snapshots over 110 days under a policy that read "7d", pinning ~127 GiB on a
+  3-OSD NVMe pool that reached 84.53% against an 85% nearfull threshold
+  (2026-09-08, see blog/blog-cnpg-draft.md).
+
+  Deletes by age with a hard floor, so a stalled backup schedule can never empty
+  the set. Only touches backups created by a ScheduledBackup -- manual and
+  restore-drill snapshots are invisible to it.
+version: 1.0.0
+type: application
