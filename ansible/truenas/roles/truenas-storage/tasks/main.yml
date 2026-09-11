@@ -68,6 +68,32 @@
            | zip(truenas_ds_q.stdout | from_json | map(attribute='quota.rawvalue', default='0') | list)
          ) }}
 
+# ---- Create-time properties must be declared as a complete set ----------
+# The drift check below and the post-apply check in playbook.yml both read
+# casesensitivity/acltype/aclmode as ONE tuple per dataset. A dataset that
+# declares casesensitivity alone does not fail cleanly there: it crashes the
+# template with "object of type 'dict' has no attribute 'acltype'" -- and only
+# in the post-apply check, on the run that creates it, because the pre-check
+# below skips datasets that do not exist yet. So the dataset gets created and
+# THEN the run fails. Found 2026-09-11 when tank/sync did exactly that. This
+# fails first, before any create, and names the dataset.
+- name: Assert create-time properties are declared as a complete set
+  ansible.builtin.assert:
+    that:
+      - _partial | length == 0
+    fail_msg: >-
+      These datasets declare `casesensitivity` without both `acltype` and
+      `aclmode`: {{ _partial | join(', ') }}. The three are compared as one
+      tuple (dataset:CASESENSITIVITY:ACLTYPE:ACLMODE), here and in
+      playbook.yml, so declare all three. For a dataset that already exists,
+      copy the live values from `midclt call pool.dataset.query`.
+    quiet: true
+  vars:
+    _partial: >-
+      {{ ((truenas_datasets | selectattr('casesensitivity', 'defined') | rejectattr('acltype', 'defined') | list)
+          + (truenas_datasets | selectattr('casesensitivity', 'defined') | rejectattr('aclmode', 'defined') | list))
+         | map(attribute='name') | unique | list }}
+
 # ---- Create-time-only properties: ASSERT, never reconcile ----------------
 # `casesensitivity`, `acltype` and `aclmode` are declared as a SET on the SMB
 # datasets (see group_vars). casesensitivity in particular is fixed by ZFS at

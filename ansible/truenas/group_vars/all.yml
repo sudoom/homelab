@@ -276,6 +276,15 @@ truenas_datasets:
     # SENSITIVE therefore has nothing to collide. It is also the faithful
     # choice: it stores the names it was given instead of normalising them.
     casesensitivity: SENSITIVE
+    # acltype/aclmode are declared because the create-time checks compare
+    # casesensitivity:acltype:aclmode as ONE tuple. Declaring the first alone
+    # crashed the post-apply check on 2026-09-11 with "object of type 'dict'
+    # has no attribute 'acltype'". These are the values the box created it
+    # with, read back from pool.dataset.query -- not a new decision. POSIX is
+    # right for a dataset only a container writes to, with no SMB share and no
+    # ACL model to express.
+    acltype: POSIX
+    aclmode: DISCARD
     # A QUOTA RATHER THAN 0, and it is the point rather than housekeeping.
     # This is the only dataset on the box whose contents are written by a
     # daemon reacting to two laptops. A mis-scoped folder on either Mac (a home
