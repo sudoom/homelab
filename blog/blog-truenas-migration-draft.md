@@ -4660,3 +4660,57 @@ Two lessons worth keeping. "No route to host" to a VIP that answers ping says no
 cluster; ask from another host on the LAN before concluding anything. And an empty result from a
 failed command piped into `wc -l` prints `0` — the sweep briefly showed "0 snapshots" for both
 Postgres clusters, which was a count of error output, not of snapshots.
+
+### Second run — `changed=2`, and a failure that had been silent since 09-08
+
+After the fixes above the next run came back clean:
+
+```
+PLAY RECAP
+truenas : ok=66  changed=2  unreachable=0  failed=0  skipped=46
+```
+
+Syncthing was `RUNNING`, with the healthcheck and `pl.sudops.compose-sha: 2474a111…` in its stored
+config — the value the local test had predicted. But I had expected one change, not two. TrueNAS keeps
+every middleware job since `middlewared` started (2026-08-25 here), so the whole history was readable:
+
+```
+$ midclt call core.get_jobs '[["method","=","pool.update"]]' '{"order_by":["id"]}'
+41558 2026-09-08 16:47 SUCCESS [1, {"autotrim": "ON"}]     <- set by hand
+41629 2026-09-08 17:12 FAILED  [1, {"autotrim": true}]     <- first playbook run after it was declared
+41659 2026-09-08 17:23 FAILED  [1, {"autotrim": true}]
+41694 2026-09-08 17:34 FAILED  [1, {"autotrim": true}]
+51809 2026-09-11 20:44 FAILED  [1, {"autotrim": true}]
+51861 2026-09-11 21:02 FAILED  [1, {"autotrim": true}]
+error: [EINVAL] data.autotrim: Input should be 'ON' or 'OFF'
+```
+
+Five runs, the same call rejected every time, every play reporting `failed=0`. Two defects stacked:
+
+- **YAML 1.1 booleans.** The hand-set at 16:47 sent the string `"ON"` and worked. Transcribing it into
+  `group_vars` as `truenas_pool_properties: { tank: ON }`, unquoted, made it the boolean `true` — the role's
+  own comment said `pool.update` takes the strings `"ON"`/`"OFF"`. The drift check then compared the live
+  `"on"`, uppercased, against `true`, found drift every time, and fired every time.
+- **A job method called without `--job`.** `pool.update` runs as a middleware job. Without `--job`, `midclt`
+  returns the job id at once with rc 0; the job fails afterwards and nothing reads it, so the task reported
+  `changed`. Audited every mutating call in the topic against `core.get_methods`, which marks job methods:
+  `pool.update` was the only one missing `--job`.
+
+No damage — autotrim was already on, and on six spinning disks it does nothing. The real cost was that no
+run since 09-08 could have reported `changed=0`, so an unexpected change would have hidden inside a
+`changed=1` that had become normal.
+
+Fixed by quoting the value, adding `--job`, and a guard that rejects anything but the strings ON/OFF with
+a message naming the YAML cause. Verified with the task's own expressions, extracted from the role file,
+against the live `pool.query`:
+
+```
+BEFORE (tank: ON):    payload {"autotrim": true}  would_fire=true   guard_passes=false
+AFTER  (tank: "ON"):  payload {"autotrim": "ON"}  would_fire=false  guard_passes=true
+```
+
+The BEFORE row reproduces the job log's payload exactly. The next run should report `changed=0`.
+
+The general lesson, and the reason this took a job log to find: the middleware's own record of what
+happened is a better source than the play recap. `failed=0` described what Ansible saw, which was a job
+id being returned.

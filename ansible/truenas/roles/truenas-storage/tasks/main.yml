@@ -289,11 +289,28 @@
   changed_when: false
   check_mode: false
 
+# pool.update is a JOB method (core.get_methods: job=true). Called without
+# --job, midclt returns the job id immediately with rc=0 and the job fails
+# afterwards where nothing looks -- which is how a rejected payload reported
+# `changed` on every run from 2026-09-08 to 09-11 while the play said ok. Of
+# the mutating methods this topic calls, it was the only job method missing
+# --job (audited against core.get_methods, 2026-09-11).
+- name: Assert pool properties are declared as the strings ON/OFF
+  ansible.builtin.assert:
+    that:
+      - (truenas_pool_properties | default({}) | dict2items | rejectattr('value', 'in', ['ON', 'OFF']) | list | length) == 0
+    fail_msg: >-
+      truenas_pool_properties values must be the quoted strings "ON" or "OFF",
+      got {{ truenas_pool_properties }}. An unquoted ON/OFF is a YAML 1.1
+      boolean, which pool.update rejects.
+    quiet: true
+
 - name: Reconcile pool autotrim
   ansible.builtin.command:
     argv:
       - midclt
       - call
+      - --job
       - pool.update
       - "{{ (truenas_pool_props_q.stdout | from_json | selectattr('name', 'equalto', item.key) | first).id | string }}"
       - "{{ {'autotrim': item.value} | to_json }}"

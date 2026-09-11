@@ -40,6 +40,20 @@ Rejected alternatives:
   repo with no Terraform, and models `zpool` only as a raw `topology_json`
   escape hatch. Not worth it for one appliance.
 
+**A job method must be called with `--job`, or its failure is invisible
+(found 2026-09-11).** Some middleware methods run as jobs, and
+`core.get_methods` marks them `job: true`. Without `--job`, `midclt call`
+returns the job id immediately with rc 0; the job then fails where nothing
+reads it, and the task reports `changed` with no error. `pool.update` did
+exactly that on every run — rejecting `{"autotrim": true}` in the middleware
+job log while every play reported `failed=0`. Audited the same day against
+`core.get_methods`: of the mutating methods this topic calls, it was the only
+job method missing `--job`. Check the flag before adding a mutating call:
+
+```bash
+midclt call core.get_methods | python3 -c 'import sys,json; print(json.load(sys.stdin)["pool.update"]["job"])'
+```
+
 **Corollary for anything OUTSIDE this topic that wants to drive the box
 (added 2026-09-09).** The same wall stops a cluster-side caller. A CronJob in
 `components/` — the natural shape for a `truenas-cert-sync` ported from

@@ -667,7 +667,13 @@ truenas_syncthing:
 # also not worth it: the boot pool holds the OS, writes are small and mostly
 # static, and it is not where reclaim matters.
 truenas_pool_properties:
-  tank: ON
+  # QUOTED, AND IT HAS TO BE. Unquoted, YAML 1.1 reads ON as the boolean true,
+  # so the role sent {"autotrim": true}, which pool.update rejects with
+  # "[EINVAL] data.autotrim: Input should be 'ON' or 'OFF'". The drift check
+  # then compared "ON" against true, found drift every run, and fired every
+  # run -- failing silently from 2026-09-08 to 09-11 because the call lacked
+  # --job (see truenas-storage). Found from the middleware job log.
+  tank: "ON"
 
 # ---- Data protection ------------------------------------------------------
 truenas_scrub_day_of_month: "1"     # monthly
