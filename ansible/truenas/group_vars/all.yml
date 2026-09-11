@@ -93,6 +93,9 @@ truenas_datasets:
     # to both Macs, and each one has to accept a new device before sync
     # resumes. A child dataset rather than a subdirectory of `apps` so it gets
     # its own snapshots, same reasoning as the s3 children below.
+    # Since the switch to the catalog app (2026-09-11) the app mounts this at
+    # /var/syncthing and Syncthing keeps its state under config/; the files at
+    # the dataset root are left over from the custom app and unused.
   # ---- garage S3 (Velero BackupStorageLocation) -----------------------
   # Parent MUST be listed before its children: pool.dataset.create will not
   # create intermediate datasets, and this list is applied in order.
@@ -591,6 +594,22 @@ truenas_node_exporter:
 # to the DS418. Drive Client was doing exactly one job here: two-way sync of
 # ~/Projects between the two Macs.
 #
+# A CATALOG APP (stable train), NOT A CUSTOM ONE -- the rule that makes garage
+# a catalog app and node_exporter a custom one: custom only when no train ships
+# it. Syncthing is in the stable train. It was first built here as a custom
+# compose app without checking that (2026-09-09), and both defects its first
+# run found were consequences: pinning the GUI inside Syncthing broke the
+# image's loopback healthcheck, and a custom app reconciled on image drift
+# only. The catalog app has neither problem -- iX maintains the compose and
+# the healthcheck, and TrueNAS tracks upgrades. Switched 2026-09-11.
+#
+# THE ONE COST, not configurable through values: iX's template adds SYS_ADMIN
+# to the container and sets PCAP so the syncthing binary itself holds
+# cap_sys_admin (ix-dev/stable/syncthing/templates/docker-compose.yaml). The
+# rest of its capability list is Docker's default, which the custom app had
+# anyway. It serves Syncthing's ownership-sync features, which a single-user
+# receive-only mirror does not use. Accepted.
+#
 # WHY SYNCTHING AND NOT NEXTCLOUD (evaluated 2026-09-09, rejected for THIS
 # payload): ~/Projects is git working trees, so it is tens of thousands of
 # small files under .git/objects. Nextcloud's desktop client does per-file
@@ -615,32 +634,32 @@ truenas_node_exporter:
 # originates a change, so it adds no third conflict source. The consequence to
 # remember is the mirror image of that -- Syncthing REVERTS anything written
 # into /mnt/tank/sync by hand on its next scan. It is not a share.
+#
+# NETWORK: published ports, NOT host networking. The template only publishes
+# ports when host_network is false; with host networking the GUI binds 0.0.0.0
+# on the host. Consequence: local discovery cannot find this node -- the
+# broadcast does not cross the docker bridge and 21027 is not published -- so
+# each Mac adds it by address, tcp://192.168.1.25:22000 (README).
+#
+# BIND ADDRESS: all interfaces, because it cannot be the frontnet one.
+# app.ip_choices on this box offers only 0.0.0.0, :: and 192.168.10.10 (the
+# storage backnet); the mgmt address 192.168.1.25 is not offered -- the same
+# limit garage hit, see truenas_garage.bind_ip. The Macs are not on the
+# backnet, so pinning there would make the node unreachable. Net exposure on
+# the backnet is the three OKD nodes' host stacks (pods cannot route to it),
+# and the GUI requires a password, set at first login (README). The custom app
+# already had sync and discovery on every interface; only the GUI moved.
 truenas_syncthing:
   app_name: syncthing
-  # Pinned to an exact tag, not to the moving `2` / `2.1` / `latest` that
-  # syncthing also publishes. Same convention as node_exporter, and the reason
-  # is in the README: a mutable tag is the ONE case app.outdated_docker_images
-  # can detect, but it also means the box can change underneath a run nobody
-  # asked for. An exact tag plus Renovate is the trade this repo makes
-  # everywhere else. The customManager in renovate.json matches every `image:`
-  # line in this file, so no new manager was needed for this app.
-  image: docker.io/syncthing/syncthing:2.1.5
-  # Host networking is REQUIRED, not incidental: local peer discovery is a
-  # broadcast on UDP 21027 and does not survive a bridged docker network.
-  # Same shape as node_exporter above, and the same consequence -- it would
-  # otherwise listen on every address this box holds, including the backnet --
-  # so the GUI is pinned to the frontnet address explicitly.
-  #
-  # PORTS USED: 22000/tcp + 22000/udp (sync), 21027/udp (local discovery),
-  # 8384/tcp (GUI). Check these against `ss -lnt` before the first run the way
-  # 9100 was checked; the known-taken set on this box is
-  # 22/80/111/139/443/445/2049/5357/6000/6999 plus garage's 30186-30190.
-  gui_address: "192.168.1.25:8384"
-  # The TrueNAS apps account, same as garage. The image honours PUID/PGID, and
-  # the paths below are chowned to match -- without that the container writes
-  # as root into a dataset the rest of the box cannot manage.
-  run_as_uid: 568
+  train: stable
+  version: "1.3.13"          # the only version the catalog offers today
+  bind_ip: 0.0.0.0           # see BIND ADDRESS -- 192.168.1.25 is not in app.ip_choices
+  ports:
+    web: 8384                # the Syncthing default, not the app's 20910
+    sync: 22000              # tcp + udp (QUIC); the port a Mac assumes
+  run_as_uid: 568            # the TrueNAS apps account, same as garage
   run_as_gid: 568
+  data_mount: /data/projects # the folder path to enter in the NAS GUI
   paths:
     config: /mnt/tank/apps/syncthing
     data: /mnt/tank/sync

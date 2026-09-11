@@ -4720,3 +4720,128 @@ The BEFORE row reproduces the job log's payload exactly. The next run should rep
 The general lesson, and the reason this took a job log to find: the middleware's own record of what
 happened is a better source than the play recap. `failed=0` described what Ansible saw, which was a job
 id being returned.
+
+---
+
+## 2026-09-11 — Syncthing moves to the catalog app
+
+Prompted by a direct question: why build a custom app when the TrueNAS catalog has one? Because I
+had not checked (see the correction on the 09-09 section). Evidence gathered before switching,
+since `app.create` has no dry-run:
+
+```
+$ midclt call catalog.get_app_details syncthing '{"train":"stable"}'
+latest: 1.3.13   (the only version offered)
+run_as.user/group            default 568
+syncthing.additional_envs    list
+network.{web,tcp,udp}_port   {bind_mode, port_number, host_ips}
+network.host_network         default false
+storage.config               ix_volume | host_path
+storage.additional_storage   list of {type, mount_path, host_path_config...}
+
+$ midclt call app.ip_choices
+{"0.0.0.0": "0.0.0.0", "::": "::", "192.168.10.10": "192.168.10.10"}
+
+$ midclt call app.query ...
+syncthing custom_app=True version=1.0.0
+```
+
+And iX's template (`truenas/apps`, `ix-dev/stable/syncthing/templates/docker-compose.yaml`) settles
+the healthcheck question: it sets `STGUIADDRESS=0.0.0.0:<web port>` *inside* the container, probes
+that port with its own healthcheck, and publishes ports — with `host_ips` — only when
+`host_network` is false. Pinning happens where Docker publishes the port, not inside Syncthing,
+which is exactly what my custom compose got wrong.
+
+Three things the evidence forced:
+
+- **No frontnet pinning.** `app.ip_choices` does not offer `192.168.1.25` — the same limit a
+  comment on garage already recorded. Ports bind on all interfaces; the GUI also answers on the
+  storage backnet, whose only members are the three OKD nodes' host stacks. A GUI password is now
+  a mandatory pairing step.
+- **No local discovery of the NAS.** Without host networking the broadcast does not cross the
+  docker bridge, so the Macs add it by address, `tcp://192.168.1.25:22000`.
+- **`SYS_ADMIN`.** The template adds it and sets `PCAP` so the syncthing binary holds
+  `cap_sys_admin`. Not configurable. Accepted.
+
+The role now deletes the existing app only while `custom_app` is true (self-limiting: once it is
+gone the condition cannot recur), creates the catalog app the way garage is created, and
+reconciles the declared values against `app.config` by projecting the same fields out of both
+sides — `app.config` merges schema defaults in, so a whole-dict comparison would drift forever.
+
+Verified locally against real box data:
+
+```
+rendered values vs catalog schema + app.ip_choices   PASS
+delete guard vs live app.query                       true  (custom app present -> delete)
+_st_exists right after the delete                    false (-> create)
+_st_exists on a later run                            true  (-> reconcile)
+reconcile vs simulated post-create config            would_update=false
+reconcile vs drifted host_ips / mount path           would_update=true
+```
+
+One harness lesson: my first simulated config failed with "unexpected '}'" — a `}}` inside a Jinja
+expression closes the block. Nested closing braces in an inline expression need a space.
+
+Side finding: garage declares `version: "1.2.5"` and runs `1.2.8`. The pin is read only at create
+and upgrades happen from the Apps screen, so catalog declarations go stale — now a LOW TODO, and
+Syncthing inherits the same shape.
+
+## 2026-09-11 — the workstation LAN block, narrowed
+
+Following up the side note above. The result is a clean line, and it is not the one I first
+suspected:
+
+```
+binary                                                signature                    LAN
+/usr/bin/curl, /usr/bin/ssh                           Apple platform binary        reaches
+/Library/Developer/CommandLineTools/usr/bin/python3   Apple (team 59GAB85EFG)      reaches
+/opt/homebrew/bin/python3, oc, kubectl, node          ad-hoc, no team              ERR 65 No route to host
+```
+
+Destination does not matter — Homebrew Python fails even to TrueNAS port 22, which `ssh` reaches.
+And the parent does not matter: the same Homebrew Python fails under the `claude` process, in a
+plain iTerm2 window, and under Terminal.app. That exonerates the Claude Code update of 09-10
+(2.1.268) and rules out iTerm2's permission alone.
+
+Ruled out with evidence: routing (`route` → `en0`, direct), a Claude Code sandbox (none configured),
+the WireGuard profile (disconnected), Defender network protection (`mdatp health`:
+`stopped`/`disabled`), the cluster (from TrueNAS, `/readyz` is 200 on the VIP and all three nodes),
+and the SSH-tunnel workaround's failure (TrueNAS `ssh.config` has `tcpfwd: false`).
+
+Still in play: the laptop is Intune-managed (`profiles status`: MDM enrollment Yes, User Approved)
+with Defender's network extension registered as a content filter, and something changed between
+09-09 (worked) and 09-11 20:36 (failing). Visible changes in that window: Command Line Tools 27.0
+(09-11 11:06) and iTerm2 3.7.1 (09-11 21:21, after the first failure); policy pushes are not
+visible from here. The open question is whether the block is specifically ad-hoc-signed code or
+anything not signed by Apple — there is no Developer-ID-signed runtime on this Mac to test with.
+
+The working read path meanwhile: Apple's curl against the API with the read-only service-account
+token, passed through a 0600 curl config deleted after use, so it never appears in a command line.
+The whole health sweep ran that way.
+
+This matters beyond `oc`: the Syncthing pairing walkthrough said `brew install syncthing` — an
+ad-hoc-signed formula. It now says `brew install --cask syncthing-app`, the Syncthing project's
+macOS app.
+
+## 2026-09-11 — sweep, run through curl
+
+Clean: 3/3 nodes Ready, 46/46 Applications Synced+Healthy (immich at `c638f82` after the chart-only
+#178, `/api/server/version` still `3.1.0` as pinned), every CSV Succeeded, every Certificate Ready
+(`homelab-wildcard` renews 09-21, expires 10-21), Ceph HEALTH_OK, no non-running or crashlooping
+pods, both CNPG clusters `ContinuousArchiving=True`.
+
+The snapshot pruner's first two live runs (09-10 and 09-11, 05:30) both succeeded; 09-11 pruned one
+per cluster at the floor of 7. `nvme-replicated` read **28.42% / 324 GiB MAX AVAIL**, down from
+59.39% on 09-09 with nothing added — daily `node-fstrim` and Ceph's snapshot trimming are the
+candidates, not attributed.
+
+The only restarts in 48 h were all three transmission containers at 03:00 UTC, exit 0. Their
+previous-container logs end the same way:
+
+```
+2026-09-11 03:00:09 /etc/openvpn/tunnelDown.sh tun0 1500 0 10.100.0.2 255.255.240.0 init
+2026-09-11 03:00:14 SIGTERM[hard,] received, process exiting
+```
+
+OpenVPN takes the SIGTERM and exits cleanly, so the container exits 0. All three within the same
+second, daily, fits the liveness probe tripping on a VPN-side drop. Self-healing; not pursued.

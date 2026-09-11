@@ -521,23 +521,18 @@
 # ---------------------------------------------------------------------------
 # Syncthing — replaces Synology Drive Client for ~/Projects.
 #
-# This box is a RECEIVE-ONLY peer: the two Macs are the writers, and what this
-# node contributes is being awake when one of them is not, plus the ZFS
-# snapshot history under tank/sync. Full rationale, and why not Nextcloud, sits
-# above `truenas_syncthing` in group_vars/all.yml.
+# A CATALOG app (stable train), deployed the way garage is. It was a custom
+# compose app from 2026-09-09 to 09-11; why it moved, and the one cost of the
+# catalog app (SYS_ADMIN), sit above `truenas_syncthing` in group_vars.
 #
-# The folder and device pairing are NOT converged here. Syncthing rewrites its
-# own config.xml at runtime, so templating it would fight the container; the
-# device IDs and folder settings are recorded in the README as documented
-# state instead. See the README's "Syncthing" section for the one-time pairing
-# walkthrough and for the phase-2 note on doing this over Syncthing's REST API
-# with ansible.builtin.uri.
+# This box is a RECEIVE-ONLY peer. The folder and device pairing are NOT
+# converged here -- Syncthing owns its config.xml. See the README's "Syncthing"
+# section for the one-time pairing walkthrough.
 # ---------------------------------------------------------------------------
 
-# Same reasoning as garage's paths: the datasets are created by truenas-storage
-# (which runs first), so this role never mkdirs. It only fixes ownership, and
-# only when it is actually wrong -- the container runs as 568 and cannot write
-# into a root-owned mountpoint.
+# The container runs as run_as (568) and a freshly created dataset is
+# root:root 0755, so ownership is checked per path and fixed only when wrong --
+# same as garage. The datasets themselves come from truenas-storage.
 - name: Stat the syncthing storage paths
   ansible.builtin.command:
     argv: [midclt, call, filesystem.stat, "{{ item.value }}"]
@@ -561,82 +556,84 @@
     label: "{{ item.item.value }}"
   when: (item.stdout | from_json).uid != truenas_syncthing.run_as_uid
 
-# Defined ONCE and used by both the create and the update below, same as the
-# node_exporter payload above. Two copies of a compose definition drift.
-- name: Build the syncthing compose definition
+# Defined ONCE and used by both the create and the reconcile below.
+- name: Build the syncthing app values
   ansible.builtin.set_fact:
-    _st_compose_base:
-      services:
-        syncthing:
-          image: "{{ truenas_syncthing.image }}"
-          # Custom apps always report `App Version: custom` / `1.0.0` in the UI
-          # -- those are hardcoded stubs, see the node_exporter note above.
-          # These labels are the closest the box gets to a truthful version.
-          labels:
-            org.opencontainers.image.version: "{{ truenas_syncthing.image | regex_replace('^.*:', '') }}"
-            org.opencontainers.image.source: "https://github.com/syncthing/syncthing"
-            org.opencontainers.image.title: "syncthing"
-            pl.sudops.managed-by: "ansible/truenas/roles/truenas-apps"
-          restart: unless-stopped
-          # THE IMAGE'S OWN HEALTHCHECK CANNOT PASS HERE, so it is overridden.
-          # Upstream probes `127.0.0.1:8384/rest/noauth/health` (Dockerfile @
-          # v2.1.5), and STGUIADDRESS below binds the GUI to the frontnet
-          # address only -- so loopback refuses (curl rc=7), the container sits
-          # in `starting` indefinitely and the app never leaves DEPLOYING,
-          # while Syncthing itself answers {"status":"OK"} on 192.168.1.25.
-          # Found 2026-09-11. Same command as upstream, pointed at the address
-          # the GUI actually listens on.
-          healthcheck:
-            test: ["CMD-SHELL", "curl -fkLsS -m 2 {{ truenas_syncthing.gui_address }}/rest/noauth/health | grep -o --color=never OK || exit 1"]
-            interval: 1m
-            timeout: 10s
-          # REQUIRED, not a convenience: local peer discovery is a broadcast on
-          # UDP 21027 and does not cross a bridged docker network. Without it
-          # the Macs can only find this node by a hardcoded address.
-          network_mode: host
-          environment:
-            # The image honours these; the mountpoints are chowned to match.
-            PUID: "{{ truenas_syncthing.run_as_uid }}"
-            PGID: "{{ truenas_syncthing.run_as_gid }}"
-            # Pin the GUI to the frontnet address. Host networking would
-            # otherwise expose it on the storage backnet too, which is the same
-            # trap node_exporter's explicit --web.listen-address avoids.
-            STGUIADDRESS: "{{ truenas_syncthing.gui_address }}"
-            # Set the config dir EXPLICITLY rather than relying on the image's
-            # default home, so the bind below lands where Syncthing actually
-            # reads from regardless of what the base image changes.
-            STHOMEDIR: /var/syncthing/config
-            # Without this, first start creates a default ~/Sync folder and
-            # offers it to every peer that pairs -- noise on a node whose only
-            # folder is meant to be receive-only.
-            STNODEFAULTFOLDER: "1"
-          volumes:
-            - "{{ truenas_syncthing.paths.config }}:/var/syncthing/config"
-            # The path to enter when adding the folder in the GUI.
-            - "{{ truenas_syncthing.paths.data }}:/var/syncthing/projects"
+    _st_values:
+      TZ: "{{ truenas_timezone }}"
+      syncthing:
+        # Without it, first start creates a default ~/Sync folder and offers it
+        # to every peer that pairs. STGUIADDRESS is deliberately NOT set: the
+        # template sets it to 0.0.0.0:<web port> inside the container, which is
+        # what lets its own healthcheck pass, and the bind that matters happens
+        # where the port is published.
+        additional_envs:
+          - { name: STNODEFAULTFOLDER, value: "1" }
+      run_as:
+        user: "{{ truenas_syncthing.run_as_uid | int }}"
+        group: "{{ truenas_syncthing.run_as_gid | int }}"
+      network:
+        host_network: false
+        web_port: { bind_mode: published, port_number: "{{ truenas_syncthing.ports.web | int }}", host_ips: "{{ _ips }}" }
+        tcp_port: { bind_mode: published, port_number: "{{ truenas_syncthing.ports.sync | int }}", host_ips: "{{ _ips }}" }
+        udp_port: { bind_mode: published, port_number: "{{ truenas_syncthing.ports.sync | int }}", host_ips: "{{ _ips }}" }
+      storage:
+        config: { type: host_path, host_path_config: { path: "{{ truenas_syncthing.paths.config }}" } }
+        additional_storage:
+          - { type: host_path, mount_path: "{{ truenas_syncthing.data_mount }}", host_path_config: { path: "{{ truenas_syncthing.paths.data }}" } }
+  vars:
+    # [] means all interfaces -- see BIND ADDRESS in group_vars for why it is
+    # not 192.168.1.25. Same expression garage uses.
+    _ips: "{{ [] if truenas_syncthing.bind_ip == '0.0.0.0' else [truenas_syncthing.bind_ip] }}"
 
-# This app used to reconcile on IMAGE drift only -- the node_exporter pattern
-# -- which left every other compose change declared in git and never applied,
-# with the play reporting ok. The healthcheck override above was the first
-# such change and would have hit it immediately. Stamping the compose with a
-# hash of its own content makes ANY change detectable: the label round-trips
-# through app.config unchanged (verified 2026-09-11), and is compared below.
-- name: Stamp the syncthing compose with a hash of its own content
+# ONE-TIME MIGRATION, and self-limiting: fires only while an app named
+# syncthing exists AND is a custom app -- the compose app this role deployed
+# until 2026-09-11. Once it is gone the condition can never be true again, and
+# a catalog app of the same name is never touched. app.delete removes the app
+# and its image; it does not touch host-path storage, so both datasets and
+# their snapshots survive (remove_ix_volumes stays false; there are none).
+- name: Remove the pre-catalog custom syncthing app
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.delete
+      - "{{ truenas_syncthing.app_name }}"
+      - '{"remove_images": true, "remove_ix_volumes": false}'
+  when: >-
+    truenas_app_q.stdout | from_json
+    | selectattr('name', 'equalto', truenas_syncthing.app_name)
+    | selectattr('custom_app', 'equalto', true)
+    | list | length > 0
+  register: truenas_st_delete
+
+# truenas_app_names was built before the delete, so it still lists syncthing.
+- name: Decide whether the syncthing catalog app already exists
   ansible.builtin.set_fact:
-    _st_compose: "{{ _st_compose_base | combine({'services': {'syncthing': {'labels': {'pl.sudops.compose-sha': (_st_compose_base | to_json(sort_keys=True) | hash('sha1'))}}}}, recursive=True) }}"
+    _st_exists: "{{ truenas_syncthing.app_name in truenas_app_names and truenas_st_delete is not changed }}"
 
-- name: Deploy the syncthing custom app
+- name: Deploy the syncthing catalog app
   ansible.builtin.command:
     argv:
       - midclt
       - call
       - --job
       - app.create
-      - "{{ {'app_name': truenas_syncthing.app_name, 'custom_app': true, 'custom_compose_config': _st_compose} | to_json }}"
-  when: truenas_syncthing.app_name not in truenas_app_names
+      - "{{ _app | to_json }}"
+  vars:
+    _app:
+      app_name: "{{ truenas_syncthing.app_name }}"
+      catalog_app: syncthing
+      train: "{{ truenas_syncthing.train }}"
+      version: "{{ truenas_syncthing.version }}"
+      values: "{{ _st_values }}"
+  when: not (_st_exists | bool)
   register: truenas_st_deploy
   failed_when: false
 
+# Same reasoning as garage: surface the real error from the job record rather
+# than an opaque module failure.
 - name: Read the app.create job record if the syncthing deploy failed
   ansible.builtin.command:
     argv: [midclt, call, core.get_jobs, '[["method", "=", "app.create"]]']
@@ -649,31 +646,21 @@
     msg: "syncthing app.create failed: {{ (truenas_st_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
   when: (truenas_st_deploy.rc | default(0)) != 0
 
-- name: Report syncthing state
-  ansible.builtin.debug:
-    msg: >-
-      syncthing {{ 'already present' if truenas_syncthing.app_name in truenas_app_names else 'DEPLOYED' }}
-      -- GUI at http://{{ truenas_syncthing.gui_address }}/. The folder and the
-      two Mac devices are paired ONCE by hand; see the README. This node must
-      be set RECEIVE-ONLY, or it becomes a third writer.
-
-# Custom apps have no catalog entry, so TrueNAS reports upgrade_available=false
-# forever and nothing on the box will ever say syncthing is old -- Renovate
-# watches the pinned tag instead (the customManager in renovate.json matches
-# every `image:` line in group_vars/all.yml). This reconcile is what applies a
-# bump, and because the image is part of the hashed compose, it covers the
-# image and every other field in one comparison.
-- name: Read the live syncthing compose
+- name: Read the live syncthing app values
   ansible.builtin.command:
     argv: [midclt, call, app.config, "{{ truenas_syncthing.app_name }}"]
-  register: truenas_st_config
+  register: truenas_st_live
   changed_when: false
   check_mode: false
-  when: truenas_syncthing.app_name in truenas_app_names
+  when: _st_exists | bool
 
-# An app created before the hash label existed has no label, reads as '', and
-# gets exactly one update that stamps it.
-- name: Reconcile the syncthing compose
+# Compares only what this role declares, projected out of the live values the
+# same way on both sides. app.config merges schema defaults in (garage's comes
+# back with acl_enable, ix_* keys and so on), so a whole-dict comparison would
+# report drift on every run. Without this task a change to the values above
+# would be declared in git and never applied -- the trap this topic keeps
+# hitting.
+- name: Reconcile the syncthing app values
   ansible.builtin.command:
     argv:
       - midclt
@@ -681,10 +668,37 @@
       - --job
       - app.update
       - "{{ truenas_syncthing.app_name }}"
-      - "{{ {'custom_compose_config': _st_compose} | to_json }}"
+      - "{{ {'values': _st_values} | to_json }}"
   vars:
-    _live_sha: "{{ (truenas_st_config.stdout | from_json).get('services', {}).get('syncthing', {}).get('labels', {}).get('pl.sudops.compose-sha', '') }}"
-    _want_sha: "{{ _st_compose.services.syncthing.labels['pl.sudops.compose-sha'] }}"
+    _l: "{{ truenas_st_live.stdout | from_json }}"
+    _want_sig:
+      - "{{ _st_values.run_as.user | string }}:{{ _st_values.run_as.group | string }}"
+      - "{{ _st_values.network.host_network | string }}"
+      - "{{ _st_values.network.web_port.port_number | string }}={{ _st_values.network.web_port.host_ips | sort | join(',') }}"
+      - "{{ _st_values.network.tcp_port.port_number | string }}={{ _st_values.network.tcp_port.host_ips | sort | join(',') }}"
+      - "{{ _st_values.network.udp_port.port_number | string }}={{ _st_values.network.udp_port.host_ips | sort | join(',') }}"
+      - "{{ _st_values.storage.config.host_path_config.path }}"
+      - "{{ _st_values.storage.additional_storage | map(attribute='mount_path') | join(',') }}>{{ _st_values.storage.additional_storage | map(attribute='host_path_config.path') | join(',') }}"
+      - "{{ _st_values.syncthing.additional_envs | map(attribute='name') | join(',') }}={{ _st_values.syncthing.additional_envs | map(attribute='value') | join(',') }}"
+    _live_sig:
+      - "{{ _l.run_as.user | default('') | string }}:{{ _l.run_as.group | default('') | string }}"
+      - "{{ _l.network.host_network | default(false, true) | string }}"
+      - "{{ _l.network.web_port.port_number | default('') | string }}={{ _l.network.web_port.host_ips | default([], true) | sort | join(',') }}"
+      - "{{ _l.network.tcp_port.port_number | default('') | string }}={{ _l.network.tcp_port.host_ips | default([], true) | sort | join(',') }}"
+      - "{{ _l.network.udp_port.port_number | default('') | string }}={{ _l.network.udp_port.host_ips | default([], true) | sort | join(',') }}"
+      - "{{ _l.storage.config.host_path_config.path | default('') }}"
+      - "{{ _l.storage.additional_storage | default([], true) | map(attribute='mount_path') | join(',') }}>{{ _l.storage.additional_storage | default([], true) | map(attribute='host_path_config.path') | join(',') }}"
+      - "{{ _l.syncthing.additional_envs | default([], true) | map(attribute='name') | join(',') }}={{ _l.syncthing.additional_envs | default([], true) | map(attribute='value') | join(',') }}"
   when:
-    - truenas_syncthing.app_name in truenas_app_names
-    - _live_sha != _want_sha
+    - _st_exists | bool
+    - _live_sig != _want_sig
+
+- name: Report syncthing state
+  ansible.builtin.debug:
+    msg: >-
+      syncthing {{ 'REPLACED the custom app with the catalog app' if truenas_st_delete is changed
+      else ('catalog app present' if _st_exists | bool else 'DEPLOYED') }}
+      -- GUI at http://192.168.1.25:{{ truenas_syncthing.ports.web }}/ (set a GUI
+      password at first login). Pairing is one-time and by hand; see the README.
+      The NAS folder must be RECEIVE-ONLY, and each Mac adds this node by
+      address, tcp://192.168.1.25:{{ truenas_syncthing.ports.sync }}.

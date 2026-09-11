@@ -76,7 +76,8 @@ check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
 | SMB Time Machine targets for the Macs | `truenas-smb` | global flag + groups/users/shares matched on name; dataset ACLs on owner/acltype/ACE drift |
 | Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
 | garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
-| node_exporter + Syncthing custom apps | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
+| node_exporter custom app | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
+| Syncthing catalog app (Mac ↔ Mac sync of `~/Projects`) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
 
 ## What it deliberately does NOT manage
 
@@ -275,10 +276,11 @@ sync of `~/Projects` between the Mac mini and the MacBook Air.
 
 | | |
 |---|---|
-| app | `syncthing` — custom compose app, host network |
-| GUI | `http://192.168.1.25:8384/` |
-| data | `tank/sync` → `/var/syncthing/projects` in the container |
-| state | `tank/apps/syncthing` → `/var/syncthing/config` |
+| app | `syncthing` — **catalog** app, stable train, `1.3.13` (a custom compose app from 2026-09-09 to 09-11) |
+| GUI | `http://192.168.1.25:8384/` — a password is required, set at first login |
+| sync | `tcp://192.168.1.25:22000`, `quic://192.168.1.25:22000` |
+| data | `tank/sync` → `/data/projects` in the container |
+| state | `tank/apps/syncthing` → `/var/syncthing` (Syncthing keeps it under `config/`) |
 | snapshots | every 2 h, kept 30 days |
 | this node's folder type | **Receive Only** |
 
@@ -289,19 +291,39 @@ host. Two-way sync propagates a deletion to every peer within seconds, so the
 ZFS task on `tank/sync` is the entirety of the recycle bin Drive Client used to
 provide. That is the reason this node exists in the mesh at all.
 
-Host networking is required rather than convenient: local peer discovery is a
-broadcast on UDP 21027 and does not cross a bridged docker network. The
-consequence is the same one node_exporter has — it would otherwise listen on
-the storage backnet too — so `STGUIADDRESS` pins the GUI to the frontnet
-address.
+**Why a catalog app.** This topic's rule is custom only when no TrueNAS train
+ships the app — node_exporter is custom for exactly that reason, garage is not.
+Syncthing is in the stable train. It was first built as a custom compose app
+without checking, and both defects its first run found came from that: pinning
+the GUI inside Syncthing broke the image's own loopback healthcheck, and the
+custom app only reconciled on image drift. iX now maintains the compose and the
+healthcheck, and TrueNAS tracks upgrades. **The one cost:** iX's template
+hardcodes `SYS_ADMIN` and sets `PCAP` so the syncthing binary holds
+`cap_sys_admin`, for ownership-sync features this mirror does not use. No value
+turns it off.
 
-**The image's own healthcheck is overridden, and has to be.** Upstream's
-`HEALTHCHECK` (Dockerfile @ `v2.1.5`) probes `127.0.0.1:8384`, which the pinned
-`STGUIADDRESS` closes. On the first deploy (2026-09-11) the container sat in
-`starting` and the app never left `DEPLOYING`, while Syncthing itself answered
-`{"status":"OK"}` on `192.168.1.25:8384`. The compose now runs the same probe
-against the pinned address; both come from `truenas_syncthing.gui_address`, so
-they cannot drift apart.
+**Published ports on all interfaces, not host networking.** The template
+publishes ports only when `host_network` is false. Binding them to the frontnet
+alone is not possible: `app.ip_choices` here offers `0.0.0.0`, `::` and
+`192.168.10.10` — the mgmt address `192.168.1.25` is not among them, the same
+limit garage hit. So the GUI and sync port also answer on the storage backnet,
+whose only members are the three OKD nodes' host stacks (pods cannot route
+there); the GUI password is what closes that. And local discovery cannot find
+this node — the broadcast does not cross the docker bridge and 21027 is not
+published — so each Mac adds it **by address**.
+
+**Upgrades** work the way garage's do: TrueNAS shows `upgrade_available` and
+the Apps screen applies it. `truenas_syncthing.version` is read only at create,
+so after an upgrade the declaration goes stale — garage declares `1.2.5` while
+`1.2.8` runs (2026-09-11).
+
+**Migrating from the custom app** happens on the first playbook run after the
+switch: `truenas-apps` deletes the app only while it is still a custom app, then
+creates the catalog one. Nothing had been paired, so nothing is lost, and both
+datasets and their snapshots are untouched. The device ID regenerates, because
+the catalog app mounts the dataset at `/var/syncthing` and Syncthing keeps its
+state under `config/`; the `config.xml`, keys and database at the dataset root
+are left over from the custom app and unused.
 
 ### One-time pairing
 
@@ -312,16 +334,26 @@ once, then record the device IDs in the table below.
    not already identical when Syncthing pairs them, you get the *union* of both
    plus a scattering of `.sync-conflict-*` files. Confirm Drive Client shows
    both Macs in sync, then remove its sync task before continuing.
-1. Both Macs: `brew install syncthing && brew services start syncthing`.
-2. On the Mac holding the canonical tree, add `~/Projects` as a folder, type
+1. **This box first**, at `http://192.168.1.25:8384/`: set a GUI user and
+   password, then under Settings → Connections turn **off** global discovery,
+   relaying and NAT traversal.
+2. **Both Macs:** `brew install --cask syncthing-app` — the Syncthing project's
+   macOS app, not the Homebrew formula. On 2026-09-11 this laptop blocked
+   ad-hoc-signed binaries, which Homebrew-built formulae are, from every LAN
+   address; a Syncthing that cannot reach `192.168.1.x` pairs with nothing. The
+   app asks for local network access like any Mac app — allow it. Then turn
+   the same three settings off in each Mac's GUI.
+3. On each Mac, add this box as a device with addresses
+   `tcp://192.168.1.25:22000, quic://192.168.1.25:22000`. Left as `dynamic` it
+   is never found, because it cannot be discovered.
+4. On the Mac holding the canonical tree, add `~/Projects` as a folder, type
    **Send & Receive**, and share it with the other Mac and with this box.
-3. On this box's GUI, accept the shared folder, set its path to
-   `/var/syncthing/projects`, and set folder type to **Receive Only**. This is
-   the step that keeps the NAS from becoming a third writer — it is not a
-   default.
-4. On the second Mac, accept the same folder at `~/Projects`, type
+5. On this box's GUI, accept the shared folder, set its path to
+   `/data/projects`, and set folder type to **Receive Only**. This is the step
+   that keeps the NAS from becoming a third writer — it is not a default.
+6. On the second Mac, accept the same folder at `~/Projects`, type
    **Send & Receive**.
-5. Ignore list: copy `files/projects-stignore-shared` to
+7. Ignore list: copy `files/projects-stignore-shared` to
    `~/Projects/.stignore-shared`, then set each of the three peers' `.stignore`
    to the single line `#include .stignore-shared`. Syncthing does not sync
    `.stignore` itself, which is exactly why the real list lives in an included
@@ -383,7 +415,7 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `roles/truenas-shares/` | NFS exports + service enablement |
 | `roles/truenas-smb/` | SMB Time Machine targets: `aapl_extensions`, per-Mac users/groups, dataset ACLs, shares, service |
 | `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots |
-| `roles/truenas-apps/` | garage S3 server (Velero BSL) + the node_exporter and Syncthing custom apps: deploy/update, and garage's layout/key/bucket bootstrap |
+| `roles/truenas-apps/` | garage (Velero BSL) and Syncthing as catalog apps, node_exporter as a custom app: deploy/update, and garage's layout/key/bucket bootstrap |
 | `files/projects-stignore-shared` | Syncthing ignore list for `~/Projects`. Copied to `~/Projects/.stignore-shared` on every peer; not applied by Ansible |
 | `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
 | `destroy-empty-dataset.sh` | One-shot gated destroy of an **empty** dataset — the only remedy for create-time-only property drift (deliberately NOT in the playbook) |
@@ -391,13 +423,14 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 Full chronology, decisions and the gaps found in the original plan:
 `blog/blog-truenas-migration-draft.md`.
 
-## Updating a custom app (node_exporter, syncthing)
+## Updating a custom app (node_exporter)
 
 `garage` is a **catalog** app: TrueNAS tracks the upstream version, sets
 `upgrade_available`, and the UI offers a button.
 
-`node-exporter` and `syncthing` are **custom (compose)** apps, and that button
-will never appear for either. There is no catalog entry to compare against, so `app.query` reports
+`node-exporter` is a **custom (compose)** app, and that button will never
+appear for it. (`syncthing` was one too, from 2026-09-09 to 09-11; it is now a
+catalog app and upgrades the way garage does.) There is no catalog entry to compare against, so `app.query` reports
 `upgrade_available: false` permanently and `version` is a synthetic `1.0.0` that
 never moves. `app.outdated_docker_images` does not help either — it only detects
 a **mutable** tag (`:latest`) whose digest changed upstream; against a pinned tag
@@ -408,15 +441,12 @@ So nothing on the box will ever tell you the image is old. The update path is:
 1. **Renovate opens a PR.** `renovate.json` has a `customManagers` entry
    watching every pinned `image:` line in `group_vars/all.yml`, using the
    `docker` datasource — the same treatment every other image in this repo
-   gets. It matches on the field name rather than on a variable name, so
-   `syncthing` was picked up without a second manager being written.
+   gets. It matches on the field name rather than on a variable name, so a
+   future custom app is covered without a second manager.
 2. **Merge it.**
-3. **Run the playbook.** For `node-exporter`, `truenas-apps` compares the
-   declared image against `app.query`'s `active_workloads.images` and calls
-   `app.update` when they differ. For `syncthing` it compares a hash of the
-   whole declared compose, stamped into the `pl.sudops.compose-sha` label and
-   read back from `app.config` — so an image bump and any other compose change
-   are one comparison.
+3. **Run the playbook.** `truenas-apps` compares the declared image against
+   `app.query`'s `active_workloads.images` and calls `app.update` with the new
+   compose when they differ.
 
 ```bash
 cd ansible/truenas && ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass
@@ -431,8 +461,10 @@ closes it.
 **On `node-exporter` that closes it for the image only.** Any other change to its
 compose — an argument, a mount, a label — is still declared-but-never-applied.
 `syncthing` hit exactly this on its first change (the healthcheck override,
-2026-09-11) and moved to the compose-hash comparison; `node-exporter` should
-follow before its compose next changes for any reason other than a tag bump.
+2026-09-11); a hash of the whole compose stamped into a `pl.sudops.compose-sha`
+label fixed it and was verified live before Syncthing moved to the catalog app.
+`node-exporter` should get the same before its compose next changes for any
+reason other than a tag bump.
 
 **Proven end to end on 2026-09-08**: the customManagers entry was committed, Renovate opened
 [#175](https://github.com/sudoom/homelab/pull/175) (`v1.9.1` -> `v1.12.1`) within minutes against that very commit,
