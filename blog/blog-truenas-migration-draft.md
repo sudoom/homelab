@@ -4288,6 +4288,12 @@ things came back that mattered:
   never the thing Drive Client provided** — that was already covered.
 - `truenas-apps` already deploys custom compose apps (`app.create` with
   `custom_app: true`), which is how garage and node_exporter run.
+  **CORRECTION 2026-09-11: wrong about garage.** garage is a *catalog* app
+  (`catalog_app: garage`); only node_exporter is custom, and its block in
+  `group_vars` states why in its first line — no TrueNAS train ships it.
+  Syncthing *is* in the stable train. I copied the custom-app shape without
+  checking the catalog, and that unchecked assumption produced two of the three
+  defects the first playbook run found (see 2026-09-11).
 
 The second point is the one that reframed it. If backup is covered, what is
 actually needed is multi-device availability, and that is a different problem
