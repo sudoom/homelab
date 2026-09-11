@@ -139,7 +139,7 @@ immich:
         main:
           image:
             repository: ghcr.io/immich-app/immich-server
-            tag: v3.1.0
+            tag: v3.2.0
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -239,7 +239,7 @@ immich:
               # repository explicit (== chart default) for Renovate tracking; MUST
               # stay version-locked to the server above — Renovate groups them.
               repository: ghcr.io/immich-app/immich-machine-learning
-              tag: v3.1.0
+              tag: v3.2.0
             resources:
               requests:
                 cpu: 500m
