@@ -281,6 +281,14 @@ consequence is the same one node_exporter has — it would otherwise listen on
 the storage backnet too — so `STGUIADDRESS` pins the GUI to the frontnet
 address.
 
+**The image's own healthcheck is overridden, and has to be.** Upstream's
+`HEALTHCHECK` (Dockerfile @ `v2.1.5`) probes `127.0.0.1:8384`, which the pinned
+`STGUIADDRESS` closes. On the first deploy (2026-09-11) the container sat in
+`starting` and the app never left `DEPLOYING`, while Syncthing itself answered
+`{"status":"OK"}` on `192.168.1.25:8384`. The compose now runs the same probe
+against the pinned address; both come from `truenas_syncthing.gui_address`, so
+they cannot drift apart.
+
 ### One-time pairing
 
 Not converged by Ansible (see "What it deliberately does NOT manage"). Do this
@@ -389,9 +397,12 @@ So nothing on the box will ever tell you the image is old. The update path is:
    gets. It matches on the field name rather than on a variable name, so
    `syncthing` was picked up without a second manager being written.
 2. **Merge it.**
-3. **Run the playbook.** `truenas-apps` compares the declared image against
-   `app.query`'s `active_workloads.images` and calls `app.update` with the new
-   compose when they differ.
+3. **Run the playbook.** For `node-exporter`, `truenas-apps` compares the
+   declared image against `app.query`'s `active_workloads.images` and calls
+   `app.update` when they differ. For `syncthing` it compares a hash of the
+   whole declared compose, stamped into the `pl.sudops.compose-sha` label and
+   read back from `app.config` — so an image bump and any other compose change
+   are one comparison.
 
 ```bash
 cd ansible/truenas && ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass
@@ -402,6 +413,12 @@ first written, which meant editing the tag changed nothing on the box while the
 play still reported converged — the same "declared but never applied" trap as the
 auto-created scrub task and the un-applied dataset quota. The reconcile task now
 closes it.
+
+**On `node-exporter` that closes it for the image only.** Any other change to its
+compose — an argument, a mount, a label — is still declared-but-never-applied.
+`syncthing` hit exactly this on its first change (the healthcheck override,
+2026-09-11) and moved to the compose-hash comparison; `node-exporter` should
+follow before its compose next changes for any reason other than a tag bump.
 
 **Proven end to end on 2026-09-08**: the customManagers entry was committed, Renovate opened
 [#175](https://github.com/sudoom/homelab/pull/175) (`v1.9.1` -> `v1.12.1`) within minutes against that very commit,

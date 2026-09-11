@@ -4263,6 +4263,10 @@ progress only while `state == SCANNING`, so the series is simply absent when idl
 
 Needs an `ansible/truenas` playbook run to land the collector change; the dashboard half ships via ArgoCD.
 
+**Landed 2026-09-11** on the first playbook run after the fix: the textfile now carries
+`truenas_zpool_scrub_in_progress{pool="tank"} 0` and no `scrub_percent_complete` series at all,
+where the same file read `96.22` an hour earlier.
+
 ---
 
 ## 2026-09-09 — replacing Synology Drive Client: why Syncthing, and why not Nextcloud
@@ -4542,3 +4546,117 @@ Recorded, not built. The README gate still stands — the queued
 blackbox-exporter TLS-expiry probe measures where a *client* stands, and that
 is what nothing was doing when the Synology cert expired while cert-manager
 reported healthy. Whatever lands here should land after something is watching.
+
+---
+
+## 2026-09-11 — first playbook run: it converged, then crashed in its own post-check
+
+The run that applied the Syncthing work:
+
+```
+TASK [Compute the declared-vs-live delta]
+[ERROR]: Task failed: ... Error while resolving value for '_drift':
+         object of type 'dict' has no attribute 'acltype'
+Origin: ansible/truenas/playbook.yml:135:19   (_want_ct)
+
+PLAY RECAP
+truenas : ok=63  changed=6  unreachable=0  failed=1  skipped=43
+```
+
+`changed=6` before the failure is the important number: every role had already run. The crash
+was in `post_tasks` — the verification — so the first question was what the box actually looked
+like, not what the play said.
+
+### What the crashed run left behind
+
+```
+tank/sync            casesensitivity=SENSITIVE acltype=POSIX aclmode=DISCARD quota=200 GiB recordsize=128K
+tank/apps/syncthing  casesensitivity=SENSITIVE acltype=POSIX aclmode=DISCARD quota=None    recordsize=128K
+snapshot task        tank/sync  every */2 h  keep 30 DAY  enabled=True
+apps                 syncthing DEPLOYING (container: starting) · node-exporter RUNNING · garage RUNNING
+```
+
+The one-way door went through correctly — `tank/sync` was created `SENSITIVE` as declared. Two
+separate defects remained, both mine.
+
+### Defect 1 — a tuple invariant nobody wrote down
+
+Both create-time checks — the storage role's pre-check and the playbook's post-check — build
+`dataset:CASESENSITIVITY:ACLTYPE:ACLMODE` for every dataset that declares `casesensitivity`, via
+`map(attribute='acltype')`. The three timemachine datasets declare all three. `tank/sync` declared
+only the first.
+
+Why the storage role did not catch it: its pre-check deliberately compares only datasets that
+*already exist*, and `tank/sync` did not. So the dataset was created, and then the post-check —
+which deliberately covers datasets created on this very run — hit the missing key. The next run
+would have crashed in the pre-check instead, since the dataset now exists.
+
+Reproduced locally before fixing, with the post-check expression copied verbatim and evaluated
+against the real `group_vars`: same error, same line. After declaring the live values
+(`acltype: POSIX`, `aclmode: DISCARD`, read back from `pool.dataset.query` — not a new decision),
+the same expression renders and its `difference` against the live pool's 22 datasets is `[]`.
+
+The invariant is now explicit: a guard in `truenas-storage` fails *before any create* if a dataset
+declares `casesensitivity` without both `acltype` and `aclmode`, and names it. Against the unfixed
+file it printed `["sync"]`; against the fixed one, `[]`.
+
+### Defect 2 — pinning the GUI broke the image's own healthcheck
+
+Syncthing had been `starting` for several minutes. Docker's health record is not readable as
+`truenas_admin` (no passwordless sudo, not in the docker group), so I tested the hypothesis
+directly. With host networking the container's loopback *is* the host's:
+
+```
+http://127.0.0.1:8384/rest/noauth/health     -> rc=7 (connection refused)
+http://192.168.1.25:8384/rest/noauth/health  -> {"status": "OK"}
+```
+
+And the image, from syncthing's own `Dockerfile` at `v2.1.5`:
+
+```
+HEALTHCHECK --interval=1m --timeout=10s \
+  CMD curl -fkLsS -m 2 127.0.0.1:8384/rest/noauth/health | grep -o --color=never OK || exit 1
+```
+
+`STGUIADDRESS=192.168.1.25:8384` — the pinning I added so host networking would not expose the
+GUI on the backnet — closes loopback, so the image's healthcheck could never pass. Syncthing was
+healthy; its health probe was structurally unable to see it. Fixed by overriding the healthcheck
+with the same command pointed at the pinned address, both taken from one variable.
+
+### Defect 3 — that fix would never have reached the box
+
+The Syncthing reconcile was copied from node_exporter's, which calls `app.update` only when the
+**image** differs. A healthcheck is not an image, so the fix would have sat in git while every run
+reported the app converged — the exact "declared but never applied" shape this topic keeps
+producing.
+
+`app.config` returns the stored compose essentially verbatim (labels, env, no healthcheck key when
+none was sent), so a self-describing label round-trips. The compose is now stamped with
+`pl.sudops.compose-sha` — a sha1 of its own content — and the reconcile compares that against the
+live label. The image is part of the hashed compose, so image bumps are covered by the same check.
+Tested against the real `app.config` pulled from the box:
+
+```
+vs live app.config (no label yet):     live_sha=""        want_sha=2474a111…  would_update=true
+vs what app.update would then store:   live_sha=2474a111… want_sha=2474a111…  would_update=false
+```
+
+One update, then idempotent. node_exporter still reconciles on image only, which is now written
+down as a known gap rather than left for the next compose change to discover.
+
+### Side note — the workstation could not reach the API
+
+The same session's health sweep failed on every call with
+`dial tcp 192.168.1.240:6443: connect: no route to host` — from `oc` in the shell *and* from the
+kubernetes MCP server's `kubectl`. `ping`, `dig` and `ssh` from the same shell reached the LAN
+normally. From TrueNAS, `curl -sk https://<ip>:6443/readyz` returned **200** on the VIP and all
+three nodes, so the cluster was fine and the fault was local to the Mac, affecting only
+third-party binaries. The suspected cause is macOS Local Network privacy; the unified log showed
+no matching denial, so that is unconfirmed. An SSH `-L` tunnel through TrueNAS did not work around
+it — every connection was reset at the far end, most likely because TrueNAS's sshd has TCP
+forwarding off.
+
+Two lessons worth keeping. "No route to host" to a VIP that answers ping says nothing about the
+cluster; ask from another host on the LAN before concluding anything. And an empty result from a
+failed command piped into `wc -l` prints `0` — the sweep briefly showed "0 snapshots" for both
+Postgres clusters, which was a count of error output, not of snapshots.

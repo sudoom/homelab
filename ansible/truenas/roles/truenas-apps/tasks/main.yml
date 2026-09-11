@@ -565,7 +565,7 @@
 # node_exporter payload above. Two copies of a compose definition drift.
 - name: Build the syncthing compose definition
   ansible.builtin.set_fact:
-    _st_compose:
+    _st_compose_base:
       services:
         syncthing:
           image: "{{ truenas_syncthing.image }}"
@@ -578,6 +578,18 @@
             org.opencontainers.image.title: "syncthing"
             pl.sudops.managed-by: "ansible/truenas/roles/truenas-apps"
           restart: unless-stopped
+          # THE IMAGE'S OWN HEALTHCHECK CANNOT PASS HERE, so it is overridden.
+          # Upstream probes `127.0.0.1:8384/rest/noauth/health` (Dockerfile @
+          # v2.1.5), and STGUIADDRESS below binds the GUI to the frontnet
+          # address only -- so loopback refuses (curl rc=7), the container sits
+          # in `starting` indefinitely and the app never leaves DEPLOYING,
+          # while Syncthing itself answers {"status":"OK"} on 192.168.1.25.
+          # Found 2026-09-11. Same command as upstream, pointed at the address
+          # the GUI actually listens on.
+          healthcheck:
+            test: ["CMD-SHELL", "curl -fkLsS -m 2 {{ truenas_syncthing.gui_address }}/rest/noauth/health | grep -o --color=never OK || exit 1"]
+            interval: 1m
+            timeout: 10s
           # REQUIRED, not a convenience: local peer discovery is a broadcast on
           # UDP 21027 and does not cross a bridged docker network. Without it
           # the Macs can only find this node by a hardcoded address.
@@ -602,6 +614,16 @@
             - "{{ truenas_syncthing.paths.config }}:/var/syncthing/config"
             # The path to enter when adding the folder in the GUI.
             - "{{ truenas_syncthing.paths.data }}:/var/syncthing/projects"
+
+# This app used to reconcile on IMAGE drift only -- the node_exporter pattern
+# -- which left every other compose change declared in git and never applied,
+# with the play reporting ok. The healthcheck override above was the first
+# such change and would have hit it immediately. Stamping the compose with a
+# hash of its own content makes ANY change detectable: the label round-trips
+# through app.config unchanged (verified 2026-09-11), and is compared below.
+- name: Stamp the syncthing compose with a hash of its own content
+  ansible.builtin.set_fact:
+    _st_compose: "{{ _st_compose_base | combine({'services': {'syncthing': {'labels': {'pl.sudops.compose-sha': (_st_compose_base | to_json(sort_keys=True) | hash('sha1'))}}}}, recursive=True) }}"
 
 - name: Deploy the syncthing custom app
   ansible.builtin.command:
@@ -635,12 +657,23 @@
       two Mac devices are paired ONCE by hand; see the README. This node must
       be set RECEIVE-ONLY, or it becomes a third writer.
 
-# Same trap as node_exporter: custom apps have no catalog entry, so TrueNAS
-# reports upgrade_available=false forever and nothing on the box will ever say
-# syncthing is old. Renovate watches the pinned tag (the customManager in
-# renovate.json matches every `image:` line in group_vars/all.yml, so this app
-# needed no new manager) and this task is what applies the bump.
-- name: Reconcile the syncthing image
+# Custom apps have no catalog entry, so TrueNAS reports upgrade_available=false
+# forever and nothing on the box will ever say syncthing is old -- Renovate
+# watches the pinned tag instead (the customManager in renovate.json matches
+# every `image:` line in group_vars/all.yml). This reconcile is what applies a
+# bump, and because the image is part of the hashed compose, it covers the
+# image and every other field in one comparison.
+- name: Read the live syncthing compose
+  ansible.builtin.command:
+    argv: [midclt, call, app.config, "{{ truenas_syncthing.app_name }}"]
+  register: truenas_st_config
+  changed_when: false
+  check_mode: false
+  when: truenas_syncthing.app_name in truenas_app_names
+
+# An app created before the hash label existed has no label, reads as '', and
+# gets exactly one update that stamps it.
+- name: Reconcile the syncthing compose
   ansible.builtin.command:
     argv:
       - midclt
@@ -650,9 +683,8 @@
       - "{{ truenas_syncthing.app_name }}"
       - "{{ {'custom_compose_config': _st_compose} | to_json }}"
   vars:
-    _live: "{{ (truenas_app_q.stdout | from_json
-                | selectattr('name', 'equalto', truenas_syncthing.app_name)
-                | first).active_workloads.images | default([]) }}"
+    _live_sha: "{{ (truenas_st_config.stdout | from_json).get('services', {}).get('syncthing', {}).get('labels', {}).get('pl.sudops.compose-sha', '') }}"
+    _want_sha: "{{ _st_compose.services.syncthing.labels['pl.sudops.compose-sha'] }}"
   when:
     - truenas_syncthing.app_name in truenas_app_names
-    - truenas_syncthing.image not in _live
+    - _live_sha != _want_sha
