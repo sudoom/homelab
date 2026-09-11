@@ -13,5 +13,5 @@ version: 1.0.0
 type: application
 dependencies:
   - name: immich
-    version: 0.13.1
+    version: 0.13.2
     repository: oci://ghcr.io/immich-app/immich-charts
