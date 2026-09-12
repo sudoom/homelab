@@ -5015,3 +5015,15 @@ cleared it is not recorded yet.
 The same check turned up a useful contrast. An `oc get no` against the operator kubeconfig failed with
 `the server has asked for the client to provide credentials` — an HTTP 401. That is the opposite of
 the earlier symptom: TCP and TLS both succeeded, and only the OAuth token had expired.
+
+### Converged
+
+```
+truenas : ok=65  changed=0  unreachable=0  failed=0  skipped=49
+```
+
+The first `changed=0` since 2026-09-08 — every run in between carried the silently failing autotrim
+`pool.update`, so no run could have reported a converged box. One recap confirms three separate
+things: the autotrim fix holds, Syncthing's value reconcile is idempotent against the real
+`app.config`, and the dataset removal left nothing declared-but-missing and nothing
+present-but-undeclared.
