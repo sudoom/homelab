@@ -4843,8 +4843,13 @@ previous-container logs end the same way:
 2026-09-11 03:00:14 SIGTERM[hard,] received, process exiting
 ```
 
-OpenVPN takes the SIGTERM and exits cleanly, so the container exits 0. All three within the same
-second, daily, fits the liveness probe tripping on a VPN-side drop. Self-healing; not pursued.
+OpenVPN takes the SIGTERM and exits cleanly, so the container exits 0. **Correction (2026-09-12): not a
+VPN drop.** The chart's liveness probe is a deliberate nightly restart —
+`exit $(test $(date +%H) -eq 3 && echo 1 || echo 0)` with `failureThreshold: 1` — so the kubelet kills all
+three during hour 03 by design, and `SIGTERM[hard,]` is the kubelet's signal. The one off-schedule restart
+that session was different and says so in the same log line: `transmission-slave` at 17:38Z on 09-12
+logged `Inactivity timeout (--ping-restart)` and then `SIGTERM[soft,ping-restart]`, OpenVPN restarting
+itself. The hard/soft flag separates the two causes with no further digging.
 
 ---
 
