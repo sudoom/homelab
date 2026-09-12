@@ -4968,3 +4968,50 @@ outlive the datasets.
 
 Noted while editing, not fixed: `run.sh` still lists `cephfs-hdd` as a backend, though that tier
 was retired on 2026-09-07.
+
+### Applied on the box, same evening
+
+The exports first, since the gate refuses a dataset a share still references:
+
+```
+$ ssh truenas_admin@192.168.1.25 'midclt call sharing.nfs.delete 4 && midclt call sharing.nfs.delete 5'
+True
+True
+```
+
+The dry runs for `bench` and `bench16` then flipped from `GATE FAILED: NFS share(s) still reference`
+to `gate passed ... 0 snapshots, 0 children, 0 shares`. Each of the four destroys verified itself:
+
+```
+>>> destroying 'tank/bench' (irreversible, one-shot)
+True
+>>> verifying it is gone (expect [])
+[]
+```
+
+Each also printed its standard closing line, "Now re-create it with the declared properties" —
+ignored, as planned, because the declarations were already out of `group_vars`.
+
+Checked afterwards across all four sides rather than trusting the per-dataset checks:
+
+```
+removed datasets still present:  none
+tank datasets:                   17, set-equal to truenas_datasets
+NFS exports:                     /mnt/tank/media, /mnt/tank/immich, /mnt/tank/keepers
+StorageClasses:                  nfs-csi, nfs-truenas-{immich,keepers,media}
+                                 (nfs-csi Application Synced+Healthy at 6f78ea0 — ArgoCD pruned both)
+PVC/PV on the removed classes:   none
+```
+
+Only the converge playbook run remains, and it should report `changed=0`.
+
+### The workstation LAN block cleared
+
+By 22:11 the same day the block described above was gone: `oc get nodes` under the read-only
+service-account kubeconfig returned all three nodes, and Homebrew's ad-hoc-signed Python connected to
+both `192.168.1.240:6443` and `192.168.1.25:22`, both of which had failed with errno 65. What
+cleared it is not recorded yet.
+
+The same check turned up a useful contrast. An `oc get no` against the operator kubeconfig failed with
+`the server has asked for the client to provide credentials` — an HTTP 401. That is the opposite of
+the earlier symptom: TCP and TLS both succeeded, and only the OAuth token had expired.
