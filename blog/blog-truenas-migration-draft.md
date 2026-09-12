@@ -4907,3 +4907,64 @@ success while protecting nothing, which reads as coverage.
 Also spotted from the same query: `tank/bench` and `tank/bench16` still have **enabled NFS
 exports**, so that cleanup is four-sided rather than three — StorageClasses, datasets, exports, and
 the stray PVC.
+
+---
+
+## 2026-09-12 — removing four empty datasets, and keeping what they taught
+
+Asked to remove `bench`, `bench16`, `personal` and `work` after the empty-dataset inventory above.
+All four were at the 191.8 KiB baseline. The removal is **four-sided**, and only one side is a
+`group_vars` edit:
+
+| side | where | prunes itself? |
+|---|---|---|
+| dataset declarations | `truenas_datasets` | no — the storage role creates and reconciles, never prunes |
+| NFS exports (bench, bench16) | `truenas_nfs_exports` | no — `truenas-shares` only creates missing exports |
+| StorageClasses | `components/storage/nfs-csi/values.yaml` | yes, ArgoCD prunes |
+| harness backends | `tests/storage-benchmark/{run.sh,README.md}` | n/a |
+
+The gate script reported the split cleanly:
+
+```
+$ ./destroy-empty-dataset.sh personal
+gate passed - tank/personal is empty (191.81 KiB), 0 snapshots, 0 children, 0 shares
+$ ./destroy-empty-dataset.sh bench
+GATE FAILED:
+  NFS share(s) still reference /mnt/tank/bench: ['/mnt/tank/bench']
+```
+
+**An ordering trap worth writing down.** The script's own dry-run advice is "after destroying, run
+the playbook to re-create it" — correct for its usual job, which is fixing a create-time-only
+property. Here it is exactly backwards: the declarations have to be gone from `group_vars` *before*
+any playbook run, or the next run recreates all four. And because `truenas-shares` never prunes,
+dropping the two export entries does not remove the live exports; that needs `sharing.nfs.delete`,
+for which this repo has no code path at all. So the order is: commit the removal, delete the two
+exports by hand, destroy the four datasets, then converge.
+
+### What the benchmark scratch taught, preserved here because the config is gone
+
+Two results are worth more than the datasets were:
+
+**Record size, not hardware, produced the "TrueNAS is 125× worse at random writes" figure.** The
+2026-09-06 grid measured 205-375 read iops and ~60 write iops on rand-4k against `tank/bench`,
+which is `recordsize=1M`. A 4 KiB request touches a whole 1 MiB record — 256× amplification both
+ways — while the Synology sits on a 4 KiB-block filesystem. The arithmetic closes: 375 iops × 1 MiB
+is about what this pool does sequentially. The comparison was of record sizes.
+
+**Why the twin was 16K and not 4K**, which would have matched the Synology exactly: `tank` is
+raidz2 6-wide at `ashift=12`, so a stripe is 4 data + 2 parity 4 KiB sectors. A 16 KiB record fills
+it exactly; a 4 KiB record would occupy one data sector plus two parity sectors — 3× space
+amplification, measuring RAIDZ geometry rather than drives. 16K takes 256× down to 4×, the honest
+floor for this pool shape.
+
+Also preserved: the quota on the scratch dataset was the backstop, not the record size. The
+harness has its own capacity gate, but a backstop that depends on the tool being used correctly is
+not a backstop. And sizing it needs the fio detail that each *job* names its own corpus, so a
+3-client grid lays 5 × 64 GiB × 3 = 960 GiB, not 384 GiB — `zfs list tank/bench` read USED 767G
+after the 12-cell bulk grid.
+
+The six `bench16` rows in `data/storage-benchmark-results.tsv` are untouched, so the measurements
+outlive the datasets.
+
+Noted while editing, not fixed: `run.sh` still lists `cephfs-hdd` as a backend, though that tier
+was retired on 2026-09-07.

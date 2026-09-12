@@ -14,7 +14,7 @@
 #   ./run.sh --list                                  # show backends + workloads
 #   ./run.sh --backend cephfs-hdd --dry-run          # gates + rendered manifest
 #   ./run.sh --backend cephfs-hdd                    # full matrix, 1 client
-#   ./run.sh --backend nfs-truenas-bench --clients 3 # multi-client
+#   ./run.sh --backend nfs-csi --clients 3           # multi-client
 #   ./run.sh --backend cephfs-hdd --workload smallfile-write --clients 2
 #   ./run.sh --backend nfs-csi --clean                 # remove retained layout files
 #
@@ -137,11 +137,6 @@ CLEAN=0
 #   home-router/nas      link_rate= 1000  <- Synology
 # Check the link rate, not the spelling, if these ever need revisiting.
 #
-# bench and bench16 share the SAME physical port, because they are the same NAS
-# on the same 10G link -- the twin differs only in ZFS record size. So the wire
-# cross-check cannot tell them apart, and the two must not be measured
-# concurrently or each will corroborate against the other's bytes.
-#
 # cephfs-hdd WAS "-" -- no cross-check at all -- reasoning that its traffic is
 # node-to-node, shows on three ports at once, and is double counted (once leaving
 # the sender, once arriving at the reader), so no single port means "CephFS
@@ -163,8 +158,6 @@ CLEAN=0
 # whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
 cephfs-hdd|cephfs-hdd|ReadWriteMany|1000Gi|6|cephpool/cephfs-bulk-hdd|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet, quota ENFORCED
-nfs-truenas-bench|nfs-truenas-bench|ReadWriteMany|600Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 1M, no SLOG
-nfs-truenas-bench16|nfs-truenas-bench16|ReadWriteMany|1000Gi|6|home-switch/TrueNAS|TrueNAS RAIDZ2 6-wide HGST 4TB over NFS, 10G backnet, recordsize 16K, no SLOG
 nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
@@ -214,8 +207,9 @@ case "$BACKEND" in
     die "'$BACKEND' is a PRODUCTION dataset, and benchmarking it would write
   into live data: csi-driver-nfs creates a pvc-<uuid> subdirectory inside the
   share, and the class is Retain, so the directory is orphaned afterwards.
-  Use --backend nfs-truenas-bench instead (tank/bench, 200G quota, exists for
-  exactly this)." ;;
+  The scratch dataset that existed for exactly this (tank/bench) was removed
+  2026-09-12; re-create a scratch dataset + export + StorageClass before
+  benchmarking TrueNAS again -- see README.md Prerequisites." ;;
 esac
 
 ROW="$(backend_row "$BACKEND")"
@@ -328,16 +322,12 @@ AVAIL_SRC=""
 case "$BACKEND" in
   ceph-nvme-block)   AVAIL_BYTES="$(ceph_pool_avail nvme-replicated)"; AVAIL_SRC="ceph pool nvme-replicated" ;;
   cephfs-hdd)        AVAIL_BYTES="$(ceph_pool_avail cephfs-bulk-hdd)"; AVAIL_SRC="ceph pool cephfs-bulk-hdd" ;;
-  # MUST probe the DATASET, not the pool. tank/bench carries a quota, and
-  # `zfs list -o available` on a quota'd dataset reports the quota-bounded
-  # figure while the pool reports the whole 8.88 TiB. Probing the pool would
-  # wave through a 3-client 64G run (needs 384 GiB) against a 200 GiB quota and
-  # fail it two thirds of the way into layout -- about 20 minutes in.
-  # Measured 2026-09-05: tank=9766991880320, tank/bench=214748168384.
-  nfs-truenas-bench) AVAIL_BYTES="$(ssh -o ConnectTimeout=8 truenas_admin@192.168.1.25 \
-                        'zfs list -Hp -o available tank/bench' 2>/dev/null || true)"; AVAIL_SRC="zfs tank/bench (quota-bounded)" ;;
-  nfs-truenas-bench16) AVAIL_BYTES="$(ssh -o ConnectTimeout=8 truenas_admin@192.168.1.25 \
-                        'zfs list -Hp -o available tank/bench16' 2>/dev/null || true)"; AVAIL_SRC="zfs tank/bench16 (quota-bounded)" ;;
+  # The TrueNAS backends were removed 2026-09-12 with their datasets, exports
+  # and StorageClasses. Restoring them means restoring this probe too, and it
+  # must read the DATASET, not the pool: `zfs list -o available` on a quota'd
+  # dataset reports the quota-bounded figure while the pool reports the whole
+  # pool, so probing the pool waves through a run that cannot fit and fails it
+  # two thirds of the way into layout.
   nfs-csi)           AVAIL_SRC="Synology (no credentialed probe -- check DSM by hand)" ;;
 esac
 

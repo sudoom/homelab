@@ -109,12 +109,14 @@ not fight, and anything **added** here must never again be changed in the UI.
 - **SSH hardening / 2FA / root login.** 25.10 ships root login disabled and an
   admin account already; re-asserting risks locking out the account this
   playbook connects as. `check.yml` reports it instead.
-- **SMB shares for `personal` / `work`.** The Time Machine half of SMB **is**
-  managed now (`truenas-smb`, 2026-08-31), including the global
-  `aapl_extensions` flag, per-Mac users/groups, NFSv4 dataset ACLs and the
-  service. What is still open is the *human* file shares: they need a user and
-  group model for people rather than machines, and `tank/work` has an
-  undecided `casesensitivity` (see the create-time-only note below).
+- **SMB shares for humans.** The Time Machine half of SMB **is** managed
+  (`truenas-smb`, 2026-08-31): the global `aapl_extensions` flag, per-Mac
+  users/groups, NFSv4 dataset ACLs and the service. The *human* file shares were
+  never built, and on 2026-09-12 their two empty datasets (`tank/personal`,
+  `tank/work`) were removed rather than left declared. Reviving them means
+  re-declaring the datasets — with `casesensitivity` decided up front this time,
+  since it is fixed at create — plus a user and group model for people rather
+  than machines.
 - **Syncthing's folder and device pairing.** The app, its dataset, its
   ownership and its snapshot task are all converged; the *folder* definition
   and the three device pairings are not. Syncthing rewrites `config.xml` at
@@ -221,8 +223,9 @@ reports *every* reason it refused, not just the first.
 
 **The deadline is not a date, it is the first byte written.** While a dataset is
 empty this costs nothing; once data lands the fix is copy-out / destroy /
-re-create / copy-back. `tank/work` is currently empty with an undecided
-`casesensitivity` — decide before anything mounts it.
+re-create / copy-back. `tank/work` used to be the standing example — empty, with
+`casesensitivity` never decided — until it was removed on 2026-09-12 along with
+`tank/personal`. No dataset on the pool carries an undecided one today.
 
 `tank/sync` (2026-09-09) is the counter-example: it was created `SENSITIVE`
 deliberately, and it could be decided precisely because nothing will ever mount
@@ -230,7 +233,8 @@ it over SMB. Its only writer is Syncthing on the Linux side, receiving from two
 case-**insensitive** APFS volumes, so a pair of names differing only by case
 cannot arrive and `SENSITIVE` has nothing to collide. Note what this did *not*
 do: the Syncthing work deliberately landed on its own dataset rather than in
-`tank/work`, so it did not force the open decision above.
+`tank/work`, so it never forced that dataset's open decision — which is also why
+removing `tank/work` later cost nothing.
 
 ## Time Machine
 

@@ -54,7 +54,6 @@ result under that id.** Add a new id (`seq-read-1m-v2`) instead of editing.
 |---|---|---|---|---|
 | `ceph-nvme-block` | Ceph RBD, replicated ×3 | 2 of 3 | 3 NVMe (PM9A1) | 10G backnet |
 | `cephfs-hdd` | CephFS EC 2+1, 1 OSD/node | 1 chunk | 3 HDD | 10G backnet |
-| `nfs-truenas-bench` | ZFS RAIDZ2 6-wide | 2 drives | 6 × HGST 4 TB | 10G backnet |
 | `nfs-csi` | Synology DS418 SHR (≈RAID5) | 1 drive | 4 × 3.6 TB | **1G frontnet** |
 
 Layout is recorded in every result row, because it is what makes the numbers
@@ -70,8 +69,9 @@ The harness refuses rather than warns. In order:
    cannot be benchmarked. csi-driver-nfs provisions one subdirectory *per PV
    inside the share*, and every NFS class here is `Retain` — so a run against
    the media class would write `pvc-<uuid>` directories into the live 3.39 TiB
-   library and orphan them afterwards. `tank/bench` (200 GiB quota) exists so
-   this is never necessary.
+   library and orphan them afterwards. A scratch dataset existed for exactly
+   this (`tank/bench`, 200 GiB quota) and was removed on 2026-09-12, so TrueNAS
+   currently has no benchmarkable target — see Prerequisites.
 2. **Client count vs access mode.** `ceph-nvme-block` is RWO, so `--clients 3`
    is refused. It would not produce a slow result — it would leave pods Pending,
    which reads like a hung benchmark rather than a physical impossibility.
@@ -80,7 +80,8 @@ The harness refuses rather than warns. In order:
    `CephPGImbalance`) from something that means your number describes a degraded
    cluster.
 4. **Capacity, actually queried.** Needs `filesize × clients × 4` and *checks*
-   it — Ceph via the mgr metrics proxy, TrueNAS via `zfs list` over SSH.
+   it — Ceph via the mgr metrics proxy. The TrueNAS probe went with its
+   backends on 2026-09-12.
    `nvme-replicated` had only 152 GiB free on 2026-09-05, so this is a real
    constraint, not a formality. The Synology has no credentialed probe and
    degrades to a loud warning.
@@ -92,16 +93,20 @@ contention on shared filenames rather than the storage).
 
 ## Prerequisites
 
-The TrueNAS backend needs `tank/bench` + its NFS export + the
-`nfs-truenas-bench` StorageClass. All three are committed but **not yet
-applied**:
+**The TrueNAS backends were removed on 2026-09-12** — `tank/bench`,
+`tank/bench16`, both NFS exports and both StorageClasses. Benchmarking TrueNAS
+again means restoring all four sides:
 
-```bash
-cd ansible/truenas && ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass
-# ArgoCD syncs components/storage/nfs-csi/ for the StorageClass
-```
+1. the datasets in `ansible/truenas/group_vars/all.yml` (`truenas_datasets`) —
+   recordsize 1M for the sequential comparison, 16K for rand-4k; why 16K rather
+   than 4K on this raidz2 geometry is recorded in
+   `blog/blog-truenas-migration-draft.md` (2026-09-12),
+2. their entries in `truenas_nfs_exports`,
+3. the classes in `components/storage/nfs-csi/values.yaml`,
+4. the backend rows and the quota-bounded `zfs list` probe in `run.sh`.
 
-`cephfs-hdd`, `ceph-nvme-block` and `nfs-csi` need nothing.
+`ceph-nvme-block` and `nfs-csi` need nothing. (`cephfs-hdd` is still listed as a
+backend, but the CephFS tier itself was retired on 2026-09-07.)
 
 ## Usage
 
@@ -112,7 +117,7 @@ export KUBECONFIG=~/.kube/config          # needs write; the readonly SA cannot 
 ./run.sh --list                                        # backends + workloads
 ./run.sh --backend cephfs-hdd --dry-run                # gates + rendered manifest
 ./run.sh --backend cephfs-hdd                          # full matrix, 1 client
-./run.sh --backend nfs-truenas-bench --clients 3       # the multi-client dimension
+./run.sh --backend nfs-csi --clients 3                 # the multi-client dimension
 ./run.sh --backend nfs-csi --workload smallfile-read   # one workload
 ```
 
