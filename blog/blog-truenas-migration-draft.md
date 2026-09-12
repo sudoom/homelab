@@ -5010,7 +5010,9 @@ Only the converge playbook run remains, and it should report `changed=0`.
 By 22:11 the same day the block described above was gone: `oc get nodes` under the read-only
 service-account kubeconfig returned all three nodes, and Homebrew's ad-hoc-signed Python connected to
 both `192.168.1.240:6443` and `192.168.1.25:22`, both of which had failed with errno 65. What
-cleared it is not recorded yet.
+cleared it was **a restart of the Mac**. That argues against the Intune/Defender-policy explanation,
+since a pushed policy would survive a reboot, and points toward a stuck macOS networking-privacy
+state instead — an inference, not something verified.
 
 The same check turned up a useful contrast. An `oc get no` against the operator kubeconfig failed with
 `the server has asked for the client to provide credentials` — an HTTP 401. That is the opposite of
