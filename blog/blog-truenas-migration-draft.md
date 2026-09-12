@@ -4845,3 +4845,65 @@ previous-container logs end the same way:
 
 OpenVPN takes the SIGTERM and exits cleanly, so the container exits 0. All three within the same
 second, daily, fits the liveness probe tripping on a VPN-side drop. Self-healing; not pursued.
+
+---
+
+## 2026-09-12 — the catalog switch applied, and an inventory of what is empty
+
+```
+truenas : ok=66  changed=2  unreachable=0  failed=0  skipped=48
+```
+
+`changed=2` is the delete plus the create, which is what the run was predicted to do. On the box:
+
+```
+state: RUNNING | custom_app: False | catalog: syncthing stable | version: 1.3.13
+images: ['syncthing/syncthing:2.1.5']   container: running
+GUI /rest/noauth/health: {"status": "OK"}
+listeners: 0.0.0.0:8384 tcp, 0.0.0.0:22000 tcp+udp
+```
+
+Idempotence was then checked against the **real** `app.config` rather than a simulation — the
+declared and live projections came back identical, `would_update: false` — so the next run reports
+`changed=0` without having to run it to find out.
+
+One puzzle worth recording: `ls -la /mnt/tank/apps/syncthing` printed nothing at all. Not empty —
+**unreadable**. `filesystem.stat` gives `mode 16832` = `0700`, owner `apps` (568), so only the
+middleware can list it. Through `filesystem.listdir` both halves of the prediction show up:
+
+```
+config          DIRECTORY   <- live state; the catalog app mounts the dataset at /var/syncthing
+config.xml, config.xml.v0, cert.pem, key.pem, https-cert.pem, https-key.pem, index-v2/
+                            <- orphans from the custom app, unused
+```
+
+`/mnt/tank/sync` is still empty: nothing has been paired yet.
+
+### Which datasets are empty — and one that should not be
+
+`191.8K` is what an empty dataset reports on this pool, so it reads as a zero:
+
+| dataset | used | snapshots | status |
+|---|---|---|---|
+| `tank/media` | 3.5T | 14 | in use |
+| `tank/keepers` | 1.7T | — | in use |
+| `tank/timemachine` (macmini 273.3G, mba 197.3G) | 470.6G | — | in use |
+| `tank/s3` (garage: data 7.4G, meta 53.6M) | 7.4G | 2 | in use |
+| `tank/apps/syncthing` | 431.6K | — | in use (new) |
+| `tank/monitoring/{bin,textfile}` | ~440K | — | in use, small by nature |
+| `tank/sync` | 191.8K | 9 | empty **by design** until pairing |
+| `tank/immich` | 303.7K | 15 | pre-created; library move gated on the UPS |
+| `tank/apps` | 623.4K | — | parent; NUT/`oc` tooling also awaits the UPS |
+| `tank/work`, `tank/personal` | 191.8K each | — | human SMB shares were never created |
+| `tank/bench`, `tank/bench16` | 191.8K each | — | benchmark scratch, deliberately kept |
+| **`tank/backup`** | **191.8K** | **61** | **declared `OFFSITE = YES`, and nothing writes to it** |
+
+Most of those are pending by design. `tank/backup` is not: it has a 90-day recursive snapshot task
+producing snapshots of an empty dataset — 61 of them — for a tree whose whole purpose is offsite
+backup. Nothing was ever pointed at it; the Immich DB dump goes to the NFS library and CNPG's WAL
+and base backups go to R2. The failure mode is the familiar one in this topic: a task that reports
+success while protecting nothing, which reads as coverage.
+
+Also spotted from the same query: `tank/bench` and `tank/bench16` still have **enabled NFS
+exports**, so that cleanup is four-sided rather than three — StorageClasses, datasets, exports, and
+the stray PVC.
