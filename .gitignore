@@ -50,3 +50,7 @@ kubeconfig
 config-breakglass
 config-readonly
 .bench-podlogs/
+
+# Python bytecode -- a .pyc under ansible/truenas was committed by accident (2026-09-08)
+__pycache__/
+*.pyc
