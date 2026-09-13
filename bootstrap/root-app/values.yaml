@@ -70,8 +70,7 @@ applications:
 
   # Periodic node `fstrim` to reclaim freed-but-not-TRIMMed RBD blocks (thin
   # provisioning never returns space to Ceph without discard). Privileged
-  # hostPID DaemonSet (privileged).
-  # First pass also does the one-off reclaim (e.g. stale Loki-WAL blocks).
+  # hostPID DaemonSet.
   node-fstrim:
     enabled: true
     path: components/cluster-config/node-fstrim
@@ -164,8 +163,9 @@ applications:
 
   # Disabled 2026-05-14: CephCluster is on `network.provider: host`, so
   # the multus NADs aren't referenced by any daemon. Chart kept in tree
-  # in case a future round switches back to multus (would also need the
-  # `ceph-shim` NNCP re-enabled in nmstate-nncp).
+  # in case a future round switches back to multus. The `ceph-shim` macvlan
+  # and its /25 route in nmstate-nncp are still rendered and live -- read
+  # CLAUDE.md's "Network provider" section before touching either.
   ceph-network-attachments:
     enabled: false
     path: components/cluster-config/ceph-network-attachments
@@ -188,10 +188,10 @@ applications:
     namespace: default
     syncWave: "5"
 
-  # OADP DataProtectionApplication + RGW bucket plumbing + daily
-  # Schedule. Daily backup at 02:00 UTC, 14d retention, CSI snapshot +
-  # datamover to RGW. Velero never modifies live state; restores are
-  # explicit operator actions.
+  # OADP DataProtectionApplication + the garage (S3 on TrueNAS) BSL + a
+  # daily Schedule that ships PAUSED (02:00 UTC, 14d retention, CSI snapshot
+  # + datamover). Velero never modifies live state; restores are explicit
+  # operator actions.
   oadp:
     enabled: true
     path: components/cluster-config/oadp
@@ -240,10 +240,9 @@ applications:
     namespace: nfs-csi
     syncWave: "4"
 
-  # Wave 5 — Monitoring + observability config
-  # Re-enabled 2026-05-15 after the GitOps-only Ceph rebuild test. Each
-  # of these consumes ceph-nvme-block PVCs (Prometheus TSDB, Grafana,
-  # Loki, Gatus state) so they could not come up until storage was back.
+  # Wave 5 — Monitoring + observability config. Each of these consumes
+  # ceph-nvme-block PVCs (Prometheus TSDB, Grafana, Loki, Gatus state), so
+  # none of them can come up before storage.
   grafana-config:
     enabled: true
     path: components/cluster-config/grafana-config
@@ -321,7 +320,7 @@ applications:
 
   # Prunes CNPG volumeSnapshot backups; CNPG's retentionPolicy does not cover
   # them. Wave 6 so it lands after the CNPG clusters it reads (wave 5).
-  # SHIPS WITH dryRun: true -- it logs and deletes nothing until that is flipped.
+  # Live (dryRun: false) since 2026-09-09.
   cnpg-snapshot-retention:
     enabled: true
     path: components/cluster-config/cnpg-snapshot-retention
@@ -330,7 +329,7 @@ applications:
 
   # Periodic CronJob that evicts pods violating node affinity / taints /
   # inter-pod anti-affinity. Designed to unstick the post-MCO-reroll
-  # clustering pattern (routers, RGW, etc. landing on suboptimal nodes).
+  # clustering pattern (routers and the like landing on suboptimal nodes).
   # Excludes anything with a PVC (CNPG, Loki, Prometheus, …).
   descheduler:
     enabled: true
@@ -360,11 +359,9 @@ applications:
     namespace: keepers
     syncWave: "6"
 
-  # Pull-through OCI registry cache. Phase A (this entry) deploys Zot
-  # standalone at zot.apps.okd.sudops.pl with on-demand sync from quay.io,
-  # docker.io, ghcr.io, registry.k8s.io. Phase B (separate, MCO-event
-  # scoped) wires ImageDigestMirrorSet + ImageTagMirrorSet to route
-  # cluster pulls through it.
+  # Pull-through OCI registry cache at zot.apps.okd.sudops.pl with on-demand
+  # sync from quay.io, docker.io, ghcr.io, registry.k8s.io. The mirror rules
+  # that route cluster pulls through it are image-mirror-zot (wave 5).
   zot:
     enabled: true
     path: components/apps/zot
