@@ -76,9 +76,7 @@
     }
   ],
   "ignorePaths": [
-    "bootstrap/**",
-    "*-values.yaml",
-    "monitoring/**"
+    "bootstrap/**"
   ],
   "customManagers": [
     {
