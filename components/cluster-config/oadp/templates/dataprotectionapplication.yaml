@@ -19,10 +19,9 @@ spec:
     - name: {{ .Values.garageBsl.name }}
       velero:
         provider: aws
-        # THE DEFAULT since 2026-09-07. Exactly one BSL may carry this: two is
-        # ambiguous, zero means a Backup with no explicit storageLocation has
-        # nowhere to go. So this flag and the RGW one above move together, in a
-        # single commit, and never independently.
+        # THE DEFAULT. Exactly one BSL may carry this: two is ambiguous, zero
+        # means a Backup with no explicit storageLocation has nowhere to go. If
+        # a second BSL is ever added, move the flag in the same commit.
         default: true
         objectStorage:
           bucket: {{ .Values.garageBsl.bucket }}

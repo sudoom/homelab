@@ -10,11 +10,11 @@ spec:
   paused: {{ .Values.schedule.paused }}
   template:
     ttl: {{ .Values.schedule.ttl }}
-    # Follows whichever BSL is default rather than naming "default" literally.
-    # The literal was a latent trap: "default" is a BSL NAME here, not a
-    # reference to the default flag, so flipping the flag would have left this
-    # Schedule still pointed at RGW while everything else moved -- and it is
-    # paused, so nothing would have failed loudly to reveal it.
+    # Names the BSL explicitly rather than "default" literally. The literal was
+    # a latent trap: "default" is a BSL NAME here, not a reference to the
+    # default flag, so moving the flag to another BSL would have left this
+    # Schedule pointed at the old one -- and it is paused, so nothing would
+    # have failed loudly to reveal it.
     storageLocation: {{ .Values.schedule.storageLocation }}
     snapshotMoveData: {{ .Values.schedule.snapshotMoveData }}
     defaultVolumesToFsBackup: false
