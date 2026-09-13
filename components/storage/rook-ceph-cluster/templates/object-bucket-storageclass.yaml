@@ -1,10 +1,10 @@
 {{- if .Values.objectBucket.enabled }}
-# StorageClass that provisions buckets in the existing CephObjectStore
-# (owned by components/storage/ceph-object-store/) via ObjectBucketClaim.
-# This SC stays local to this chart instead of folded into upstream
-# cephObjectStores[] because the CephObjectStore CR itself is still in a
-# separate ArgoCD app — see the migration plan in
-# blog/blog-rook-ceph-draft.md.
+# StorageClass that provisions buckets in the CephObjectStore owned by
+# components/storage/ceph-object-store/ via ObjectBucketClaim. Parked with
+# that chart since the object store was retired 2026-09-07; enable both
+# together. Local to this chart rather than folded into upstream
+# cephObjectStores[] because the CephObjectStore CR lives in a separate
+# ArgoCD app.
 #
 # Two flavors:
 #   ceph-bucket          reclaimPolicy: Delete — OBC delete = bucket wipe.

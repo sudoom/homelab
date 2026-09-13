@@ -18,13 +18,10 @@ rook-ceph-cluster:
 
   monitoring:
     enabled: true
-    # Replaces the vendored files/ceph-prometheus-rules.yaml in the old chart.
+    # Rook's shipped Ceph PrometheusRules; our own additions live in templates/.
     createPrometheusRules: true
 
-  # No labels/annotations on the CephCluster CR. The Phase-A migration
-  # annotation lives on the *live* resource (added under the old chart);
-  # ArgoCD's ServerSideApply removes it when the new chart asserts
-  # ownership without rendering it, which is exactly the cleanup we want.
+  # No labels/annotations on the CephCluster CR.
   cephClusterMetadata:
     annotations: {}
     labels: {}
@@ -76,11 +73,6 @@ rook-ceph-cluster:
       #
       # CLAUDE.md "Network provider" section has the full chronology.
       # See also blog/blog-multus-ceph-migration-draft.md.
-      #
-      # Trade vs. multus: host-network Ceph daemons bind host ports, so
-      # RGW collides with openshift-ingress/router-default on :80 on 2 of
-      # 3 nodes. Mitigation: `required` podAntiAffinity in the
-      # ceph-object-store chart pins RGW to the router-free node.
       provider: host
       addressRanges:
         public:
@@ -143,37 +135,20 @@ rook-ceph-cluster:
       useAllNodes: false
       useAllDevices: false
       nodes:
-        # OSD devices use SLOT-STABLE paths (not drive-specific by-id WWN) so a
-        # drive replacement in the same slot REUSES the OSD instead of spawning a
-        # new one: NVMe = /dev/nvme0n1 (one NVMe/node, deterministic); HDD =
-        # /dev/disk/by-path/pci-...-ata-N (the SATA bay PORT, stable across the
-        # sda/sdb reshuffle AND drive swaps — NOT /dev/sdX). by-id WWN stays the
-        # ref for drive-SPECIFIC ops (wipe/SMART/gate), where you mean one disk.
+        # One NVMe OSD per node, named by its slot-stable path so a drive swap
+        # in the same slot REUSES the OSD instead of spawning a new one. by-id
+        # WWN stays the ref for drive-SPECIFIC ops (wipe/SMART/gate). A device
+        # must leave this list BEFORE its OSD is purged, or Rook recreates the
+        # OSD on its next reconcile (the 2026-09-08 HDD removal, in CLAUDE.md).
         - name: "node4.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            # HDD bay removed 2026-09-08 (phase 4a of the HDD-tier decommission).
-            # osd.3 held 0 PGs and `ceph osd safe-to-destroy 3` passed, so this is
-            # NOT a degraded-window change -- `ceph osd out` moves zero data. The
-            # device must leave the spec BEFORE the deployment is scaled down and
-            # purged, or Rook recreates the OSD on its next reconcile.
-            # Drive stays physically seated; the pull is a separate event (the
-            # 3.5" bay is not hot-swap, so it costs a power-cycle, and every node
-            # reboot re-trips the br-ex.forwarding cascade).
         - name: "node5.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            # HDD bay removed 2026-09-08 (phase 4a) -- osd.4. See node4 above.
         - name: "node6.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
-            # HDD bay removed 2026-09-08 (phase 4a) -- osd.5. See node4 above.
-            #
-            # With osd.3/4/5 gone the cluster is nvme-only, which closes the .mgr
-            # trap structurally: `replicated_rule` targets bare `default`, and
-            # `default` now contains only nvme. templates/mgr-pool-crush-rule.yaml
-            # is kept (it costs nothing and documents the hazard) but is no longer
-            # load-bearing on a fresh bootstrap.
 
     disruptionManagement:
       managePodBudgets: true
@@ -211,29 +186,10 @@ rook-ceph-cluster:
           csi.storage.k8s.io/node-stage-secret-namespace: "{{ .Release.Namespace }}"
           csi.storage.k8s.io/fstype: ext4
 
-  # RETIRED 2026-09-07 (HDD-tier decommission, phase 3b).
-  #
-  # Was a single CephFilesystem `cephfs`: metadata replicated x3 on NVMe, one
-  # bulk data pool `cephfs-bulk-hdd` erasure-coded 2+1 across the three HDD
-  # OSDs, exposed as the RWX StorageClass `cephfs-hdd`.
-  #
-  # WHY IT GOES: its only consumer, media/media-data-pvc, moved to TrueNAS NFS
-  # on 2026-08-30 and its retained 3.5 TiB was reclaimed 2026-09-07. RWX is
-  # served by the NFS classes and no CephFS is planned, so the tier had no
-  # purpose -- and the HDD OSDs it exists for are being pulled.
-  #
-  # THIS IS ONE-WAY. Recreating needs a manual
-  # `ceph fs new cephfs cephfs-metadata <datapool> --force` FIRST: Ceph requires
-  # --force for an EC default data pool and Rook will not pass it. Rook adopts
-  # and manages the MDS afterwards, but cannot perform that first step.
-  #
-  # UNRESOLVED AT RETIREMENT, recorded so a future incident can connect it:
-  # this tier could not serve concurrent multi-node RWX. Two pods on two nodes
-  # gave one client persistent EACCES on statx -- 293 failures in 300s, no
-  # recovery until the concurrency stopped. Not the MDS (fs Ready, no evictions
-  # since August). Consistent with a blocklisted kernel client. Never root
-  # caused, and the same behaviour could affect RBD, which IS production. See
-  # the README TODO.
+  # No CephFilesystem: the HDD-backed CephFS tier was retired 2026-09-07, and
+  # rebuilding it is NOT a chart change (Ceph needs `ceph fs new ... --force`
+  # for an EC data pool, which Rook will not pass). The procedure, and the
+  # unexplained concurrent-RWX EACCES it left behind, are in CLAUDE.md "CephFS".
   cephFileSystems: []
 
   cephObjectStores: []
@@ -241,23 +197,6 @@ rook-ceph-cluster:
 # ---------------------------------------------------------------------------
 # Local templates (rendered alongside the subchart) — OpenShift-specific
 # extras the upstream chart doesn't provide.
-
-# Two StorageClasses for the CephFS two-tier filesystem, rendered by the local
-# templates/cephfs-storageclasses.yaml. The upstream subchart renders only ONE
-# SC per cephFileSystems[] entry, but the two-tier plan needs two SCs against
-# the SAME filesystem (differing only in target data pool). `pool` MUST be the
-# full rendered RADOS pool name (<fsName>-<dataPool>), not the bare data-pool
-# name — the CSI driver takes it verbatim. Neither is the cluster default
-# (ceph-nvme-block RBD stays default); RWX is requested explicitly.
-# NOTE (2026-09-08): `cephfsStorageClasses` and templates/cephfs-storageclasses.yaml
-# were DELETED, not just disabled. Keeping a false-gated CephFS StorageClass
-# template implied the tier could be restored by flipping `enabled: true`, and it
-# cannot: Ceph requires `--force` for an EC default data pool and Rook will not
-# pass it, so a rebuild needs a one-time manual `ceph fs new cephfs <meta> <data>
-# --force` BEFORE Rook can adopt the MDS. A flag that silently does nothing is
-# worse than no flag -- same failure shape as the immich `existingClaim` note in
-# components/apps/immich/values.yaml. Restore from git history if the tier ever
-# comes back; the CephFS section of CLAUDE.md has the full procedure.
 
 # OpenShift Route fronting the Ceph dashboard with edge TLS at
 # ceph.apps.okd.sudops.pl. Upstream chart only ships Ingress + Gateway-API
@@ -285,22 +224,16 @@ mgrServiceMonitor:
 #   1. Cluster-wide warning at 80% — fills the gap between rook's 85%
 #      per-OSD nearfull and the 95% mon_osd_full_ratio backstop.
 #   2. NVMe-tier (device_class=nvme) warning at 75% + critical at 85% —
-#      the cluster-total rule is blind to a full NVMe tier (HDD capacity
-#      dilutes it), which is how nvme-replicated hit OSD_FULL undetected
-#      2026-07-05. Device-class-scoped + raw-bytes so it fires early,
-#      while Prometheus is alive and fstrim can still reclaim.
+#      device-class-scoped + raw-bytes so it fires early, while Prometheus
+#      is alive and fstrim can still reclaim (the 2026-07-05 OSD_FULL lesson).
 # Rationale in templates/prometheusrule-cluster-utilization.yaml header.
 clusterUtilizationAlert:
   enabled: true
 
-# RETIRED 2026-09-07 (HDD-tier decommission, phase 3c). Rendered the
-# `ceph-bucket` StorageClass that ObjectBucketClaims provisioned against the
-# CephObjectStore. That object store is being deleted: its only two tenants,
-# Loki's chunks and OADP's BackupStorageLocation, both moved to garage on
-# TrueNAS the same day, and zero OBCs exist anywhere in the cluster.
-#
-# Left enabled it would render a StorageClass pointing at an object store that
-# no longer exists -- a provisioner that accepts a claim and then fails.
+# The `ceph-bucket` StorageClasses for ObjectBucketClaims. Parked since the
+# CephObjectStore was retired 2026-09-07 (S3 is garage on TrueNAS now). Enable
+# only together with components/storage/ceph-object-store, never alone: a
+# bucket class pointing at no object store accepts claims and then fails them.
 objectBucket:
   enabled: false
   storageClassName: ceph-bucket
@@ -359,16 +292,14 @@ csiRbdProvisionerCapsFix:
 # around the Squid 19.2.3 pg_autoscaler bug (full write-up in
 # bugs/upstream-ceph-pg-autoscaler-bulk-ignored.md). Idempotent: skips
 # any pool where pg_num is already >= floor. Runs at sync-wave 11 so it
-# fires after the cluster is up + after the CephObjectStore at wave 4
-# has had time to create its pools.
+# fires after the cluster is up and the pools exist.
 #
 # nvme-replicated floor 128: 100 PGs/OSD × 3 OSDs / replication 3 = 100
 #   → next pow2 = 128 (per Ceph's PG sizing formula).
-# The rgw.buckets.data (floor 32) and cephfs-bulk-hdd (floor 64) entries were
-#   removed 2026-09-07 when the object store and CephFS were retired. Leaving
-#   them was not harmless: the Job blocks up to 600s per missing pool waiting
-#   for it to appear, then fails and retries forever, which is what held
-#   rook-ceph-cluster in Progressing after the pools were deleted.
+# ONLY LIST POOLS THAT EXIST: the Job blocks up to 600s per missing pool
+#   waiting for it to appear, then fails and retries forever -- which held
+#   rook-ceph-cluster in Progressing on 2026-09-07 until the retired pools'
+#   entries were removed.
 pgNumFloor:
   enabled: true
   image: quay.io/ceph/ceph:v19.2.4
