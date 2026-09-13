@@ -18,8 +18,10 @@
 #
 # Trade-off: ctrlplugin pods bind host ports (9090 for metrics, etc.) — a
 # replicas=2 deployment is fine since OKD nodes don't have anything else on
-# those ports. cephfs ctrlplugin is patched the same way for future-proofing
-# (CephFS storage class is planned once bulk HDDs land — see README TODO).
+# those ports. Only the RBD Driver is patched: the CephFS driver was disabled
+# in components/operators/rook-ceph on 2026-09-13 (tier retired 2026-09-07),
+# and a Driver CR applied here for a driver Rook no longer manages would make
+# ceph-csi-operator deploy it anyway. Re-add the cephfs block with the tier.
 #
 # This whole patch becomes obsolete the moment Rook propagates
 # CSI_ENABLE_HOST_NETWORK to the Driver CR. Track upstream-rook PRs.

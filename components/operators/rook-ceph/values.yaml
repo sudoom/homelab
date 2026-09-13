@@ -9,6 +9,10 @@ rook-ceph:
   useOperatorHostNetwork: true
   csi:
     enableRbdDriver: true
-    enableCephfsDriver: true
+    # Off since 2026-09-13: the CephFS tier was retired 2026-09-07 and no
+    # CephFS PV, StorageClass or CephFilesystem remains, so the driver's five
+    # plugin pods served nothing. Re-enable together with a rebuilt tier, and
+    # restore the cephfs Driver hostNetwork patch in csi-driver-config with it.
+    enableCephfsDriver: false
   monitoring:
     enabled: true

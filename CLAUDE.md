@@ -188,7 +188,7 @@ Both tenants moved to **garage on TrueNAS** (`http://192.168.1.25:30188`, frontn
 
 ### CephFS — RETIRED 2026-09-07 (was the HDD bulk RWX tier)
 
-The `CephFilesystem` `cephfs`, its `cephfs-metadata` + `cephfs-bulk-hdd` pools, the `cephfs-csi` subvolume group and the `cephfs-hdd` StorageClass are **gone**. Its only consumer, `media/media-data-pvc`, moved to TrueNAS NFS on 2026-08-30; the retained 3.5 TiB was reclaimed 2026-09-07. **RWX is served by the NFS classes now** — do not propose CephFS for a new RWX need without an explicit decision to rebuild the tier.
+The `CephFilesystem` `cephfs`, its `cephfs-metadata` + `cephfs-bulk-hdd` pools, the `cephfs-csi` subvolume group and the `cephfs-hdd` StorageClass are **gone**. Its only consumer, `media/media-data-pvc`, moved to TrueNAS NFS on 2026-08-30; the retained 3.5 TiB was reclaimed 2026-09-07. **RWX is served by the NFS classes now** — do not propose CephFS for a new RWX need without an explicit decision to rebuild the tier. **The CephFS CSI driver is off as well (2026-09-13):** `csi.enableCephfsDriver: false` in `components/operators/rook-ceph/values.yaml`, and the cephfs `Driver` hostNetwork patch is gone from `components/cluster-config/csi-driver-config/`. A rebuild re-enables both in one commit.
 
 **Rebuilding is NOT a chart change.** Ceph requires `--force` for an EC default data pool and Rook will not pass it, so it needs a one-time manual `ceph fs new cephfs <metadata> <data> --force` BEFORE Rook can adopt and manage the MDS.
 

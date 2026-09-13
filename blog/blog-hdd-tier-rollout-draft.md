@@ -2145,3 +2145,62 @@ the `nvme-replicated` fill warning. Ceph's `nearfull` trips at 85% and the pool 
 fired today (`CephNvmeTierNearFull`) is **ours**, from `prometheusrule-cluster-utilization.yaml`, deliberately set
 below Ceph's own threshold so there is room to act. Working exactly as designed, and worth remembering before
 someone reads `HEALTH_WARN`-with-one-detail as "capacity is fine."
+
+### 2026-09-13 — sweeping the tier's leftovers out of the code
+
+Five days after the last HDD left the chassis, a repo-wide pass for dead code found the retirement had left more
+behind than tombstone comments. In order of consequence:
+
+**The CephFS CSI driver was still enabled.** `components/operators/rook-ceph/values.yaml` had
+`csi.enableCephfsDriver: true`, so five CephFS plugin pods (three nodeplugins, two ctrlplugins) were running against
+a cluster with no `CephFilesystem`, no `cephfs-hdd` StorageClass and zero CephFS PVs:
+
+```
+$ oc get sc --no-headers | awk '{print $1}'
+ceph-nvme-block nfs-csi nfs-truenas-immich nfs-truenas-keepers nfs-truenas-media
+$ oc get pv --no-headers | grep -ci cephfs
+0
+$ oc -n rook-ceph get pods --no-headers | grep -c cephfs
+5
+$ oc -n rook-ceph get drivers.csi.ceph.io
+rook-ceph.cephfs.csi.ceph.com
+rook-ceph.rbd.csi.ceph.com
+```
+
+Flipped to `false`. The companion `csi-driver-config` chart patched `Driver/rook-ceph.cephfs.csi.ceph.com` with
+`controllerPlugin.hostNetwork: true` alongside the RBD one; that document is gone too, because a Driver CR applied
+by ArgoCD for a driver Rook no longer manages would have ceph-csi-operator deploy the plugins regardless of the
+Rook flag. Both edits land in one commit so the end state is the same whichever Application syncs first: Rook
+drops the driver on its next CSI reconcile, ArgoCD prunes the patched CR, ceph-csi-operator removes the pods.
+Re-enabling is the same two edits in reverse, after the `ceph fs new ... --force` step the CephFS section of
+CLAUDE.md describes. Observed result is appended below once ArgoCD has synced.
+
+**`smartctl-exporter` still probed `/dev/sdb`.** Every node's exporter reports only `nvme0n1` and `sda` now (the
+boot SSD moved to `sda` on node4 and node6 when the HDD left; node5's was already there), so the third device entry
+was a scrape of nothing:
+
+```
+$ for p in $(oc -n smartctl-exporter get pods -o jsonpath='{range .items[*]}{.metadata.name}:{.spec.nodeName}{"\n"}{end}'); do
+    echo "${p##*:}: $(oc get --raw "/api/v1/namespaces/smartctl-exporter/pods/${p%%:*}:9633/proxy/metrics" \
+      | grep -o 'smartctl_device{[^}]*device="[^"]*"' | grep -o 'device="[^"]*"' | sort -u | tr '\n' ' ')"; done
+node4.okd.sudops.pl: device="nvme0n1" device="sda"
+node5.okd.sudops.pl: device="nvme0n1" device="sda"
+node6.okd.sudops.pl: device="nvme0n1" device="sda"
+```
+
+Dropped, with the comment rewritten to say what is actually in each chassis and to re-check enumeration after any
+bay change — the same `/dev/sdX` hazard the wipe gates and the `CephNodeDiskspaceWarning` false positive already
+taught.
+
+**The benchmark harness still registered `cephfs-hdd`** as a backend, with its own `ceph_pool_avail` probe, an
+ENOSPC `die` branch for the enforced quota and a 15 MB/s layout budget. All removed. The `cephpool/<pool>` counter
+route stays, because it is the right instrument for any Ceph-backed backend that returns, and `recheck-wire.py`
+now says where its framing constant goes instead of carrying a dead one.
+
+**Tombstones.** `rook-ceph-cluster/values.yaml` carried some seventy lines explaining the CephFS, object-bucket and
+HDD-bay removals, most of it duplicating the CLAUDE.md sections that already hold the one-way `--force` rebuild trap
+and the unexplained concurrent-RWX EACCES. Cut to pointers. The NVMe-tier utilization rule keeps its 75% early
+warning but its text no longer argues against an HDD dilution that cannot happen. Verified render-neutral: the
+chart's `helm template` output before and after the comment edits differs only in the two rule descriptions.
+
+Nothing in this pass touched a pool, a CRUSH rule or a daemon other than the CephFS plugins.
