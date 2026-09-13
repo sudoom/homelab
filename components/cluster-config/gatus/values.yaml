@@ -105,9 +105,9 @@ config:
       conditions:
         - "[CONNECTED] == true"
 
-    # DNS — pi-hole on its way out (technetium migration), but keep it
-    # visible until cutover so we can see the day it stops being authoritative.
-    - name: pihole-dns
+    # DNS — dns-master, the Technitium primary (ansible/technitium). Renamed
+    # from pihole-dns 2026-09-13; the pi-hole it watched was cut over 2026-05-12.
+    - name: technitium-dns
       group: network
       url: udp://192.168.1.12:53
       interval: 60s
