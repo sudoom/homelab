@@ -586,32 +586,9 @@
     # not 192.168.1.25. Same expression garage uses.
     _ips: "{{ [] if truenas_syncthing.bind_ip == '0.0.0.0' else [truenas_syncthing.bind_ip] }}"
 
-# ONE-TIME MIGRATION, and self-limiting: fires only while an app named
-# syncthing exists AND is a custom app -- the compose app this role deployed
-# until 2026-09-11. Once it is gone the condition can never be true again, and
-# a catalog app of the same name is never touched. app.delete removes the app
-# and its image; it does not touch host-path storage, so both datasets and
-# their snapshots survive (remove_ix_volumes stays false; there are none).
-- name: Remove the pre-catalog custom syncthing app
-  ansible.builtin.command:
-    argv:
-      - midclt
-      - call
-      - --job
-      - app.delete
-      - "{{ truenas_syncthing.app_name }}"
-      - '{"remove_images": true, "remove_ix_volumes": false}'
-  when: >-
-    truenas_app_q.stdout | from_json
-    | selectattr('name', 'equalto', truenas_syncthing.app_name)
-    | selectattr('custom_app', 'equalto', true)
-    | list | length > 0
-  register: truenas_st_delete
-
-# truenas_app_names was built before the delete, so it still lists syncthing.
 - name: Decide whether the syncthing catalog app already exists
   ansible.builtin.set_fact:
-    _st_exists: "{{ truenas_syncthing.app_name in truenas_app_names and truenas_st_delete is not changed }}"
+    _st_exists: "{{ truenas_syncthing.app_name in truenas_app_names }}"
 
 - name: Deploy the syncthing catalog app
   ansible.builtin.command:
@@ -696,8 +673,7 @@
 - name: Report syncthing state
   ansible.builtin.debug:
     msg: >-
-      syncthing {{ 'REPLACED the custom app with the catalog app' if truenas_st_delete is changed
-      else ('catalog app present' if _st_exists | bool else 'DEPLOYED') }}
+      syncthing {{ 'catalog app present' if _st_exists | bool else 'DEPLOYED' }}
       -- GUI at http://192.168.1.25:{{ truenas_syncthing.ports.web }}/ (set a GUI
       password at first login). Pairing is one-time and by hand; see the README.
       The NAS folder must be RECEIVE-ONLY, and each Mac adds this node by

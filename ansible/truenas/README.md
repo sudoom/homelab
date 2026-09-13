@@ -321,13 +321,14 @@ the Apps screen applies it. `truenas_syncthing.version` is read only at create,
 so after an upgrade the declaration goes stale — garage declares `1.2.5` while
 `1.2.8` runs (2026-09-11).
 
-**Migrating from the custom app** happens on the first playbook run after the
-switch: `truenas-apps` deletes the app only while it is still a custom app, then
-creates the catalog one. Nothing had been paired, so nothing is lost, and both
-datasets and their snapshots are untouched. The device ID regenerates, because
-the catalog app mounts the dataset at `/var/syncthing` and Syncthing keeps its
-state under `config/`; the `config.xml`, keys and database at the dataset root
-are left over from the custom app and unused.
+**The custom app was replaced in place** on the first playbook run after the
+switch (2026-09-12): a one-shot task, since removed from the role, deleted the
+app while it was still a custom app and the role then created the catalog one.
+Nothing had been paired, so nothing was lost, and both datasets and their
+snapshots were untouched. The device ID regenerated, because the catalog app
+mounts the dataset at `/var/syncthing` and Syncthing keeps its state under
+`config/`; the `config.xml`, keys and database at the dataset root are left over
+from the custom app and unused.
 
 ### One-time pairing
 
