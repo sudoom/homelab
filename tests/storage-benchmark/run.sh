@@ -12,10 +12,10 @@
 #
 # Usage:
 #   ./run.sh --list                                  # show backends + workloads
-#   ./run.sh --backend cephfs-hdd --dry-run          # gates + rendered manifest
-#   ./run.sh --backend cephfs-hdd                    # full matrix, 1 client
+#   ./run.sh --backend nfs-csi --dry-run             # gates + rendered manifest
+#   ./run.sh --backend nfs-csi                       # full matrix, 1 client
 #   ./run.sh --backend nfs-csi --clients 3           # multi-client
-#   ./run.sh --backend cephfs-hdd --workload smallfile-write --clients 2
+#   ./run.sh --backend nfs-csi --workload smallfile-write --clients 2
 #   ./run.sh --backend nfs-csi --clean                 # remove retained layout files
 #
 # Results append to data/storage-benchmark-results.tsv (machine-readable) and
@@ -84,15 +84,15 @@ CLEAN=0
 # not produce a slow result -- it produces pods stuck Pending, which reads like
 # a hung benchmark rather than a scheduling impossibility.
 #
-# LAYOUT IS PART OF THE RESULT. Three backends, three different shapes, and the
-# shape explains the numbers: the DS418 has MORE spindles than CephFS-HDD (4 vs
-# 3) and measured 2.4x slower, because it is one box behind a 1G link. Without
-# the layout in the row, that looks like a contradiction.
+# LAYOUT IS PART OF THE RESULT, because the shape explains the numbers: the
+# DS418 had MORE spindles than the (since retired) CephFS-HDD tier (4 vs 3) and
+# measured 2.4x slower, because it is one box behind a 1G link. Without the
+# layout in the row, that looks like a contradiction.
 #
 # ceph-nvme-block IS DELIBERATELY ABSENT (2026-09-05). It is RWO, so it can
-# never take part in the multi-client dimension, and it is NVMe against three
-# HDD-backed backends -- a comparison that tells you the device class differs,
-# which nobody needed a benchmark to learn. Add it back only for an
+# never take part in the multi-client dimension, and it is NVMe against
+# HDD-backed NFS backends -- a comparison that tells you the device class
+# differs, which nobody needed a benchmark to learn. Add it back only for an
 # NVMe-vs-NVMe question.
 #
 # PVC SIZE IS DERIVED FROM THE CORPUS COUNT, and the count is not one per
@@ -110,16 +110,15 @@ CLEAN=0
 # per client -- so 384 GiB total". That undercounts the bulk side 4:1. It never
 # failed because on NFS the PVC size is ADVISORY -- csi-driver-nfs provisions a
 # subdirectory inside the share and nothing enforces the request, so the real
-# limits were the DS418 volume and tank/bench's quota. CephFS ENFORCES it, so
-# cephfs-hdd at 600Gi would have hit ENOSPC mid-layout around cell 9 of 12,
-# hours in, presenting as a CephFS fault rather than a sizing error.
+# limits were the DS418 volume and tank/bench's quota. A class that ENFORCES
+# the request (CephFS did) would instead hit ENOSPC mid-layout around cell 9 of
+# 12, hours in, presenting as a storage fault rather than a sizing error.
 #
-# The two NFS entries STAY at 600Gi deliberately: their PVCs are already Bound
-# with corpora in them, and run.sh re-applies the PVC on every run -- raising
-# the request on a live PVC is an expansion, which csi-driver-nfs does not
-# support, so it would break every future NFS run to fix a number that has no
-# effect there. cephfs-hdd is sized correctly because it is enforced and the
-# PVC does not exist yet.
+# The nfs-csi entry STAYS at 600Gi deliberately: its PVC is already Bound with
+# corpora in it, and run.sh re-applies the PVC on every run -- raising the
+# request on a live PVC is an expansion, which csi-driver-nfs does not support,
+# so it would break every future NFS run to fix a number that has no effect
+# there. Size any enforcing backend correctly BEFORE its PVC first exists.
 #
 # switch_if is the MikroTik port carrying this backend's traffic, as
 # routerboard/interface, or "-" when there is no single port to watch. It gives
@@ -157,7 +156,6 @@ CLEAN=0
 # leaving the sender, once arriving at the reader). There is no single port
 # whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
-cephfs-hdd|cephfs-hdd|ReadWriteMany|1000Gi|6|cephpool/cephfs-bulk-hdd|CephFS EC 2+1 across 3 HDD OSDs (1/node), 10G backnet, quota ENFORCED
 nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
@@ -321,7 +319,6 @@ AVAIL_BYTES=""
 AVAIL_SRC=""
 case "$BACKEND" in
   ceph-nvme-block)   AVAIL_BYTES="$(ceph_pool_avail nvme-replicated)"; AVAIL_SRC="ceph pool nvme-replicated" ;;
-  cephfs-hdd)        AVAIL_BYTES="$(ceph_pool_avail cephfs-bulk-hdd)"; AVAIL_SRC="ceph pool cephfs-bulk-hdd" ;;
   # The TrueNAS backends were removed 2026-09-12 with their datasets, exports
   # and StorageClasses. Restoring them means restoring this probe too, and it
   # must read the DATASET, not the pool: `zfs list -o available` on a quota'd
@@ -368,18 +365,12 @@ if [[ "$GRID_BYTES" -gt "$PVC_BYTES" ]]; then
   MSG="a full 18-cell grid at clients=$CLIENTS retains $(human "$GRID_BYTES") of corpora
   (4 bulk corpora + 1 shared smallfile corpus, 64G each, per client) but the PVC
   is only $(human "$PVC_BYTES")."
-  case "$BACKEND" in
-    cephfs-hdd)
-      die "$MSG
-  CephFS ENFORCES the quota, so this fails with ENOSPC partway through layout --
-  hours in, looking like a CephFS fault. Raise pvc_size in the backend registry
-  BEFORE the PVC is created (it is immutable-ish afterwards: csi-driver-nfs
-  cannot expand, and a CephFS expansion needs the PV patched too)." ;;
-    *)
-      echo "  WARN $MSG"
-      echo "       Advisory here -- $SC does not enforce the request, so the real"
-      echo "       limits are the share's own quota. Not fatal." ;;
-  esac
+  # Every registered backend is NFS, where the request is advisory. A backend
+  # whose class ENFORCES the request must `die` here instead: otherwise the
+  # failure lands hours in, as ENOSPC mid-layout, looking like a storage fault.
+  echo "  WARN $MSG"
+  echo "       Advisory here -- $SC does not enforce the request, so the real"
+  echo "       limits are the share's own quota. Not fatal."
 else
   echo "  ok   PVC $PVC_SIZE covers a full grid at clients=$CLIENTS ($(human "$GRID_BYTES") of retained corpora)"
 fi
@@ -445,11 +436,11 @@ RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"
 # 969.5 Mb/s. Physically impossible, and only visible because of the switch
 # cross-check.
 #
-# THE PESSIMISTIC LAYOUT RATE IS PER BACKEND, because "the slowest plausible
-# backend" is not one number. 50 MB/s covers the two NFS backends (the DS418
-# writes at ~110 MiB/s, TrueNAS at ~87-104), but cephfs-hdd is EC 2+1 across
-# three spindles and its last measured sequential write is 22.1 MB/s
-# (2026-06-12, data/storage-throughput.md) -- EC amplifies writes x1.5.
+# THE PESSIMISTIC LAYOUT RATE MUST BE PER BACKEND when the backends differ,
+# because "the slowest plausible backend" is not one number. 50 MB/s covers the
+# NFS backends (the DS418 writes at ~110 MiB/s, TrueNAS at ~87-104); the retired
+# cephfs-hdd needed 15 MB/s (EC 2+1 across three spindles, last measured at
+# 22.1 MB/s sequential write on 2026-06-12, on emptier OSDs than it had later).
 #
 # At 50 MB/s the c=1 deadline works out to 2634s while a 64 GiB layout at
 # 22 MB/s needs ~3120s, so the FIRST cell would have been killed mid-layout.
@@ -457,10 +448,6 @@ RUN_ID="bench-$(date +%Y%m%d-%H%M%S)"
 # file, and the next run reads it, fits it in cache, and reports something
 # physically impossible -- which is exactly how the Synology produced a
 # 127.1 MiB/s row against a wire that peaked at 969.5 Mb/s.
-#
-# 15 MB/s for cephfs-hdd rather than the measured 22.1: the figure is nearly
-# three months old, and the retained media PVC still occupies the same pool,
-# so the OSDs are not the empty ones that measurement was taken against.
 #
 # SMALLFILE LAYOUT IS METADATA-BOUND, NOT BANDWIDTH-BOUND, and costing it in
 # MB/s is how you kill a 3-hour layout at the 80-minute mark. A 64 GiB corpus of
@@ -474,10 +461,7 @@ case "$WORKLOADS" in
     LAYOUT_DESC="${FILES_PER_CLIENT} files/client allowed ${LAYOUT_SECS}s at a pessimistic 100 files/s"
     ;;
   *)
-    case "$BACKEND" in
-      cephfs-hdd) LAYOUT_MBPS=15 ;;
-      *)          LAYOUT_MBPS=50 ;;
-    esac
+    LAYOUT_MBPS=50
     LAYOUT_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS ))
     LAYOUT_SECS=$(( LAYOUT_BYTES / (LAYOUT_MBPS * 1000000) ))
     LAYOUT_DESC="layout of $(human "$LAYOUT_BYTES") allowed ${LAYOUT_SECS}s at a pessimistic ${LAYOUT_MBPS} MB/s"

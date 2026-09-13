@@ -74,11 +74,12 @@ PODLOGS = os.environ.get(
 # fitting the instrument to the data, and the whole reason this file exists is
 # that the previous check had no independently-derived reference at all. The
 # 0.85-1.30 band absorbs it; a row outside that band is saying something.
-FRAMING = {"home-router/nas": 1448 / 1538, "home-switch/TrueNAS": 8948 / 9038,
-           # A Ceph pool counter measures the storage layer directly, so there
-           # is no Ethernet/IP/TCP framing between the payload and the counter:
-           # expected == payload exactly, ratio 1.0 is the ideal.
-           "cephpool/cephfs-bulk-hdd": 1.0}
+FRAMING = {"home-router/nas": 1448 / 1538, "home-switch/TrueNAS": 8948 / 9038}
+# A "cephpool/<pool>" switch_if (none registered since the CephFS tier was
+# retired 2026-09-07) maps to 1.0: a Ceph pool counter measures the storage
+# layer directly, so there is no Ethernet/IP/TCP framing between the payload
+# and the counter and expected == payload exactly. Add it here when a Ceph
+# backend returns, or the 0.94 default below scores it wrong.
 
 # PORTS THAT CARRY TRAFFIC OTHER THAN THE BENCHMARK.
 # The Synology's port was clean all evening -- zero PVCs remain on nfs-csi, so

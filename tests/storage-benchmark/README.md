@@ -53,13 +53,13 @@ result under that id.** Add a new id (`seq-read-1m-v2`) instead of editing.
 | backend | layout | tolerance | spindles | link |
 |---|---|---|---|---|
 | `ceph-nvme-block` | Ceph RBD, replicated ×3 | 2 of 3 | 3 NVMe (PM9A1) | 10G backnet |
-| `cephfs-hdd` | CephFS EC 2+1, 1 OSD/node | 1 chunk | 3 HDD | 10G backnet |
 | `nfs-csi` | Synology DS418 SHR (≈RAID5) | 1 drive | 4 × 3.6 TB | **1G frontnet** |
 
 Layout is recorded in every result row, because it is what makes the numbers
-make sense: **the DS418 has more spindles than CephFS-HDD (4 vs 3) and measures
-~2.4× slower** — one box behind a 1 Gbit link beats disk count. Without the
-layout in the row that reads like a contradiction.
+make sense: **the DS418 had more spindles than the CephFS-HDD tier (4 vs 3) and
+measured ~2.4× slower** — one box behind a 1 Gbit link beats disk count. Without
+the layout in the row that reads like a contradiction. (`cephfs-hdd` left the
+backend registry on 2026-09-13; the tier itself was retired 2026-09-07.)
 
 ## Safety
 
@@ -105,8 +105,7 @@ again means restoring all four sides:
 3. the classes in `components/storage/nfs-csi/values.yaml`,
 4. the backend rows and the quota-bounded `zfs list` probe in `run.sh`.
 
-`ceph-nvme-block` and `nfs-csi` need nothing. (`cephfs-hdd` is still listed as a
-backend, but the CephFS tier itself was retired on 2026-09-07.)
+`ceph-nvme-block` and `nfs-csi` need nothing.
 
 ## Usage
 
@@ -115,8 +114,8 @@ cd tests/storage-benchmark
 export KUBECONFIG=~/.kube/config          # needs write; the readonly SA cannot apply
 
 ./run.sh --list                                        # backends + workloads
-./run.sh --backend cephfs-hdd --dry-run                # gates + rendered manifest
-./run.sh --backend cephfs-hdd                          # full matrix, 1 client
+./run.sh --backend nfs-csi --dry-run                   # gates + rendered manifest
+./run.sh --backend nfs-csi                             # full matrix, 1 client
 ./run.sh --backend nfs-csi --clients 3                 # the multi-client dimension
 ./run.sh --backend nfs-csi --workload smallfile-read   # one workload
 ```
@@ -247,9 +246,7 @@ the filter off before theorising.
    is where every historical figure in `data/storage-throughput.md` came from.
 2. **`dnf install fio` costs ~90s per pod per Job** and depends on pod egress.
    Mirroring an fio-bearing image through the zot pullthrough removes both.
-3. **CephFS may not be worth running at all** — ~1 hour of EC 2+1 layout on
-   three HDD spindles, for a tier that now has no production consumers.
-4. **fio's multi-client sum assumes the clients overlap** and they don't; each
+3. **fio's multi-client sum assumes the clients overlap** and they don't; each
    pod installs fio and checks layout independently before its own 60s window.
    A start barrier would fix it. Until then the switch counter is the better
    aggregate for multi-client runs.
