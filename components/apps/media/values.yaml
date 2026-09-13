@@ -4,16 +4,10 @@ domain: apps.okd.sudops.pl
 storage:
   configClass: ceph-nvme-block
 
-  # ---- CephFS -> TrueNAS migration: COMPLETE, flags retired 2026-09-07 -----
-  # Cut over 2026-08-30 (tests/media-truenas-migration/), verified byte-identical
-  # with hardlinks intact. The stagePvc/cutover pair and storage.dataClass /
-  # dataSize are gone along with the CephFS PVC they controlled: the retained
-  # media-data-pvc was reclaimed in the HDD-tier decommission, so there is no
-  # longer anything to roll back TO and a flag offering it would be a lie.
-  #
-  # The RWX backend is now the static PV truenas-media-data (nfs-truenas-media),
-  # declared in components/storage/nfs-csi. Its size is the ZFS dataset's, not a
-  # PVC request -- NFS does not enforce the request.
+  # The shared /data RWX backend is the static PV truenas-media-data declared in
+  # components/storage/nfs-csi (TrueNAS NFS since the 2026-08-30 cutover from
+  # CephFS; tests/media-truenas-migration/). Its size is the ZFS dataset's, not
+  # a PVC request -- NFS does not enforce the request.
 
 apps:
   bazarr:
@@ -30,7 +24,7 @@ apps:
         memory: 500Mi
     mountData: true
     # PUID=0/PGID=0 → run as root like sonarr/radarr (see sonarr comment). Bazarr
-    # WRITES sidecar .srt files INTO the root:root 0755 CephFS media tree that
+    # WRITES sidecar .srt files INTO the root:root 0755 media tree that
     # radarr/sonarr own; without root it ran as the LSIO non-root default and hit
     # PermissionError(13) on /data/media/{movies,cartoons} (2026-07-05). Same
     # future cleanup applies: shared securityContext.fsGroup + non-root PUID.
@@ -52,11 +46,11 @@ apps:
         memory: 1000Mi
     mountData: true
     # PUID=0/PGID=0 → linuxserver s6 skips the privilege drop, Sonarr runs as
-    # root. On the CephFS shared volume (since 2026-06-15) the subvolume root
-    # is owned root:root 0755, so the default `abc` user can't create the
-    # /data tree — running as root sidesteps it. (Previously this was a
-    # Synology NFSv4 root-squash/idmap workaround.) Future cleanup: set a
-    # securityContext.fsGroup + non-root PUID instead of running as root.
+    # root. The shared /data tree is owned root:root 0755 (laid out that way on
+    # CephFS in 2026-06 and copied to TrueNAS NFS with ownership intact on
+    # 2026-08-30), so the default `abc` user can't create under it — running as
+    # root sidesteps it. Future cleanup: set a securityContext.fsGroup +
+    # non-root PUID instead of running as root.
     puid: "0"
     pgid: "0"
     # Sonarr v4 native Postgres backend. Shared Cluster CR shipped from
@@ -86,7 +80,7 @@ apps:
       limits:
         memory: 512Mi
     mountData: true
-    # Same root-on-CephFS access as Sonarr — see sonarr.puid above.
+    # Same root-on-shared-tree reason as Sonarr — see sonarr.puid above.
     puid: "0"
     pgid: "0"
     postgres:
@@ -154,13 +148,13 @@ apps:
     mountData: true
     # No PUID/PGID — the official image has no s6 user-remap (the linuxserver-only
     # vars are ignored). Runs as root via securityContext (official:true →
-    # runAsUser:0); root writes the CephFS /data subvolume root + existing /config.
+    # runAsUser:0); root writes the shared /data tree + existing /config.
     # Intel QuickSync (QSV) HW transcoding on the i7-11700 / UHD 750 iGPU.
     # hwAccel=true gives this pod (only) a hostPath mount of the host's
     # /dev/dri (renderD128 is 0666, pod is privileged + root, so QSV works
     # with no device-plugin) + an ephemeral /transcode emptyDir for transcode
-    # scratch (fast node-local, avoids EC write-churn on cephfs-bulk-hdd and
-    # pressure on the 30Gi config PVC). Set Jellyfin Transcode path=/transcode.
+    # scratch (fast node-local, keeps transcode churn off the NFS share and
+    # the 30Gi config PVC). Set Jellyfin Transcode path=/transcode.
     # All 3 nodes have the same iGPU, so no nodeSelector is needed.
     hwAccel: true
     # Size cap for the ephemeral /transcode emptyDir (node root disk, ~233Gi
