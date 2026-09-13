@@ -2204,3 +2204,73 @@ warning but its text no longer argues against an HDD dilution that cannot happen
 chart's `helm template` output before and after the comment edits differs only in the two rule descriptions.
 
 Nothing in this pass touched a pool, a CRUSH rule or a daemon other than the CephFS plugins.
+
+**What the sync actually did — a foreground-prune livelock.** The operator half went exactly as planned:
+
+```
+2026-09-13 12:02:59.279614 I | op-k8sutil: operator setting "ROOK_CSI_ENABLE_CEPHFS" = "false"
+2026-09-13 12:02:59.376221 I | ceph-csi: successfully removed CSI CephFS driver
+2026-09-13 12:02:59.515019 I | ceph-csi: Creating RBD driver resources
+```
+
+The prune half did not. ArgoCD had already deleted `Driver/rook-ceph.cephfs.csi.ceph.com` at 12:01:51 — with its
+default `foreground` propagation, which means the CR gets a `foregroundDeletion` finalizer and waits for every
+dependent with `blockOwnerDeletion: true` to be gone first. Its dependents are the plugin DaemonSet and Deployment,
+owned by the CR and reconciled by ceph-csi-operator — which does not check `deletionTimestamp`:
+
+```
+$ oc -n rook-ceph get drivers.csi.ceph.io rook-ceph.cephfs.csi.ceph.com -o jsonpath='deleting={.metadata.deletionTimestamp} finalizers={.metadata.finalizers}'
+deleting=2026-09-13T12:01:51Z finalizers=["foregroundDeletion"]
+
+$ oc -n rook-ceph get ds/rook-ceph.cephfs.csi.ceph.com-nodeplugin -o jsonpath='created={.metadata.creationTimestamp} owner={.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name} block={.metadata.ownerReferences[0].blockOwnerDeletion} deleting={.metadata.deletionTimestamp}'
+created=2026-09-13T12:05:25Z owner=Driver/rook-ceph.cephfs.csi.ceph.com block=true deleting=2026-09-13T12:05:25Z
+
+# ceph-csi-controller-manager, same second:
+12:05:25Z  INFO  Starting reconcile iteration for Ceph CSI driver   Driver=rook-ceph.cephfs.csi.ceph.com
+12:05:25Z  INFO  node plugin daemonset updated successfully
+12:05:25Z  INFO  controller plugin deployment updated successfully
+12:05:25Z  INFO  CSI Driver reconciliation completed successfully
+```
+
+GC deletes the DaemonSet, the operator recreates it for the still-existing CR, GC deletes it again — every ~45 s,
+the DaemonSet's creation and deletion timestamps landing in the same second. The replacement nodeplugins never even
+schedule (`0/3 nodes are available: 3 node(s) didn't match pod anti-affinity rules` — host-port anti-affinity
+against their own terminating predecessors). In the ArgoCD tree it reads as a Driver with a trash icon that never
+goes away and children that are always "a few seconds" old. Rook is innocent here: once its flag read `false` it
+never touched the CephFS driver again.
+
+Two lessons, both now in CLAUDE.md's teardown symptom map. The unstick is the standard finalizer clear on the CR
+(`--type=merge -p '{"metadata":{"finalizers":null}}'`, user-run); with the owner gone, background GC removes the
+children and the operator has nothing to reconcile. The prevention is a two-step removal for any operator-owned CR:
+annotate it `argocd.argoproj.io/sync-options: PrunePropagationPolicy=background`, let that sync, then drop it from
+the manifest. I had written "whichever Application syncs first, the end state is the same" a few hours earlier.
+The end state is the same; the path there was a livelock I did not predict, because I was thinking about Rook's
+reconcile and not about the garbage collector's.
+
+**Observed end state, after the finalizer clear.** Run from a logged-in terminal (a mutation, so operator-run):
+
+```
+$ oc -n rook-ceph patch driver.csi.ceph.io rook-ceph.cephfs.csi.ceph.com --type=merge -p '{"metadata":{"finalizers":null}}'
+driver.csi.ceph.io/rook-ceph.cephfs.csi.ceph.com patched
+
+$ oc -n rook-ceph get drivers.csi.ceph.io rook-ceph.cephfs.csi.ceph.com
+Error from server (NotFound): drivers.csi.ceph.io "rook-ceph.cephfs.csi.ceph.com" not found
+$ oc -n rook-ceph get ds,deploy --no-headers | grep -c cephfs
+0
+$ oc -n rook-ceph get pods --no-headers | grep -c cephfs
+0
+$ oc -n rook-ceph get pods --no-headers | grep -c 'rbd.*Running'
+5
+$ oc -n openshift-gitops get applications rook-ceph-operator csi-driver-config
+rook-ceph-operator   Synced   Healthy
+csi-driver-config    Synced   Healthy
+$ oc -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}'
+HEALTH_OK
+```
+
+Within a minute of the patch the DaemonSet, the Deployment and every CephFS pod were gone, both Applications were
+back to Synced/Healthy, and RBD had not blinked. One orphan remains: the cluster-scoped
+`CSIDriver/rook-ceph.cephfs.csi.ceph.com` registration object (153 days old, no ownerReference). Neither Rook's
+"successfully removed CSI CephFS driver" nor the Driver deletion touched it. Inert — no plugin registers under it
+and no PVC names it — but litter: `oc delete csidriver rook-ceph.cephfs.csi.ceph.com` (operator-run) finishes
+the job. Filed as `bugs/upstream-ceph-csi-operator-reconciles-terminating-driver.md`.
