@@ -4,14 +4,14 @@ Guidance for Claude Code when working in this repository.
 
 ## Repository overview
 
-Homelab GitOps repository for a **3-node bare-metal OKD 4.20 cluster** (OpenShift Kubernetes Distribution), managed declaratively by **ArgoCD** with an app-of-apps pattern and Helm templating.
+Homelab GitOps repository for a **3-node bare-metal OKD 4.21 cluster** (OpenShift Kubernetes Distribution), managed declaratively by **ArgoCD** with an app-of-apps pattern and Helm templating.
 
 - **Cluster domain:** `okd.sudops.pl`
 - **Nodes:** 3 control-plane+worker; frontend `192.168.1.7–9`, storage backnet `192.168.10.2–4`
 - **Failure domains** (`topology.kubernetes.io/zone`): `fd-a → node4`, `fd-b → node5`, `fd-c → node6`
 - **Ingress:** `*.apps.okd.sudops.pl` (wildcard, cert-manager)
 - **API:** `api.okd.sudops.pl`
-- **Git:** `git@github.com:sudoom/homelab.git` — `master` = production (ArgoCD tracks), `develop` = working branch
+- **Git:** `git@github.com:sudoom/homelab.git` — `master` = production (ArgoCD tracks). Commits go straight to `master`; there is no working branch (see "Commit and branch conventions").
 
 ## Stack and tool versions
 
@@ -24,7 +24,7 @@ Pin these when generating manifests or commands — mismatched versions are the 
 | ArgoCD          | v3.1.11+cc053b2     | Server-side apply + sync-wave annotations used throughout             |
 | OLM             | OKD-bundled    | `okderators` + `community-operators` CatalogSources                   |
 | cert-manager    | v1.18.2     | OLM from `okderators`. **OUT OF MATRIX + EOL:** 1.18 supports Kube 1.29–1.33 and died 2026-03-10; we are on Kube 1.34. **No catalog offers newer** (okderators 1.18.0, community-operators 1.16.5, operatorhubio 1.16.5), so the only routes are the upstream Helm chart (built + parked on branch `cert-manager-helm-fallback`) or the upstream pipeline. **The pipeline route is now filed (2026-09-09): [okd-operator-pipeline#29](https://github.com/okd-project/okd-operator-pipeline/pull/29) bumps cert-manager to 1.20 on `release-4.21`, which is the branch that builds `catalog-index:4.21`; [#28](https://github.com/okd-project/okd-operator-pipeline/pull/28) does the same on `main` for 4.22. Neither helps until merged AND a catalog is rebuilt, so the Helm fallback stays the answer if the renewal date gets close.** **First ACME renewal on the out-of-matrix version: `homelab-wildcard` 2026-09-21.** |
-| oc / kubectl    | matching 4.20  | Prefer `oc` for OpenShift-only kinds (Route, SCC, ImageStream)        |
+| oc / kubectl    | matching 4.21  | Prefer `oc` for OpenShift-only kinds (Route, SCC, ImageStream)        |
 | kubeconform     | latest         | Use with OpenShift CRD schema location (see Validation)               |
 | Renovate        | GitHub App     | Handles image tag bumps; PRs labeled `dependencies`                   |
 
@@ -45,8 +45,6 @@ Pin these when generating manifests or commands — mismatched versions are the 
 ├── ansible/                 # Non-cluster home infra, NOT ArgoCD-managed (see below)
 │   ├── technitium/          # Technitium DNS Server — dns-master + dns-slave (2× RPi 3B+), CLUSTERED
 │   └── truenas/             # TrueNAS SCALE NAS config via midclt over SSH (replacing the Synology)
-├── *-values.yaml            # Helm values for tools installed OUTSIDE the root app
-│                            # (Cilium, Istio, Prometheus, ArgoCD itself, Kiali)
 ├── blog/                    # Working notes / draft posts — see "Blog notes" rule below
 ├── bugs/                    # Drafted upstream-issue bodies (filing-ready)
 ├── tests/                   # Manual-apply test artifacts not yet promoted to a chart
@@ -390,7 +388,7 @@ helm template root-app bootstrap/root-app/ -f bootstrap/root-app/values.yaml
 3. Render `bootstrap/root-app/` locally and confirm the generated `Application` looks right.
 4. If it installs an operator with CRDs: `Subscription` at wave 1, CRs at wave 5 (intra-chart annotations).
 5. Run the full validation workflow above.
-6. Commit on `develop`, open PR into `master`.
+6. Commit directly to `master`; ArgoCD picks it up on its next poll.
 
 ## Debugging order of operations
 
@@ -575,7 +573,7 @@ one-line version bump does not need headings.
 
 ## Commit and branch conventions
 
-- Work on `develop`, PR into `master`. ArgoCD watches `master`.
+- Commit directly to `master` — ArgoCD watches it. No feature branches and no PRs for this repo; the only branches are upstream-contribution clones and the parked `cert-manager-helm-fallback`.
 - Commit messages: `<scope>: <imperative summary>` — e.g. `cert-manager: bump to v1.16.2`, `root-app: add monitoring stack`, `storage: enable fd-b zone`.
 - One logical change per commit. The rendered-manifest diff should be predictable from the message alone.
 - Renovate PRs (label `dependencies`) are reviewed, not rewritten.

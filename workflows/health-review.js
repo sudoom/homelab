@@ -26,9 +26,9 @@ export const meta = {
 const KC = 'export KUBECONFIG=$HOME/.kube/config-readonly'
 
 // Documented false-positives on THIS cluster — do not raise these as problems.
-const KNOWN_BENIGN = `KNOWN-BENIGN (never flag as a problem): BLUESTORE_SLOW_OP_ALERT (consumer-NVMe fsync, hair-trigger); CephPGImbalance (Rook rule lacks device-class grouping — 2-tier cluster); cnpg-clusters + immich ArgoCD OutOfSync/Healthy (CNPG operator-managed field drift); nmstate-handler / multus / haproxy / router cumulative restarts; KubeJobFailed on completed one-shot bootstrap Jobs; transient collect-profiles OLM one-shot Error pods; OLMv1 operator-controller crashloop (chronic, pre-existing).`
+const KNOWN_BENIGN = `KNOWN-BENIGN (never flag as a problem): BLUESTORE_SLOW_OP_ALERT (consumer-NVMe fsync, hair-trigger); cnpg-clusters + immich ArgoCD OutOfSync/Healthy (CNPG operator-managed field drift); nmstate-handler / multus / haproxy / router cumulative restarts; KubeJobFailed on completed one-shot bootstrap Jobs; transient collect-profiles OLM one-shot Error pods; OLMv1 operator-controller crashloop (chronic, pre-existing).`
 
-const CLUSTER = `Cluster: 3-node OKD 4.20 (Kube 1.33), nodes node4/5/6 (all control-plane+worker, no drain headroom). Storage = Rook-Ceph v1.19.5 / Ceph Squid, host-network, 6 OSDs (3 NVMe + 3 HDD), full capacity ~13538691661824 bytes. Data DBs = CloudNativePG (media-postgres 3 instances, immich-postgres 1) with offsite WAL+base backups to Cloudflare R2 via the barman-cloud plugin (verify via bucket + the plugin-barman-cloud NATIVE sidecar logs, NOT CNPG status conditions).`
+const CLUSTER = `Cluster: 3-node OKD 4.21 (Kube 1.34), nodes node4/5/6 (all control-plane+worker, no drain headroom). Storage = Rook-Ceph v1.19.5 / Ceph Squid, host-network, 3 NVMe OSDs (one per node, ~1.5 TB raw) serving the single pool nvme-replicated; the HDD tier, CephFS and RGW were retired 2026-09-07, RWX is TrueNAS NFS and S3 is garage on TrueNAS. Data DBs = CloudNativePG (media-postgres 3 instances, immich-postgres 1) with offsite WAL+base backups to Cloudflare R2 via the barman-cloud plugin (verify via bucket + the plugin-barman-cloud NATIVE sidecar logs, NOT CNPG status conditions).`
 
 const SCHEMA = {
   type: 'object', additionalProperties: false, required: ['area', 'status', 'summary', 'findings'],
