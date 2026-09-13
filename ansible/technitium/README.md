@@ -17,7 +17,7 @@ ansible/technitium/
 ├── files/
 │   └── blocked.urls                       # blocklist URLs, one per line
 ├── roles/
-│   ├── base/                              # OS hygiene (hostname, timezone, NTP, packages, unattended-upgrades, pi-hole purge)
+│   ├── base/                              # OS hygiene (hostname, timezone, NTP, packages, unattended-upgrades)
 │   │   ├── tasks/main.yml
 │   │   ├── handlers/main.yml              # restart systemd-timesyncd
 │   │   └── templates/10-ntp.conf.j2       # timesyncd drop-in — ALL servers in NTP=, never FallbackNTP=
