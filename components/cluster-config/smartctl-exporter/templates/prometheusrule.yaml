@@ -1,13 +1,14 @@
 {{- if .Values.smartAlerts.enabled }}
-# SMART degradation alerts for the used-drive fleet (HDD tier + NVMe OSDs + boot SSDs).
+# SMART degradation alerts for the drive fleet (NVMe OSDs + SATA boot/etcd SSDs; the
+# used HGST HDD tier they were written for left 2026-09-08).
 # Evaluated by user-workload-monitoring (this namespace is cluster-monitoring=false,
 # so its ServiceMonitor + PrometheusRule are owned by the UWM Prometheus, not platform).
 #
-# These replace pre-install badblocks as the safety net for the used HGST HDDs: the
-# long self-test + clean baseline gate them in; this catches in-service degradation
-# live, and a burned-in shelf spare is swapped in. Reallocated/pending attributes are
-# SATA-only (attribute_id 5/197) so the reallocated rule naturally targets HDD+SSD,
-# not NVMe; smart_status covers every device. Full rationale: blog/blog-hdd-tier-rollout-draft.md.
+# Written to replace pre-install badblocks as the safety net for used HDDs: catch
+# in-service degradation live and swap in a burned-in shelf spare. The rules are
+# device-agnostic, so they stay. Reallocated/pending attributes are SATA-only
+# (attribute_id 5/197) so the reallocated rule naturally targets the SATA SSDs, not
+# NVMe; smart_status covers every device. Full rationale: blog/blog-hdd-tier-rollout-draft.md.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
