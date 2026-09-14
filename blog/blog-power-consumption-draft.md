@@ -1479,5 +1479,24 @@ recover from that state without a reboot on this cluster; the two-reboot path is
 rollout, not a runtime change; switch the profile off by changing `bootArgs` in git and run the network
 pre-flight. (2) ArgoCD selfHeal undoing a manual delete does not undo what MCO already decided in the gap: the
 pool target snaps back, the selected node does not. (3) The `immich-postgres` drain blocker is now a
-two-for-two on master-pool rerolls; the README TODO carries the fix options. Outcome of the unblock: to be
-filled in once node4 is back on the original config.
+two-for-two on master-pool rerolls; the README TODO carries the fix options.
+
+**Outcome — 13 minutes from pod delete to a green pool, two reboots as predicted.** Observed under the readonly
+kubeconfig at 30 s resolution:
+
+```
+17:49:48Z  immich-postgres-1 recreated on node6 (operator ran the pod delete); node4 has no evictable pod left
+17:55:10Z  node4 Ready=Unknown            reboot 1, onto rendered-master-d9509ea… (kernel args removed)
+17:57:13Z  node4 Ready, cur=d9509ea, des=dd023d0 already — the node controller re-selected it the moment
+           the first update completed, still cordoned, state=Working
+18:00:47Z  node4 Ready=Unknown            reboot 2, back onto rendered-master-dd023d0…
+18:02:20Z  MCD: "Validated on-disk state"
+18:02:50Z  node4 uncordoned, state=Done; mcp/master Updated=True Updating=False Degraded=False
+```
+
+At 18:05Z: 3/3 nodes Ready, 46/46 apps Synced+Healthy, mons a/b/c Running (mon-a back on node4), osd.0
+`up=1` in the mgr metrics while the CephCluster status still reads `OSD_DOWN` on its refresh lag,
+`authentication` and `openshift-apiserver` Progressing as their node4 replicas roll. `MON_DISK_LOW` on mon c
+(node5 root at 70%) is unrelated and stays. Still owed, both need exec: `net.ipv4.conf.br-ex.forwarding` on
+node4 after two reboots, and `/proc/cmdline` to see `intel_pstate=passive processor.max_cstate=9` with my own
+eyes rather than through the MCD's validation line.
