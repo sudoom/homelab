@@ -1398,7 +1398,10 @@ I0914 12:08:08 controller.go:830] created MachineConfig 50-nto-master with kerne
 The deletions did not go through the ArgoCD API — `openshift-gitops-server` logs no `DeleteResource` in that
 window, only three `ApplicationService.Update` calls at 12:11:08/11/13Z from the UI (peer `[::1]`), and the
 application-controller logged `Enabled automated sync` for `power-tuning` at 12:11:12Z, i.e. somebody had
-switched auto-sync off and root-app's selfHeal switched it back on. Whoever deleted the CR used `oc`/console.
+switched auto-sync off and root-app's selfHeal switched it back on. That somebody was me, with `oc` in a
+terminal: I wanted to see whether the tuning is worth keeping and deleted the profile to compare. Wrong lever —
+the runtime half of the profile (governor, EPB, `min_perf_pct`) can be A/B-tested without a reboot; the
+`[bootloader]` half cannot, and deleting the whole CR takes both away and starts a reroll.
 
 **What MCO did with the gap.** In one of the windows where `50-nto-master` did not exist, the render controller
 built a master config from the remaining 12 sources and re-targeted the pool:
