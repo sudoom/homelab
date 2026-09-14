@@ -1497,6 +1497,19 @@ kubeconfig at 30 s resolution:
 At 18:05Z: 3/3 nodes Ready, 46/46 apps Synced+Healthy, mons a/b/c Running (mon-a back on node4), osd.0
 `up=1` in the mgr metrics while the CephCluster status still reads `OSD_DOWN` on its refresh lag,
 `authentication` and `openshift-apiserver` Progressing as their node4 replicas roll. `MON_DISK_LOW` on mon c
-(node5 root at 70%) is unrelated and stays. Still owed, both need exec: `net.ipv4.conf.br-ex.forwarding` on
-node4 after two reboots, and `/proc/cmdline` to see `intel_pstate=passive processor.max_cstate=9` with my own
-eyes rather than through the MCD's validation line.
+(node5 root at 70%) is unrelated and stays.
+
+Verified once the operator login was back (~18:20Z), both via `oc exec` into the `ovnkube-node` pods:
+
+```
+node4.okd.sudops.pl br-ex.forwarding=1
+node5.okd.sudops.pl br-ex.forwarding=1
+node6.okd.sudops.pl br-ex.forwarding=1
+node4 /proc/cmdline: intel_pstate=passive processor.max_cstate=9
+```
+
+So two reboots of node4 did NOT zero its `br-ex.forwarding` this time — the first counter-example to "a node
+reboot reliably zeroes that node's forwarding" (2026-09-08). Recorded, not explained; the sysctl check stays
+mandatory. The firing board afterwards was the known set (`TargetDown` nmstate, `PodDisruptionBudgetAtLimit`,
+`KubeCPUOvercommit`, `UpdateAvailable`, `InsightsRecommendationActive`, `Watchdog`) plus `CephMonDiskspaceLow` /
+`CephHealthWarning` for mon c on node5, both since 12:09Z today.
