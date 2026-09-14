@@ -363,6 +363,36 @@ once, then record the device IDs in the table below.
    to the single line `#include .stignore-shared`. Syncthing does not sync
    `.stignore` itself, which is exactly why the real list lives in an included
    file that *is* synced — otherwise the three nodes drift on what they ignore.
+   Put both files in `~/Projects` **before** adding the folder in the Mac's GUI:
+   Syncthing reads `.stignore` at add time and scans immediately, so adding the
+   folder first means one full pass that indexes every `node_modules` and
+   `.venv` before the ignore list exists.
+
+### Folder settings, per node
+
+Only two rows are non-defaults; everything else is listed so the GUI is not
+read as a list of things to tune. Drive Client's "two-way sync" is Send &
+Receive on the Macs; its "advanced consistency check" is what Syncthing always
+does (block hashing); its recycle bin is the ZFS snapshot task.
+
+| setting | Macs | this box | why |
+|---|---|---|---|
+| Folder ID | set once on the mini, arrives with the share | accept, do not type | must be identical on all three |
+| Folder path | `~/Projects` | `/data/projects` (the mount root) | one dataset per synced tree keeps snapshots and quota per folder; a second tree gets a second dataset and mount, not a subdirectory |
+| Folder type | Send & Receive | **Receive Only** | the NAS must never become a third writer |
+| File versioning | none | none | Time Machine on the Macs; the 2-hourly/30-day snapshots here |
+| Ignore patterns | `#include .stignore-shared` | same | see step 7 |
+| Watch for changes | on | off | nothing legitimately changes here locally; inotify on a 200 GiB small-file tree hits the container's watch limit for no benefit. The hourly rescan still catches — and reverts — anything written by hand |
+| Full rescan interval | 3600 | 3600 | default; the tree is metadata-bound, an hourly pass is cheap |
+| Ignore permissions | off | **on** | the dataset is POSIX, written as uid 568; macOS modes mean nothing here and would only generate permission-change noise. Executable bits still travel Mac to Mac: the index entry carries the announcing Mac's mode, this box just stores the data |
+| Sync / send ownership, xattrs | off | off | single user; the `SYS_ADMIN` the template grants exists for these and stays unused |
+| Block indexing | on | on | default |
+| Minimum free disk space | 1 % | 1 % | default; the dataset quota is the real ceiling |
+
+A folder created here for testing (any path under `/data/projects`) is removed
+from the GUI, and its leftover directory then shows on the real Receive Only
+folder as local changes — clear it with the folder's **Revert Local Changes**
+button, not by hand.
 
 | node | device ID |
 |---|---|
