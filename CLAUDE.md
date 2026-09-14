@@ -149,8 +149,26 @@ instant. And `oc` may fail `Unauthorized` at that exact moment, because the `aut
 during the upgrade and an `oauth-openshift` replica can be Pending on the cordoned node: **this is what the
 break-glass kubeconfig is for** (SA token, not OAuth).
 
-**Before the 4.22 hop:** either scale `immich-postgres` to 2 instances (needs NVMe headroom we do not currently
-have) or make the pod deletion an explicit runbook step. It will recur.
+**It recurred on 2026-09-14, and not on an upgrade.** An unplanned MCO reroll (next paragraph) selected node4 at
+12:09Z; the drain sat on `immich-postgres-1` for 5+ hours, the MCD went Degraded after the first hour
+(`failed to drain node: node4.okd.sudops.pl after 1 hour`), and five control-plane replicas plus mon-a and osd.0
+were Pending the whole time. **Every master-pool MachineConfig change hits this, not just the 4.22 hop.** Either
+scale `immich-postgres` to 2 instances (the NVMe headroom argument from 09-08 no longer holds: `nvme-replicated`
+read 95.6 GiB stored / 309.7 GiB max avail on 2026-09-14) or treat the pod deletion as a mandatory step of every
+reroll — tracked in the README TODO.
+
+**What starts a reroll without a commit — never delete the `powersave-experimental` Tuned CR by hand (2026-09-14).**
+NTO turns that CR's `[bootloader]` line into `50-nto-master`. Delete the CR and NTO deletes the MachineConfig within
+a second; MCO renders a master config without `intel_pstate=passive processor.max_cstate=9` and selects a node
+inside the next minute (`render_controller: now targeting rendered-master-d9509ea…` at 12:08:59Z, node4 cordoned
+at 12:09:10Z). ArgoCD selfHeal recreates the Tuned, NTO recreates `50-nto-master`, and the pool target flips back
+to the original rendered config — but **the node already selected keeps the transient `desiredConfig`**: the node
+controller never reassigns a node it counts as unavailable, so that node reboots onto the argument-less config
+and then a second time back onto the real one. To turn power tuning off, change `bootArgs` in
+`components/cluster-config/power-tuning/values.yaml` and run the network pre-flight — one controlled reroll.
+Side effect seen the same minute: the cordon made Rook re-reconcile CSI (12:09:21Z), which rewrote the RBD
+`Driver` CR; `csi-driver-config` re-applied `hostNetwork` (12:09:27Z) and both RBD ctrlplugin pods restarted.
+Chronology: `blog/blog-power-consumption-draft.md` 2026-09-14.
 
 ### Topology
 

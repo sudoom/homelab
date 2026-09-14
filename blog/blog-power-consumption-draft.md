@@ -1375,3 +1375,106 @@ the only real argument for NVMe-only-compact nodes" is an estimate; this measure
 drives instead of 3. It also feeds the Synology-vs-TrueNAS comparison — the DS418 it
 replaces has 4 bays and its own draw, so the migration's true power delta is
 `truenas − ds418`, not `truenas` alone. Capture the DS418 figure before it is sold.
+
+## 2026-09-14 — deleting the Tuned by hand started an unplanned MCO reroll
+
+Found by the session-start sweep at 17:24Z, five hours in: node4 `Ready,SchedulingDisabled`, seven pods
+Pending, Ceph `HEALTH_WARN` with one mon and one OSD down. No commit today, no upgrade, no scheduled work.
+Everything below is UTC and read under the readonly kubeconfig.
+
+**Trigger.** The `powersave-experimental` Tuned CR was deleted at least three times between 12:07Z and 12:11Z
+and recreated each time by ArgoCD selfHeal (the `power-tuning` app's sync history gained an entry at
+12:07:11Z; the CR's current `creationTimestamp` is 12:11:12Z). NTO tracks the CR's `[bootloader]` line as
+`50-nto-master`, and followed every flap:
+
+```
+I0914 12:07:10 controller.go:1056] deleted MachineConfig 50-nto-master
+E0914 12:07:12 controller.go:807] not all 3 Nodes in MCP master agree on bootcmdline: intel_pstate=passive processor.max_cstate=9
+I0914 12:07:13 controller.go:830] created MachineConfig 50-nto-master with kernel parameters: [intel_pstate=passive processor.max_cstate=9]
+I0914 12:08:03 controller.go:1056] deleted MachineConfig 50-nto-master
+I0914 12:08:08 controller.go:830] created MachineConfig 50-nto-master with kernel parameters: [...]
+```
+
+The deletions did not go through the ArgoCD API — `openshift-gitops-server` logs no `DeleteResource` in that
+window, only three `ApplicationService.Update` calls at 12:11:08/11/13Z from the UI (peer `[::1]`), and the
+application-controller logged `Enabled automated sync` for `power-tuning` at 12:11:12Z, i.e. somebody had
+switched auto-sync off and root-app's selfHeal switched it back on. Whoever deleted the CR used `oc`/console.
+
+**What MCO did with the gap.** In one of the windows where `50-nto-master` did not exist, the render controller
+built a master config from the remaining 12 sources and re-targeted the pool:
+
+```
+I0914 12:08:59 render_controller.go:623] Generated machineconfig rendered-master-d9509ea54f9acfd81d75f42c40a26472 from 12 configs: [...]
+I0914 12:08:59 render_controller.go:649] Pool master: now targeting: rendered-master-d9509ea54f9acfd81d75f42c40a26472
+I0914 12:09:04 node_controller.go:1475] Pool master: selected candidate node node4.okd.sudops.pl
+I0914 12:09:04 node_controller.go:764] Pool master[zone=fd-a]: node node4.okd.sudops.pl: changed annotation machineconfiguration.openshift.io/desiredConfig = rendered-master-d9509ea...
+I0914 12:09:10 drain_controller.go:192] node node4.okd.sudops.pl: cordon succeeded (currently schedulable: false)
+```
+
+The only delta between the two rendered configs is the kernel argument list:
+
+```
+spec.kernelArguments: ['intel_pstate=passive', 'processor.max_cstate=9', 'systemd.unified_cgroup_hierarchy=1', 'cgroup_no_v1="all"']
+                   -> ['systemd.unified_cgroup_hierarchy=1', 'cgroup_no_v1="all"']
+files/units: no change
+```
+
+The MCD on node4 accepted it as a kargs-only update (`Starting update from rendered-master-dd023d0… to
+rendered-master-d9509ea…: &{osUpdate:false kargs:true …}`, `Update prepared; requesting cordon and drain via
+annotation to controller`). Once the Tuned was back for good at 12:11:12Z, NTO recreated `50-nto-master` at
+12:11:13Z and the render came out identical to the original `rendered-master-dd023d0…`, so the pool's
+`spec.configuration.name` and `status.configuration.name` both point at the ORIGINAL config again. No newer
+rendered config exists. But node4 still carries `desiredConfig=rendered-master-d9509ea…`: the node controller
+only assigns candidates while the pool has capacity, and node4 itself is the one unavailable node, so it is never
+reassigned. It will apply the argument-less config, reboot, and then be selected again for the real config.
+
+**Where it stuck — the drain trap from 2026-09-08, exactly as predicted.**
+
+```
+E0914 17:27:39 drain_controller.go:162] error when evicting pods/"immich-postgres-1" -n "immich" (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+E0914 13:09:05 writer.go:231] Marking Degraded due to: "failed to drain node: node4.okd.sudops.pl after 1 hour. ..."
+```
+
+`immich-postgres-1` is the only non-DaemonSet pod left on node4, and it is the single instance behind a
+`minAvailable: 1` PDB. Everything else drained fine, including Loki (the `loki-pdb-override` CronJob kept the
+ingester PDB at `minAvailable: 1` without any pre-flight). Cost of the stall at 17:30Z:
+
+| Symptom | Detail |
+|---|---|
+| Pending pods | `openshift-apiserver`, `oauth-openshift`, `controller-manager`, `oauth-apiserver`, `route-controller-manager` (one replica each), `rook-ceph-mon-a`, `rook-ceph-osd-0` — all pinned to node4 |
+| ClusterOperators Degraded | `authentication`, `openshift-apiserver` (1 of 3 unavailable), `machine-config` (node4 Degraded) |
+| Ceph | `MON_DOWN 1/3 (quorum b,c)`, `OSD_DOWN 1`, `PG_DEGRADED 45224/135672 objects (33.333%), 129 pgs undersized`; osd.0 `up=0 in=1`, `noout` NOT set; `rook-ceph-mon-d-canary` Pending (no third mon-free node) |
+| Ceph, unrelated | `MON_DISK_LOW: mon c is low on available space` — node5's root filesystem is 70% used (112 GiB free of 372), right at the 30%-free threshold |
+
+**Side effect worth knowing.** Eleven seconds after the cordon the Rook operator re-read its CSI settings
+(12:09:21Z, a CSI reconcile triggered by the node change), which rewrote the RBD `Driver` CR; `csi-driver-config`
+auto-synced at 12:09:27Z (`driver.csi.ceph.io/rook-ceph.rbd.csi.ceph.com serverside-applied`, restoring
+`controllerPlugin.hostNetwork`) and both RBD ctrlplugin pods restarted at 12:09:27Z. The nodeplugins were not
+touched. So a cordon on this cluster costs a few seconds of RBD provisioner restart — harmless, but it will show
+up in any "why did the ctrlplugin restart" question.
+
+**Unblock (all operator-run; nothing here is a chart change):**
+
+1. `oc -n immich delete pod immich-postgres-1` — CNPG recreates it on node5 or node6 (node4 is cordoned).
+   Immich is down for the 2-3 minutes the graceful shutdown + RBD remount takes; the drain controller has backed
+   off to a 5-minute retry, so the drain completes a few minutes after the pod is gone.
+2. MCD applies `rendered-master-d9509ea…` and reboots node4 (reboot 1, kernel args removed). Once node4 is Ready
+   at that config, the node controller selects it again for `rendered-master-dd023d0…` — a fast drain this time —
+   and reboots it once more (reboot 2, kernel args restored).
+3. After EACH reboot: `net.ipv4.conf.br-ex.forwarding` on node4 (expect 1; restart node4's `ovnkube-node` if 0),
+   `ip -br a show enp1s0f0np0` UP with `192.168.10.2`, no stuck VolumeAttachments, mon-a and osd.0 back, the five
+   control-plane replicas Running.
+4. Done when `oc get mcp master` reads `UPDATED=True UPDATING=False DEGRADED=False`, all three nodes at
+   `rendered-master-dd023d0…`, `rpm-ostree kargs` on node4 shows `intel_pstate=passive processor.max_cstate=9`,
+   the three ClusterOperators are back to `Degraded=False`, and Ceph is `HEALTH_OK`.
+
+Not tried: resetting node4's `desiredConfig` annotation to the original config to skip reboot 1. MCO is meant to
+handle a revert-before-reboot, but the MCD is already in `Degraded` with a drain pending and I have not seen it
+recover from that state without a reboot on this cluster; the two-reboot path is the documented one.
+
+**Lessons.** (1) A Tuned CR with a `[bootloader]` stanza is a MachineConfig by proxy — deleting it is a reboot
+rollout, not a runtime change; switch the profile off by changing `bootArgs` in git and run the network
+pre-flight. (2) ArgoCD selfHeal undoing a manual delete does not undo what MCO already decided in the gap: the
+pool target snaps back, the selected node does not. (3) The `immich-postgres` drain blocker is now a
+two-for-two on master-pool rerolls; the README TODO carries the fix options. Outcome of the unblock: to be
+filled in once node4 is back on the original config.
