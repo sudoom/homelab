@@ -77,7 +77,7 @@ check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
 | Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
 | garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
 | node_exporter custom app | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
-| Syncthing catalog app (Mac ↔ Mac sync of `~/Projects`) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
+| Syncthing catalog app (Mac ↔ Mac sync of the projects tree, plus the mini's `~/Documents` mirror) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
 
 ## What it deliberately does NOT manage
 
@@ -275,15 +275,22 @@ and two ceilings that can disagree is worse than one).
 
 ## Syncthing
 
-Replaces Synology Drive Client, which was doing exactly one job here: two-way
-sync of `~/Projects` between the Mac mini and the MacBook Air.
+Replaces Synology Drive Client, which did two jobs here: mirror the Mac mini's
+whole `~/Documents` to the NAS (`/mydrive`), and two-way sync the MacBook Air's
+`~/projects` with the server subfolder `/mydrive/work/projects` — so a MacBook
+change reached the mini at `~/Documents/work/projects` through the NAS. Drive
+Client could map a server subfolder to a local folder; Syncthing has no subtree
+mapping, a folder is a folder on every member. Hence **two Syncthing folders**:
+`projects` (both Macs plus this box, the Macs peer directly) nested inside
+`documents` (the mini plus this box), with one ignore line that keeps the nest
+from being indexed twice.
 
 | | |
 |---|---|
 | app | `syncthing` — **catalog** app, stable train, `1.3.13` (a custom compose app from 2026-09-09 to 09-11) |
 | GUI | `http://192.168.1.25:8384/` — a password is required, set at first login |
 | sync | `tcp://192.168.1.25:22000`, `quic://192.168.1.25:22000` |
-| data | `tank/sync` → `/data/projects` in the container |
+| data | `tank/sync` → `/data` in the container; folder roots `/data/documents` and `/data/projects` (was `/data/projects` alone until 2026-09-14) |
 | state | `tank/apps/syncthing` → `/var/syncthing` (Syncthing keeps it under `config/`) |
 | snapshots | every 2 h, kept 30 days |
 | this node's folder type | **Receive Only** |
@@ -351,22 +358,34 @@ once, then record the device IDs in the table below.
 3. On each Mac, add this box as a device with addresses
    `tcp://192.168.1.25:22000, quic://192.168.1.25:22000`. Left as `dynamic` it
    is never found, because it cannot be discovered.
-4. On the Mac holding the canonical tree, add `~/Projects` as a folder, type
-   **Send & Receive**, and share it with the other Mac and with this box.
-5. On this box's GUI, accept the shared folder, set its path to
-   `/data/projects`, and set folder type to **Receive Only**. This is the step
-   that keeps the NAS from becoming a third writer — it is not a default.
-6. On the second Mac, accept the same folder at `~/Projects`, type
-   **Send & Receive**.
-7. Ignore list: copy `files/projects-stignore-shared` to
-   `~/Projects/.stignore-shared`, then set each of the three peers' `.stignore`
-   to the single line `#include .stignore-shared`. Syncthing does not sync
-   `.stignore` itself, which is exactly why the real list lives in an included
-   file that *is* synced — otherwise the three nodes drift on what they ignore.
-   Put both files in `~/Projects` **before** adding the folder in the Mac's GUI:
-   Syncthing reads `.stignore` at add time and scans immediately, so adding the
-   folder first means one full pass that indexes every `node_modules` and
-   `.venv` before the ignore list exists.
+4. **Ignore lists first, on every member, before any folder is added.** Copy
+   `files/sync-stignore-shared` to `.stignore-shared` in each folder root —
+   `~/Documents` and `~/Documents/work/projects` on the mini, `~/projects` on
+   the MacBook — and next to it a `.stignore` holding the single line
+   `#include .stignore-shared`. Syncthing does not sync `.stignore` itself,
+   which is exactly why the real list lives in an included file that *is*
+   synced; otherwise the members drift on what they ignore. The shared list
+   carries `/work/projects`, the nesting guard: it only matches inside
+   `documents`, and without it the mini indexes the projects subtree twice.
+   Order matters because Syncthing reads `.stignore` at add time and scans at
+   once — add first and the first pass indexes every `node_modules` and `.venv`.
+5. **`projects`, from the Mac mini:** add `~/Documents/work/projects` as a
+   folder, ID `projects`, type **Send & Receive**, share it with the MacBook and
+   with this box. On this box accept it at `/data/projects`, type
+   **Receive Only** — the step that keeps the NAS from becoming a third writer;
+   it is not a default. On the MacBook accept it at `~/projects`, type
+   **Send & Receive**. Both Mac paths are where Drive Client already had the
+   tree, so nothing moves.
+6. **`documents`, from the Mac mini:** add `~/Documents` as a folder, ID
+   `documents`, type **Send & Receive**, share it with this box only, accept
+   here at `/data/documents`, **Receive Only**. The MacBook is not a member; it
+   never had the whole tree. Two things on the mini before this one: iCloud's
+   "Desktop & Documents Folders" must be **off** (Syncthing would sync evicted
+   placeholders), and the Syncthing app needs the Files and Folders permission
+   for Documents when macOS asks.
+7. This box's GUI now shows both folders as Receive Only with their `.stfolder`
+   markers created by Syncthing itself under `/data`; nothing else is created
+   here by hand.
 
 ### Folder settings, per node
 
@@ -378,7 +397,7 @@ does (block hashing); its recycle bin is the ZFS snapshot task.
 | setting | Macs | this box | why |
 |---|---|---|---|
 | Folder ID | set once on the mini, arrives with the share | accept, do not type | must be identical on all three |
-| Folder path | `~/Projects` | `/data/projects` (the mount root) | one dataset per synced tree keeps snapshots and quota per folder; a second tree gets a second dataset and mount, not a subdirectory |
+| Folder path | `projects`: `~/Documents/work/projects` (mini), `~/projects` (MacBook); `documents`: `~/Documents` (mini) | `/data/projects`, `/data/documents` | one dataset (`tank/sync`) with two folder roots under the `/data` mount; the 2-hourly snapshots and the 200 GiB quota cover both trees together, as the Synology recycle bin did |
 | Folder type | Send & Receive | **Receive Only** | the NAS must never become a third writer |
 | File versioning | none | none | Time Machine on the Macs; the 2-hourly/30-day snapshots here |
 | Ignore patterns | `#include .stignore-shared` | same | see step 7 |
@@ -389,7 +408,7 @@ does (block hashing); its recycle bin is the ZFS snapshot task.
 | Block indexing | on | on | default |
 | Minimum free disk space | 1 % | 1 % | default; the dataset quota is the real ceiling |
 
-A folder created here for testing (any path under `/data/projects`) is removed
+A folder created here for testing (any path under `/data`) is removed
 from the GUI, and its leftover directory then shows on the real Receive Only
 folder as local changes — clear it with the folder's **Revert Local Changes**
 button, not by hand.
@@ -451,7 +470,7 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `roles/truenas-smb/` | SMB Time Machine targets: `aapl_extensions`, per-Mac users/groups, dataset ACLs, shares, service |
 | `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots |
 | `roles/truenas-apps/` | garage (Velero BSL) and Syncthing as catalog apps, node_exporter as a custom app: deploy/update, and garage's layout/key/bucket bootstrap |
-| `files/projects-stignore-shared` | Syncthing ignore list for `~/Projects`. Copied to `~/Projects/.stignore-shared` on every peer; not applied by Ansible |
+| `files/sync-stignore-shared` | Syncthing ignore list for both folders (`projects`, `documents`). Copied to `<folder root>/.stignore-shared` on every member; not applied by Ansible |
 | `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
 | `destroy-empty-dataset.sh` | One-shot gated destroy of an **empty** dataset — the only remedy for create-time-only property drift (deliberately NOT in the playbook) |
 

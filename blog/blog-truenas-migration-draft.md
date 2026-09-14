@@ -4400,7 +4400,8 @@ Syncthing pairs them, the result is the *union* of both plus a scattering of
 synced by Syncthing, so three hand-maintained copies would drift silently. The
 idiom is a one-line `.stignore` containing `#include .stignore-shared`, with
 the real list in the included file — which *is* synced. Committed as
-`ansible/truenas/files/projects-stignore-shared`.
+`ansible/truenas/files/projects-stignore-shared` (renamed `sync-stignore-shared`
+on 2026-09-14, when it started serving two folders — see below).
 
 `.git` stays out of that ignore list on purpose. Ignoring it would leave the
 peers sharing a working tree with no branch and no history, and would make the
@@ -5034,3 +5035,50 @@ The first `changed=0` since 2026-09-08 — every run in between carried the sile
 things: the autotrim fix holds, Syncthing's value reconcile is idempotent against the real
 `app.config`, and the dataset removal left nothing declared-but-missing and nothing
 present-but-undeclared.
+
+## 2026-09-14 — the Drive Client layout was two trees, so Syncthing gets two folders
+
+Everything above assumed Drive Client did one job: keep `~/Projects` identical on the two Macs. Pairing day
+showed the real configuration, straight from the client's "Selective Sync Settings":
+
+```
+Mac mini:    ~/Documents/*  <-> /mydrive               (two-way)
+MacBook Air: ~/projects/*   <-> /mydrive/work/projects (two-way)
+```
+
+So the mini mirrored its whole Documents tree to the DS418, and the MacBook synced one server *subfolder* to
+a local folder of a different name. A MacBook change reached the mini at `~/Documents/work/projects` by way of
+the NAS. Drive Client can map a server subfolder to a local folder; Syncthing cannot — a folder is a folder on
+every member, and a device either has the whole tree or is not a member.
+
+Two designs were on the table. One folder, Synology-faithful: every member joins `documents`, the MacBook at a
+root like `~/Documents` with an "everything except `work/projects`" ignore list (`!/work/projects`, `/work/*`,
+`!/work`, `*`). It keeps a single tree on the NAS, but it moves the MacBook's projects path, and the
+include-then-ignore-all idiom is the Syncthing footgun where one typo syncs the whole tree. Two folders, chosen:
+
+| folder | Mac mini | MacBook Air | NAS |
+|---|---|---|---|
+| `projects` | `~/Documents/work/projects`, Send & Receive | `~/projects`, Send & Receive | `/data/projects`, Receive Only |
+| `documents` | `~/Documents`, Send & Receive | not a member | `/data/documents`, Receive Only |
+
+`projects` is nested inside `documents` on the mini. Syncthing does not stop that, and without help it indexes
+the subtree twice — every MacBook change would be re-announced through `documents` as a competing version. The
+guard is one anchored line in the shared ignore list, `/work/projects`: it matches only from the `documents`
+root (there is no `work/` under `~/projects`), so the same file serves both folders. The list also grew the
+macOS metadata set (`.DS_Store`, `._*`, Spotlight, Trashes, fseventsd) now that a whole home subtree is in it,
+and was renamed `files/sync-stignore-shared`.
+
+On the box this is one dataset with two folder roots. `truenas_syncthing.data_mount` moved from
+`/data/projects` to `/data`, one line in `group_vars/all.yml`; the role already chowns the dataset to uid 568
+when it is wrong, so Syncthing creates both roots itself. The 200 GiB quota and the 2-hourly snapshots now
+cover both trees together, which is what the Synology recycle bin did anyway. The mount change is a playbook
+run (`--ask-vault-pass`, operator-run); the app restarts and keeps its state under `/var/syncthing`, so the
+device ID survives. The README's pairing walkthrough was rewritten for two folders, with the ignore files
+placed *before* any folder is added, and two mini-side preconditions for `documents`: iCloud "Desktop &
+Documents" off, and the Files and Folders permission for the Syncthing app.
+
+Folder settings, so the GUI is not read as a list of knobs: two non-defaults on the NAS — Receive Only, and
+Ignore Permissions on (POSIX dataset written as uid 568; the Macs' modes still travel Mac to Mac because the
+index entry carries the announcing Mac's mode). Watch for Changes off on the NAS (nothing legitimately changes
+there; the hourly rescan reverts anything written by hand). No file versioning anywhere: Time Machine on the
+Macs, the snapshot task here. Ownership and extended-attribute sync off. Everything else default.

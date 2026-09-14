@@ -1,0 +1,60 @@
+// Shared Syncthing ignore list for BOTH folders: `projects` (Mac mini
+// ~/Documents/work/projects <-> MacBook Air ~/projects <-> NAS /data/projects)
+// and `documents` (Mac mini ~/Documents -> NAS /data/documents).
+//
+// Goes at <folder root>/.stignore-shared on EVERY member of each folder. Each
+// member's own .stignore is then a single line:
+//
+//     #include .stignore-shared
+//
+// .stignore is not itself synced by Syncthing; this file is. That indirection
+// is the only reason the nodes cannot quietly drift apart on what they ignore
+// -- editing it on one Mac updates every member.
+
+// THE NESTING GUARD. `projects` lives INSIDE `documents` on the Mac mini
+// (~/Documents/work/projects). Without this line the mini indexes that subtree
+// twice, once per folder, and every MacBook change is re-announced through
+// `documents` as a second, competing version. Anchored at the folder root, so
+// it only ever matches in `documents`; in `projects` there is no `work/`.
+/work/projects
+
+// macOS metadata. Finder and Spotlight recreate these on demand; syncing them
+// only produces churn, and on the NAS (POSIX, uid 568) they mean nothing.
+// (?d) lets Syncthing delete them when it removes their directory.
+(?d).DS_Store
+(?d)._*
+(?d).Spotlight-V100
+(?d).Trashes
+(?d).fseventsd
+(?d).TemporaryItems
+(?d).DocumentRevisions-V100
+(?d).com.apple.timemachine.donotpresent
+
+// .git IS DELIBERATELY NOT IGNORED. Ignoring it would leave the peers sharing
+// a working tree with no branch, no history, and no way to restore a repo from
+// this node -- the NAS copy would be a file dump rather than a backup. The
+// cost is the rule in the README: do not have the same repo open and being
+// written on both Macs at once.
+
+// Build output and dependency trees. Large, high-churn, and reproducible from
+// the manifests that ARE synced, so syncing them buys nothing and costs the
+// small-file throughput this folder is already bound by.
+(?d)node_modules
+(?d).venv
+(?d)venv
+(?d)__pycache__
+(?d)*.pyc
+(?d)target
+(?d)dist
+(?d)build
+(?d).direnv
+(?d).tox
+(?d).pytest_cache
+(?d).mypy_cache
+(?d).ruff_cache
+
+// Helm vendored subcharts. This repo gitignores components/**/charts/ and
+// re-fetches them with `helm dependency update`; syncing them would propagate
+// a stale subchart from one machine to another, which is the exact failure the
+// Rook version-coherence rule exists to prevent.
+(?d)charts

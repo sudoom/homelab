@@ -183,7 +183,7 @@ truenas_datasets:
   # and they are deliberately left alone.
   - name: sync
     recordsize: 128K
-    comments: "Syncthing mirror of ~/Projects (Mac mini <-> MacBook Air). Receive-only here; the snapshots are the version history."
+    comments: "Syncthing mirror: the Mac mini's ~/Documents, and the projects tree the mini and the MacBook Air share. Receive-only here; the snapshots are the version history."
     quota: 214748364800             # 200 GiB
     # CASESENSITIVITY IS DECIDED HERE, unlike `work` above, and it is decidable
     # precisely because nothing will ever mount this over SMB. The only writer
@@ -497,10 +497,12 @@ truenas_node_exporter:
   # does not log an error on every scrape.
   textfile_dir: /mnt/tank/monitoring/textfile
 
-# ---- Syncthing (Mac mini <-> MacBook Air sync of ~/Projects) --------------
+# ---- Syncthing (Mac mini ~/Documents mirror + mini <-> MacBook Air projects) --
 # REPLACES SYNOLOGY DRIVE CLIENT, one of the last things still tying a laptop
-# to the DS418. Drive Client was doing exactly one job here: two-way sync of
-# ~/Projects between the two Macs.
+# to the DS418. Drive Client did two jobs: mirror the mini's whole ~/Documents
+# to /mydrive, and two-way sync the MacBook's ~/projects with the server
+# SUBFOLDER /mydrive/work/projects. Syncthing has no subfolder mapping, so
+# this is two Syncthing folders under one /data mount (README "Syncthing").
 #
 # A CATALOG APP (stable train), NOT A CUSTOM ONE -- the rule that makes garage
 # a catalog app and node_exporter a custom one: custom only when no train ships
@@ -567,7 +569,11 @@ truenas_syncthing:
     sync: 22000              # tcp + udp (QUIC); the port a Mac assumes
   run_as_uid: 568            # the TrueNAS apps account, same as garage
   run_as_gid: 568
-  data_mount: /data/projects # the folder path to enter in the NAS GUI
+  data_mount: /data          # one dataset, two Syncthing folder roots under it:
+                             # /data/documents (mini's ~/Documents) and
+                             # /data/projects (mini <-> MBA). README "Syncthing".
+                             # Was /data/projects until 2026-09-14, when the
+                             # real Drive Client layout turned out to be two trees.
   paths:
     config: /mnt/tank/apps/syncthing
     data: /mnt/tank/sync
