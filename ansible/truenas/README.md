@@ -119,7 +119,7 @@ not fight, and anything **added** here must never again be changed in the UI.
   than machines.
 - **Syncthing's folder and device pairing.** The app, its dataset, its
   ownership and its snapshot task are all converged; the *folder* definition
-  and the three device pairings are not. Syncthing rewrites `config.xml` at
+  and the two device pairings (mini ↔ MacBook, mini → this box) are not. Syncthing rewrites `config.xml` at
   runtime, so a templated file would fight the container. They are recorded as
   documented state under "Syncthing" below instead. Phase 2 could converge them
   over Syncthing's own REST API with `ansible.builtin.uri` — legitimate here
@@ -229,9 +229,10 @@ re-create / copy-back. `tank/work` used to be the standing example — empty, wi
 
 `tank/sync` (2026-09-09) is the counter-example: it was created `SENSITIVE`
 deliberately, and it could be decided precisely because nothing will ever mount
-it over SMB. Its only writer is Syncthing on the Linux side, receiving from two
-case-**insensitive** APFS volumes, so a pair of names differing only by case
-cannot arrive and `SENSITIVE` has nothing to collide. Note what this did *not*
+it over SMB. Its only writer is Syncthing on the Linux side, receiving from the
+Mac mini trees that live on case-**insensitive** APFS volumes (the MacBook's
+too, since they reach here through the mini), so a pair of names differing only
+by case cannot arrive and `SENSITIVE` has nothing to collide. Note what this did *not*
 do: the Syncthing work deliberately landed on its own dataset rather than in
 `tank/work`, so it never forced that dataset's open decision — which is also why
 removing `tank/work` later cost nothing.
@@ -281,9 +282,11 @@ whole `~/Documents` to the NAS (`/mydrive`), and two-way sync the MacBook Air's
 change reached the mini at `~/Documents/work/projects` through the NAS. Drive
 Client could map a server subfolder to a local folder; Syncthing has no subtree
 mapping, a folder is a folder on every member. Hence **two Syncthing folders**:
-`projects` (both Macs plus this box, the Macs peer directly) nested inside
-`documents` (the mini plus this box), with one ignore line that keeps the nest
-from being indexed twice.
+`projects` (both Macs plus this box) nested inside `documents` (the mini plus
+this box), with one ignore line that keeps the nest from being indexed twice.
+**Two pairings, not three:** the mini pairs with the MacBook and with this box;
+the MacBook and this box never pair with each other. The mini carries
+`projects` between them (decided 2026-09-14).
 
 | | |
 |---|---|
@@ -296,11 +299,13 @@ from being indexed twice.
 | this node's folder type | **Receive Only** |
 
 **The two Macs peer directly; this box is not load-bearing for the sync
-itself.** It earns its place twice — as the always-on third node, so a change
-on the MacBook lands somewhere while the mini is asleep, and as the snapshot
-host. Two-way sync propagates a deletion to every peer within seconds, so the
-ZFS task on `tank/sync` is the entirety of the recycle bin Drive Client used to
-provide. That is the reason this node exists in the mesh at all.
+itself.** It is paired with the mini only, so it is the snapshot host and
+nothing else: a MacBook change reaches it only once the mini has it, and while
+the mini is asleep the MacBook's changes stay on the MacBook (and in `git
+push`). That is the accepted cost of keeping the MacBook paired with a single
+machine. Two-way sync propagates a deletion to every peer within seconds, so
+the ZFS task on `tank/sync` is the entirety of the recycle bin Drive Client
+used to provide. That is the reason this node exists in the mesh at all.
 
 **Why a catalog app.** This topic's rule is custom only when no TrueNAS train
 ships the app — node_exporter is custom for exactly that reason, garage is not.
@@ -321,7 +326,7 @@ limit garage hit. So the GUI and sync port also answer on the storage backnet,
 whose only members are the three OKD nodes' host stacks (pods cannot route
 there); the GUI password is what closes that. And local discovery cannot find
 this node — the broadcast does not cross the docker bridge and 21027 is not
-published — so each Mac adds it **by address**.
+published — so the mini adds it **by address** (the only Mac that adds it at all).
 
 **Upgrades** work the way garage's do: TrueNAS shows `upgrade_available` and
 the Apps screen applies it. `truenas_syncthing.version` is read only at create,
@@ -353,14 +358,25 @@ once, then record the device IDs in the table below.
    macOS app, not the Homebrew formula. On 2026-09-11 this laptop blocked
    ad-hoc-signed binaries, which Homebrew-built formulae are, from every LAN
    address; a Syncthing that cannot reach `192.168.1.x` pairs with nothing. The
-   app asks for local network access like any Mac app — allow it. Then turn
-   the same three settings off in each Mac's GUI.
-3. On each Mac, add this box as a device with addresses
+   app asks for local network access like any Mac app — allow it. If it came
+   from the DMG rather than the cask, drag it to `/Applications` before the
+   first launch: on 2026-09-14 the MacBook's copy was running from the mounted
+   image at `/Volumes/Syncthing/`, which is gone after an eject or a reboot.
+   Then turn the same three settings off in each Mac's GUI. Local discovery
+   stays on — it is how the two Macs find each other. With global discovery
+   and relays left on, the MacBook's first contact with this box on 2026-09-14
+   went through a public relay (`relay-client`, `lan=false`) before the LAN
+   path won; that is what the LAN-only rule exists to prevent.
+3. **On the Mac mini only**, add this box as a device with addresses
    `tcp://192.168.1.25:22000, quic://192.168.1.25:22000`. Left as `dynamic` it
-   is never found, because it cannot be discovered.
+   is never found, because it cannot be discovered. The MacBook does not add
+   this box and this box does not add the MacBook; the two Macs add each other
+   (local discovery finds them). If a MacBook ↔ this-box pairing exists from an
+   earlier attempt, remove the device on both sides — this box keeps dialling
+   a paired MacBook otherwise.
 4. **Ignore lists first, on every member, before any folder is added.** Copy
    `files/sync-stignore-shared` to `.stignore-shared` in each folder root —
-   `~/Documents` and `~/Documents/work/projects` on the mini, `~/projects` on
+   `~/Documents` and `~/Documents/work/projects` on the mini, `~/Projects` on
    the MacBook — and next to it a `.stignore` holding the single line
    `#include .stignore-shared`. Syncthing does not sync `.stignore` itself,
    which is exactly why the real list lives in an included file that *is*
@@ -373,9 +389,16 @@ once, then record the device IDs in the table below.
    folder, ID `projects`, type **Send & Receive**, share it with the MacBook and
    with this box. On this box accept it at `/data/projects`, type
    **Receive Only** — the step that keeps the NAS from becoming a third writer;
-   it is not a default. On the MacBook accept it at `~/projects`, type
+   it is not a default. On the MacBook accept it at `~/Projects`, type
    **Send & Receive**. Both Mac paths are where Drive Client already had the
-   tree, so nothing moves.
+   tree, so nothing moves. The MacBook and this box are both members of the
+   folder without being paired with each other: each sees only the mini, and
+   the mini relays the folder between them. On this box the MacBook never
+   appears in the device list, and that is correct. **Accept the mini's offer;
+   do not create the folder here.** A folder added on this box gets a random
+   ID (`wcphp-qgqsp` labelled "Projects" on 2026-09-14) and never syncs with
+   the Macs' `projects`, however it is labelled — the Macs log it as
+   `Unexpected folder ID in ClusterConfig` and ignore it.
 6. **`documents`, from the Mac mini:** add `~/Documents` as a folder, ID
    `documents`, type **Send & Receive**, share it with this box only, accept
    here at `/data/documents`, **Receive Only**. The MacBook is not a member; it
@@ -397,7 +420,7 @@ does (block hashing); its recycle bin is the ZFS snapshot task.
 | setting | Macs | this box | why |
 |---|---|---|---|
 | Folder ID | set once on the mini, arrives with the share | accept, do not type | must be identical on all three |
-| Folder path | `projects`: `~/Documents/work/projects` (mini), `~/projects` (MacBook); `documents`: `~/Documents` (mini) | `/data/projects`, `/data/documents` | one dataset (`tank/sync`) with two folder roots under the `/data` mount; the 2-hourly snapshots and the 200 GiB quota cover both trees together, as the Synology recycle bin did |
+| Folder path | `projects`: `~/Documents/work/projects` (mini), `~/Projects` (MacBook); `documents`: `~/Documents` (mini) | `/data/projects`, `/data/documents` | one dataset (`tank/sync`) with two folder roots under the `/data` mount; the 2-hourly snapshots and the 200 GiB quota cover both trees together, as the Synology recycle bin did |
 | Folder type | Send & Receive | **Receive Only** | the NAS must never become a third writer |
 | File versioning | none | none | Time Machine on the Macs; the 2-hourly/30-day snapshots here |
 | Ignore patterns | `#include .stignore-shared` | same | see step 7 |
@@ -430,6 +453,11 @@ button, not by hand.
 - **`.git` is synced on purpose.** Ignoring it would leave the peers sharing a
   working tree with no branch and no history, and would make this node useless
   as a restore source.
+- **The MacBook and this box are never paired.** Two pairings exist, both with
+  the mini. Adding this box on the MacBook, or the MacBook here, makes a third
+  path for the same folder and reintroduces exactly the mesh this decision
+  removed. Consequence to accept: with the mini asleep, MacBook changes reach
+  this box's snapshots only after the mini wakes.
 - **LAN-only.** Global discovery and relays stay off: the MacBook does not sync
   while away, and `git push` covers tracked work in the meantime. Turning them
   on would route traffic through third-party relays; the alternative is a real

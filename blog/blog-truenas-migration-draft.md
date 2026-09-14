@@ -5082,3 +5082,72 @@ Ignore Permissions on (POSIX dataset written as uid 568; the Macs' modes still t
 index entry carries the announcing Mac's mode). Watch for Changes off on the NAS (nothing legitimately changes
 there; the hourly rescan reverts anything written by hand). No file versioning anywhere: Time Machine on the
 Macs, the snapshot task here. Ownership and extended-attribute sync off. Everything else default.
+
+## 2026-09-14 — two pairings, not three: the MacBook and the NAS are never paired
+
+The walkthrough above had every node paired with every other node ("on each Mac, add this box"). The
+decision, stated while pairing: the MacBook pairs with the mini only, and the NAS pairs with the mini only.
+
+```
+mini  -> truenas   documents + projects
+mini <-> mba       projects
+```
+
+Syncthing does not need a full mesh for a shared folder: the mini is a member of `projects` with both, so it
+carries the folder between them, and on the NAS the MacBook simply never appears. The cost is that a MacBook
+change reaches the snapshot host only once the mini has it — with the mini asleep it waits, and `git push`
+covers tracked work meanwhile. That replaces the "always-on third node so a MacBook change lands somewhere"
+argument the README used to make for the NAS's membership; the NAS is now the snapshot host and nothing else.
+
+The live state on the MacBook at the time, read from its own config and REST API over loopback
+(`~/Library/Application Support/Syncthing/config.xml`, `/rest/system/connections`, `/rest/config/*`), showed
+how far the first attempt had drifted from both the old walkthrough and the new decision:
+
+```
+device BP6BD55 Vadzims-Mac-mini.local   addresses=['dynamic']
+device VEVHQPF TrueNAS                  addresses=['dynamic']      <- paired, and by discovery rather than by address
+options globalAnnounce=True localAnnounce=True relays=True nat=True   <- step 2 not done
+folder projects path=~/Projects type=sendreceive devices=[BP6BD55, GB7E5RR]   <- shared with the mini only: correct
+conn VEVHQPF connected=True addr=192.168.1.25:58066 type=tcp-server           <- the NAS dials the MacBook
+```
+
+The log explains the `tcp-server` direction and why a `dynamic` address for the NAS worked at all:
+
+```
+20:46:51 INF Established secure connection (device=VEVHQPF ... connection.remote=150.40.127.4:22067 connection.type=relay-client connection.lan=false ...)
+20:46:52 INF Lost device connection (... error="reading length: EOF" ...)          x3
+20:47:34 INF Established secure connection (device=VEVHQPF connection.local=192.168.1.61:22000 connection.remote=192.168.1.25:22000 connection.type=tcp-server connection.lan=true ...)
+```
+
+First contact with the NAS went through a public Syncthing relay — the LAN-only rule broken in the first two
+minutes, because both ends still had relays and global discovery on — and every LAN connection since has been
+the NAS dialling in, which means the NAS learned the MacBook's address the same way. The MacBook itself never
+dials the NAS: `dynamic` cannot be discovered across the docker bridge, exactly as the README predicted.
+
+Two more findings from the same log. The NAS offered the MacBook a folder that was created on the NAS rather
+than accepted from the mini:
+
+```
+21:25:20 WRN Unexpected folder ID in ClusterConfig; ensure that the folder exists and that this device is selected under "Share With" ... (folder.label=Projects folder.id=wcphp-qgqsp device=VEVHQPF)
+22:32:36 INF Lost device connection (... error="handling index-update for wcphp-qgqsp: wcphp-qgqsp: no such folder" ...)
+```
+
+A folder added on any node gets a random ID; labelled "Projects" or not, it never syncs with the Macs'
+`projects`. Only the mini's offer, accepted, carries the right ID. And the MacBook's app was running from the
+mounted DMG (`/Volumes/Syncthing/Syncthing.app`), not from `/Applications` — gone after an eject or a reboot.
+
+What is working: mini ↔ MacBook. The MacBook found the mini by local discovery at `192.168.1.3:22000`
+(`tcp-client`, `lan=true`), `projects` is shared both ways, and the first pass was moving — 117,083 global
+items, the mini at 67 %, the MacBook at 63 %, tens of thousands of metadata updates per minute in the log.
+
+The NAS side could not be read the same way: `/mnt/tank/apps/syncthing/config/config.xml` is uid 568 mode
+700, `truenas_admin` gets `Permission denied`, and the inventory forbids `become` by design. Its state is
+whatever the GUI shows, which is the walkthrough's premise anyway.
+
+To make live state match the decision, all GUI, all user-run: on the MacBook remove the TrueNAS device, turn
+off global discovery, relaying and NAT traversal (local discovery stays), and move the app to `/Applications`
+before ejecting the DMG; on the NAS remove the MacBook device, remove the self-created "Projects" folder
+(`wcphp-qgqsp`), accept the mini's `projects` at `/data/projects` Receive Only, and confirm the three
+connection settings are off there too; on the mini, nothing — it already shares `projects` with both. The
+README walkthrough now says "on the Mac mini only" at step 3, names the MacBook path `~/Projects` as the GUI
+has it, and carries the random-folder-ID trap in step 5.

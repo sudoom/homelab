@@ -1,5 +1,5 @@
 // Shared Syncthing ignore list for BOTH folders: `projects` (Mac mini
-// ~/Documents/work/projects <-> MacBook Air ~/projects <-> NAS /data/projects)
+// ~/Documents/work/projects <-> MacBook Air ~/Projects, and mini -> NAS /data/projects)
 // and `documents` (Mac mini ~/Documents -> NAS /data/documents).
 //
 // Goes at <folder root>/.stignore-shared on EVERY member of each folder. Each
