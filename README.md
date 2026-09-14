@@ -466,6 +466,7 @@ Legend: ✅ published · 📝 staged raw draft (not live) · ⬜ not started · 
 | R2 | Runbook | OKD 4.20 → 4.21 → 4.22 upgrade campaign | `blog-okd-4.22-upgrade` | ⬜ | 2026-05-11→06-24 |
 | R3 | Runbook | Homelab power consumption | `blog-power-consumption` | ⬜ | 2026-05-21→05-26 |
 | R4 | Runbook | Graceful full-cluster shutdown / return | `blog-cluster-shutdown` | ⬜ | 2026-05-29→06-08 |
+| R5 | Incident | OLM v1 catalog cache leak filled a mon's disk; default Red Hat catalogs disabled | `blog-olm-v1-catalogs` | ⬜ | 2026-09-14 |
 
 **Using this tracker:**
 - **Build date vs narrative slot** — the Day-2 posts (Seq 12–19) were *authored* 2026-06-24+ but sit before Storage/Networking in the narrative even though that work happened earlier (dates in the table are the real build chronology; order follows the published narrative). Same draft can appear at two slots (e.g. `blog-rook-ceph` design at Seq 5, live ops at Seq 20; `blog-multus` NMState subset at Seq 19, full saga at Seq 25) — not duplicates.
