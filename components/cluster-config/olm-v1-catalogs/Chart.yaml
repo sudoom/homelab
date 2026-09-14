@@ -1,0 +1,5 @@
+apiVersion: v2
+name: olm-v1-catalogs
+description: Sets availabilityMode on the OLM v1 default ClusterCatalogs (catalogd / operator-controller)
+version: 1.0.0
+type: application

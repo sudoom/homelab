@@ -1,0 +1,38 @@
+# OLM v1 default ClusterCatalogs to switch OFF.
+#
+# OKD 4.21 ships OLM v1 (catalogd + operator-controller) next to OLM v0, and
+# cluster-olm-operator creates four default ClusterCatalogs at install:
+# openshift-redhat-operators, openshift-certified-operators,
+# openshift-redhat-marketplace and openshift-community-operators. This
+# cluster runs zero ClusterExtensions, and the three Red Hat catalogs carry
+# operators that need a registry.redhat.io entitlement it does not have, so
+# they serve nothing here. Operator installs in this repo go through OLM v0
+# (CatalogSources okderators / community-operators + Subscriptions), which
+# this chart does not touch.
+#
+# Why bother: operator-controller polls every ClusterCatalog on its
+# 10-minute interval and caches the content in an emptyDir on the node's
+# root disk. On this cluster the parse of openshift-redhat-operators (the
+# largest index) times out on nearly every poll, and the 4.21 payload lacks
+# the upstream cleanup (operator-framework/operator-controller#2574), so
+# every failed poll leaks a 79 MB temp dir: 544 of them, 42 GiB, on node5
+# in six days, which tripped Ceph's MON_DISK_LOW (2026-09-14). Unavailable
+# stops the polling and drops the catalog from catalogd's storage; the
+# already-leaked dirs go when the operator-controller pod is restarted.
+#
+# Mechanics: the template renders a PARTIAL ClusterCatalog (name +
+# spec.availabilityMode only) that ArgoCD server-side-applies onto the
+# object cluster-olm-operator already created — same pattern as
+# csi-driver-config. It relies on the object existing, which it does on
+# every OKD install; the OLM docs describe this field as the supported way
+# to disable a default catalog. Revert = remove a name from the list and
+# sync; ArgoCD's prune then deletes nothing (the object is not ours), the
+# field just stays Unavailable until someone sets it back, so flip it to
+# Available explicitly if that matters.
+#
+# openshift-community-operators is deliberately left Available: it unpacks
+# fine and keeps OLM v1 usable for a future ClusterExtension test.
+unavailable:
+  - openshift-redhat-operators
+  - openshift-certified-operators
+  - openshift-redhat-marketplace

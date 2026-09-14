@@ -178,6 +178,17 @@ applications:
     namespace: rook-ceph
     syncWave: "2"
 
+  # OLM v1: sets availabilityMode=Unavailable on the three Red Hat default
+  # ClusterCatalogs (no entitlement here, zero ClusterExtensions). Stops the
+  # operator-controller temp-dir leak that filled node5's root disk on
+  # 2026-09-14. Cluster-scoped objects; the namespace is only ArgoCD's
+  # destination. Does not touch the OLM v0 CatalogSources.
+  olm-v1-catalogs:
+    enabled: true
+    path: components/cluster-config/olm-v1-catalogs
+    namespace: openshift-catalogd
+    syncWave: "2"
+
   # Routes cluster image pulls through Zot pull-through cache. Triggers
   # a 3-master MCO reroll on first apply (writes /etc/containers/
   # registries.conf via MachineConfig). Run cascade pre-flight per

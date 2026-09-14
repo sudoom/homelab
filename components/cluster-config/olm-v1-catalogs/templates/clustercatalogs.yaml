@@ -1,0 +1,10 @@
+{{- range .Values.unavailable }}
+---
+# Partial object, merged onto the catalog cluster-olm-operator created.
+apiVersion: olm.operatorframework.io/v1
+kind: ClusterCatalog
+metadata:
+  name: {{ . }}
+spec:
+  availabilityMode: Unavailable
+{{- end }}
