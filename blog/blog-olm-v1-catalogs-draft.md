@@ -111,4 +111,13 @@ openshift-redhat-operators      Unavailable   False   UserSpecifiedUnavailable
 fetch that was in flight when the catalog stopped serving — and nothing after. The ArgoCD app reads
 Synced/Healthy. Node5's root disk is unchanged at 260/372 GiB and Ceph still says `MON_DISK_LOW`: expected,
 because the leaked directories live in the pod's emptyDir and only the pod restart (operator-run) returns them.
-Reading to record after that restart: node5 root back near 218 GiB used, `MON_DISK_LOW` gone.
+The operator ran the pod delete at ~18:50Z; it took over two minutes (unlinking 544 directories of catalog
+content), and the replacement landed on node4 at 18:51:27Z. Four minutes later:
+
+```
+node5 root: used=219/372 GiB (59%)        # was 260/372 (70%) — 41 GiB back
+ceph: HEALTH_OK                            # MON_DISK_LOW gone, lastChecked 18:54:37Z
+```
+
+Cluster back to a clean board. The remaining exposure is the operator-controller half of #2574 not being in the
+4.21 payload; with the three Red Hat catalogs Unavailable there is nothing left for it to leak on.
