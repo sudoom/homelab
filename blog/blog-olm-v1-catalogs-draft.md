@@ -96,5 +96,19 @@ The **one-shot** half is operator-run: the leaked directories live in the pod's 
 no orphan sweep, so `oc -n openshift-operator-controller delete pod operator-controller-controller-manager-94b6fb847-c4l9n`
 is what actually returns the 42 GiB. After the chart is live the pod cannot leak again for that catalog.
 
-Outcome after sync: to be filled in with the `ClusterCatalog` conditions, the node5 root-disk figure and the
-Ceph health line.
+**Outcome.** Pushed as `ee7d621` at 18:41Z; root-app created the Application on its next poll and the sync
+finished at 18:49:33Z. Conditions immediately afterwards:
+
+```
+$ oc get clustercatalog -o custom-columns=NAME:.metadata.name,AVAIL:.spec.availabilityMode,SERVING:.status.conditions[?(@.type=="Serving")].status,REASON:.status.conditions[?(@.type=="Serving")].reason
+openshift-certified-operators   Unavailable   False   UserSpecifiedUnavailable
+openshift-community-operators   Available     True    Available
+openshift-redhat-marketplace    Unavailable   False   UserSpecifiedUnavailable
+openshift-redhat-operators      Unavailable   False   UserSpecifiedUnavailable
+```
+
+`operator-controller` logged one last `Reconciler error` for `openshift-redhat-operators` at 18:49:33.531Z — the
+fetch that was in flight when the catalog stopped serving — and nothing after. The ArgoCD app reads
+Synced/Healthy. Node5's root disk is unchanged at 260/372 GiB and Ceph still says `MON_DISK_LOW`: expected,
+because the leaked directories live in the pod's emptyDir and only the pod restart (operator-run) returns them.
+Reading to record after that restart: node5 root back near 218 GiB used, `MON_DISK_LOW` gone.
