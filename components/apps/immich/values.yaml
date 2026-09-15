@@ -11,9 +11,16 @@ route:
 postgres:
   # Dedicated CNPG cluster on the VectorChord operand image. Immich requires the
   # vchord extension (>=0.3,<2.0) + pgvector — a stock CNPG image CANNOT run it,
-  # so this is a separate cluster, NOT the shared media-postgres. Single instance
-  # (homelab; DB is recoverable from the daily snapshot — bump to 2 for HA later).
-  instances: 1
+  # so this is a separate cluster, NOT the shared media-postgres. Two instances
+  # since 2026-09-15: NOT for HA of the database itself (the daily snapshot +
+  # R2 WAL archive cover recovery) but because a 1-instance CNPG cluster carries
+  # a `minAvailable: 1` primary PDB that can never be satisfied, and it stalled
+  # every master-pool drain (the 4.21 hop on 09-08, an unplanned MCO reroll on
+  # 09-14, 5+ hours each). With 2 instances CNPG switches over ahead of the
+  # drain and the old primary is evicted as a replica; the replica PDB only
+  # exists at >=3 instances, so the lone replica is freely evictable. Cost: one
+  # more 10Gi RBD image and 512Mi/1Gi of memory. Blog: blog-cnpg-draft.md.
+  instances: 2
   image: ghcr.io/tensorchord/cloudnative-vectorchord:18-1.1.1
   storage:
     size: 10Gi
