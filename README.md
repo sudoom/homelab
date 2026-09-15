@@ -351,8 +351,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **OKD upgrade — HOP 1 DONE 2026-09-08: cluster is on 4.21.0-okd-scos.11 (Kube 1.34). Hop 2 (4.22) still
   blocked.** ~95 min, 3/3 nodes Ready on v1.34.6, zero degraded ClusterOperators, Ceph recovered to the benign
   slow-op warning only. Full execution write-up in `blog/blog-okd-4.22-upgrade-draft.md`.
-  **THE BLOCKER NOBODY LISTED — fix before hop 2: a single-instance CNPG cluster blocks node drain
-  unconditionally.** `immich-postgres` is `instances: 1`; CNPG puts a `minAvailable: 1` PDB over the primary, and
+  **THE BLOCKER NOBODY LISTED — FIXED 2026-09-15 (`immich-postgres` runs `instances: 2` since `e460c61`; nothing left to do before hop 2): a single-instance CNPG cluster blocks node drain
+  unconditionally.** `immich-postgres` was `instances: 1`; CNPG puts a `minAvailable: 1` PDB over the primary, and
   with no replica to fail over to the budget can never be satisfied — the drain retried forever and stalled node6
   for ~20 min. `media-postgres` (3 instances) was untouched. CLAUDE.md correctly said these PDBs "do NOT block
   draining a node that holds a *replica*"; the missing corollary is that **for a single-instance cluster every node
