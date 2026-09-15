@@ -21,7 +21,14 @@ postgres:
   # exists at >=3 instances, so the lone replica is freely evictable. Cost: one
   # more 10Gi RBD image and 512Mi/1Gi of memory. Blog: blog-cnpg-draft.md.
   instances: 2
-  image: ghcr.io/tensorchord/cloudnative-vectorchord:18-1.1.1
+  # Pinned to the PostgreSQL MINOR (2026-09-15): upstream tags every build as
+  # <cnpg-minor>-<vectorchord>, and the floating `18-1.1.1` moved under us —
+  # the new replica pulled 18.6 (pgvector 0.8.6) on node4 while the primary
+  # kept node6's cached 18.3 (pgvector 0.8.2). Bump this deliberately, then
+  # as postgres SUPERUSER on the primary: `ALTER EXTENSION vector UPDATE`
+  # (the catalog stays at the old version until told; vchord needs the
+  # REINDEX dance noted in templates/cnpg-cluster.yaml).
+  image: ghcr.io/tensorchord/cloudnative-vectorchord:18.6-1.1.1
   storage:
     size: 10Gi
     # DB on fast RBD block, NEVER CephFS/NFS (corruption risk).

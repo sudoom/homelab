@@ -25,14 +25,23 @@ clusters:
   media-postgres:
     enabled: true
     namespace: media
-    # 3 instances: 1 primary + 2 hot-standby replicas, one per node via
-    # CNPG's default pod anti-affinity. Total storage = instances × size,
-    # all on ceph-nvme-block (3-way replicated underneath). Stream
-    # replication between Postgres instances stays on the K8s pod network
-    # (routes via OVN-K → host stack → backnet per today's routingViaHost
-    # change, so PG replication uses the 10G backnet).
-    instances: 3
-    imageName: ghcr.io/cloudnative-pg/postgresql:18
+    # 2 instances (was 3 until 2026-09-15): 1 primary + 1 hot-standby, on
+    # different nodes via CNPG's default pod anti-affinity. Two is what the
+    # drain story needs — CNPG switches over ahead of a drain at >=2, and the
+    # replica PDB only exists at >=3 — and the third copy bought only "still
+    # a standby after losing a node", for a 20Gi image and ~250MiB. Total
+    # storage = instances × size, all on ceph-nvme-block (3-way replicated
+    # underneath). Stream replication between instances stays on the K8s pod
+    # network (routes via OVN-K → host stack → backnet per routingViaHost, so
+    # PG replication uses the 10G backnet).
+    instances: 2
+    # Pinned to the PostgreSQL MINOR (2026-09-15). The floating `:18` tag left
+    # the three pods on two different image digests (all 18.4 that day, by
+    # luck); immich's floating tag put its primary on 18.3 and its replica on
+    # 18.6 the same afternoon. `MM.mm` is the tag CNPG documents as the stable
+    # per-minor reference, and it is something Renovate can bump. Same minor
+    # as immich's vectorchord build, so both clusters run one Postgres.
+    imageName: ghcr.io/cloudnative-pg/postgresql:18.6
     storage:
       # Grown 10Gi→20Gi on 2026-07-02: during the ~2-day node4 outage the R2 WAL
       # archiving path was broken (OVN egress cascade), so Postgres retained
