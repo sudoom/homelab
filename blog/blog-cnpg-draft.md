@@ -1341,4 +1341,5 @@ pdb: only <cluster>-primary on each, allowed=0 (structural)
 Still pending, user-run because it needs the postgres superuser: `ALTER EXTENSION vector UPDATE` on the immich
 primary — `pg_extension` still says `vector=0.8.2` while the image's `vector.control` is `default_version = '0.8.6'`.
 Harmless as is; it only matters when something wants a 0.8.6 feature or the next vchord bump runs its
-`ALTER EXTENSION vchord UPDATE` + reindex against a mismatched catalog.
+`ALTER EXTENSION vchord UPDATE` + reindex against a mismatched catalog. Run the same evening (`ALTER EXTENSION`),
+`pg_extension` now reads `vector=0.8.6 vchord=1.1.1`.
