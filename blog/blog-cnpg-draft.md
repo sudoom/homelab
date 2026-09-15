@@ -1218,3 +1218,78 @@ on exactly 7 afterwards, which is the floor doing its job.
 
 Shipped with `dryRun: true`. Deleting backups automatically, unattended, forever is not a change to
 enable sight-unseen — read one run's log first, then flip it.
+
+## 2026-09-15 — `immich-postgres` to 2 instances, so a master-pool drain switches over instead of stalling
+
+The 1-instance cluster had stalled two master-pool drains in a week: the 4.21 hop on 09-08 (node6, ~20 min
+until the pod was deleted by hand) and the unplanned MCO reroll on 09-14 (node4, 5+ hours, MCD Degraded after
+the first hour, five control-plane replicas plus mon-a and osd.0 Pending throughout). Same mechanism both
+times: CNPG's primary PDB is `minAvailable: 1` over the one primary pod, so with a single instance the budget
+can never be satisfied and the eviction retries forever.
+
+Before touching it I wanted the 2-instance case pinned down rather than inferred from `media-postgres` (3
+instances), because the replica PDB could plausibly block the *replica's* node instead. It cannot. CNPG 1.30
+`pkg/specs/poddisruptionbudget.go`:
+
+```go
+// We should ensure that in a cluster of n instances,
+// with n-1 replicas, at least n-2 are always available
+if cluster == nil || cluster.Spec.Instances < 3 {
+    return nil
+}
+minAvailableReplicas := int32(cluster.Spec.Instances - 2)
+```
+
+So at 2 instances there is no replica PDB at all, and the live `media-postgres` PDB confirms the formula
+(3 instances → `media-postgres` minAvailable 1, allowed 1). The drain side is documented in
+`docs/src/kubernetes_upgrade.md` for the same release: "If a node is to be drained and contains a cluster's
+primary instance, a switchover happens ahead of the drain. Once the instance in the node is downgraded to
+replica, the draining can resume. For single-instance clusters, a switchover is not possible, so CloudNativePG
+will prevent draining the node."
+
+The change is one value, `postgres.instances: 1 → 2` in `components/apps/immich/values.yaml` (`e460c61`).
+Validation: `helm lint` clean, kubeconform 19 valid / 1 skipped (the CNPG CRD has no schema in the catalog),
+and the read-only diff against the live object was exactly the one line:
+
+```
+-  instances: 1
++  instances: 2
+```
+
+**What CNPG did with it, which was not what I predicted.** I expected a `pg_basebackup` clone from the
+primary. It seeded the new volume from this morning's volume snapshot instead — `immich-postgres-2` has
+`dataSource=VolumeSnapshot/immich-postgres-daily-20260915043000` — via a short `immich-postgres-2-snapshot-recovery`
+job, then replayed the WAL gap from the primary. The operator prefers the snapshot when one exists, which is
+cheaper for a large database and made no difference at 0.74 GiB. Timeline from the poll:
+
+```
+16:09:07 phase=Creating a new replica            immich-postgres-2-snapshot-recovery-t829f@node4 Pending
+16:09:23 phase=Waiting for the instances to become active   immich-postgres-2@node4 Pending
+16:09:39 ready=2                                 immich-postgres-2@node4 replica Running
+```
+
+Settled state, ~35 s after ArgoCD picked the commit up:
+
+```
+instances=2 ready=2 phase=Cluster in healthy state primary=immich-postgres-1 healthy=[immich-postgres-1 immich-postgres-2] archiving=True/ContinuousArchivingSuccess
+immich-postgres-1   node6   primary   Running
+immich-postgres-2   node4   replica   Running
+pdb: immich-postgres-primary  min=1  role=primary  allowed=0      <- the only PDB, and it no longer blocks a drain
+pvc: immich-postgres-1 10Gi Bound, immich-postgres-2 10Gi Bound
+```
+
+The replica's own Postgres log, in order:
+
+```
+entering standby mode
+redo starts at F/A7000060
+consistent recovery state reached at F/A7000130
+database system is ready to accept read-only connections
+started streaming WAL from primary at F/B4000000 on timeline 1
+```
+
+Two follow-ons to remember. The daily 04:30 snapshot will now be taken on the standby by default
+(`backup.target: prefer-standby`), so the `VolumeSnapshot` source PVC changes to whichever instance is the
+replica at the time; the retention job keys on the `cnpg.io/scheduled-backup` label and does not care. And the
+`PodDisruptionBudgetAtLimit` alert on `immich-postgres-primary` stays firing — it is structural on every CNPG
+cluster here and was never the signal that a drain would stall.

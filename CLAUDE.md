@@ -128,7 +128,7 @@ The 2026-06-12 CSI outage was a **version-coherence** failure. The mechanics tha
 5. Only then bump the Ceph image (`cephClusterSpec`/`cephImage.tag`) — gate on Ceph HEALTH_OK, quiet IO, 2h+ headroom (rolls all 3 OSDs in series, degraded-window each).
 6. **Renovate must NOT auto-bump Rook or Ceph.** These are manual, supervised, version-coherent, compatibility-checked bumps. **Enforced 2026-06-18 in `renovate.json`**: `packageRules` → `enabled: false` for `rook-ceph` + `rook-ceph-cluster` + `quay.io/ceph/ceph`, and both Rook `Chart.lock` files are now committed (un-gitignored) so the deployed subchart version is pinned + reviewable. (Was the third storage-version Renovate incident in one day before the lockdown.)
 
-### Node drain — a single-instance CNPG cluster blocks it unconditionally
+### Node drain — a single-instance CNPG cluster blocks it unconditionally (immich FIXED 2026-09-15 by going to 2 instances)
 
 Found the hard way during the 4.20 → 4.21 upgrade (2026-09-08): node6's drain stalled ~20 minutes and would
 never have completed on its own.
@@ -153,10 +153,18 @@ break-glass kubeconfig is for** (SA token, not OAuth).
 **It recurred on 2026-09-14, and not on an upgrade.** An unplanned MCO reroll (next paragraph) selected node4 at
 12:09Z; the drain sat on `immich-postgres-1` for 5+ hours, the MCD went Degraded after the first hour
 (`failed to drain node: node4.okd.sudops.pl after 1 hour`), and five control-plane replicas plus mon-a and osd.0
-were Pending the whole time. **Every master-pool MachineConfig change hits this, not just the 4.22 hop.** Either
-scale `immich-postgres` to 2 instances (the NVMe headroom argument from 09-08 no longer holds: `nvme-replicated`
-read 95.6 GiB stored / 309.7 GiB max avail on 2026-09-14) or treat the pod deletion as a mandatory step of every
-reroll — tracked in the README TODO.
+were Pending the whole time. **Every master-pool MachineConfig change hits this, not just the 4.22 hop.**
+
+**Resolved 2026-09-15: `immich-postgres` runs `instances: 2`** (`components/apps/immich/values.yaml`, commit
+`e460c61`). With two or more instances CNPG performs a switchover ahead of the drain when the primary's node is
+cordoned, and the old primary is then evicted as a replica — the documented 1.30 behaviour and what
+`media-postgres` already did. The replica PDB (`<cluster>`, `minAvailable: instances-2`) is only created at
+three or more instances (`pkg/specs/poddisruptionbudget.go`), so the lone replica is freely evictable and the
+only PDB left is the structural `immich-postgres-primary`, which no longer blocks because the primary can move.
+Cost: one more 10Gi RBD image and 512Mi/1Gi memory; the daily volume snapshot now comes from the standby
+(`backup.target` default `prefer-standby`), which is a valid restore source. **The unblock recipe above stays
+valid for any FUTURE single-instance CNPG cluster** — the rule is "never run a 1-instance CNPG cluster on the
+master pool", not "delete the pod". Chronology: `blog/blog-cnpg-draft.md` 2026-09-15.
 
 **What starts a reroll without a commit — never delete the `powersave-experimental` Tuned CR by hand (2026-09-14).**
 NTO turns that CR's `[bootloader]` line into `50-nto-master`. Delete the CR and NTO deletes the MachineConfig within
