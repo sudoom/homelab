@@ -1293,3 +1293,52 @@ Two follow-ons to remember. The daily 04:30 snapshot will now be taken on the st
 replica at the time; the retention job keys on the `cnpg.io/scheduled-backup` label and does not care. And the
 `PodDisruptionBudgetAtLimit` alert on `immich-postgres-primary` stays firing — it is structural on every CNPG
 cluster here and was never the signal that a drain would stall.
+
+## 2026-09-15 (later) — pinned to the Postgres minor, media down to 2 instances, and the primary was restarted in place
+
+The CNPG Grafana dashboard put a number on something the manifests could not: `immich-postgres-1` on 18.3,
+`immich-postgres-2` on 18.6. Same `imageName`, `cloudnative-vectorchord:18-1.1.1`, but that tag floats —
+upstream tags every build `<cnpg-minor>-<vectorchord>` *and* `<major>-<vectorchord>` (`.github/workflows/docker.yml`,
+`versions.yaml` currently `cnpg: 18.6`) — and `imagePullPolicy: IfNotPresent` meant node4 pulled today's build
+for the new replica while node6 kept the one it cached in June. pgvector differed too, 0.8.6 vs 0.8.2, with the
+database catalog at 0.8.2. Media was on the floating `postgresql:18` and, by luck, all 18.4 across two digests.
+
+Fix (`872a5ca`): `postgresql:18` → `postgresql:18.6`, `cloudnative-vectorchord:18-1.1.1` → `18.6-1.1.1`, and
+`media-postgres` from 3 to 2 instances in the same commit — at 2 the drain story is identical (switchover ahead
+of the drain, no replica PDB), and the third copy bought only "still a standby after losing a node" for a 20Gi
+image and ~250MiB. Lint clean, kubeconform 6+4 valid, live diff exactly the three lines.
+
+Timeline, one poll every 20 s (times UTC):
+
+```
+16:24:16  immich  2/1  Waiting for the instances to become active        immich-postgres-2 Pending   <- replica first
+16:24:41  immich  2/1  Primary instance is being restarted without a switchover
+16:25:02  media   2/1  Waiting for the instances to become active        media-postgres-2 gone, -1 Pending (scale-down + image)
+16:26:08  media   2/2  -1 replica Running on 18.6, -3 primary still 18.4
+16:26:30  media   2/1  Primary instance is being restarted without a switchover
+16:28:40  immich  2/2  healthy   1=18.6 2=18.6
+16:30:09  media   2/2  healthy   1=18.6 3=18.6
+```
+
+**The part I had wrong: "a few seconds of reconnect".** Both clusters have `primaryUpdateStrategy: unsupervised`
+and the default `primaryUpdateMethod: restart`, so CNPG restarted each primary *in place* on the new image
+rather than promoting the freshly-rolled replica. Postgres was unavailable for roughly four minutes per cluster
+(16:24:41 → 16:28:40 immich, 16:26:30 → 16:30:09 media). No consumer pod restarted — immich-server and the
+servarrs reconnected on their own — but a `switchover` would have been seconds, and with two instances there is
+now always a replica to switch to. `primaryUpdateMethod: switchover` is the follow-up (README TODO); it is a
+spec field, no restart to apply it.
+
+Settled state:
+
+```
+media-postgres   instances=2 ready=2 healthy primary=media-postgres-3 image=postgresql:18.6 archiving=True
+  media-postgres-1  node6  replica      media-postgres-3  node4  primary      (media-postgres-2 and its PVC removed by the scale-down)
+immich-postgres  instances=2 ready=2 healthy primary=immich-postgres-1 image=cloudnative-vectorchord:18.6-1.1.1 archiving=True
+  immich-postgres-1 node6  primary      immich-postgres-2 node4  replica
+pdb: only <cluster>-primary on each, allowed=0 (structural)
+```
+
+Still pending, user-run because it needs the postgres superuser: `ALTER EXTENSION vector UPDATE` on the immich
+primary — `pg_extension` still says `vector=0.8.2` while the image's `vector.control` is `default_version = '0.8.6'`.
+Harmless as is; it only matters when something wants a 0.8.6 feature or the next vchord bump runs its
+`ALTER EXTENSION vchord UPDATE` + reindex against a mismatched catalog.
