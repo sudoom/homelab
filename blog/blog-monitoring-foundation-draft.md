@@ -236,3 +236,62 @@ concurrent with OSD-impacting work on the no-drain topology.
 - The UWM volume will start receiving nmstate metrics once the RoleBinding fix in
   `components/operators/nmstate/` lands (see `blog/blog-multus-ceph-migration-draft.md`),
   which is the first real growth this TSDB has seen in a while.
+
+## 2026-09-16/17 — both platform Prometheus replicas panicked within a minute: client-cert rotation
+
+Found on the 09-17 session-start sweep. Everything else was clean; the restart-recency check
+returned exactly two containers:
+
+```
+openshift-monitoring/prometheus-k8s-0 prometheus exit=2 at=2026-09-16T15:12:33Z n=1
+openshift-monitoring/prometheus-k8s-1 prometheus exit=2 at=2026-09-16T15:11:40Z n=1
+```
+
+Exit 2 is a Go panic, not an OOM (137). Two replicas on two nodes dying 53 s apart is a shared
+input, not a node problem. `oc -n openshift-monitoring logs prometheus-k8s-0 -c prometheus --previous`:
+
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x18 pc=0x98ed5f]
+github.com/prometheus/common/config.(*tlsRoundTripper).RoundTrip(...)
+	vendor/github.com/prometheus/common/config/http_config.go:1386 +0x4ff
+...
+github.com/prometheus/prometheus/scrape.(*targetScraper).scrape(...)
+```
+
+`tlsRoundTripper` is the transport that re-reads CA/cert/key files and rebuilds itself when their
+hash changes, so the question is which mounted file changed just before 15:11. `oc get -o json`
+strips `managedFields` unless asked, which made my first two searches return nothing:
+
+```bash
+for k in secret cm; do oc get $k -A --show-managed-fields -o json | jq -r --arg k $k \
+  '.items[] | . as $s | ([.metadata.managedFields[]?.time] | max) as $t
+   | select($t >= "2026-09-16T14:30:00Z" and $t <= "2026-09-16T15:13:00Z")
+   | "\($t) \($k) \($s.metadata.namespace)/\($s.metadata.name)"'; done
+...
+2026-09-16T15:11:13Z secret openshift-monitoring/metrics-client-certs
+```
+
+and the certificate inside it (public half only) was issued that minute:
+
+```
+subject=CN=system:serviceaccount:openshift-monitoring:prometheus-k8s
+notBefore=Sep 16 15:06:13 2026 GMT      # 5-minute backdate => issued 15:11:13
+notAfter=Oct  6 13:32:15 2026 GMT
+```
+
+So: CMO rotated the mTLS client certificate Prometheus scrapes with, the kubelet synced the new
+files into each pod within its own resync period (hence 27 s and 80 s after the write, not
+simultaneous), and the first scrape to notice the new hash hit a nil pointer in the reload path
+of Prometheus 3.7.3's vendored `prometheus/common`. Each replica restarted once, replayed its WAL
+and has been up since. Nothing in the repo touches any of this; it is payload behaviour.
+
+What it cost: both replicas were down together for part of a minute, so there is a short gap in
+platform metrics around 15:12Z on 09-16 and any alert `for:` timer was reset. No data loss beyond
+that, no PVC or attachment trouble on restart.
+
+What to expect: the new certificate runs to 2026-10-06, so the next rotation is due before then
+and may do the same thing. One restart per replica at a rotation is the known shape; more than
+one, or a restart with no matching `metrics-client-certs` write, is something else. Not raised
+upstream yet — it needs checking against the `prometheus/common` tracker first, since a reload
+race in that function may already be fixed in a newer vendored version than 4.21 ships.
