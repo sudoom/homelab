@@ -7,23 +7,23 @@
     "dependencies"
   ],
   "kubernetes": {
-    "fileMatch": [
-      "components/.+\\.yaml$"
+    "managerFilePatterns": [
+      "/components/.+\\.yaml$/"
     ]
   },
   "helm-values": {
-    "fileMatch": [
-      "components/.+values\\.yaml$"
+    "managerFilePatterns": [
+      "/components/.+values\\.yaml$/"
     ]
   },
   "helmv3": {
-    "fileMatch": [
-      "components/.+Chart\\.yaml$"
+    "managerFilePatterns": [
+      "/components/.+Chart\\.yaml$/"
     ]
   },
   "packageRules": [
     {
-      "description": "Automerge patch updates for the media + keepers stacks (non-load-bearing apps). Uses matchFileNames with the REAL paths components/apps/{media,keepers}/** \u2014 the old matchPaths:[media/**,keepers/**] matched ZERO files (there is no root media/ or keepers/ dir), so this rule never fired and patch bumps were merged by hand. matchPaths is also deprecated.",
+      "description": "Automerge patch updates for the media + keepers stacks (non-load-bearing apps). Uses matchFileNames with the REAL paths components/apps/{media,keepers}/** — the old matchPaths:[media/**,keepers/**] matched ZERO files (there is no root media/ or keepers/ dir), so this rule never fired and patch bumps were merged by hand. matchPaths is also deprecated.",
       "matchFileNames": [
         "components/apps/media/**",
         "components/apps/keepers/**"
@@ -82,8 +82,8 @@
     {
       "customType": "regex",
       "description": "node_exporter runs on the TrueNAS box as a CUSTOM (compose) app, so TrueNAS itself will never offer an update: custom apps have no catalog entry to compare against and app.query always reports upgrade_available=false. app.outdated_docker_images only helps for mutable tags like :latest, and this one is pinned. Renovate is therefore the ONLY thing that will ever tell us a newer image exists. The manager matches every `image:` line in the file rather than one named variable, so a future custom app is covered without editing it; catalog apps (garage, syncthing) have no image line and are tracked by TrueNAS instead. Applying the bump still needs an operator playbook run (--ask-vault-pass).",
-      "fileMatch": [
-        "^ansible/truenas/group_vars/all\\.yml$"
+      "managerFilePatterns": [
+        "/^ansible/truenas/group_vars/all\\.yml$/"
       ],
       "matchStrings": [
         "image:\\s+(?<depName>[^:\\s]+):(?<currentValue>\\S+)"
