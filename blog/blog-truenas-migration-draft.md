@@ -5176,6 +5176,19 @@ now fixed on the box too. The other half was never ours: from 09-07 Mailjet acce
 every message (`250 OK queued`) and dropped it afterwards because the account's sending was
 suspended. A message arriving through the same account means that is over.
 
+Cause confirmed the same evening: Mailjet support replied at 16:18Z (11:18 CDT) that sending is
+enabled, after the account verification exchange. The NAS's successful `mail.send` is 51 minutes
+later. Nothing on our side changed between the last dropped message and the first delivered one.
+
+The account comes with a **temporary limit of 20 emails per hour**, reviewable after a week of
+regular sending. The NAS will never get near it. Alertmanager could in one bad hour: it groups by
+`namespace` with `group_interval: 5m`, so a single namespace whose critical alerts keep changing
+can send 12 mails an hour, plus the resolved notices, and two such namespaces at once exceed 20.
+That is the shape of the false etcd/CVO critical storms this cluster has had. Left as is on
+purpose — the first mails of an incident are the ones that matter and those get through; what to
+remember is that a gap in the inbox during a storm may be the limit, not the pipeline
+(`alertmanager_notifications_failed_total{integration="email"}` tells which).
+
 One thing in the received mail that looks wrong and is not: the From address shows as
 `alerts_at_sudops_pl_<id>@icloud.com`, not `alerts@sudops.pl`. The recipient is an iCloud
 Hide My Email address, and that relay rewrites the sender on the way to the real mailbox so a
