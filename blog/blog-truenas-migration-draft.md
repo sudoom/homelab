@@ -5151,3 +5151,36 @@ before ejecting the DMG; on the NAS remove the MacBook device, remove the self-c
 connection settings are off there too; on the mini, nothing — it already shares `projects` with both. The
 README walkthrough now says "on the Mac mini only" at step 3, names the MacBook path `~/Projects` as the GUI
 has it, and carries the random-folder-ID trap in step 5.
+
+## 2026-09-21 — alert email delivers: TrueNAS test mail arrived through Mailjet
+
+The test mail from **System > General > Email > Send Test Mail** landed in the inbox today —
+"TrueNAS truenas.local: Test Message", sender name `TrueNAS truenas`. First delivered message
+since the alert-email work started on 2026-09-07.
+
+Live state, read ad hoc (the password field dropped before printing):
+
+```bash
+ansible all -i inventory.yml -m ansible.builtin.shell -a \
+  "midclt call mail.config | python3 -c \"import sys,json; d=json.load(sys.stdin); d.pop('pass',None); d.pop('oauth',None); print(json.dumps(d))\""
+{"fromemail": "alerts@sudops.pl", "fromname": "TrueNAS truenas", "outgoingserver": "in-v3.mailjet.com",
+ "port": 587, "security": "TLS", "smtp": true, "user": "<mailjet api key>", "id": 1}
+```
+
+`root` and `truenas_admin` both carry the alert address, and the middleware's own job log agrees
+with the inbox: `core.get_jobs [["method","=","mail.send"]]` → one job, `SUCCESS`, 17:09Z.
+
+All of that is what the role declares — `fromemail` separate from the SMTP username,
+`truenas_alert_to` applied to the admin users — so the three defects fixed in code on 09-07 are
+now fixed on the box too. The other half was never ours: from 09-07 Mailjet accepted and queued
+every message (`250 OK queued`) and dropped it afterwards because the account's sending was
+suspended. A message arriving through the same account means that is over.
+
+One thing in the received mail that looks wrong and is not: the From address shows as
+`alerts_at_sudops_pl_<id>@icloud.com`, not `alerts@sudops.pl`. The recipient is an iCloud
+Hide My Email address, and that relay rewrites the sender on the way to the real mailbox so a
+reply can be routed back. The message left the NAS as `alerts@sudops.pl`.
+
+Still unobserved: the cluster's Alertmanager uses the same account, sender and recipient, but it
+only mails `severity = critical` (plus the `UserNamespace*` and `CNPGWALArchiveFailing*` routes),
+and none has fired since. Tracked in the README TODO until one real alert mail lands.
