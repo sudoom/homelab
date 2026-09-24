@@ -165,7 +165,8 @@ applications:
   # the multus NADs aren't referenced by any daemon. Chart kept in tree
   # in case a future round switches back to multus. The `ceph-shim` macvlan
   # and its /25 route in nmstate-nncp are still rendered and live -- read
-  # CLAUDE.md's "Network provider" section before touching either.
+  # the "Network provider" section of .claude/skills/rook-ceph/SKILL.md before
+  # touching either.
   ceph-network-attachments:
     enabled: false
     path: components/cluster-config/ceph-network-attachments

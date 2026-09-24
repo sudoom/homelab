@@ -71,7 +71,8 @@ rook-ceph-cluster:
       # has IPs in that range (enp1s0f0np0 / 192.168.10.0/24), and the
       # 10G NIC carries everything.
       #
-      # CLAUDE.md "Network provider" section has the full chronology.
+      # The "Network provider" section of .claude/skills/rook-ceph/SKILL.md has
+      # the full chronology.
       # See also blog/blog-multus-ceph-migration-draft.md.
       provider: host
       addressRanges:
@@ -189,7 +190,8 @@ rook-ceph-cluster:
   # No CephFilesystem: the HDD-backed CephFS tier was retired 2026-09-07, and
   # rebuilding it is NOT a chart change (Ceph needs `ceph fs new ... --force`
   # for an EC data pool, which Rook will not pass). The procedure, and the
-  # unexplained concurrent-RWX EACCES it left behind, are in CLAUDE.md "CephFS".
+  # unexplained concurrent-RWX EACCES it left behind, are in the "CephFS" section
+  # of .claude/skills/rook-ceph/SKILL.md.
   cephFileSystems: []
 
   cephObjectStores: []

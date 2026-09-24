@@ -195,5 +195,5 @@ byte-for-byte counter comparison that never divides by a window.
 - `blog/blog-hdd-tier-rollout-draft.md` — CephFS Phase 5 (2026-06-12) original figures
 - `blog/blog-truenas-migration-draft.md` — keepers + media migrations, the re-measures,
   and the Time Machine apply
-- `CLAUDE.md` → "Network provider — `host`" — why the mon-on-frontnet / OSD-on-backnet
+- `.claude/skills/rook-ceph/SKILL.md` → "Network provider — `host`" — why the mon-on-frontnet / OSD-on-backnet
   split means client data never traversed the 1G link
