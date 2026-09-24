@@ -43,6 +43,7 @@ Pin these when generating manifests or commands — mismatched versions are the 
 │   ├── cluster-config/      # Wave 2 — ClusterIssuer, Certificates, NNCPs
 │   └── storage/             # Wave 3+ — storage + TLS consumers
 ├── ansible/                 # Non-cluster home infra, NOT ArgoCD-managed (see below)
+│   ├── CLAUDE.md            # ansible rules; Claude Code loads it when a file under ansible/ is read
 │   ├── technitium/          # Technitium DNS Server — dns-master + dns-slave (2× RPi 3B+), CLUSTERED
 │   └── truenas/             # TrueNAS SCALE NAS config via midclt over SSH (replacing the Synology)
 ├── blog/                    # Working notes / draft posts — see "Blog notes" rule below
@@ -51,6 +52,10 @@ Pin these when generating manifests or commands — mismatched versions are the 
 ├── data/                    # Captured benchmark / SMART / log artifacts referenced from blog drafts
 │                            # └── storage-throughput.md — ALL measured throughput figures, with conditions
 ├── docs/superpowers/specs/  # Design specs from brainstorming, reviewed before any implementation
+├── .claude/
+│   ├── settings.json        # Tracked: read-only allowlist + guardrail deny list (settings.local.json is not)
+│   └── skills/              # On-demand instructions split out of this file — cluster-health,
+│                            # network-change, rook-ceph (+ teardown.md, disk-ops.md), upstream-pr
 └── CLAUDE.md
 ```
 
@@ -107,25 +112,30 @@ For operators bringing CRDs, use **intra-chart** sync-wave annotations: `Subscri
 
 ## Storage (Rook-Ceph)
 
-The cluster's storage is **Rook v1.19.5 managing Ceph Squid 19.2.4**. (Ceph was bumped 19.2.3→19.2.4 via Renovate 2026-06-12 and rolled the 3 OSDs cleanly — kept. Rook was bumped 1.19.6→**1.20.0** by Renovate the same day and it **broke CSI** — the v1.20 operator changed CSI ServiceAccount naming, leaving `ceph-csi-*-sa` missing so RBD+CephFS CSI couldn't create new pods; reverted to a coherent **v1.19.5** in `49406f5`. See "Upgrading Rook/Ceph" below + `blog/blog-rook-ceph-draft.md`.) Two Rook charts: **operator** = `components/operators/rook-ceph/` (deploys the Rook operator), **cluster** = the wrapper `components/storage/rook-ceph-cluster/` (owns the `CephCluster` CR + block pools + StorageClasses + CephFS, rendered from `cephClusterSpec`/`cephFileSystems`/`cephBlockPools` in its `values.yaml`). **To change OSD devices, pools, or CRUSH, edit `components/storage/rook-ceph-cluster/values.yaml`.** OSD device list = `cephClusterSpec.storage.nodes[].devices` — uses **`/dev/disk/by-path/pci-…-ata-N`** (the SATA bay PORT, slot-stable so a drive swap reuses the OSD; NVMe = `/dev/nvme0n1`); by-id WWN stays the ref for drive-SPECIFIC ops (wipe/SMART/gate). **THE HDD TIER, CephFS AND THE OBJECT STORE WERE ALL RETIRED 2026-09-07.** Ceph now serves exactly two pools — `nvme-replicated` (RBD, the `ceph-nvme-block` SC) and `.mgr` — on the three NVMe OSDs. There is no CephFS, no `cephfs-hdd` SC, no `CephObjectStore`, no `ceph-bucket` SC, and no in-cluster S3. RWX is served by the NFS classes (`nfs-csi`, `nfs-truenas-*`); S3 is garage on TrueNAS. **PHASE 4 COMPLETE 2026-09-08: `osd.3/4/5` are purged and the drives are physically out.** Ceph is now a 3-OSD all-NVMe cluster (`ceph osd crush class ls` returns `["nvme"]` — the `hdd` class no longer exists), and the 11 orphan CRUSH rules left by the retired pools were dropped, leaving only `replicated_rule` and `nvme-replicated`. Rollout-to-retirement history, and the four teardown traps worth knowing before touching Ceph again, are in `blog/blog-hdd-tier-rollout-draft.md`.
+Rook v1.19.5 managing Ceph Squid 19.2.4 on three NVMe OSDs (`osd.0-2`, one per node, failure domain `host`). Two
+pools: `nvme-replicated` (RBD, StorageClass `ceph-nvme-block`) and `.mgr`. The HDD tier, CephFS and the in-cluster
+object store were retired 2026-09-07: RWX is the NFS classes (`nfs-csi`, `nfs-truenas-*`), S3 is garage on TrueNAS.
+Charts: operator `components/operators/rook-ceph/`, cluster `components/storage/rook-ceph-cluster/` (OSD devices,
+pools and CRUSH live in its `values.yaml`).
 
-### Upgrading Rook / Ceph — version coherence (READ before approving any Rook/Ceph bump)
+**Load the `rook-ceph` skill (`.claude/skills/rook-ceph/SKILL.md`) before any Ceph, RBD or CSI diagnosis, any storage
+change, and any Rook/Ceph PR review.** Teardown and drive-hardware procedures are reference files inside it.
 
-The 2026-06-12 CSI outage was a **version-coherence** failure. The mechanics that make this fragile, and the rules:
+Rules that hold even when the skill is not loaded:
 
-- **`charts/` + `Chart.lock` are gitignored** in both Rook charts → ArgoCD does NOT use a vendored/pinned subchart; it runs `helm dependency update` and **pulls whatever version `Chart.yaml` names, fresh, at sync time.** So a one-line `Chart.yaml` version bump = an immediate live chart change, no review of the rendered delta. (Local `helm template` uses the local `charts/` tgz, which can be a DIFFERENT stale version → local render ≠ what ArgoCD deploys. Don't trust local render alone for version changes.)
-- **Not every version string has a published Helm chart.** Renovate bumped `Chart.yaml` to `v1.19.6`, which has NO chart on `charts.rook.io` → `helm dependency update` fails → ArgoCD kept the prior render. Then `v1.20.0` (which DOES have a chart) deployed for real. **Always `helm dependency update` locally first to confirm the target version's chart actually exists.**
-- **Operator and cluster charts must be the SAME Rook version, bumped together.** They're separate charts (operator lifecycle vs cluster lifecycle — can't merge) but a split version = collision. Pin both `components/operators/rook-ceph/Chart.yaml` and `components/storage/rook-ceph-cluster/Chart.yaml` to the same `vX.Y.Z`.
-- **Rook ↔ Ceph compatibility is a hard gate.** A given Rook minor supports a bounded Ceph range (Rook 1.19 → Ceph Squid 19.2.x; Ceph 20/Tentacle needs a newer Rook). `allowUnsupported: false` makes the CephCluster REFUSE an unsupported Ceph → never bump Ceph major ahead of a Rook that supports it.
-- **Order:** bump Rook (operator first, then cluster) to a version that supports the target Ceph → verify CSI + health → then bump Ceph (a degraded-window OSD roll on the no-drain topology).
-
-**Procedure for an intentional Rook/Ceph upgrade:**
-1. Confirm the target Rook version supports the target Ceph version (Rook release notes' Ceph support matrix). Confirm both have published Helm charts (`helm dependency update` succeeds for the new version).
-2. Bump BOTH `Chart.yaml` deps to the same Rook version; `helm dependency update` both; commit `Chart.lock` too (stop gitignoring it — pins the version for review).
-3. `helm template … | oc diff -n rook-ceph` the operator chart — **review the CSI SA / RBAC / DaemonSet delta** (this is exactly where the v1.20 break hid).
-4. Sync the OPERATOR app first; verify operator image + `oc -n rook-ceph get sa | grep ceph-csi` (the 4 `ceph-csi-{rbd,cephfs}-{node,ctrl}plugin-sa` present) + CSI pods Running, before touching the cluster app or Ceph.
-5. Only then bump the Ceph image (`cephClusterSpec`/`cephImage.tag`) — gate on Ceph HEALTH_OK, quiet IO, 2h+ headroom (rolls all 3 OSDs in series, degraded-window each).
-6. **Renovate must NOT auto-bump Rook or Ceph.** These are manual, supervised, version-coherent, compatibility-checked bumps. **Enforced 2026-06-18 in `renovate.json`**: `packageRules` → `enabled: false` for `rook-ceph` + `rook-ceph-cluster` + `quay.io/ceph/ceph`, and both Rook `Chart.lock` files are now committed (un-gitignored) so the deployed subchart version is pinned + reviewable. (Was the third storage-version Renovate incident in one day before the lockdown.)
+- **No drain headroom** — 3 OSDs on 3 nodes, so any OSD-affecting change is a degraded window. Never run two
+  OSD-impacting changes at once; never propose `oc cordon node{4,5,6}` without an explicit ask.
+- **Rook and Ceph are bumped by hand, never by Renovate** — both Rook charts at the same version, Rook↔Ceph
+  compatibility checked, Ceph only after Rook. Storage version PRs default to NOT-APPROVE.
+- **No `network.provider` or Multus change without `kubectl-rook-ceph multus validation run` first**, and a
+  30-minute cap on storage-mode debugging before tearing down.
+- **Don't touch `enp1s0f0np0`, `ceph-shim` or `192.168.10.0/24` routing** without reading
+  `blog/blog-multus-ceph-migration-draft.md` — those routes are load-bearing.
+- **A pod that needs the NAS uses `192.168.1.25`** — pod-network → backnet (`192.168.10.x`) egress does not work.
+- **Read per-pool `MAX AVAIL`, never cluster-level `avail`**, and re-measure hours after a snapshot deletion.
+- **Every storage action goes in a blog draft** — no exception for small ones.
+- Ceph-internal mutations (`ceph mgr fail`, `rbd trash purge schedule add`, …) may be appropriate — flag and confirm
+  before running.
 
 ### Node drain and unplanned rerolls
 
@@ -134,204 +144,6 @@ The 2026-06-12 CSI outage was a **version-coherence** failure. The mechanics tha
 - **Never delete the `powersave-experimental` Tuned CR by hand** — NTO drops `50-nto-master` and MCO rerolls a node.
   Change `bootArgs` in `components/cluster-config/power-tuning/values.yaml` instead.
 - The unblock recipe and the full history: `network-change` skill.
-
-### Topology
-
-- **3 NVMe OSDs, one per node — that is the whole cluster (`osd.0-2`).** The 3 HDD OSDs (`osd.3-5`, added 2026-06-12) were purged and physically pulled 2026-09-08; root `default` weight is now 1.39737 (3 x 0.46579). Failure domain is `host` (labels `fd-a/fd-b/fd-c`, one per node), so the no-drain constraint below applies to every OSD. **CAPACITY WAS THE BINDING CONSTRAINT AND IS NOT RIGHT NOW, but the reason it eased is worth knowing:** `nvme-replicated` peaked at **84.53% / MAX AVAIL 70 GiB** on 2026-09-08, half a point off the 85% `nearfull` threshold, having climbed from 76.6% inside a few hours. It read **59.39% / 183 GiB** on 2026-09-09 and **28.42% / 324 GiB** on 2026-09-11 — the decline kept going for two days with nothing added and only the retention CronJob's daily deletions (2 snapshots on 09-11). Daily `node-fstrim` and Ceph's own snapshot trimming are the candidates; not attributed. Nothing was added to the cluster — 182 unpruned CNPG volume snapshots were deleted, and Ceph then trimmed for hours afterwards (stored 396 -> 269 GiB, ~127 GiB total). **Re-measure hours after any snapshot deletion, not minutes: the immediate reading understated that reclaim by 2.5x.** The 11 TiB of empty HDD used to sit in `ceph -s`'s totals and hid this completely — do NOT read cluster-level `avail` as headroom, read the per-pool `MAX AVAIL` from `ceph df`. Reclaim levers, in order: `fstrim` (the `node-fstrim` DaemonSet — freed RBD blocks are not returned without discard, see RBD CSI quirks), then the CNPG `ceph-rbd-snapshot` volume snapshots. **That guess was correct and the cause is now fixed: `Cluster.spec.backup.retentionPolicy` governs the barman object-store path ONLY — for `method: volumeSnapshot` CNPG creates the VolumeSnapshot and the Backup CR and never collects either.** 182 had accumulated over 110 days under a policy reading `7d`. `components/cluster-config/cnpg-snapshot-retention/` (root-app wave 6) now prunes them daily: older than 7d, with a hard floor of 7 newest per cluster so a stalled backup schedule can never empty the set, scoped by `cnpg.io/scheduled-backup` so manual and restore-drill snapshots are untouched. **Deleting a `Backup` CR does NOT cascade to its `VolumeSnapshot` — the ownerReference is the Cluster — so both objects must be deleted.** Full diagnosis: `blog/blog-cnpg-draft.md` 2026-09-08/09.
-- **No drain headroom.** Any rolling change to OSDs (rebuild, encrypt-at-rest, redeploy) goes through a degraded window — there is no fourth node to absorb the missing OSD. Plan accordingly: schedule during quiet IO, never run two OSD-impacting changes at once, never propose `oc cordon node{4,5,6}` without an explicit ask.
-- **Mons:** 3-of-3, one per node. Same topology constraint applies.
-- **Network:** Frontnet (VLAN 5) for clients; storage backnet (VLAN 10, 192.168.10.2-4) for OSD ↔ OSD replication.
-  **The backnet is no longer Ceph-only (changed 2026-08-26): TrueNAS sits on it at `192.168.10.10`, MTU 9000**, so its NFS exports reach the nodes on-link with no NNCP change — which is precisely why that address was chosen over a dedicated NFS VLAN (a new VLAN would have needed `enp1s0f1np1` brought up = an nmstate enactment = the `br-ex.forwarding` cascade). `.10` is clear of the nodes (`.2-.4`), the `ceph-shim` macvlans (`.16-.18`) and the `192.168.10.128/25` Multus pod range. **Accepted cost: Ceph and the NAS now share a failure domain** — a backnet incident takes out both (two in two months: node6's NIC back DOWN 2026-07-25, the 10G switch firmware flap 2026-08-07). **The Multus migration is parked, not in flight.** The host side shipped 2026-05-11 and is still live in the `storage-node4/5/6` NNCPs: a per-node macvlan host-shim (`ceph-shim`, IPs `.16/.17/.18`) and an explicit `192.168.10.128/25 dev ceph-shim` route (the kernel-RBD-client hairpin fix). The NADs (`ceph-network-attachments`) are disabled in root-app and the CephCluster stays on `provider: host` — see "Network provider" for why both multus attempts failed. Full design + ops history in `blog/blog-multus-ceph-migration-draft.md`. **Don't touch `enp1s0f0np0`, `ceph-shim`, or `192.168.10.0/24` routing without checking that draft first** — the routing setup is load-bearing: `/24 master metric 100`, `/24 shim metric 410`, `/25 dev shim static`. Reordering or simplifying breaks pod↔host reachability.
-
-### Hardware: 3× Samsung PM9A1 512GB
-
-- Migration from PNY CS1030 → PM9A1 completed 2026-05-07. Per-OSD `kv_commit_lat` dropped from ~95 ms (worn PNY lifetime) to ~3 ms (PM9A1); **average stays ~3.7 ms** (confirmed 2026-06-15). The worn-drive pathology is gone — **watch the *average* `kv_commit_lat`, not the alert latch.** **`BLUESTORE_SLOW_OP_ALERT` does still appear** and is **benign**: it's hair-trigger (`bluestore_slow_ops_warn_threshold=1` / `lifetime=86400` / `log_op_age=5s` → a single op >5 s in 24 h latches it), and an occasional fsync/FUA stall on no-PLP consumer NVMe is expected hardware-class behaviour (2026-06-15: NVMe osd.0/osd.1, 355/874 slow KV commits out of ~1.72 M = 0.02–0.05 %, avg latency healthy). **Don't read "N OSDs slow" as "the HDDs" — check `ceph osd tree` for the device class first** (2026-06-15 I guessed HDD; it was NVMe osd.0/osd.1). Lever if it ever becomes pure noise: raise `bluestore_slow_ops_warn_threshold` (don't suppress — it's a real signal). Full chronology + bottleneck sweep in `blog/blog-rook-ceph-draft.md`.
-- **`CephPGImbalance` — SHOULD NOW SELF-RESOLVE (2026-09-08).** It was a false positive ONLY because Rook's rule averages `ceph_osd_numpg` across device classes; with the HDD tier gone there is one class and three OSDs at 129 PGs each, so the cross-class mean is no longer meaningless. **If it keeps firing, it is worth a real look rather than the old dismissal.** Historical rationale, kept because it explains the rule's defect:  Rook's `prometheus-ceph-rules` averages `ceph_osd_numpg` across *all* OSDs with no device-class grouping; NVMe OSDs carry ~185 PGs, HDD OSDs ~68, so both tiers deviate ±46 % from the cross-class mean (126.5) and all six trip the 30 % threshold. **Within each class the distribution is perfect** (185/186/185 nvme, 68/67/68 hdd) and `ceph balancer status` reports `no_optimization_needed: true, "distribution is already perfect"`. Proper fix (device-class-aware expr) requires `monitoring.createPrometheusRules: false` + vendoring the full corrected rule set — deferred (cosmetic; README TODO). Firing since 2026-06-13 (HDD-tier rebalance settled).
-- For future drive purchases at this cluster scale, stay on PM9A1-class consumer NVMe — full PLP enterprise (Micron 7450 PRO etc.) is not justified by the workload. The bottleneck post-swap is replication-amplification at `size=3`, not per-drive fsync latency.
-- **BMH inventory is stale and cannot be refreshed on this cluster.** The OpenShift console's BareMetalHost "Disks" tab still shows the pre-swap PNY CS1030 drives because BMHs are in `state=unmanaged` with `externallyProvisioned=true` — Metal3 doesn't manage them (no BMC credentials configured), so it can't trigger re-inspection. The `inspect.metal3.io` annotation is a no-op in this state. The `smartctl-exporter` dashboard + the `smartctl_device_*` Prometheus metrics are the **live** source of truth for current hardware. Nothing in ArgoCD, Ceph, or operator reconciliation reads the BMH `.status.hardware.storage`, so the staleness is purely cosmetic.
-- **On-node disk tooling — use the `smartctl-exporter` pod, not a pulled image.** `registry.access.redhat.com/rhel9/support-tools` does NOT pull on node4 (`ImagePullBackOff`, observed 2026-06-10). For on-node `smartctl` / SMART self-tests, `oc exec` into the existing `smartctl-exporter` DaemonSet pod (per node: it already has `smartctl` + host device access, zero pull). That image lacks `badblocks` — destructive write-tests need a USB3 dock off-node or a pre-mirrored tool image. **Always reference disks by `/dev/disk/by-id/wwn-*`, never `/dev/sdX`**: HDD bay installs power-cycle the node and `/dev/sd*` re-enumerates (2026-06-10: the new HDD took `sda` on node4 but `sdb` on node5/node6; the boot/etcd SSD is also SATA, so a wrong `/dev/sdX` is one typo from the boot disk).
-- **SATA-SSD wipe/erase — the `ROTA=1` boot-disk guard does NOT apply; use an allowlist gate.** The HDD burn-in gate (`assert_burnin_target`) leans on `ROTA=1` to separate the 4TB HDD target from the boot/etcd disk (a SATA SSD, `ROTA=0`). That discriminator **vanishes when the target is itself a SATA SSD** — boot/etcd disk and burn-in SSD are the same device class. Any SATA-SSD *write* (secure-erase for the boot-spare/backup-drive prep, 2026-06-11 batch 3; future OSD-journal SSDs) must go through **`assert_ssd_burnin_target`** — a **positive WWN-allowlist** gate (fail-closed on empty allowlist; paste the seated SSD's WWN in first), keeping the boot/NVMe WWN denylist as backstop. Never the HDD gate, never a bare `/dev/sdX` — a wrong by-id on an SSD erase = boot/etcd disk wiped on a no-drain cluster. On-node wipe = **`blkdiscard -f` + `wipefs -a`, NOT `hdparm`** — `hdparm` is **not installed on SCOS** (confirmed 2026-06-11, `rc=127`; `wipefs`/`lsblk`/`blkdiscard` are present, `hdparm` isn't), so ATA secure-erase isn't an on-node option. `blkdiscard` (whole-device TRIM) is a clean-slate-for-reuse wipe; `DISC-ZERO=0` on these Intel DC drives means no read-zero guarantee (fine for reuse, not forensic — pull to a workstation w/ hdparm for that). Gate template + SSD flow (SMART wear triage → read pass → `blkdiscard`/`wipefs` → post-wipe confirm) in `blog/blog-hdd-tier-rollout-draft.md` (2026-06-11 Batch 3; **S4610 backup-target burn-in via USB enclosure done 2026-06-26**). USB-enclosure lessons from that run: the USB-SATA bridge needs **`smartctl -d sat` on every call** but passes TRIM + self-tests fine (use the drive-internal long self-test as the surface scan — no `dd`-over-USB needed); the `smartctl-exporter` pod has `blkdiscard`/`dd`/`blockdev`/`partprobe` but **NOT `wipefs`/`lsblk`/`mdadm`**, so clear the partition table by **`dd`-zeroing the first 10 MiB (MBR + GPT primary) + last 1 MiB (GPT backup) *after* `blkdiscard`** (after, because `DISC-ZERO=0` → TRIM gives no read-zero guarantee); and **run `blkdiscard` in the background — whole-device TRIM over a USB bridge exceeds a 2-min foreground exec and gets SIGTERM'd mid-wipe** (the front zeroing + table re-read still landed, but re-run in the background to complete the full-device TRIM). The wipe script bakes the gate's typed-serial check in programmatically (re-resolve by-id symlink + re-assert model/serial/WWN + denylist at execution time) since the pod has no interactive TTY. Drive roles: S3510 480GB → boot/etcd spare; S4610 960GB → Synology USB-box backup target (not Ceph WAL/DB).
-- **Used-drive hot-swap → false CRITICAL etcd/CVO alerts (DDF firmware-RAID, 2026-06-10).** The used HUS726040 datacenter pulls carry DDF (firmware-RAID) superblocks; the host auto-assembles an md raid0 on insertion, and a *broken* array (after a pull) makes the kernel disk-stats read **hang kubelet cAdvisor for the 30s scrape timeout** → Prometheus can't scrape that node's host-metrics → ~31 **false** alerts incl. **critical** `etcdMembersDown` / `etcdInsufficientMembers` / `ClusterVersionOperatorDown` + 16× `TargetDown`. **These are scrape-inferred, not real — confirm with `oc -n openshift-etcd exec <etcd-pod> -c etcdctl -- etcdctl endpoint health --cluster` (all members up) before touching etcd.** Fix per node, guarded to the HUS726040 rotational disk only: `mdadm --stop` the stale `/dev/md*` arrays, then `wipefs -a` the DDF; a node whose cAdvisor has been wedged for hours additionally needs `systemctl restart kubelet`. Prevention: wipe DDF **first** on every used-drive insertion, store shelf spares **raw**. Full diagnosis: `blog/blog-hdd-tier-rollout-draft.md` (2026-06-10 DDF section). **A node's `ovnkube-node` with broken pod→remote-host egress throws the *same* false etcd-critical symptom — rule out both** (see "restart ALL 3 ovnkube-node" in the network pre-flight section).
-
-### Pools and pg_num
-
-- **Only two pools exist since 2026-09-07:** `nvme-replicated` (`size=3`, `min_size=2`, CRUSH rule on `device_class=nvme`, `bulk: true`) backing the `ceph-nvme-block` RBD StorageClass, and `.mgr`.
-- **`.mgr` is pinned to the NVMe CRUSH rule** by `components/storage/rook-ceph-cluster/templates/mgr-pool-crush-rule.yaml`. Ceph creates `.mgr` itself, so no CR owns it and it defaults to `replicated_rule`, which targets bare `default` — every device class. That made it the last thing holding PGs on the HDD OSDs after every HDD pool was deleted, and it appears in no list of "HDD pools" because it is not one. A fresh bootstrap recreates it on the default rule, hence the Job. **Since 2026-09-08 the hazard is structural rather than operational:** with the HDD OSDs gone, `default` contains only nvme, so `replicated_rule` and `nvme-replicated` select the same devices and the trap cannot recur. The Job is kept anyway — it costs nothing, and it documents the hazard for whoever re-adds a second device class.
-- **Target `pg_num` is 128** for `nvme-replicated`: 100 PGs/OSD × 3 OSDs / replication 3 = 100 → next pow2 = 128. Use `pg_num_min: 128` in the BlockPool to enforce — the autoscaler is **not** applying the `bulk` hint correctly (`ceph osd pool autoscale-status` returns `[]`; root cause likely a Squid 19.2.x quirk, tracked as an open TODO). Same quirk hit the RGW data pool on 2026-05-10; same fix shape.
-- When proposing pool changes: floor with `pg_num_min`, don't disable autoscale. Don't suggest manual `pg_num` bumps unless paired with the autoscaler diagnosis.
-- **`pg_num_min` chicken-and-egg:** Ceph rejects `pg_num_min > current pg_num` with `EINVAL`. Pure-GitOps `pg_num_min` enforcement requires a **one-time toolbox bump** of `pg_num` to bootstrap each new pool past 1 (`ceph osd pool set <pool> pg_num <floor>; ceph osd pool set <pool> pgp_num <floor>`); the chart's `pg_num_min` then enforces the floor going forward. Confirmed twice (`nvme-replicated` originally, RGW data pool 2026-05-10). Capture the exact toolbox commands in the topical blog draft.
-
-### Object storage (RGW) — RETIRED 2026-09-07
-
-The `CephObjectStore` `ceph-objectstore`, all nine `ceph-objectstore.rgw.*` pools, `.rgw.root`, the three orphan `default.rgw.*` pools and the `ceph-bucket` / `ceph-bucket-retain` StorageClasses are **gone**. There is no in-cluster S3.
-
-Both tenants moved to **garage on TrueNAS** (`http://192.168.1.25:30188`, frontnet — pods cannot reach the backnet): Loki's chunks and OADP's BackupStorageLocation. Garage buckets and access keys are managed by `ansible/truenas` (`truenas_garage.s3_tenants`), one key per consumer so a rotation cannot take out backups and logging together.
-
-**If in-cluster S3 is ever wanted again**, re-enable `ceph-object-store` in `bootstrap/root-app/values.yaml` — but note it brought two standing costs: the RGW-vs-router `:80` anti-affinity permanently consumes one schedulable node, and Rook does not propagate a `deviceClass` change to an existing pool (`bugs/upstream-rook-deviceclass-change-not-propagated-existing-pool.md`).
-
-### CephFS — RETIRED 2026-09-07 (was the HDD bulk RWX tier)
-
-The `CephFilesystem` `cephfs`, its `cephfs-metadata` + `cephfs-bulk-hdd` pools, the `cephfs-csi` subvolume group and the `cephfs-hdd` StorageClass are **gone**. Its only consumer, `media/media-data-pvc`, moved to TrueNAS NFS on 2026-08-30; the retained 3.5 TiB was reclaimed 2026-09-07. **RWX is served by the NFS classes now** — do not propose CephFS for a new RWX need without an explicit decision to rebuild the tier. **The CephFS CSI driver is off as well (2026-09-13):** `csi.enableCephfsDriver: false` in `components/operators/rook-ceph/values.yaml`, and the cephfs `Driver` hostNetwork patch is gone from `components/cluster-config/csi-driver-config/`. A rebuild re-enables both in one commit. Disabling was NOT clean: the pruned Driver CR livelocked under ArgoCD's foreground prune (symptom map row in the teardown section) and needed its finalizer cleared by hand.
-
-**Rebuilding is NOT a chart change.** Ceph requires `--force` for an EC default data pool and Rook will not pass it, so it needs a one-time manual `ceph fs new cephfs <metadata> <data> --force` BEFORE Rook can adopt and manage the MDS.
-
-**UNEXPLAINED AT RETIREMENT, and it may not be CephFS-specific.** The tier could not serve concurrent multi-node RWX: two pods on two nodes, one client getting persistent `EACCES` on `statx` — **293 failures in 300 s, no recovery until the concurrency stopped**. Not the MDS (fs Ready, no evictions since August). Not one bad node (node4 first, then node5 on a directory it had just used successfully four times). Consistent with a **blocklisted kernel client**. It was never root-caused and is now unreproducible. **The same mechanism could affect RBD**, which is production — every config PVC, both Postgres clusters, Loki's WAL. If RBD ever shows persistent EACCES on a multi-node claim, start here rather than from scratch.
-
-Also worth carrying forward: fio renders a failed `stat()` as `fio: /path is not a directory` for a directory that demonstrably exists, which sends you looking at paths instead of client sessions.
-
-### RBD CSI quirks
-
-- The CSI driver does **deferred delete**: PVC removal calls `rbd trash mv`, not `rbd rm`. Trashed images keep consuming pool space until purged. Manual purge in 04/2026 reclaimed ~600 GiB.
-- Need a periodic `rbd trash purge schedule` (use Ceph's built-in scheduler, not a CronJob — it lives in mgr config).
-- **Freed blocks aren't returned to the pool without TRIM/discard** (separate from trash). `ceph-nvme-block` has no `discard` mountOption, so a filesystem deleting data leaves the RBD blocks allocated. 2026-06-18: `rbd du` showed ~245 GiB of stale Loki-WAL allocation (106+140 GiB) vs ~0.5 GiB FS-used — most of `nvme-replicated`'s 82% fill. Reclaim is **`fstrim`**, NOT `rbd sparsify` (freed blocks aren't zeroed). Shipped + enabled `components/cluster-config/node-fstrim/` — a privileged hostPID DaemonSet running `nsenter -t1 -m -- fstrim -av` weekly per node (first pass also does the one-off reclaim). In-cluster `oc debug node … fstrim` is guardrail-denied (host node-shell), so a manual one-off is operator-run. Full diagnosis: `blog/blog-rook-ceph-draft.md` 2026-06-18.
-- Occasionally an image refuses removal with `image has watchers` — usually a stuck CSI nodeplugin attachment; investigate the node, don't force-delete the image.
-- **`operation already exists` mount lock can outlive plugin restarts.** When `NodeStageVolume` hangs (e.g., kRBD waiting on an unreachable OSD), the rbd-plugin's in-memory operation tracker locks the volume ID. Every retry returns `rpc error: code = Aborted desc = an operation with the given Volume ID ... already exists`. Restarting the rbd-nodeplugin pod usually clears the lock — but if the underlying cause (network unreachable, msgr2 silent drop) persists, the new plugin will hit the same hang on the first retry. **Don't chase the lock; chase what's keeping the first call stuck.** Check `/sys/bus/rbd/devices/` on the host via `oc debug node/<name>` — empty = the hang is in plugin userspace, not kernel.
-- **Stuck VolumeAttachments need finalizer force-clear.** When CSI mount fails repeatedly, VAs accumulate with the `external-attacher/rook-ceph-rbd-csi-ceph-com` finalizer and `attached: true` even though no mount succeeded. If the PV is also gone (e.g., test PVC deleted), normal `oc delete` hangs forever. Unstick: `oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge`. Same pattern can affect `rook-ceph-mon-endpoints` ConfigMap / `rook-ceph-mon` Secret after teardown — same force-clear works.
-- **Orphan Released PVs block the csi-provisioner cluster-wide.** When CSI's `DeleteVolume` for a PV fails (e.g., earlier mount regression left an unfinishable rbd image), the PV stays `Released` and the provisioner re-attempts deletion forever. CSI plugins serialize operations cluster-wide, so a stuck DeleteVolume blocks every new CreateVolume too — symptom looks identical to the "operation already exists" lock from the per-volume tracker, but the cause is a different volume's stuck deletion. **Before applying any test PVC, check for orphan Released PVs**: `oc get pv | grep Released`. Clear them with `oc patch pv <name> -p '{"metadata":{"finalizers":[]}}' --type=merge && oc delete pv <name>`. Also clear any stale VolumeAttachments to the now-gone PV. The "stuck VA + stuck PV" duo can survive plugin restarts, controlplugin restarts, and operator restarts — must be manually cleared.
-- **Fresh-bootstrap workaround: `client.csi-rbd-provisioner.<gen>` is missing its `osd` cap** (Rook 1.19.5 bug). The provisioner user gets `mgr "allow rw"` + `mon "profile rbd, ..."` but no `osd` cap → every `CreateVolume` hangs on the first RADOS op → "operation already exists" lock storm. **Auto-fixed on each bootstrap by** `components/storage/rook-ceph-cluster/templates/csi-rbd-provisioner-caps-fix.yaml`. Bug filed at `bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md`; full chronology + manual recovery steps in `blog/blog-rook-ceph-draft.md`. If a key rotation creates `csi-rbd-provisioner.2`/`.3`, the same `ceph auth caps … osd "profile rbd"` needs to be re-run against the new generation suffix.
-- **CephFS post-node-outage recovery (2026-07-26) — historical; CephFS was retired 2026-09-07.** A wedged node-level CephFS stage mount survived plugin restarts. The fix was moving its consumers off the node, then `systemctl restart kubelet` there — not hand-unmounting the staging dirs (that corrupted ceph-csi's staging state) and not a reboot. Full saga: `blog/blog-ntp-dns-cluster-outage-draft.md` Part 3.
-
-### Network provider — `host` (with required `addressRanges`)
-
-The `CephCluster.spec.network.provider` is `host`. Two ways this rule has been validated:
-
-**1. In-place `host → multus` migration is forbidden.** A 2026-05-12 attempt to follow Rook's documented `host → "" → multus` two-step deadlocks on this 3-OSD no-drain topology. During the intermediate `provider: ""` state, the first-rolled OSD goes onto the pod network while the other two stay on host; **PG peering hangs indefinitely** under that mixed-network shape (msgr2 between asymmetric-address peers stalls); Rook's `ceph osd ok-to-stop` then refuses to roll any further OSD because peering is hung, including the one that needs to roll back. Chicken-and-egg with no Rook-native escape. Bonus snag: the operator does NOT clear `public_network` from the Ceph config DB across provider changes — the first OSD on the new shape crashloops because it can't find an interface matching the stale CIDR.
-
-**2. Multus fresh-rebuild on a clean cluster (2026-05-14) also failed.** Skipped the in-place migration entirely; tore down and rebuilt on `provider: multus` from the first daemon. Initial measurements were promising (1.6 GB/s 1M seqread vs. ~118 MB/s baseline), but the moment we tried to refine the design (Phase 6.5 — split the two NADs onto disjoint /26 IPAM ranges + pin explicit public/cluster_network CIDRs), kRBD mount silently broke: the host-side `ceph-shim` macvlan IP (`.16`) ended up outside the narrowed public `/26`, so msgr2 from the host stack hung. **The regression survived a clean chart revert** — CSI plugin restarts, ctrlplugin restarts, operator restart, VA finalizer force-clears, none of it cleared the stuck `NodeStageVolume` goroutine in the rbd-plugin. Recovery required full teardown.
-
-**Mons advertise FRONTNET addresses while OSDs advertise BACKNET — this is CORRECT, do not "fix" it.** `rook-ceph-mon-endpoints` and `ceph mon dump` both show `192.168.1.7/8/9`, which looks like `addressRanges` failing to apply. It is not. `public_network` = `cluster_network` = `192.168.10.0/24` (`ceph config get mon`, verified 2026-08-28), and **all three OSDs advertise `192.168.10.2/3/4` as both public and cluster address** (re-verified 2026-09-24 from the mgr's `ceph_osd_metadata` metric, readable under the readonly SA). A client contacts a mon once over the frontnet to fetch the OSDMap (a few KB of control plane), then does all data IO directly against the OSDs on the 10G backnet. **Client data has never traversed the 1G link** — on 2026-08-28 a 3-stream read of the since-retired CephFS tier measured 170 MiB/s (1.43 Gbps), above 1G line rate. **Quote the date with any throughput number and re-measure before sizing on it: every measured figure lives in `data/storage-throughput.md` with its client/stream count and method; add new ones there, not inline.** (Corollary: both networks are load-bearing for storage — frontnet down = no mon contact, backnet down = no OSD IO, which is why a single node's backnet NIC coming up DOWN after a reboot breaks all its RBD mounts.)
-
-**POD-NETWORK → STORAGE-BACKNET EGRESS DOES NOT WORK (found 2026-08-28).** Everything that reaches `192.168.10.0/24` today does so from the **host stack**: Ceph is `network.provider: host`, and `csi-nfs-node` + `csi-nfs-controller` are both `hostNetwork: true`. A pod on the OVN pod network (podIP `10.128.0.0/14`) **cannot** reach `192.168.10.x`. Confirmed when the Velero `truenas-garage` BSL failed `dial tcp 192.168.10.10:30188: i/o timeout` and a 90-second `ss` watch **on the NAS saw ZERO inbound SYNs** — the packets never arrive, so this is an egress-side drop, not an asymmetric-reply problem (TrueNAS *would* also misroute the reply: `ip route get 10.130.1.157` → `via 192.168.1.1 dev eno1`, the frontnet gateway, which has no route to the pod CIDR — but that never comes into play). **Pod → frontnet LAN works fine** (`synology-cert-sync` reaches `192.168.1.2` nightly), so the workaround for any pod-network client of a LAN service is to reach it on `192.168.1.x`. **Practical rule: if a POD (not the kubelet, not a hostNetwork DaemonSet) needs to talk to the NAS, point it at `192.168.1.25`, not `192.168.10.10`.** The data path is unaffected — NFS is kernel-mounted by hostNetwork CSI pods, so media/immich/keepers traffic still rides the 10G backnet; only pod-originated traffic (Velero's S3 client) takes the 1G frontnet.
-
-**Rule for re-attempting multus:** if a future session wants multus, **mandatory pre-flight is `kubectl-rook-ceph multus validation run`**. OpenShift-compatible RBAC ships in upstream Rook at `deploy/examples/multus-validation-test-openshift.yaml` (grants `hostnetwork-v2` SCC to a dedicated SA the tool uses). Skipping this step burned a full session day. The validation tool exists exactly to catch the host↔pod reachability + source-IP issues that bit us in Phase 6.5. Do not propose multus changes without committing to running the tool first.
-
-**Critical for `provider: host` on this cluster: `addressRanges` is required.** Without it, Rook uses each node's K8s-registered IP as the mon endpoint. On nodes with both a frontnet (1G, kubelet-registered) and backnet (10G, storage-dedicated), that means **mons + OSDs bind to the 1G frontnet IP** by default — which caps Ceph throughput at ~118 MB/s. This was the original source of the "host caps at 1G" diagnosis. The fix is not multus; it's:
-
-```yaml
-network:
-  provider: host
-  addressRanges:
-    public:
-      - "192.168.10.0/24"
-    cluster:
-      - "192.168.10.0/24"
-```
-
-`addressRanges` tells Rook to set Ceph `public_network`/`cluster_network` to the backnet CIDR. Daemons then bind to whichever interface has an IP in that subnet (the 10G `enp1s0f0np0`). The host still has its kubelet-registered frontnet IP for K8s control-plane traffic; only Ceph daemon msgr2 traffic moves to the backnet.
-
-If a future change to `addressRanges` is needed, daemons need a rollout restart (`oc rollout restart deploy -l app=rook-ceph-{mon,mgr,osd,rgw} -n rook-ceph`) — Rook applies the cephConfig keys to the Ceph config DB but does NOT auto-roll daemons on a network-only change. Also clear stale config DB entries first: `ceph config rm global public_network ; ceph config rm global cluster_network` from the toolbox.
-
-**If RGW (or any Ceph daemon binding host ports) comes back, it must avoid router nodes.** With `network.provider: host`, RGW binds `:80`, which the two hostNetwork `router-default` replicas already hold on 2 of 3 nodes. On 2026-05-13 RGW rescheduled onto a router node and crashlooped on `EADDRINUSE` for ~21 h. The disabled `components/storage/ceph-object-store/` chart keeps a `required` podAntiAffinity against the router pods — **don't downgrade it to `preferred`**. Multi-instance RGW, NFS-ganesha or an NVMe-oF gateway would need the same.
-
-### Clean teardown procedure — "fresh install" means **fresh**
-
-`cleanupPolicy.confirmation: "yes-really-destroy-data"` + disabling the app zaps OSD disks via Rook's cleanup-jobs, but leaves a long tail of namespace-level state that the next fresh bootstrap inherits and gets confused by. **Each item below bit us individually on 2026-05-14 — clean ALL of them as part of every teardown, not after symptoms appear.**
-
-After the cleanup-jobs complete (verify with `oc -n rook-ceph get jobs | grep cluster-cleanup-job` — all `Complete`), run the full sweep:
-
-```bash
-# 1. Rook mon-tracking state (else next bootstrap hangs at "detecting the ceph image version"):
-oc -n rook-ceph delete cm rook-ceph-mon-endpoints rook-ceph-pdbstatemap --ignore-not-found
-oc -n rook-ceph delete secret rook-ceph-mon --ignore-not-found
-oc -n rook-ceph patch cm rook-ceph-mon-endpoints -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
-oc -n rook-ceph patch secret rook-ceph-mon -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
-
-# 2. Bootstrap Jobs from prior cluster (immutable; ArgoCD can't re-apply, blocks sync).
-# Every bootstrap Job in components/storage/rook-ceph-cluster/templates/*.yaml is fair game.
-# Current list as of 2026-09-24 (templates and live agree):
-for j in csi-rbd-provisioner-caps-fix-bootstrap mgr-pool-crush-rule-bootstrap pg-num-floor-bootstrap rbd-trash-purge-schedule-bootstrap; do
-  oc -n rook-ceph delete job $j --ignore-not-found
-done
-oc -n rook-ceph delete jobs -l rook-ceph-cleanup --ignore-not-found
-
-# 2b. Stuck Ceph CR finalizers — Rook can't reconcile its own delete once the CR is in Deleting:
-oc -n rook-ceph patch cephcluster rook-ceph -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
-for bp in $(oc -n rook-ceph get cephblockpool -o name 2>/dev/null); do
-  oc -n rook-ceph patch $bp -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
-done
-
-# 2c. Stale cluster-scoped ObjectBuckets (else a new OBC stays Pending with "bucketName has changed compared to ob").
-# Only relevant if the object store was re-enabled — RGW and every OBC were retired 2026-09-07, so this is normally a no-op:
-for ob in $(oc get objectbucket -o name 2>/dev/null); do
-  oc patch $ob -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
-  oc delete $ob --ignore-not-found 2>/dev/null
-done
-
-# 2d. Stale clientprofiles.csi.ceph.io (else rook-ceph namespace stuck Terminating):
-for cp in $(oc -n rook-ceph get clientprofiles.csi.ceph.io -o name 2>/dev/null); do
-  oc -n rook-ceph patch $cp -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
-done
-
-# 3. Orphan Released PVs (block csi-provisioner cluster-wide):
-for PV in $(oc get pv -o jsonpath='{range .items[?(@.status.phase=="Released")]}{.metadata.name}{"\n"}{end}' | grep ceph-nvme); do
-  oc patch pv $PV -p '{"metadata":{"finalizers":[]}}' --type=merge
-  oc delete pv $PV --ignore-not-found
-done
-
-# 4. Orphan VolumeAttachments:
-for VA in $(oc get volumeattachment -o name); do
-  oc patch $VA -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null
-done
-
-# 5. Test-namespace PVCs still around from prior runs:
-oc -n default get pvc 2>/dev/null | awk 'NR>1 && $4=="ceph-nvme-block" {print $1}' | xargs -r -I {} oc -n default patch pvc {} -p '{"metadata":{"finalizers":[]}}' --type=merge
-
-# 6. CSI plugin in-memory state — bounce the RBD plugin pods (operator recreates; the CephFS driver is off since 2026-09-13):
-oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-nodeplugin --wait=false
-oc -n rook-ceph delete pod -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin --wait=false
-
-# 7. Bounce the rook-operator for a fully clean reconcile slate:
-oc -n rook-ceph delete pod -l app=rook-ceph-operator
-```
-
-The SA dockercfg secrets (`builder-dockercfg-*`, `ceph-csi-*-dockercfg-*`, `rook-ceph-*-dockercfg-*`) are cosmetic OpenShift-managed artifacts; they get regenerated when the SAs are next used. Leave them alone.
-
-**Symptom map — which leftover causes which symptom:**
-
-| Symptom | Likely leftover |
-|---|---|
-| Bootstrap hangs at `"detecting the ceph image version"` | `rook-ceph-mon-endpoints` CM + `rook-ceph-mon` Secret |
-| ArgoCD app stuck `OutOfSync`, `Job is invalid: spec.selector: Required value` | Any bootstrap Job from prior cluster — `rbd-trash-purge-schedule-bootstrap`, `csi-rbd-provisioner-caps-fix-bootstrap`, etc. (immutable; can't be `kubectl replace`'d) |
-| Teardown stops with `CephObjectStore` / `CephBlockPool` / `CephCluster` stuck in `Deleting` for >5min | Rook finalizer can't reconcile (operator stopped watching) — force-clear `metadata.finalizers` to `[]` |
-| `CephFilesystem` / `CephObjectStore` stuck `Deleting` right after their daemons were removed | **Rook's dependent check needs the daemon it already tore down.** It lists buckets via the RGW admin API (`no such host` once the Service is gone) and subvolumegroups via the MDS (`exec timeout` once zero MDS pods remain), so the finalizer can NEVER clear. Confirmed 2026-09-07. Force-clear is the only exit; verify the dependents are empty BEFORE the daemons go down, because afterwards you cannot. Every CephFS/object-store retirement here ends this way |
-| A purged OSD **reappears** a few minutes later, often with a blank `CLASS` in `ceph osd tree` | **`ceph osd purge` does not remove the on-disk BlueStore signature.** `cephClusterSpec.storage.nodes[].devices` gates only NEW provisioning; on every reconcile Rook also runs `ceph-volume raw list` and re-adopts ANY disk still carrying a signature, allowlist or not (`cephosd: N ceph-volume raw osd devices configured on this node` in the osd-prepare log). Confirmed 2026-09-08 — osd.3 came back 25 min after a clean purge, on the reconcile triggered by an unrelated node's device removal. **Removing an OSD needs a fourth step: kill the signature.** Either zap the disk (no reboot — the right call if the drive is STAYING) or physically pull it (no zap — the right call if it is leaving anyway, since the 3.5" bay is not hot-swap). Purge AFTER the signature is gone, never before |
-| Pools survive after their CR is pruned | `preservePoolsOnDelete: true` (and `preserveFilesystemOnDelete`) — working as intended. Deleting the CR removes the daemons and stops Rook managing them; the pools are deleted deliberately from the toolbox behind `mon_allow_pool_delete`. Skipping this leaves PGs on OSDs you are about to remove |
-| An OBC takes ~an hour to delete and looks stalled | The provisioner sends `DELETE /admin/bucket?purge-objects=true` as ONE synchronous call with a client timeout it cannot meet at ~20k objects on HDD. It progresses only by timing out and retrying; once workqueue backoff stretches it looks dead **while the bucket is already gone**. Restart `rook-ceph-operator` to reset the backoff |
-| ObjectBucketClaim (OBC) stays `Pending`, operator log says `"bucketName has changed compared to ob"` | Stale cluster-scoped `ObjectBucket` from prior cluster — delete it |
-| `rook-ceph` namespace stuck `Terminating`, status says `clientprofiles.csi.ceph.io has 1 resource instances` | Stale `clientprofile.csi.ceph.io` finalizer — force-clear |
-| csi-provisioner spins forever on volume IDs unrelated to current PVCs | Orphan Released PVs |
-| New PVC stuck `Pending` even after provisioner restart | Combination of orphan PVs + stale VAs blocking the serialized provisioner |
-| `NodeStageVolume` returns "operation already exists" immediately on first mount | Stale VA + plugin in-memory tracker on a volume that no longer exists |
-| Every `CreateVolume` returns "operation already exists" on a freshly-bootstrapped cluster | `client.csi-rbd-provisioner.<gen>` missing `osd profile rbd` cap (Rook 1.19.5 bug — see RBD CSI quirks above; chart-shipped Job auto-fixes on next sync if it ran) |
-| A pruned `Driver.csi.ceph.io` sits in `Deleting` while its plugin DaemonSet/Deployment are recreated every ~45 s, new pods Pending on anti-affinity against their own terminating predecessors | **Foreground-prune livelock (found 2026-09-13, disabling the CephFS driver).** ArgoCD prunes with `foreground` propagation, so the CR carries only the `foregroundDeletion` finalizer and waits for its dependents; ceph-csi-operator keeps reconciling the terminating Driver and recreates the owned DaemonSet/Deployment (`blockOwnerDeletion: true`), so the GC never finishes. Rook is NOT the culprit once `ROOK_CSI_ENABLE_<X>` reads false. Unstick (user-run): `oc -n rook-ceph patch driver.csi.ceph.io <name> --type=merge -p '{"metadata":{"finalizers":null}}'` — the owner vanishes, background GC removes the children, the operator has nothing left to reconcile. Prevention: annotate the resource `argocd.argoproj.io/sync-options: PrunePropagationPolicy=background` and let that sync BEFORE removing it from the manifest. Applies to any operator-owned CR ArgoCD prunes while the operator still reconciles it |
-
-If you're tearing down, run the full sweep. If you discover one of these symptoms during a botched bootstrap, the table above tells you which subset of the sweep to apply.
-
-### `CephCluster` SSA gotcha — `managedFields: []` makes field removal sticky
-
-The live `CephCluster/rook-ceph` resource has empty `metadata.managedFields` (it was created via non-SSA apply originally, never migrated). Server-side apply removes fields only for the manager that *owns* them — with no ownership tracked, fields rendered out of the Helm manifest **don't get removed from the live spec** on apply. ArgoCD's `selfHeal` may eventually clear them on a re-establish-ownership cycle, but timing is unpredictable (minutes, not seconds).
-
-Practical implication: when a chart change *removes* a field from the rendered `CephCluster` spec, expect the live spec to keep the old value. `oc diff` will look empty even though the manifest no longer contains the field, which is confusing. The 2026-05-12 Multus attempt hit this with `addressRanges`.
-
-If a future spec change needs guaranteed field removal: either re-establish SSA ownership first (`oc apply --server-side --force-conflicts -f -` on a hand-rendered manifest, once, to make ArgoCD the canonical owner) or do a direct `oc patch --type=json` `op: remove` (after confirming nothing else depends on the field). Plain Helm-template-removal alone is not reliable.
-
-### When proposing storage changes
-
-- Always state the impact on the degraded window first. "Rolling restart of OSDs" = degraded cluster, not a free operation.
-- For pool/CRUSH changes: `helm template … | oc diff -f -` against the live `CephCluster` / `CephBlockPool` so the deltas are inspected before commit.
-- The toolbox is `oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph …`. Read-only `ceph` commands are fine; Ceph-internal mutations (e.g. `ceph mgr fail`, `ceph orch ...`, `rbd trash purge schedule add`) are different from K8s mutations and may be appropriate — but flag them and confirm before running.
-- **30-minute cap on storage-mode debugging.** If a `network.provider` change, `addressRanges` change, NAD/IPAM change, or other cluster-level network/topology mutation breaks CSI mounts and isn't recovered within ~30 min of focused debugging, **stop and teardown** instead of continuing to debug. The 2026-05-14 multus-rebuild round spent 4+ hours trying to recover a CSI mount regression that survived a clean code revert; teardown + rebuild took ~10 min. Teardown is cheap on a no-client-load cluster (Phase 7 not done yet) and the polluted state is harder to debug than a fresh bootstrap. If client workloads are active, the trade-off is different — but then you wouldn't be making a network-mode change in the first place.
-- **`network.provider` or multus changes require running `kubectl-rook-ceph multus validation run` first.** OpenShift-compatible RBAC ships in upstream Rook at `deploy/examples/multus-validation-test-openshift.yaml`. No exceptions — skipping this step was the 2026-05-14 process failure that cost a session day.
-- **Observability stack is on Ceph-RBD PVCs** (Prometheus TSDB, Grafana, Loki, ArgoCD repo cache). When Ceph I/O hangs, all dashboards go dark — confirmed by the 2026-05-12 incident. Don't rely on Grafana to debug a storage incident; use the toolbox + `oc -n rook-ceph logs/exec` directly. If observability is dark during an incident, that's a *symptom* of the storage problem, not a separate failure to chase.
-
-### Storage actions are always blog-worthy
-
-Storage is the most load-bearing, hardest-to-roll-back part of this cluster. **Every storage action must be captured in a blog draft — no judgement call, no "is this big enough to write up."** This is stricter than the general "Blog notes" rule below: storage doesn't get the "non-trivial" qualifier.
-
-- **Scope:** any change to `components/storage/`, any `ceph` / `rbd` / `rados` command beyond pure read-only inspection, any pool/CRUSH/StorageClass/CephFilesystem edit, any OSD operation, any hardware swap, any CSI / SealedSecret change touching storage credentials.
-- **Drafts:** prefer to extend the existing topical draft (`blog/blog-rook-ceph-draft.md`, `blog/blog-multus-ceph-migration-draft.md`) over creating a new one. Create a new draft only when the topic is genuinely new (e.g. CephFS rollout when it lands).
-- **What to capture:** the exact `ceph -s` / `ceph osd pool ls detail` / `rbd trash ls` output that drove the decision, the exact mutation command, the post-state output, and the *why*. Storage debugging six months later relies on this — paraphrase doesn't survive.
-- **No exceptions for "small" actions.** A `ceph mgr fail` to refresh orchestrator inventory is small but it's still a mutation on the storage layer; write it up. Future-you will thank current-you when an unrelated symptom turns out to be the same root cause.
 
 ## Validation workflow
 
@@ -379,37 +191,6 @@ When an Application is `OutOfSync`, `Degraded`, or just "stuck", check in this o
 3. `oc describe <kind> <name> -n <ns>` — per-resource conditions.
 4. For operator-managed resources: `oc get csv -n <operator-ns>` and `oc get subscription -n <operator-ns>` first — a stuck CSV blocks everything downstream.
 5. For cert-manager: `oc describe certificate <name> -n <ns>` → `CertificateRequest` → `Order` → `Challenge`. DNS-01 failures are almost always Cloudflare token expired or wrong zone.
-
-### Pre-flight checks for any CSI-mount-dependent work
-
-Before applying a test PVC, re-running a failed test, or debugging "operation already exists" / mount-hang symptoms, run these checks first — they catch cluster-wide CSI poison that survives plugin restarts:
-
-```bash
-# 1. Orphan PVs (Released or stuck-Bound to a deleted namespace)
-oc get pv | grep -E "Released|Failed"
-
-# 2. Stuck VolumeAttachments (especially with attached=true for a PV that no longer exists)
-oc get volumeattachment | awk '$5 == "true" {print}'
-
-# 3. Stuck PVCs with finalizers that never clear
-oc get pvc -A | grep -v "Bound\|NAME"
-
-# 4. Stale CSI controlplugin retry loops (look for "operation already exists" on volume IDs that don't correspond to any current PVC)
-oc -n rook-ceph logs -l app=rook-ceph.rbd.csi.ceph.com-ctrlplugin -c csi-provisioner --tail=20
-```
-
-If any are found, clear them BEFORE retrying the work:
-
-```bash
-# PVs (Released status, no claimant):
-oc patch pv <name> -p '{"metadata":{"finalizers":[]}}' --type=merge && oc delete pv <name>
-# VolumeAttachments (orphan / no underlying PV):
-oc patch volumeattachment <name> -p '{"metadata":{"finalizers":[]}}' --type=merge
-# PVCs:
-oc -n <ns> patch pvc <name> -p '{"metadata":{"finalizers":[]}}' --type=merge
-```
-
-Why this matters: the csi-provisioner serializes operations cluster-wide. A stuck `DeleteVolume` for an orphan PV blocks every new `CreateVolume` for unrelated PVCs — symptom looks identical to the per-volume "operation already exists" lock from the rbd-plugin's in-memory tracker, but the root cause is across PVs. Skipping this check sent us down a multi-hour rabbit hole on 2026-05-14 chasing the wrong symptom.
 
 ### Network-stack changes and pod-egress breaks
 
