@@ -40,10 +40,12 @@ Thumbs.db
 *.txt
 !data/**/*.txt
 
-# Claude Code local session state. settings.json is tracked: it carries the
-# guardrail deny list. settings.local.json and everything else stay local.
+# Claude Code local session state. settings.json (the guardrail deny list) and
+# skills/ (on-demand instructions split out of CLAUDE.md) are tracked;
+# settings.local.json and everything else stay local.
 .claude/*
 !.claude/settings.json
+!.claude/skills/
 
 # Kubeconfigs — canonical location is ~/.kube/, never the repo. This is
 # defense-in-depth in case one ever lands here by accident.
