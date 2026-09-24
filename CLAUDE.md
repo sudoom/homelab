@@ -50,6 +50,7 @@ Pin these when generating manifests or commands — mismatched versions are the 
 ├── tests/                   # Manual-apply test artifacts not yet promoted to a chart
 ├── data/                    # Captured benchmark / SMART / log artifacts referenced from blog drafts
 │                            # └── storage-throughput.md — ALL measured throughput figures, with conditions
+├── docs/superpowers/specs/  # Design specs from brainstorming, reviewed before any implementation
 └── CLAUDE.md
 ```
 
