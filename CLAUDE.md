@@ -622,6 +622,8 @@ one-line version bump does not need headings.
 
 For mutations against the cluster (apply/delete/patch/scale, etc.), still go through the user.
 
+Permissions: `.claude/settings.json` is tracked (since 2026-09-24) and holds the read-only allowlist plus the **guardrail deny list** — `oc`/`kubectl` mutating verbs in both `oc <verb>` and `oc -n <ns> <verb>` forms, `helm install/upgrade/uninstall/rollback`, `argocd app sync`, `gh pr merge/ready/review/close`, force-push/hard-reset, the token-printing `oc whoami -t` / `oc config view --raw`, and reads of kubeconfigs/`.env`/secrets. Deny beats allow, and a deny rule matches past a leading `KUBECONFIG=…` assignment. `.claude/settings.local.json` stays untracked (git, gh reads, ssh, WebFetch domains, MCP tool approvals). Editing either file from a session is blocked by auto mode as self-modification — the user applies settings changes.
+
 ## Reviewing open PRs (`sudoom/homelab`) — suggest approve / not-approve
 
 When asked to look at the repo, when starting a session, or whenever a Renovate/dependency PR is relevant, **check the open PRs and give an explicit approve / not-approve recommendation per PR** (read-only via `gh`, each command prefixed with `GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"`: `gh pr list -R sudoom/homelab --state open`, then `gh pr view <n> -R sudoom/homelab --json title,author,labels,files` and `gh pr diff <n> -R sudoom/homelab` for the diff). I can review + recommend; I never merge (merge is a mutation, user-only).
@@ -777,7 +779,7 @@ This codebase pairs with a personal+work Obsidian vault that holds long-form con
 
 ### Read permissions
 
-This repo's `.claude/settings.json` whitelists `Read(<vault-path>/**)` on the vault path; the vault's `.claude/settings.json` whitelists the same on this repo. **One `Read(path)` rule covers every file-reading tool (Read, Glob, Grep) — separate `Glob(path)`/`Grep(path)` entries are no-ops** and Claude Code warns about them at startup (they were removed here 2026-07-27). Native Read works on absolute paths in both directions — no MCP needed for cross-repo reads.
+This repo's `.claude/settings.json` whitelists `Read(~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Notatki/**)`; the vault's `.claude/settings.json` whitelists `Read(~/Projects/homelab/**)`. **Absolute paths in a permission rule need `~/` or `//` — a single leading `/` is relative to the project root.** Both files used `/Users/…` until 2026-09-24, so none of those rules ever matched, including the vault's `ask` rule meant to guard `Personal/**` edits. **One `Read(path)` rule covers every file-reading tool (Read, Glob, Grep) — separate `Glob(path)`/`Grep(path)` entries are no-ops** and Claude Code warns about them at startup (they were removed here 2026-07-27). Native Read works on absolute paths in both directions — no MCP needed for cross-repo reads.
 
 ### Downstream: the published blog (sudops.pl)
 
