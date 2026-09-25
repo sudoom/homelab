@@ -20,15 +20,16 @@ applications:
 
   # Frontnet static -> DHCP on all three nodes.
   #
-  # SHIPPED DISABLED ON PURPOSE. Enabling this IS the change: it reboots every
-  # node serially on a 3-node compact cluster with no drain headroom and no
-  # remote console (consumer SFF desktops — recovery means carrying a monitor
-  # to the rack). Do not flip it as part of unrelated work.
+  # STILL DISABLED. node4 was converted by hand on 2026-09-25 (the canary in
+  # the runbook); node5 and node6 are still static. Enabling this reboots every
+  # node serially — including nodes already converted by hand, onto the file
+  # they already have — unless a nodeDisruptionPolicy for the profile path says
+  # otherwise. No drain headroom, no remote console.
   #
-  # HARD PRECONDITION: MikroTik DHCP reservations must already pin
+  # HARD PRECONDITION: MikroTik DHCP reservations pin
   #   d0:8e:79:05:37:0a -> .7 (node4), d0:8e:79:19:19:bf -> .8 (node5),
-  #   d0:8e:79:06:f1:0f -> .9 (node6). The IPs must not change — etcd and
-  #   kubelet serving certs carry them as SANs.
+  #   d0:8e:79:06:f1:0f -> .9 (node6), each with lease-time=1d. The IPs must
+  #   not change — etcd and kubelet serving certs carry them as SANs.
   #
   # Full runbook, abort criteria and rollback:
   #   components/cluster-config/node-dhcp/README.md

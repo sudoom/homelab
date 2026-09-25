@@ -1,9 +1,13 @@
 # node-dhcp — frontnet static → DHCP
 
-**Status: prepared, NOT enabled.** `bootstrap/root-app/values.yaml` has
-`node-dhcp.enabled: false`. Flipping it to `true` **is** the change.
-
-Prepared 2026-08-26 for execution on a later, dedicated day.
+**Status: IN FLIGHT — node4 on DHCP since 2026-09-25, node5 and node6 still
+static, chart still `enabled: false`.** node4 was converted by hand (the canary
+below) and verified. The rest waits for a window when Jellyfin (on node6) is
+idle. Open choice for the remaining two: convert them by hand too and enable the
+chart together with a `nodeDisruptionPolicy` (action `None`) for the profile
+path, so enabling reboots nothing (3 reboots total); or enable the chart without
+one and let MCO drain and reboot all three again in its own order. Prepared
+2026-08-26. Execution log: `blog/blog-node-dhcp-draft.md`.
 
 ---
 
@@ -49,6 +53,18 @@ means:
       Verified 2026-08-26: `br-ex` inherits the physical NIC's MAC on all three
       nodes, so reservations keyed on these MACs match whether the DHCP client
       ends up on the NIC or on the bridge.
+
+- [ ] **Each reservation carries its own long lease** (added 2026-09-25):
+
+      /ip/dhcp-server/lease/set [find where comment~"okd"] lease-time=1d
+
+      Without it the reservations inherit the server's 10-minute lease
+      (node4 got `dhcp_lease_time = 600`). A reservation fixes WHICH address a
+      node gets, not for how long: NetworkManager drops the address when the
+      lease runs out unrenewed, so a router outage longer than the lease would
+      take all three node IPs — and etcd — down at once. The cost of `1d` is
+      that a DHCP option change (a new DNS server) reaches a node only at its
+      next renewal, up to 12 h later, or at its next reboot.
 
 - [ ] **DHCP network options are right:**
       `/ip/dhcp-server/network/print detail` → `gateway=192.168.1.1`,
@@ -98,8 +114,9 @@ unwind, and a rollback that is one `cp` and a reboot. Take the canary. Ship the
 MachineConfig only once all three nodes are proven, to make the state
 declarative and survive future reprovisioning.
 
-Cost: 4 reboots instead of 3. Benefit: the irreversible-looking step becomes a
-local, reversible file edit.
+Cost: 4 reboots instead of 3 — the canary node reboots again when the chart is
+enabled (see below). Benefit: the irreversible-looking step becomes a local,
+reversible file edit.
 
 ### Mechanism: MCD chroot, not SSH
 
@@ -130,6 +147,15 @@ node holding neither removes a variable.
 ### Canary steps
 
 ```bash
+# 0. PAUSE THE LOKI OPERATOR AND DRAIN THE NODE, as MCO would. The reboot below
+#    is not a MachineConfig event, so nothing drains for you. --force is needed:
+#    the four control-plane guard pods (etcd, kube-apiserver,
+#    kube-controller-manager, scheduler) have no controller, and drain refuses
+#    them without it. Their guard PDBs still gate the eviction; the operators
+#    recreate them on return. MCO's own drain uses force for the same reason.
+oc -n openshift-operators-redhat scale deploy loki-operator-controller-manager --replicas=0
+oc adm drain $node --ignore-daemonsets --delete-emptydir-data --force --timeout=20m
+
 # 1. BACK THE FILE UP OFF-NODE. This is your only guaranteed rollback source.
 oc -n openshift-machine-config-operator exec $mcd -c machine-config-daemon -- chroot /rootfs \
   cat /etc/NetworkManager/system-connections/enp0s31f6.nmconnection > ~/enp0s31f6-$node.static.bak
@@ -147,10 +173,39 @@ oc -n openshift-machine-config-operator exec -i $mcd -c machine-config-daemon --
 oc -n openshift-machine-config-operator exec $mcd -c machine-config-daemon -- chroot /rootfs systemctl reboot
 ```
 
-Then verify per the checks below. **If it comes back correct, repeat on the
-other two, one at a time.** Only after all three are proven, enable the chart —
-at that point the MachineConfig matches what is already on disk, so the reroll
-is a no-op adoption rather than a change.
+Then verify, and `oc adm uncordon $node`:
+
+```bash
+# on the node (MCD chroot): lease, DNS from DHCP, route, backnet, forwarding
+nmcli -f DHCP4 dev show br-ex | grep -E 'ip_address|routers|domain_name_servers|dhcp_lease_time'
+ip route show default                      # expect "proto dhcp" via 192.168.1.1
+ip -4 -br a show enp1s0f0np0               # UP with its 192.168.10.x
+sysctl -n net.ipv4.conf.br-ex.forwarding   # 1
+```
+
+On the router, `/ip/dhcp-server/lease/print detail where comment~"okd"` shows
+the node's lease `status=bound` with `active-client-id="1:<mac>"` — type 1 plus
+the MAC, which is what `dhcp-client-id=mac` sends.
+
+**If the canary comes back correct, enable the chart.** It is NOT a no-op for
+the canary node: no node disruption policy covers this path (`oc get
+machineconfiguration cluster -o jsonpath='{.status.nodeDisruptionPolicyStatus}'`
+lists only the defaults), so MCO drains and reboots every node for the new
+rendered config — the canary included, onto the file it already has. Converting
+all three by hand first would therefore cost six reboots, not three. (An earlier
+version of this README said the adoption was a no-op; it is not.)
+
+**Mon failover race (seen on the node4 canary, 2026-09-25).** Rook fails a mon
+over after it has been out of quorum for 10 minutes (`healthCheck` default).
+node4's mon was out from the drain (15:58) to shortly after the uncordon
+(~16:08), so Rook started `mon-d`; its canary scheduled onto node4 at the moment
+of the uncordon, and `mon-d` then could not bind host port 6789 because `mon-a`
+had come back first. Rook v1.19.5 reverts an unsuccessful failover by itself
+(`failoverMon`'s deferred cleanup): about 5 minutes later it removed `mon-d`,
+reset the mon ID and restored the mon PDB. **While `mon-d` is Pending the mon
+PDB allows 0 disruptions, so any drain waits** — do not start the next node
+until `oc -n rook-ceph get pdb rook-ceph-mon-pdb` shows 1 allowed again. Keeping
+each node's window under 10 minutes (uncordon promptly) avoids it altogether.
 
 ### If you skip the canary and enable the chart directly
 
