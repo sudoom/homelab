@@ -22,7 +22,7 @@ rebuild needs exactly one hand-created Secret.
 |---|---|---|
 | Store | Bitwarden Secrets Manager, EU cloud | Free tier: 2 users, 3 projects, 3 machine accounts, unlimited secrets. End-to-end encrypted. |
 | Operator source | OLM, `okderators` catalog | Chosen over the upstream Helm chart (2.11.0) to keep the repo's operator pattern. Accepted cost: see Risks. |
-| Scope | The 12 SealedSecrets on the cluster | Ansible Vault (`ansible/truenas`, `ansible/technitium`) stays as is. |
+| Scope | The 13 SealedSecrets on the cluster | Ansible Vault (`ansible/truenas`, `ansible/technitium`) stays as is. |
 
 ## What the catalog ships (verified 2026-09-24)
 
@@ -84,7 +84,7 @@ Bitwarden SM (EU)  <--https--  bitwarden-sdk-server  <--TLS (own CA)--  ESO cont
 
 - One free organisation, Secrets Manager enabled, one project `okd`.
 - Machine account `okd-eso`: **read** on project `okd`. Its access token is the only secret-zero.
-- One Bitwarden secret per key, named `<namespace>/<secret>/<key>`. 19 in total:
+- One Bitwarden secret per key, named `<namespace>/<secret>/<key>`. 20 in total:
 
 | Kubernetes Secret | Keys |
 |---|---|
@@ -98,6 +98,7 @@ Bitwarden SM (EU)  <--https--  bitwarden-sdk-server  <--TLS (own CA)--  ESO cont
 | `media/media-postgres-r2-creds` | `ACCESS_KEY_ID`, `ACCESS_SECRET_KEY` |
 | `immich/immich-postgres-r2-creds` | `ACCESS_KEY_ID`, `ACCESS_SECRET_KEY` |
 | `openshift-monitoring/alertmanager-mailjet` | `password` |
+| `openshift-monitoring/alertmanager-healthchecks` | `url` |
 | `openshift-config/github-oauth-client-secret` | `clientSecret` |
 | `cert-manager/cloudflare-api-token` | `api-token` |
 
@@ -142,7 +143,7 @@ Order (lowest stakes first; the first one proves the mechanics and measures the 
 4. `openshift-logging/loki-garage-credentials`, `openshift-adp/garage-credentials`
 5. `media/media-postgres-r2-creds`, `immich/immich-postgres-r2-creds` (check `ContinuousArchiving`
    stays True on both clusters)
-6. `openshift-monitoring/alertmanager-mailjet`, `openshift-config/github-oauth-client-secret`
+6. `openshift-monitoring/alertmanager-mailjet`, `openshift-monitoring/alertmanager-healthchecks`, `openshift-config/github-oauth-client-secret`
 7. `cert-manager/cloudflare-api-token` (last; `homelab-wildcard` renewed 2026-09-21, next 11-20)
 
 ### Optional rotation

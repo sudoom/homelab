@@ -295,3 +295,122 @@ and may do the same thing. One restart per replica at a rotation is the known sh
 one, or a restart with no matching `metrics-client-certs` write, is something else. Not raised
 upstream yet — it needs checking against the `prometheus/common` tracker first, since a reload
 race in that function may already be fixed in a newer vendored version than 4.21 ships.
+
+## 2026-09-25 — a dead-man's switch for the alert pipeline
+
+Alert email has worked end to end since 2026-09-25 (Mailjet, `severity=critical` +
+`UserNamespace*` + `CNPGWALArchiveFailing*`), which closes "an alert fired and nobody heard it."
+But Alertmanager runs *in* the cluster, and the three concrete silent gaps this year — 21 h on
+2026-07-24, 5 h on 2026-07-30, both only caught by a routine status check — were all cases where
+the thing failing was the delivery path itself, not a rule. `Watchdog`, the alert Prometheus fires
+continuously to prove the pipeline is alive, was routed to a receiver with no integrations
+("deliberately sunk into a null receiver," per the old comment) — so there was no mechanism to
+notice the pipeline had gone quiet, only ever a human noticing something else was wrong.
+
+Three options considered for closing that gap, all in the spec
+(`docs/superpowers/specs/2026-09-25-alertmanager-deadman-switch-design.md`):
+
+1. A self-hosted watcher script in the house — rejected: misses whole-house outages, depends on
+   the same Mailjet path being healthy, needs a new privileged token (the readonly SA can't read
+   alerts), and is a script to maintain.
+2. Fold it into the planned Mac-mini cluster-health analyst (README TODO, not built) — rejected
+   for now: also physically in the house, so a whole-house outage takes it down too; it stays a
+   separate, proactive idea rather than the dead-man's switch itself.
+3. A hosted heartbeat, healthchecks.io free ("Hobbyist") plan — chosen. $0, 20 checks / 100 log
+   entries (enough for one check), genuinely off-site, and the built-in period/grace model is
+   exactly a dead-man's switch: ping every 5 minutes, DOWN email if no ping lands within a 15-minute
+   grace window (~20 minutes from the last real ping to the email), UP email when pings resume.
+
+### Mechanism
+
+`components/cluster-config/monitoring-config/templates/alertmanager-config.yaml`, behind a new
+`alertmanager.heartbeat.enabled` flag: the `Watchdog` route gains `group_interval: 1m` /
+`repeat_interval: 5m` (today it inherits the default 12 h and goes nowhere), and the `Watchdog`
+receiver gains a `webhook_configs` entry pointing `url_file` at the mounted secret. Alertmanager is
+0.29.0, where `url_file` and `url` are mutually exclusive webhook fields — so the ping URL is never
+in the rendered config, only a path to it. `send_resolved: false` and `max_alerts: 1` keep the
+webhook to exactly one POST per interval. What actually leaves the cluster is Alertmanager's
+webhook JSON for `Watchdog` — labels like `alertname=Watchdog`, `namespace=openshift-monitoring`,
+`severity=none` — no secrets in the body; the only sensitive value is the ping URL itself, since
+anyone holding it could send false "alive" pings.
+
+The secret is `openshift-monitoring/alertmanager-healthchecks`, key `url`, same SealedSecret
+pattern as `alertmanager-mailjet`, sealed by hand so the URL never touches chat or git:
+
+```bash
+read -rs HC_URL   # paste the ping URL; nothing is echoed
+oc create secret generic alertmanager-healthchecks -n openshift-monitoring \
+  --from-literal=url="$HC_URL" --dry-run=client -o yaml \
+  | kubeseal --cert components/operators/sealed-secrets/sealed-secrets-pub.pem -o yaml \
+  > components/cluster-config/monitoring-config/templates/sealed-alertmanager-healthchecks.yaml
+unset HC_URL
+```
+
+**Two-commit order, and why it isn't `optional: true`.** CMO builds `alertmanagerMain.secrets` from
+both the email and heartbeat flags, and mounts every listed Secret at
+`/etc/alertmanager/secrets/<name>/` **without `optional: true`** — confirmed on the live
+StatefulSet, the existing `alertmanager-mailjet` volume has no `optional` field either. A listed
+Secret that doesn't exist yet leaves both Alertmanager pods stuck `ContainerCreating` — all
+alerting down, not just the heartbeat. So commit 1 (`1eaf6d2`) shipped only the SealedSecret with
+the flag still `false`, confirmed the Secret existed by key name (`url`, never the value), and only
+then did commit 2 (`d43de9f`) flip `heartbeat.enabled: true` and add the mount/route/receiver
+wiring. Pre-push checks on commit 2: render assertions RED (feature absent) then GREEN
+(`url_file` populated, `send/max` = `false 1`, intervals `1m 5m`, both secrets listed), a
+flag-off render byte-identical to the pre-change render (`git stash`-based diff), and an
+`amtool config routes test` run against the rendered `alertmanager.yaml` from the Alertmanager
+container's own binary (stdin, read-only):
+
+```bash
+oc -n openshift-monitoring exec -i alertmanager-main-0 -c alertmanager -- \
+  amtool config routes test --config.file=/dev/stdin alertname=Watchdog severity=none < am.yaml
+```
+
+Results: `Watchdog` → `Watchdog`; `severity=critical` → `Critical`; `UserNamespaceJobFailed` and
+`CNPGWALArchiveFailingWarning` (both warning-severity) → `Critical`; `KubeCPUOvercommit` (warning)
+→ `Default` — routing of everything else unchanged. Commit 2 was pushed 17:53:31 UTC only after a
+task review approved it.
+
+One minor caught in review, left as-is: with `heartbeat.enabled=true` and `email.enabled=false`,
+the chart lists the heartbeat secret in the mount but the `alertmanager.yaml` Secret itself is
+gated on `email.enabled` and doesn't render — a harmless orphan mount for a combination this repo
+doesn't actually run (both flags are true), and the values comment already states the dependency.
+
+### Rollout and the pings
+
+ArgoCD synced `d43de9f` by 17:57:49 UTC; `alertmanager-main-1` restarted 17:57:49, `-main-0` at
+17:58:03, both back to 6/6 Ready by 17:58:20 — no `ContainerCreating`, so the `optional: true`
+concern above never actually bit (the Secret was already there from commit 1). First ping landed
+17:58:21 UTC from `main-1` — healthchecks.io flipped the check from "new" to "up", an HTTPS POST
+with a 1916-byte body and user agent `Alertmanager/0.29.0`. Second ping 18:03:30 UTC from `main-0`,
+5 min 09 s after the first — close enough to the 5-minute `repeat_interval` given jitter across two
+replicas sharing a notification log. `alertmanager_notifications_failed_total{integration="webhook"}`
+stayed at 0 throughout, and the Mailjet email counters were untouched by the restart.
+
+### Proving the alarm
+
+The real test isn't that pings arrive, it's that stopping them does something. At 18:03:54 UTC the
+user added a 25-minute silence on `alertname=Watchdog` via the break-glass kubeconfig (visible on
+both Alertmanager replicas; `amtool silence add alertname=Watchdog --duration=25m`). Last ping
+before the silence: 18:03:30 UTC. healthchecks.io flipped to DOWN at 18:23:25 UTC — inbox, not
+spam, "success signal did not arrive on time, grace time passed," roughly 20 minutes after the last
+ping, matching the period(5m)+grace(15m) design. The silence expired 18:28:54; pings resumed
+18:29:24 UTC from `main-0` (visible on the Alertmanager notification counter on its next 30-second
+poll). healthchecks.io's own UP email landed 18:29:10 UTC: "downtime lasted 5 minutes, 44 seconds,"
+3 total pings missed.
+
+One coincidence worth recording: an unrelated MCO rollout (node DHCP, `96d20ad`) drained and
+rebooted all three nodes 18:05–18:24 during the silence window, restarting both Alertmanager pods
+mid-test. The silence survived the restart — Alertmanager persists silences on its own volume and
+gossips them between replicas — and the DOWN/UP timing tracked the silence window, not the reboot.
+Coincidental timing, not a dependency; worth noting because it's exactly the kind of "was the
+result actually caused by what I think" question this repo tries to answer with evidence rather
+than a plausible-looking signal.
+
+### What this does and doesn't cover
+
+A DOWN email says the pipeline is silent, not why — Prometheus not evaluating, Alertmanager down,
+Alertmanager's node without internet egress (`br-ex.forwarding=0`), the cluster down, the house
+offline, or healthchecks.io itself. The last of those is a false alarm, accepted for a homelab.
+It's not a substitute for alert rules either: when the cluster is up but something inside it is
+wrong, the existing critical-alert Mailjet email still carries that. What it closes is specifically
+the brownout case — the one all three demonstrated silent gaps this year had in common.
