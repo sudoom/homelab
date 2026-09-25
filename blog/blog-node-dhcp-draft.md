@@ -257,3 +257,27 @@ The rollout overlapped the Alertmanager dead-man's switch test (see
 were drained and restarted during a 25-minute Watchdog silence, and the silence
 survived — silences live on Alertmanager's volume and are gossiped between the
 replicas.
+
+### After the rollout: the descheduler and a Loki rate limit (open)
+
+The end-of-session sweep at 19:17Z was clean on every structural check, and
+surfaced two things the rollout left behind:
+
+- **`LokistackComponentsNotReadyWarning` from 19:00Z — a stale status, not a
+  broken stack.** The hourly descheduler job (`LowNodeUtilization`) ran at
+  19:00 and evicted five logging pods from node4 (cluster-logging-operator, a
+  distributor, a query-frontend, a gateway, a querier) to rebalance after the
+  drains. The Loki operator reconciled at 19:00:30 while the replacements were
+  still starting, set `Ready=False` / `PendingComponents`, and did not reconcile
+  again; by 19:18 every Loki pod was Ready and the LokiStack's own `components`
+  list showed all of them Ready. The same reconcile added an
+  `InsufficientIngesterReplicas` warning (2 ingesters, replication factor 2). It
+  should clear on the operator's next reconcile; check at the next session start.
+- **The `infrastructure` tenant hitting Loki's ingestion rate limit.**
+  Distributor logs: `ingestion rate limit exceeded for user infrastructure
+  (limit: 2097152 bytes/sec)`; the collectors (Vector) answer the 429s by
+  retrying, so nothing is dropped while their buffers hold. Counts across both
+  distributors at 19:19Z: 82 in the last hour (mostly during the rollout), 31 in
+  30 min, and 12 — all in the last two minutes. Bursty, not clearly subsiding:
+  either catch-up of three nodes' worth of backlogged node logs, or a limit that
+  was already tight and today exposed. Not decided; no change made.
