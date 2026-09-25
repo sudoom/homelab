@@ -103,6 +103,11 @@ stringData:
           # URL from the mounted SealedSecret; url and url_file are mutually
           # exclusive, so the ping URL never appears in this rendered config.
           - url_file: "/etc/alertmanager/secrets/{{ .Values.alertmanager.heartbeat.credentialsSecret }}/url"
+            # MUST stay false. A resolved POST fires when Prometheus stops
+            # evaluating Watchdog -- exactly the failure this heartbeat exists
+            # to catch -- and healthchecks.io cannot tell a resolved POST from
+            # a real "alive" ping, so send_resolved: true would silence the
+            # alarm at the one moment it matters.
             send_resolved: false
             max_alerts: 1
 {{- end }}

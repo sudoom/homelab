@@ -1,6 +1,10 @@
 # Alertmanager dead-man's switch — Watchdog heartbeat to healthchecks.io
 
-Status: design, awaiting review (2026-09-25). Nothing here is applied yet.
+Status: shipped 2026-09-25 — `1eaf6d2` (SealedSecret, flag off), `d43de9f` (route/receiver/mount,
+flag on), `17952d0` + `e36ca6e` (docs). Verified live: pings arrive on schedule and a silence
+produced a DOWN then UP email as designed. See `blog/blog-monitoring-foundation-draft.md`, the
+"2026-09-25 — a dead-man's switch for the alert pipeline" section, for the rollout chronology and
+the review-driven corrections made after this design was written.
 
 ## Why
 
@@ -134,7 +138,10 @@ unset HC_URL
    After pushing: both Alertmanager pods roll; pings start.
 
 Rollback: `heartbeat.enabled: false` — the mount goes away and Watchdog returns to the empty
-receiver. Deleting the SealedSecret is optional.
+receiver. (a) Pause the check in the healthchecks.io UI first, or a DOWN email arrives about 20
+minutes after the last ping — expected noise, but avoidable. (b) Deleting the SealedSecret is
+optional; if done, do it in a later commit, after the mount is gone — same two-commit order as the
+rollout, in reverse, so a delete never races an Alertmanager pod still expecting the mounted Secret.
 
 ## Verification
 

@@ -120,7 +120,7 @@ Whole-file values are ported 1:1. Templating them from smaller pieces is a later
 ### Seeding
 
 User-run, one of:
-- Web UI (19 entries).
+- Web UI (20 entries).
 - A script using `bws` (`--server-url https://vault.bitwarden.eu`) with a **temporary read-write**
   machine account `okd-seed`: for each row, read the live key with
   `oc get secret -n <ns> <name> -o jsonpath='{.data.<key>}' | base64 -d` and create

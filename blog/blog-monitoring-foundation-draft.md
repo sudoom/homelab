@@ -299,13 +299,19 @@ race in that function may already be fixed in a newer vendored version than 4.21
 ## 2026-09-25 — a dead-man's switch for the alert pipeline
 
 Alert email has worked end to end since 2026-09-25 (Mailjet, `severity=critical` +
-`UserNamespace*` + `CNPGWALArchiveFailing*`), which closes "an alert fired and nobody heard it."
-But Alertmanager runs *in* the cluster, and the three concrete silent gaps this year — 21 h on
-2026-07-24, 5 h on 2026-07-30, both only caught by a routine status check — were all cases where
-the thing failing was the delivery path itself, not a rule. `Watchdog`, the alert Prometheus fires
-continuously to prove the pipeline is alive, was routed to a receiver with no integrations
-("deliberately sunk into a null receiver," per the old comment) — so there was no mechanism to
-notice the pipeline had gone quiet, only ever a human noticing something else was wrong.
+`UserNamespace*` + `CNPGWALArchiveFailing*`). That closed the two concrete silent gaps from this
+year that were delivery-path failures, not the pipeline being down: 21 h on 2026-07-24 and 5 h on
+2026-07-30, both cases where the `CNPGWALArchiveFailing*` rule fired the whole time and Alertmanager
+itself was working — there was just no external route yet, so only a human noticing something else
+was wrong caught either one (`blog/blog-cnpg-draft.md`, `blog/blog-ntp-dns-cluster-outage-draft.md`).
+But Alertmanager runs *in* the cluster, and a brownout that takes the whole pipeline down — Mailjet
+route included — is a different failure: the two cluster-wide `br-ex.forwarding=0` pod-egress breaks
+this year, 2026-08-07 (~5 h, after the 10G switch firmware upgrade) and 2026-09-08 (~3.5 h) — during
+both, Alertmanager had no outbound path to Mailjet's smarthost either, so each would have produced a
+healthchecks.io DOWN email about 20 minutes in. `Watchdog`, the alert Prometheus fires continuously
+to prove the pipeline is alive, was routed to a receiver with no integrations ("deliberately sunk
+into a null receiver," per the old comment) — so there was no mechanism to notice the pipeline had
+gone quiet, only ever a human noticing something else was wrong.
 
 Three options considered for closing that gap, all in the spec
 (`docs/superpowers/specs/2026-09-25-alertmanager-deadman-switch-design.md`):
@@ -328,8 +334,11 @@ Three options considered for closing that gap, all in the spec
 `repeat_interval: 5m` (today it inherits the default 12 h and goes nowhere), and the `Watchdog`
 receiver gains a `webhook_configs` entry pointing `url_file` at the mounted secret. Alertmanager is
 0.29.0, where `url_file` and `url` are mutually exclusive webhook fields — so the ping URL is never
-in the rendered config, only a path to it. `send_resolved: false` and `max_alerts: 1` keep the
-webhook to exactly one POST per interval. What actually leaves the cluster is Alertmanager's
+in the rendered config, only a path to it. The cadence — about one POST every 5 minutes — comes
+from the route's `group_interval`/`repeat_interval` and the two replicas' shared notification log;
+`send_resolved: false` and `max_alerts: 1` instead guard against a resolved POST (which would
+register as a false "alive" ping the moment Prometheus stops evaluating) or a burst of grouped
+alerts turning into more than one. What actually leaves the cluster is Alertmanager's
 webhook JSON for `Watchdog` — labels like `alertname=Watchdog`, `namespace=openshift-monitoring`,
 `severity=none` — no secrets in the body; the only sensitive value is the ping URL itself, since
 anyone holding it could send false "alive" pings.
@@ -379,24 +388,30 @@ doesn't actually run (both flags are true), and the values comment already state
 
 ArgoCD synced `d43de9f` by 17:57:49 UTC; `alertmanager-main-1` restarted 17:57:49, `-main-0` at
 17:58:03, both back to 6/6 Ready by 17:58:20 — no `ContainerCreating`, so the `optional: true`
-concern above never actually bit (the Secret was already there from commit 1). First ping landed
-17:58:21 UTC from `main-1` — healthchecks.io flipped the check from "new" to "up", an HTTPS POST
-with a 1916-byte body and user agent `Alertmanager/0.29.0`. Second ping 18:03:30 UTC from `main-0`,
-5 min 09 s after the first — close enough to the 5-minute `repeat_interval` given jitter across two
-replicas sharing a notification log. `alertmanager_notifications_failed_total{integration="webhook"}`
-stayed at 0 throughout, and the Mailjet email counters were untouched by the restart.
+concern above never actually bit (the Secret was already there from commit 1). First ping seen on
+the Alertmanager notification counter (30 s polling) at 17:58:21 UTC from `main-1` — healthchecks.io
+flipped the check from "new" to "up", an HTTPS POST with a 1916-byte body and user agent
+`Alertmanager/0.29.0`. Second ping seen on the counter at 18:03:30 UTC from `main-0`, about 5
+minutes after the first — consistent with the 5-minute `repeat_interval` given jitter across two
+replicas sharing a notification log and the 30 s poll granularity.
+`alertmanager_notifications_failed_total{integration="webhook"}` stayed at 0 throughout, and the
+Mailjet email counters were untouched by the restart.
 
 ### Proving the alarm
 
-The real test isn't that pings arrive, it's that stopping them does something. At 18:03:54 UTC the
-user added a 25-minute silence on `alertname=Watchdog` via the break-glass kubeconfig (visible on
-both Alertmanager replicas; `amtool silence add alertname=Watchdog --duration=25m`). Last ping
-before the silence: 18:03:30 UTC. healthchecks.io flipped to DOWN at 18:23:25 UTC — inbox, not
-spam, "success signal did not arrive on time, grace time passed," roughly 20 minutes after the last
-ping, matching the period(5m)+grace(15m) design. The silence expired 18:28:54; pings resumed
-18:29:24 UTC from `main-0` (visible on the Alertmanager notification counter on its next 30-second
-poll). healthchecks.io's own UP email landed 18:29:10 UTC: "downtime lasted 5 minutes, 44 seconds,"
-3 total pings missed.
+The real test isn't that pings arrive, it's that stopping them does something. At 18:03:54 UTC I
+had a 25-minute silence added on `alertname=Watchdog` — via the break-glass kubeconfig, at my
+explicit instruction even though the operator login was valid at the time (visible on both
+Alertmanager replicas; `amtool silence add alertname=Watchdog --duration=25m`). Break-glass writes
+land in the audit log under the break-glass service account rather than the operator's identity —
+CLAUDE.md reserves break-glass for OAuth outages, so this was a deliberate one-off for the test, not
+the normal path. The last ping seen on the counter was 18:03:30 UTC; healthchecks.io flipped to
+DOWN at 18:23:25 UTC — inbox, not spam, "success signal did not arrive on time, grace time passed" —
+which, at period(5m)+grace(15m), implies the last ping healthchecks.io actually received landed at
+or just before 18:03:25 UTC. The silence expired 18:28:54; the resumed ping was seen on the counter
+between 18:29:19 and 18:29:24 UTC (two 30-second-poll readings from `main-0`, taken minutes apart),
+while healthchecks.io's own UP email landed 18:29:10 UTC: "downtime lasted 5 minutes, 44 seconds,"
+3 pings in total (about five were suppressed by the silence).
 
 One coincidence worth recording: an unrelated MCO rollout (node DHCP, `96d20ad`) drained and
 rebooted all three nodes 18:05–18:24 during the silence window, restarting both Alertmanager pods
@@ -412,5 +427,12 @@ A DOWN email says the pipeline is silent, not why — Prometheus not evaluating,
 Alertmanager's node without internet egress (`br-ex.forwarding=0`), the cluster down, the house
 offline, or healthchecks.io itself. The last of those is a false alarm, accepted for a homelab.
 It's not a substitute for alert rules either: when the cluster is up but something inside it is
-wrong, the existing critical-alert Mailjet email still carries that. What it closes is specifically
-the brownout case — the one all three demonstrated silent gaps this year had in common.
+wrong, the existing critical-alert Mailjet email still carries that — except that a green
+healthchecks check only proves Watchdog reaches the webhook, not that Mailjet is actually
+delivering: Mailjet has already suspended sending once this cycle (re-enabled 2026-09-21, capped at
+20 emails/hour), and `AlertmanagerFailedToSendAlerts` is warning severity, so it is not itself
+emailed. What the switch closes is specifically the brownout case — the cluster-wide
+`br-ex.forwarding=0` pod-egress breaks (2026-08-07, 2026-09-08) during which Alertmanager has no
+outbound path at all, critical or heartbeat. The 2026-07-24 and 2026-07-30 gaps were a different
+failure — Alertmanager was healthy and the rule fired, there was just no external route yet — and
+that gap was closed separately by the Mailjet critical-alert route shipped 2026-09-07.
