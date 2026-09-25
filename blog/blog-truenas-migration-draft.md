@@ -5197,3 +5197,60 @@ reply can be routed back. The message left the NAS as `alerts@sudops.pl`.
 Still unobserved: the cluster's Alertmanager uses the same account, sender and recipient, but it
 only mails `severity = critical` (plus the `UserNamespace*` and `CNPGWALArchiveFailing*` routes),
 and none has fired since. Tracked in the README TODO until one real alert mail lands.
+
+## 2026-09-25 — the cluster's own alert mail arrives
+
+Four days after the NAS proved the Mailjet account delivers again, nothing had come from the
+cluster. That was correct, not a fault: seven alerts were firing and none of them routes to email.
+Alertmanager's own view of which receiver each active alert went to (break-glass kubeconfig; the
+operator login had expired):
+
+```bash
+KUBECONFIG=~/.kube/config-breakglass oc -n openshift-monitoring exec alertmanager-main-0 -c alertmanager -- \
+  wget -qO- 'http://localhost:9093/api/v2/alerts?active=true'
+```
+
+`PodDisruptionBudgetAtLimit` ×2, `KubeCPUOvercommit` and `TargetDown` (nmstate) are `warning`,
+`UpdateAvailable` and `InsightsRecommendationActive` are `info`, all to `Default`; `Watchdog` to
+`Watchdog`. Neither receiver has an `email_configs` block. Only `severity = critical`,
+`UserNamespace*` and `CNPGWALArchiveFailing*` reach `Critical`, the one that mails.
+
+The send counters said the same thing from the other side. `alertmanager_notifications_total
+{integration="email"}` read 10 in total (main-0 2, main-1 8), `failed` 0, and a `query_range`
+put the last increment at 09-14 18:10Z. Every one of those ten went out during the Mailjet
+suspension (09-07 to 09-21), so each was accepted with `250 queued` and dropped afterwards. Since
+sending was re-enabled on 09-21 the cluster had not attempted a single mail.
+
+So the test was a synthetic critical alert posted straight into Alertmanager with the `amtool`
+that ships in the container (0.29.0), with a ten-minute lifetime so it resolves on its own:
+
+```bash
+KUBECONFIG=~/.kube/config-breakglass oc -n openshift-monitoring exec alertmanager-main-0 -c alertmanager -- \
+  amtool alert add EmailDeliveryTest severity=critical namespace=email-test \
+  --annotation=summary="Manual test of Alertmanager to Mailjet delivery" \
+  --end="$(date -u -v+10M +%FT%TZ)" --alertmanager.url=http://localhost:9093
+```
+
+`amtool` printed a parser warning — an annotation value with spaces is not valid for the new
+UTF-8 matcher parser, so it fell back to the classic one and accepted the input. Next time, quote
+the value inside the argument: `--annotation='summary="Manual test ..."'`. Writing into a pod is
+refused to Claude by auto mode, so the command was run by hand.
+
+What happened, in order:
+
+- 15:01:59Z posted. The alert sat on main-0 only, routed to `Critical`. Alerts posted through the
+  API are not gossiped between replicas — only the notification log and silences are — so exactly
+  one mail per state goes out.
+- main-0's email counter went 2 → 3 between 15:02:42 and 15:02:53Z (the 30 s `group_wait`),
+  `failed` still 0.
+- `[okd.sudops.pl] FIRING EmailDeliveryTest` was in the inbox by 15:03:19Z: "1 alert for
+  namespace=email-test", the three labels, the summary annotation and a Source link.
+- The alert ended at 15:11:59Z; the RESOLVED notice was sent by 15:12:47Z (counter 3 → 4,
+  `failed` 0) and `[okd.sudops.pl] RESOLVED EmailDeliveryTest` landed too, same body on a green
+  header.
+
+What this proves and what it skips: it covers Alertmanager → Mailjet → the iCloud relay → the
+inbox, through the production route (`severity = critical` → `Critical`), the subject template and
+`send_resolved`. It skips rule evaluation and Prometheus → Alertmanager, which every alert on the
+board already exercises. The README item that waited for one cluster mail to land is closed; what
+remains of it is asking Mailjet to lift the temporary 20 emails/hour limit from 09-28.
