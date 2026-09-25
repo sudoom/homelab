@@ -99,7 +99,7 @@ Before applying a test PVC, re-running a failed test, or debugging "operation al
 oc get pv | grep -E "Released|Failed"
 
 # 2. Stuck VolumeAttachments (especially with attached=true for a PV that no longer exists)
-oc get volumeattachment | awk '$5 == "true" {print}'
+oc get volumeattachment -o jsonpath='{range .items[?(@.status.attached==true)]}{.metadata.name} {.spec.source.persistentVolumeName} {.spec.nodeName}{"\n"}{end}'
 
 # 3. Stuck PVCs with finalizers that never clear
 oc get pvc -A | grep -v "Bound\|NAME"

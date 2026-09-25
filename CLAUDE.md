@@ -59,6 +59,11 @@ Pin these when generating manifests or commands — mismatched versions are the 
 └── CLAUDE.md
 ```
 
+**Never write `$` followed by a digit in a `.claude/skills/*/SKILL.md`** (awk fields like `$2`, shell positional
+args): Claude Code substitutes the skill's invocation arguments into `$1`, `$2`, … when it loads the skill, so the
+command arrives mangled. Use jsonpath filters or `grep` instead. Found 2026-09-25 — three commands had been broken
+since the split out of this file. Reference files read directly (`teardown.md`, `disk-ops.md`) are not substituted.
+
 ### Non-cluster infrastructure — `ansible/` vs `components/`
 
 - `components/` + `bootstrap/` are what ArgoCD applies to the cluster. `ansible/` holds things outside the cluster
