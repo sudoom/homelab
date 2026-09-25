@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: alertmanager-healthchecks
+  namespace: openshift-monitoring
+spec:
+  encryptedData:
+    url: AgDDKqTHuiub1n+N+s4QMDd+gVzm1V8VTtJR2IXsQHQUnhZRiC42CVk/g90wfZAkwjQ3QrFtLJmHT8ydgkip5ogrLhC+LGYe7uZINqESGRScFB7zqGetaQaZEN2BsxzfWyddfPbhT2akloRc+GV+y/RVq7GIfQyBB7u8APPAdUoua7y4goyS64qN3b827gHXVSoE7dVKxFAJ7ksQqbwDCxSHGiOytZeWLGhoTBhlK2HJ++mMlK7D3T5rsap4FWVAw/XRR5fGHV4JvgzmmE54raClfQ91qwz80Li2YKOlwpVasFQ9bcQN08hxz50p+5J2rSfhwLpqWC98YFbQem2YydUEwrhZuLpLt15JSq/WG9dFpPCqNPycgBiB4HhHAC6qvcNCEcSUNsoibx15mYJE/nqov34YWIXuxWi7/JaYjV9dBFS1/Bm8G2Tv5YsC1S24tytdkw0YdJTHPeM3pFd/381LNkoG2z4aEcOaidDbh5ilVTqJmg/L8yBwCwDWGzOut+CqxqNbrym015qH3f38Ki4DONikOa2mdN0r1c4JfpdLu2p8t39rOolRFTWuZGetmxMmrvtuRkWd5n5Z/FiCxhZ15JrMQ/SJ+x++2bVWFa7PGMRekWLhhVkM63DkkZmbCdaWlBf17ZXq4YZvZuSFR1NcE1H6GUSivt5Z/kh5LvDdYrKNKHWBqQFR+qHrk82hUXAmTeKtSNPtLRecp5KsZMwhyU3UL2QMB9xb8Jbum/gV0Ui+ryl4CaG7VQW3+sbsaJxIM4DttMXhWA==
+  template:
+    metadata:
+      name: alertmanager-healthchecks
+      namespace: openshift-monitoring
