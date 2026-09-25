@@ -59,11 +59,19 @@ stringData:
       receiver: "Default"
       routes:
         # Watchdog fires CONTINUOUSLY by design -- it is the heartbeat proving
-        # the alert pipeline works. Routing it to email would deliver a message
-        # every repeat_interval forever, and an inbox that does that stops being
-        # read within a week. It is deliberately sunk into a null receiver.
+        # the alert pipeline works. It never goes to email (a message every
+        # repeat_interval forever trains the reader to ignore the inbox). With
+        # heartbeat.enabled it is re-sent every 5 minutes to a healthchecks.io
+        # check instead, which emails from outside the cluster when the pings
+        # stop; otherwise it is sunk into the empty Watchdog receiver.
+        # repeat_interval is checked after each group_interval and must be a
+        # multiple of it: 1m/5m = one ping about every 5 minutes.
         - receiver: "Watchdog"
           matchers: ["alertname = Watchdog"]
+{{- if .Values.alertmanager.heartbeat.enabled }}
+          group_interval: 1m
+          repeat_interval: 5m
+{{- end }}
         # CRITICAL ONLY, deliberately. The alternative -- everything -- means
         # this cluster's standing warnings (BLUESTORE_SLOW_OP_ALERT,
         # CephPGImbalance, PodDisruptionBudgetAtLimit on the two structural CNPG
@@ -90,6 +98,14 @@ stringData:
     receivers:
       - name: "Default"
       - name: "Watchdog"
+{{- if .Values.alertmanager.heartbeat.enabled }}
+        webhook_configs:
+          # URL from the mounted SealedSecret; url and url_file are mutually
+          # exclusive, so the ping URL never appears in this rendered config.
+          - url_file: "/etc/alertmanager/secrets/{{ .Values.alertmanager.heartbeat.credentialsSecret }}/url"
+            send_resolved: false
+            max_alerts: 1
+{{- end }}
       - name: "Critical"
         email_configs:
           - to: {{ .Values.alertmanager.email.to | quote }}

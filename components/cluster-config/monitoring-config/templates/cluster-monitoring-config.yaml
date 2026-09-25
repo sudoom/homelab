@@ -20,13 +20,19 @@ data:
             requests:
               storage: {{ .Values.prometheus.volumeSize }}
     alertmanagerMain:
-{{- if .Values.alertmanager.email.enabled }}
-      # Mounts the sealed Mailjet credentials at
-      # /etc/alertmanager/secrets/<name>/, which is where
-      # smtp_auth_password_file in the alertmanager-main Secret reads from.
-      # Without this the config parses but every send fails on auth.
+{{- if or .Values.alertmanager.email.enabled .Values.alertmanager.heartbeat.enabled }}
+      # Each listed Secret is mounted at /etc/alertmanager/secrets/<name>/ --
+      # the Mailjet password for smtp_auth_password_file, the healthchecks.io
+      # ping URL for the Watchdog webhook's url_file. CMO mounts them WITHOUT
+      # optional: true: a listed Secret that does not exist keeps both
+      # Alertmanager pods in ContainerCreating. Changing this list rolls them.
       secrets:
+{{- if .Values.alertmanager.email.enabled }}
         - {{ .Values.alertmanager.email.credentialsSecret }}
+{{- end }}
+{{- if .Values.alertmanager.heartbeat.enabled }}
+        - {{ .Values.alertmanager.heartbeat.credentialsSecret }}
+{{- end }}
 {{- end }}
       volumeClaimTemplate:
         spec:

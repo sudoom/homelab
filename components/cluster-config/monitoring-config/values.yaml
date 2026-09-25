@@ -72,6 +72,20 @@ alertmanager:
     # alertmanagerMain.secrets below.
     credentialsSecret: alertmanager-mailjet
 
+  # Dead-man's switch (spec: docs/superpowers/specs/2026-09-25-alertmanager-deadman-switch-design.md).
+  # Watchdog is re-sent every 5 minutes to a healthchecks.io check (period 5 min,
+  # grace 15 min), which emails from OUTSIDE the cluster when the pings stop --
+  # the one failure the email route above cannot report, because Alertmanager
+  # runs in the cluster it would be reporting on. The ping URL is sealed in
+  # templates/sealed-alertmanager-healthchecks.yaml (key `url`) and read via
+  # url_file. The Secret MUST exist before this is enabled: CMO mounts it without
+  # optional: true, and a missing one leaves both Alertmanager pods in
+  # ContainerCreating. Requires email.enabled (the alertmanager.yaml template is
+  # behind it). A healthchecks.io DOWN email means: look at the cluster now.
+  heartbeat:
+    enabled: true
+    credentialsSecret: alertmanager-healthchecks
+
 userWorkload:
   enabled: true
   retention: 15d
