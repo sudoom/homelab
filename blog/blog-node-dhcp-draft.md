@@ -194,3 +194,66 @@ the chart together with a `nodeDisruptionPolicy` entry on
 writes the identical file without draining anything — three reboots in total —
 or enable the chart without it and accept three more drains and reboots in
 MCO's order.
+
+### The chart, the same evening
+
+Jellyfin went idle, so the order MCO would pick stopped mattering and the chart
+went on as it was (`96d20ad`, pushed 18:01:14Z). The `nodeDisruptionPolicy`
+alternative was dropped rather than chosen: with action `None`, MCO writes the
+file on node5 and node6 without rebooting them, and the profile only takes
+effect at boot — it only makes sense once every node is already converted.
+
+Pre-flight was the network-change runbook, re-read against the live cluster:
+Ceph `HEALTH_OK`, pool `master` Updated 3/3, the two structural CNPG primary
+PDBs the only ones at 0, both CNPG clusters 2/2, and the Loki operator still at
+0 from the node4 canary.
+
+MCO's rollout, from a 20-second poll of the pool, node state, the mon PDB, Ceph
+health and `br-ex.forwarding` on every node:
+
+```
+18:05:16  MachineConfig 99-master-frontnet-dhcp created (ArgoCD)
+18:05:38  node4 cordoned, Working            (mon PDB → 0, Ceph WARN during the drain)
+18:10:58  node4 back, new boot ID            br-ex.forwarding 1/1/1
+18:11:22  node6 cordoned
+18:17:03  node6 back                         br-ex.forwarding 1/1/1
+18:17:27  node5 cordoned
+18:24:02  node5 back
+18:24:24  pool Updated 3/3 on the new rendered config
+```
+
+About six to seven minutes per node, node4 onto the file it already had. Each
+mon was out of quorum for less than Rook's ten-minute failover timeout, so there
+was no repeat of the canary's `mon-d`: the operator log shows mon-c "back in
+quorum" at 18:24:29 and nothing more. `br-ex.forwarding` read 1 on every node
+after every reboot, so no ovnkube-node restart was needed. osd.1 on node5 took
+the longest to rejoin; Ceph was back to `HEALTH_OK` a few minutes after the
+pool finished.
+
+On every node afterwards, through the MCD chroot:
+
+```
+node4  method=auto  192.168.1.7  dhcp_lease_time = 86400  dns .12 .13  default via .1 proto dhcp  backnet UP .10.2
+node5  method=auto  192.168.1.8  dhcp_lease_time = 86400  dns .12 .13  default via .1 proto dhcp  backnet UP .10.3
+node6  method=auto  192.168.1.9  dhcp_lease_time = 86400  dns .12 .13  default via .1 proto dhcp  backnet UP .10.4
+profile sha256 a2e14d29… on all three (the same file node4 got by hand)
+```
+
+The router's lease table agreed: all three `bound`, bridge ports `ether6/7/8`,
+about 23 h 40 min left on each, and node5's lease now carries host name `node5`
+instead of the `DESKTOP-7HF9LFP` it had learned from whatever that box ran
+before OKD. The sweep after the rollout was clean: 48/48 ArgoCD apps Synced and
+Healthy (the repo-server could still reach GitHub, so no bounce), both CNPG
+clusters 2/2 and archiving, no Pending or crashlooping pods, every
+ClusterOperator clean. The Loki operator went back to one replica afterwards.
+
+The nameserver list that started all this now comes from the router: all three
+nodes resolve through `.12` and `.13`, and the next DNS change is a MikroTik
+setting, picked up at each node's next renewal (up to 12 h) or reboot — no
+MachineConfig.
+
+The rollout overlapped the Alertmanager dead-man's switch test (see
+`blog/blog-monitoring-foundation-draft.md`, 2026-09-25): both Alertmanager pods
+were drained and restarted during a 25-minute Watchdog silence, and the silence
+survived — silences live on Alertmanager's volume and are gossiped between the
+replicas.

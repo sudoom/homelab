@@ -7,7 +7,7 @@ Guidance for Claude Code when working in this repository.
 Homelab GitOps repository for a **3-node bare-metal OKD 4.21 cluster** (OpenShift Kubernetes Distribution), managed declaratively by **ArgoCD** with an app-of-apps pattern and Helm templating.
 
 - **Cluster domain:** `okd.sudops.pl`
-- **Nodes:** 3 control-plane+worker; frontend `192.168.1.7–9`, storage backnet `192.168.10.2–4`
+- **Nodes:** 3 control-plane+worker; frontend `192.168.1.7–9`, storage backnet `192.168.10.2–4`. Frontend addresses come from MikroTik DHCP reservations (1-day lease, `node-dhcp` chart) since 2026-09-25 — the IPs must never change (etcd and kubelet cert SANs); a router outage longer than a day would drop them
 - **Failure domains** (`topology.kubernetes.io/zone`): `fd-a → node4`, `fd-b → node5`, `fd-c → node6`
 - **Ingress:** `*.apps.okd.sudops.pl` (wildcard, cert-manager)
 - **API:** `api.okd.sudops.pl`
