@@ -20,11 +20,10 @@ applications:
 
   # Frontnet static -> DHCP on all three nodes.
   #
-  # STILL DISABLED. node4 was converted by hand on 2026-09-25 (the canary in
-  # the runbook); node5 and node6 are still static. Enabling this reboots every
-  # node serially — including nodes already converted by hand, onto the file
-  # they already have — unless a nodeDisruptionPolicy for the profile path says
-  # otherwise. No drain headroom, no remote console.
+  # ENABLED 2026-09-25, after node4 was converted by hand and verified (the
+  # canary in the runbook). Enabling rebooted every node serially — node4 too,
+  # onto the file it already had — on a 3-node compact cluster with no drain
+  # headroom and no remote console. Disabling it reboots every node again.
   #
   # HARD PRECONDITION: MikroTik DHCP reservations pin
   #   d0:8e:79:05:37:0a -> .7 (node4), d0:8e:79:19:19:bf -> .8 (node5),
@@ -34,7 +33,7 @@ applications:
   # Full runbook, abort criteria and rollback:
   #   components/cluster-config/node-dhcp/README.md
   node-dhcp:
-    enabled: false
+    enabled: true
     path: components/cluster-config/node-dhcp
     namespace: openshift-machine-config-operator
     syncWave: "0"

@@ -1,13 +1,12 @@
 # node-dhcp — frontnet static → DHCP
 
-**Status: IN FLIGHT — node4 on DHCP since 2026-09-25, node5 and node6 still
-static, chart still `enabled: false`.** node4 was converted by hand (the canary
-below) and verified. The rest waits for a window when Jellyfin (on node6) is
-idle. Open choice for the remaining two: convert them by hand too and enable the
-chart together with a `nodeDisruptionPolicy` (action `None`) for the profile
-path, so enabling reboots nothing (3 reboots total); or enable the chart without
-one and let MCO drain and reboot all three again in its own order. Prepared
-2026-08-26. Execution log: `blog/blog-node-dhcp-draft.md`.
+**Status: ENABLED 2026-09-25.** node4 was converted by hand first (the canary
+below) and verified; then `node-dhcp.enabled: true` in
+`bootstrap/root-app/values.yaml` let MCO drain and reboot all three nodes onto
+the file, node4 included. A `nodeDisruptionPolicy` was not used: with action
+`None` MCO would write the file on node5 and node6 without rebooting them, and
+the new profile only takes effect at boot. Prepared 2026-08-26. Execution log:
+`blog/blog-node-dhcp-draft.md`.
 
 ---
 
