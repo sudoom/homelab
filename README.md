@@ -265,6 +265,20 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Watch that `retentionSize` isn't silently eating the retention window (residual of the 2026-08-06 prometheus-k8s fill; LOW)** — `retentionSize: 38GiB` now caps the platform TSDB, which means Prometheus drops the oldest blocks whenever series growth pushes it past the cap. That is the intended behaviour, but **nothing reports that the effective window has fallen below the nominal `retention: 15d`** — the config still says 15d while the real answer might be 11d. Metric is `prometheus_tsdb_lowest_timestamp`; a rule on `time() - prometheus_tsdb_lowest_timestamp/1000 < 10*86400` would catch it. Also note the cap leaves ~13.9% available at a compaction peak vs the 15% `KubePersistentVolumeFillingUp` floor — if that keeps tripping, drop to `36GiB` (~12.4d), **not** a bigger PVC (`nvme-replicated` has ~178 GiB MAX AVAIL and each +1 GiB of PVC costs 3 GiB raw at size=3). Full rationale in `blog/blog-monitoring-foundation-draft.md`.
 - [ ] **`CephPGImbalance` false positive on the 2-tier cluster (cosmetic)** — fires for all 6 OSDs because Rook's `prometheus-ceph-rules` averages `ceph_osd_numpg` across *all* OSDs with no device-class grouping (NVMe ~185 PGs vs HDD ~68 PGs → both deviate ±46 % from the 126.5 mean → trip the 30 % threshold). Within each class the distribution is perfect (balancer: `no_optimization_needed: true`), so it's pure alert noise, not a balance problem. Proper fix = device-class-aware expr (`avg(...) by (job, device_class)`), but Rook reconciles `prometheus-ceph-rules` (`monitoring.createPrometheusRules: true`), so it requires flipping to `createPrometheusRules: false` + vendoring the full corrected ceph rule set (≈50 rules to re-diff on every Ceph bump — real maintenance cost). Defer unless the noise starts drowning real alerts; runtime Alertmanager silence is the cheap stopgap. Firing since 2026-06-13 (HDD-tier rebalance settled). Full diagnosis in `blog/blog-rook-ceph-draft.md` 2026-06-15 section.
 - [ ] **Logging stack `application` tenant — LOG-6894** — Red Hat upstream bug; `grafana-loki` SA gets `allowed: true` from cluster-side SAR for `loki.grafana.com/application/logs:get`, but observatorium-api's OPA still returns 403. KCS-7113062 has no fix at v6.3.0. Workaround: enable the OpenShift console plugin (different OAuth path) for application logs. Re-test on the next loki-operator bump.
+- [ ] **Loki `infrastructure` tenant runs over its ingestion rate limit all day, so its logs arrive late (LOW; raised 2026-10-01).** This is the steady state, not catch-up after the 09-25 node-dhcp rollout:
+  - Both distributors reject `infrastructure` pushes every hour: 1,483 rejections in the 24 h to 2026-10-01, between 30 and 87 per hour, with no reboot since 09-25.
+  - The limit is the operator's `1x.pico` default: `ingestion_rate_mb: 4` with the `global` strategy, which is 2 MiB/s per distributor, plus a 6 MB burst. A typical rejected batch is 876 lines and 2.66 MB.
+  - Vector retries the 429s: 1,159 on `output_lokistack_output_infrastructure` against 5.22 M events sent. Neither discard counter has a series, so nothing has been lost so far.
+
+  There are two ways to fix it:
+  - Raise the limit for that tenant in `components/cluster-config/logging-stack/templates/lokistack.yaml` (`spec.limits.tenants.infrastructure.ingestion.ingestionRate` / `ingestionBurstSize`, in MB). Check the `1x.pico` ingesters' memory headroom first.
+  - Cut infrastructure volume in the ClusterLogForwarder. Find the noisiest namespaces first.
+
+  Validate:
+  - Run `oc -n openshift-logging logs <distributor-pod> --since=60m | grep -c 'ingestion rate limit'` on each distributor pod; every count should be 0.
+  - `vector_http_client_responses_total{status="429"}` should stop rising.
+
+  History: `blog/blog-node-dhcp-draft.md`, the 2026-09-25 and 2026-10-01 sections.
 
 ### Queued — storage
 

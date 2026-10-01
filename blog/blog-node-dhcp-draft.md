@@ -313,5 +313,6 @@ Loki operator 18:29Z):
 
   So Vector retries and, as far as the metrics show, drops nothing, but infrastructure
   logs arrive late. The LokiStack spec sets only `limits.global.retention`, so the 4/6 MB
-  figures are the operator's `1x.pico` defaults. No config change made; the decision
-  is open.
+  figures are the operator's `1x.pico` defaults. No config change made; tracked as a
+  README TODO (Queued — observability), which lists both levers: raise the
+  `infrastructure` tenant's limit, or cut its volume.
