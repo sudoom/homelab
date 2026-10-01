@@ -281,3 +281,37 @@ surfaced two things the rollout left behind:
   30 min, and 12 — all in the last two minutes. Bursty, not clearly subsiding:
   either catch-up of three nodes' worth of backlogged node logs, or a limit that
   was already tight and today exposed. Not decided; no change made.
+
+### Re-check 2026-10-01: status cleared, rate limit is steady state
+
+Six days later, no reboot in between (both ingesters started 2026-09-25 ~18:15Z, the
+Loki operator 18:29Z):
+
+- **LokiStack status: fixed itself.** `Pending=False` since 2026-09-26T13:34Z,
+  `Ready=True/ReadyComponents`. The stale status cleared on a later reconcile, about
+  42 hours after the descheduler run. `InsufficientIngesterReplicas` is still `True`
+  and will stay: it is structural to `1x.pico` (2 ingesters, replication factor 2).
+  It is a status condition only, not a firing alert.
+- **Rate limit: steady state, not catch-up.** 1,483 rejections across both distributors
+  in 24 hours, between 30 and 87 every hour, with no quiet hour:
+
+  ```bash
+  for p in $(oc -n openshift-logging get pods -o name | grep distributor); do
+    oc -n openshift-logging logs "$p" --since=24h | grep 'ingestion rate limit'; done   # bucketed by ts= hour
+  ```
+
+  A typical rejection: `while attempting to ingest '876' lines totaling '2662272' bytes`.
+  Live limits (`logging-loki-config`): `ingestion_rate_strategy: global`,
+  `ingestion_rate_mb: 4`, `ingestion_burst_size_mb: 6`. Global means 4 MB is divided
+  across the two distributors, which gives the 2 MiB/s in the error. Only the
+  `infrastructure` tenant is affected.
+  On the collector side (Vector metrics in platform Prometheus, 24 h):
+  - `output_lokistack_output_infrastructure` got 1,159 HTTP 429s and sent 5.22 M events.
+  - `audit` sent 6.25 M and `application` 1.35 M, with no 429s.
+  - Neither `vector_component_discarded_events_total` nor
+    `vector_buffer_discarded_events_total` has a series.
+
+  So Vector retries and, as far as the metrics show, drops nothing, but infrastructure
+  logs arrive late. The LokiStack spec sets only `limits.global.retention`, so the 4/6 MB
+  figures are the operator's `1x.pico` defaults. No config change made; the decision
+  is open.
