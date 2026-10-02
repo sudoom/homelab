@@ -436,3 +436,32 @@ emailed. What the switch closes is specifically the brownout case — the cluste
 outbound path at all, critical or heartbeat. The 2026-07-24 and 2026-07-30 gaps were a different
 failure — Alertmanager was healthy and the rule fired, there was just no external route yet — and
 that gap was closed separately by the Mailjet critical-alert route shipped 2026-09-07.
+
+## 2026-10-01 — both Prometheus replicas crashed on a client-cert rotation
+
+The end-of-session sweep on 2026-10-02 flagged `prometheus-k8s-0` and `prometheus-k8s-1` with one restart
+each, at 14:23:08Z and 14:23:48Z on 2026-10-01, exit code 2. Both previous logs end in the same panic:
+
+```
+panic: runtime error: invalid memory address or nil pointer dereference
+github.com/prometheus/common/config.(*tlsRoundTripper).RoundTrip(...)
+	.../prometheus/common/config/http_config.go:1386
+```
+
+The trigger was the only change in `openshift-monitoring` in that window: the `metrics-client-certs` Secret,
+the client certificate Prometheus presents when it scrapes, was rewritten at 14:22:35Z. Mounted Secrets
+reach each pod on the kubelet's own sync, so each replica crashed on its first scrape after its copy changed,
+33 s and 73 s later, and was back 2 s after that. The two replicas run on different nodes (node6, node4),
+which is why they did not go down at the same moment.
+
+```bash
+oc -n openshift-monitoring logs prometheus-k8s-0 -c prometheus --previous | grep -A6 '^panic'
+oc -n openshift-monitoring get secret -o jsonpath='{range .items[*]}{.metadata.name} {range .metadata.managedFields[*]}{.time},{end}{"\n"}{end}'
+```
+
+This is the bug class OpenShift fixed as OCPBUGS-86250 (openshift/prometheus #314, "TLS client cert
+rotation when no CA is configured", merged to `release-4.21` on 2026-05-21). The running build reports
+Prometheus 3.7.3, revision `fac79ec7`, which does not exist in openshift/prometheus, so I could not tell
+whether the OKD payload carries the fix. Impact was a short scrape gap; the heartbeat did not go DOWN. No
+action taken; expect a repeat at the next rotation, and a repeat on a build that should contain the fix would
+be worth an upstream report.
