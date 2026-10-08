@@ -368,10 +368,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   v1.18.0 is EOL and caps at Kube 1.33; we are on 1.34. After flipping okderators to `:4.21` the alpha head is
   **still v1.18.0**, community-operators v4.21 offers **v1.16.5**, operatorhubio offers **v1.16.5** — all equal or
   older. So the June draft's "durable de-risk" (**migrate cert-manager off okderators**) is the only route, and it
-  points at the **upstream Helm chart**, not another catalog. **Measured deadline:** pods 3/3 Running 0 restarts
-  and all 5 certs Ready today; `barman-cloud-*` renews **2026-09-10** (internal CA, the canary) and
-  `homelab-wildcard` renews **2026-09-21** — the first Let's Encrypt DNS-01 renewal on an out-of-matrix
-  cert-manager, which is the real deadline.
+  points at the **upstream Helm chart**, not another catalog. **Every renewal on the out-of-matrix version has
+  succeeded so far (checked 2026-10-08, all 5 certs Ready):** `barman-cloud-*` on 2026-09-10 (internal CA),
+  `homelab-wildcard` on 2026-09-21 (the first Let's Encrypt DNS-01 renewal) and `api-cert` + `okd-wildcard` on
+  2026-10-06. Next: `homelab-wildcard` **2026-11-20**, `barman-cloud-*` 2026-11-24, `api-cert` + `okd-wildcard`
+  2026-12-05.
   **The 4.21 catalog flip delivered nothing else either:** zero InstallPlans generated; `gitops-operator` head is
   identical (v1.19.0) and `cluster-logging` head is **v6.3.0-2025-08-08, OLDER than the installed v6.5.0** — which
   is okderators issue **#44** (still open) as a fact rather than a caveat. Nothing downgrades (OLM only walks
