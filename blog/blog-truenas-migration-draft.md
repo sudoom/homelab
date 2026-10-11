@@ -5377,3 +5377,59 @@ and has to be deleted by hand.
 
 Also seen in `kubenfs`: `pvc-6dac6815-…` belongs to `default/storage-bench-nfs-csi` (Bound), and
 `pvc-1e07045b-…` and `pvc-3099a28e-…` match no PV in the cluster.
+
+### The move itself (2026-10-11, 17:32–17:53Z)
+
+Operator-run, in the order of the runbook; I read the Job logs with the readonly account.
+
+```
+17:32:37  oc -n immich scale deploy/immich-server --replicas=0     -> 0 replicas, no pod, no HPA
+17:32:53  oc -n immich apply -f tests/immich-truenas-migration/01-copy-job.yaml
+```
+
+```
+=== running as: uid=1000980000(1000980000) gid=0(root) groups=0(root),1000980000 ===
+  /src  <- 192.168.1.2:/volume1/kubenfs/pvc-57345d42-d1f7-4ee1-8f36-8761a7d01b16  (nfs4)
+  /dst  <- 192.168.10.10:/mnt/tank/immich  (nfs4)
+Number of files: 6,621 (reg: 487, dir: 6,134)
+Number of regular files transferred: 487
+Total transferred file size: 1.39G bytes
+real	7m5.148s
+=== rsync exit 0 ===
+clean.
+```
+
+So `origin-cli:4.22` does carry rsync, and the Job ran under `restricted-v2` with the injected UID
+as planned. Seven minutes for 1.39 GB is not throughput: the 487 files were across after 4 m 42 s
+(itself slow, the DS418 was deleting 1.7 TiB of keepers data at the same time), and the rest went
+on creating 6,134 mostly empty directories.
+
+```
+17:41:57  oc -n immich apply -f tests/immich-truenas-migration/02-verify-job.yaml
+```
+
+```
+  files: src=487 dst=487      dirs : src=6135 dst=6135      counts MATCH
+  src=1389025561  dst=1389025561  delta=0
+  difference count: 0
+  dst-only entries: 0
+  checking 487 of 487 files     identical: 487
+  ALL CHECKS PASSED
+```
+
+Cutover `541eb15`: `immich.persistence.library.existingClaim: immich-library-nfs`. The render diff
+against the previous commit is one line, the Deployment's `claimName`. ArgoCD had repointed the
+(still scaled-down) Deployment by 17:51:07Z; the operator scaled it to 1 at 17:52:02Z.
+
+```
+pod immich-server-8ffb68796-6kfkx Running node6 ready=true restarts=0 data-claim=immich-library-nfs
+pv behind that claim: 192.168.10.10:/mnt/tank/immich (Bound)
+[Api:StorageService] Successfully verified system mount folder checks
+[Api:Bootstrap] Immich Server is listening on http://[::1]:2283 [v3.3.1] [production]
+```
+
+HPA restored in `6a41fa8`. Immich was down for about 20 minutes.
+
+What is deliberately left: `immich-library` (the Synology PVC) stays Bound as the rollback, and
+the Hyper Backup task now backs up a directory that no longer changes. Both wait for the
+TrueNAS → Synology copy, which is the next thing to build and comes before the archive import.

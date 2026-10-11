@@ -54,28 +54,25 @@ postgres:
       schedule: "0 0 3 * * *"   # 03:00 UTC base backup (offset from 04:30 snapshot)
 
 library:
-  # RWX photo/video library on the SYNOLOGY NAS via NFS (nfs-csi). Decided
-  # 2026-06-18: photos are irreplaceable, so they live where the existing 3-2-1
-  # pipeline already is (Synology → cloud) rather than on cluster storage that
-  # would have needed a brand-new offsite path. The Postgres DB stays on
-  # ceph-nvme-block (fast RBD, never NFS). nfs-csi reclaimPolicy=Retain.
+  # THE LIVE LIBRARY IS ON TRUENAS since 2026-10-11: immich-server mounts
+  # immich-library-nfs (static PV truenas-immich-library ->
+  # 192.168.10.10:/mnt/tank/immich); see immich.persistence.library.existingClaim
+  # below and tests/immich-truenas-migration/. The Postgres DB stays on
+  # ceph-nvme-block (fast RBD, never NFS).
   #
-  # THE PIPELINE IS REAL — verified 2026-08-29 by inspecting Hyper Backup.
-  # Task `Synology_C2_immich_photos_task` backs up THIS PVC directory
-  # (/volume1/kubenfs/pvc-57345d42-d1f7-4ee1-8f36-8761a7d01b16) to Synology C2,
-  # with backups/ encoded-video/ library/ profile/ thumbs/ upload/ all selected.
-  # An earlier note in this file claimed the premise was false; that was wrong,
-  # and came from over-reading "no hyper backup for kubenfs" as "nothing under
-  # kubenfs is backed up". The job is per-PVC, not per-share: the keepers PVC
-  # (pvc-3f531e77) is deliberately NOT selected, which is fine — torrents are
-  # re-downloadable.
+  # The two keys right below describe the OLD PVC, immich-library, on the
+  # Synology (192.168.1.2:/volume1/kubenfs/pvc-57345d42-d1f7-4ee1-8f36-8761a7d01b16,
+  # nfs-csi, reclaimPolicy Retain). It is still rendered and still Bound because
+  # it is the rollback: the move mounted it read-only and never wrote to it.
+  # Remove that PVC, these two keys and truenasMigration only after the
+  # TrueNAS -> Synology copy has run and been checked.
   #
-  # ==> CONSEQUENCE FOR ANY MIGRATION OFF THIS NAS <==
-  # The C2 task targets a PATH on the Synology. Moving the library to TrueNAS
-  # silently drops it out of that backup while the task keeps reporting green
-  # against a stale directory. An equivalent TrueNAS→offsite path must exist
-  # BEFORE cutover — this is the gate on tests/immich-truenas-migration/, and it
-  # is a real gate, not a formality.
+  # OFFSITE: Hyper Backup task `Synology_C2_immich_photos_task` backs up that old
+  # directory to Synology C2 (per-PVC; verified 2026-08-29) and keeps reporting
+  # green although nothing writes there any more. From the cutover on, new uploads
+  # are NOT in C2. The operator moved knowing this; the replacement path (a
+  # TrueNAS -> Synology copy first, then OVH) is the README TODO "Immich library:
+  # preserve offsite coverage across the TrueNAS migration".
   storageClass: nfs-csi
   size: 500Gi
 

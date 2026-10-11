@@ -9,6 +9,21 @@ Same shape as `tests/keepers-truenas-migration/` — read that README for the re
 the two-PVC approach, the Job guards and the verify gates. This file only records what is
 different for immich.
 
+## Result — DONE 2026-10-11
+
+| step | when (UTC) | outcome |
+|---|---|---|
+| 1–3 PV, second PVC, HPA removed | 17:23 | `truenas-immich-library` and `immich-library-nfs` Bound, no HPA |
+| 4 quiesce | 17:32 | `immich-server` at 0, no pod, nothing to scale it back |
+| 4 copy | 17:32–17:40 | `rsync exit 0`, 487 files + 6,134 directories, 1.39 GB in 7 m 05 s; ran as 1000980000 under `restricted-v2` |
+| 4 verify | 17:41–17:49 | `ALL CHECKS PASSED`: 487/487 files, 6,135/6,135 dirs, 1,389,025,561 bytes both sides, metadata diff 0, dst-only 0, 487 of 487 checksums identical |
+| 5 cutover | 17:51–17:52 | `541eb15`; server Ready on node6, 0 restarts, mounting `immich-library-nfs`; log: "Successfully verified system mount folder checks" |
+| 6 HPA back | after 17:53 | `6a41fa8` |
+
+Immich was down for about 20 minutes. Most of the copy time went on creating 6,134 mostly empty
+directories from the DS418, not on the 1.39 GB of data. Step 7 (reclaiming the Synology copy) is
+open on purpose.
+
 ## What is being moved (measured 2026-10-11, over SMB)
 
 | | files | size |
