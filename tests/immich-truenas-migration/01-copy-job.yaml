@@ -1,0 +1,125 @@
+# immich: Synology NFS -> TrueNAS NFS, library copy. Runbook: README.md in this directory.
+#
+# Same shape as tests/keepers-truenas-migration/01-copy-job.yaml, with three differences that
+# the immich namespace forces (PSA `baseline`, SCC restricted-v2, no privileged binding):
+#
+#   1. NOT root. No runAsUser here: the SCC injects the namespace UID (1000980000), which is
+#      also the owner of every file in the library and of /mnt/tank/immich on TrueNAS.
+#   2. No `apk add`. A non-root pod cannot install packages, so the image must already ship
+#      rsync. quay.io/openshift/origin-cli inherits it from the OpenShift base image
+#      (openshift/images base/Dockerfile.rhel9 installs rsync, findutils, python3) and is the
+#      image the repo's CronJobs already run. The script checks for its tools first.
+#   3. The top-level entries are handed to rsync BY NAME instead of `/src/ /dst/`, so rsync
+#      never applies the Synology directory's own mode and group to the dataset root, which
+#      ansible/truenas owns.
+#
+# A Job's pod template is immutable: `oc -n immich delete job immich-nfs-copy` before every
+# re-apply.
+#
+# MODE  quiesced (default) -> immich-server is at 0 replicas. rsync exit 24 is a FAILURE here.
+#       live               -> immich is running; exit 24 (files vanished mid-copy) is tolerated.
+# EXTRA ""                 -> plain copy.
+#       "--delete --dry-run --info=del"  then  "--delete"  -> only for a delta pass after a
+#       live copy. Put it back to "" afterwards; this file is checked in.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: immich-nfs-copy
+  namespace: immich
+spec:
+  backoffLimit: 0            # no silent retry -- re-apply deliberately
+  activeDeadlineSeconds: 43200
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+        - name: rsync
+          image: quay.io/openshift/origin-cli:4.22
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            seccompProfile: {type: RuntimeDefault}
+          env:
+            - name: MODE
+              value: "quiesced"
+            - name: EXTRA
+              value: ""
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eu
+              for t in rsync find awk grep sed sort df; do
+                command -v "$t" >/dev/null 2>&1 || { echo "FATAL: '$t' is missing from this image"; exit 90; }
+              done
+              echo "=== running as: $(id) ==="
+              echo "=== MOUNTS (this is the go/no-go) ==="
+              grep -E " /src | /dst " /proc/mounts | awk '{print "  " $2 "  <- " $1 "  (" $3 ")"}'
+              grep -q " /src nfs" /proc/mounts || { echo "FATAL: /src is not an NFS mount"; exit 91; }
+              grep -q " /dst nfs" /proc/mounts || { echo "FATAL: /dst is not an NFS mount"; exit 92; }
+              echo "=== space ==="
+              df -h /src /dst
+
+              cd /src
+              ENTRIES=$(find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | sort)
+              [ -n "$ENTRIES" ] || { echo "FATAL: /src is EMPTY -- nothing to copy, and --delete would wipe the target"; exit 93; }
+              if echo "$ENTRIES" | grep -q '[[:space:]]'; then
+                echo "FATAL: a top-level name contains whitespace; this script passes them unquoted"; exit 94
+              fi
+              echo "=== top-level entries to copy ==="
+              echo "$ENTRIES" | sed 's/^/  /'
+
+              if ! ( : > /dst/.write-test && rm -f /dst/.write-test ); then
+                echo "FATAL: cannot write to /dst as uid $(id -u)."
+                echo "/mnt/tank/immich must be owned by the immich namespace UID -- see"
+                echo "owner_uid in ansible/truenas/group_vars/all.yml."
+                exit 95
+              fi
+
+              echo "=== rsync starting: $(date -u +%H:%M:%SZ)  MODE=$MODE  EXTRA='$EXTRA' ==="
+              rc=0
+              # $EXTRA and $ENTRIES are split on purpose.
+              time rsync -aH --numeric-ids \
+                   --info=progress2,stats2 --human-readable \
+                   $EXTRA $ENTRIES /dst/ || rc=$?
+              echo "=== rsync exit $rc ==="
+              case "$rc" in
+                0)
+                  echo "clean." ;;
+                24)
+                  echo "exit 24 = some source files VANISHED mid-copy."
+                  if [ "$MODE" = "live" ]; then
+                    echo "Expected on a LIVE pass: immich is running and moves upload/ and"
+                    echo "thumbs/ files around. A quiesced pass reconciles it. NOT a failure."
+                    rc=0
+                  else
+                    echo "MODE=quiesced, so nothing should be writing to /src. Files vanishing"
+                    echo "means the quiesce FAILED -- immich-server is still running (check the"
+                    echo "HPA is gone and replicas=0). Do NOT cut over. Re-run."
+                  fi ;;
+                *)
+                  echo "UNEXPECTED rsync exit $rc -- investigate before verifying."
+                  echo "23 = per-file errors (e.g. a file not owned by this uid).  12 = protocol.  30 = timeout." ;;
+              esac
+              echo "=== target after ==="
+              df -h /dst
+              echo "  files on /dst: $(find /dst -type f | wc -l)"
+              exit "$rc"
+          volumeMounts:
+            - name: src
+              mountPath: /src
+              readOnly: true      # the old volume is the rollback; never write it
+            - name: dst
+              mountPath: /dst
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits:   {memory: 1Gi}
+      volumes:
+        - name: src
+          persistentVolumeClaim:
+            claimName: immich-library        # Synology 192.168.1.2:/volume1/kubenfs/pvc-57345d42-...
+            readOnly: true
+        - name: dst
+          persistentVolumeClaim:
+            claimName: immich-library-nfs    # TrueNAS 192.168.10.10:/mnt/tank/immich
