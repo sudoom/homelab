@@ -88,3 +88,61 @@ uploads it. Consequences: the size to plan for is the library plus the archive, 
 never been measured (bounded at < ~2.2 TiB on 2026-08-29; ~18 zł net per TiB per month on
 Infrequent Access, so up to ~39 zł); the first upload is the existing library, and the archive
 follows when it is imported after the Immich move.
+
+## 2026-10-11 — the Synology leg: Cloud Sync over SFTP, in COPY mode
+
+The order changed today. The Immich library moved to TrueNAS ahead of any offsite job
+(`blog/blog-truenas-migration-draft.md`, same date), and the operator wants a TrueNAS → Synology
+copy in the `photo` share's `backups` folder before the archive import, with OVH after. "Backup,
+not sync": a photo deleted in Immich must stay on the Synology.
+
+I proposed an rsync task and built a Cloud Sync task instead. Both exist on 25.10.6 (0 of each
+were configured). Reasons: Cloud Sync is what the OVH design already uses, so the role code
+written now serves both legs; its `COPY` transfer mode is exactly the no-deletions behaviour; and
+SFTP takes a plain DSM account and password, where rsync over SSH for a non-admin DSM account
+needs key material in its home directory. What Cloud Sync gives up is Unix ownership and mode —
+rclone over SFTP carries contents and mtimes only — which a restore has to put back with a chown.
+
+The API, read from the box rather than remembered:
+
+```bash
+midclt call cloudsync.providers                       # 18 providers, SFTP and S3 among them
+midclt call core.get_methods cloudsync.credentials    # create: name + provider{type,host,port,user,pass|private_key}
+midclt call core.get_methods cloudsync                # create: path, credentials(id), attributes{folder}, schedule,
+                                                      #   direction PUSH|PULL, transfer_mode SYNC|COPY|MOVE, snapshot, exclude, enabled
+```
+
+`job=false` for every create and update; only `cloudsync.sync` is a job method, which matters
+because of the `--job` trap this role has already fallen into once.
+
+Declared in `ansible/truenas/group_vars/all.yml`: credential `synology-sftp` (host
+`192.168.1.2`, user and password named as vault variables), and one task — `tank/immich` →
+`/photo/backups/immich`, `COPY`, from a snapshot, daily 05:00 Europe/Warsaw (after the 02:00
+snapshot and after Immich's database dump, which runs at 02:00 UTC), excluding `thumbs/` and
+`encoded-video/`.
+
+### Testing a role that needs a vault I cannot open
+
+`playbook.yml` wants the vault password, so I cannot run it. Instead I ran the new section of
+`truenas-tasks` on localhost against a stand-in `midclt`: a small script that keeps credentials
+and tasks in a JSON file and rejects payloads the way the 25.10 schema does (unknown keys,
+`credentials` not an integer, flags not booleans). Against it:
+
+| case | result |
+|---|---|
+| vault variables absent | nothing created; the role names the two missing variables |
+| variables present, empty box | `cloudsync.credentials.create`, `cloudsync.create`; types correct |
+| second run | `changed=0`, no calls — although the box adds `private_key: null` and `fast_list: false` |
+| box drifted (password, hour 6, mode SYNC, exclude emptied) | `credentials.update` + `cloudsync.update`; all four back |
+| `--check` on an empty box | no calls |
+| `-v` output searched for the test password | 0 occurrences |
+
+The convergence block in `playbook.yml` gained `cloudsync_tasks_missing` (asserted) and
+`cloudsync_tasks_without_secrets` (reported, not asserted), checked in three states the same
+way. `ansible-playbook --syntax-check` passes. What the stand-in cannot prove is the real
+middleware's behaviour — in particular whether `snapshot: true` is accepted for this dataset and
+what DSM's SFTP root looks like — so the first real run is still a test.
+
+Not on the box yet. The DS418 refused a connection on port 22 today, so SFTP is off; it needs
+enabling, an account, two vault variables, a playbook run, and a first run that I then check
+against the original files.

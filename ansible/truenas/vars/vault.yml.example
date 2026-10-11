@@ -56,3 +56,14 @@ truenas_alert_to: you@example.com
 # NT hash), so rotating a value here and re-running is all a rotation takes.
 truenas_smb_password_macmini: CHANGEME
 truenas_smb_password_mba: CHANGEME
+
+# ---- Backup to the Synology (Cloud Sync over SFTP) ------------------------
+# The DSM account TrueNAS logs in with to write the nightly Immich copy into
+# the `photo` share (folder backups/immich). It needs read/write on `photo`
+# and the SFTP application permission; it does not need to be an administrator.
+# Named by `secrets` in truenas_cloudsync_credentials (group_vars/all.yml).
+#
+# Without these two the role creates neither the credential nor the task and
+# says so on every run -- the playbook still converges everything else.
+truenas_backup_synology_user: CHANGEME
+truenas_backup_synology_password: CHANGEME

@@ -713,3 +713,65 @@ truenas_snapshot_tasks:
     lifetime_value: 30
     lifetime_unit: DAY
     schedule: { minute: "0", hour: "*/2", dom: "*", month: "*", dow: "*" }
+
+# ---------------------------------------------------------------------------
+# Cloud Sync backup tasks (rclone underneath; converged by truenas-tasks).
+#
+# FIRST CONSUMER, 2026-10-11: the Immich library, copied nightly to the Synology
+# share folder photo/backups over SFTP. Immich moved here from the DS418 that
+# day, and the Hyper Backup -> C2 job on the DS418 backs up a path on the
+# Synology, so from the cutover on nothing left this box. This copy is the
+# bridge until the OVH job exists, and the DS418's temporary leg until it is
+# sold. The OVH target becomes a second credential and a second task here.
+#
+# WHY CLOUD SYNC AND NOT AN RSYNC TASK. Both exist on 25.10. Cloud Sync is the
+# mechanism the OVH design already uses (S3), so one code path serves both
+# legs; SFTP takes a plain DSM account and password, where rsync over SSH for
+# a non-admin DSM account needs key material planted in its home directory.
+# What it does NOT carry is Unix ownership and mode -- contents and
+# modification times only. Fine for a backup that is restored by copying files
+# back; the restore then has to chown to the immich namespace UID (see the
+# immich dataset above).
+#
+# transfer_mode COPY, NOT SYNC, ON PURPOSE: a file deleted in Immich stays on
+# the Synology. This is a backup, not a mirror -- it has to survive an
+# accidental delete at the source. The cost is that it only grows.
+#
+# SECRETS never live here. `secrets` maps a provider field to the NAME of a
+# vault variable (vars/vault.yml). When one is not loaded the role creates
+# neither the credential nor its tasks, and says so per credential, rather
+# than reporting a converged run with no backup behind it.
+# ---------------------------------------------------------------------------
+truenas_cloudsync_credentials:
+  - name: synology-sftp
+    provider:
+      type: SFTP
+      host: 192.168.1.2        # DS418, frontnet. Needs SFTP enabled in DSM File Services.
+      port: 22
+    secrets:
+      user: truenas_backup_synology_user
+      pass: truenas_backup_synology_password
+
+truenas_cloudsync_tasks:
+  # `description` is the identity the role matches on -- rename it and the role
+  # creates a second task instead of updating this one (roles never prune).
+  - description: "backup: tank/immich -> synology photo/backups/immich (managed by ansible/truenas)"
+    dataset: immich
+    credentials: synology-sftp
+    # DSM's SFTP root is the list of shared folders, so this is the `photo`
+    # share, folder backups/immich. A subfolder per dataset leaves room for more.
+    attributes:
+      folder: /photo/backups/immich
+    transfer_mode: COPY
+    # Copy from a temporary snapshot, so a photo written mid-run is either
+    # wholly in or wholly out.
+    snapshot: true
+    # 05:00 Europe/Warsaw: after the 02:00 periodic snapshot and after Immich's
+    # own database dump, which runs at 02:00 UTC (04:00 local in summer, 03:00
+    # in winter) and has to ride along -- photos without it are anonymous files.
+    schedule: { minute: "0", hour: "5", dom: "*", month: "*", dow: "*" }
+    # Regenerable, and most of the small files. rclone filter syntax; a leading
+    # slash anchors at the dataset root.
+    exclude:
+      - "/thumbs/**"
+      - "/encoded-video/**"

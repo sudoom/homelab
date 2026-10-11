@@ -81,6 +81,16 @@
       ansible.builtin.set_fact:
         _live: "{{ dict(_post_q.results | map(attribute='item.key') | zip(_post_q.results | map(attribute='stdout') | map('from_json') | list)) }}"
 
+    # Separate from the loop above, and no_log, because cloudsync.query nests each
+    # task's credential -- password included -- in its reply.
+    - name: Re-read Cloud Sync tasks for the convergence check
+      ansible.builtin.command:
+        argv: [midclt, call, cloudsync.query]
+      register: _post_cs
+      changed_when: false
+      check_mode: false
+      no_log: true
+
     - name: Compute the declared-vs-live delta
       ansible.builtin.set_fact:
         _drift:
@@ -114,12 +124,23 @@
           # is degraded. Same detection-without-delivery shape that let the
           # Synology wildcard cert expire unseen for a month.
           alerting_unconfigured: "{{ not (_mail_live.smtp | default(false)) or (_mail_live.outgoingserver | default('')) == '' }}"
+          # Cloud Sync backup tasks whose credential had its vault variables
+          # loaded this run and which are still not on the box.
+          cloudsync_tasks_missing: "{{ _cs_expected | difference(_cs_live) }}"
+          # NOT asserted, same reasoning as alerting_unconfigured: a task whose
+          # secret is not in the vault is a known pending item. But a backup
+          # that does not exist has to be visible on every run.
+          cloudsync_tasks_without_secrets: "{{ _cs_declared | difference(_cs_expected) }}"
       vars:
         _k: ['minute', 'hour', 'dom', 'month', 'dow']
         _cur: "{{ (_live.scrub | selectattr('pool', 'equalto', truenas_pool_id | int) | list | first) | default({}, true) }}"
         _now_sig: "{{ (_k | map('extract', _cur.schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list) if (_cur.schedule is defined) else [] }}"
         _want_sig: "{{ _k | map('extract', truenas_scrub_schedule) | map('string') | map('regex_replace', '^0+(?=[0-9])', '') | list }}"
         _mail_live: "{{ _live.mail | default({}, true) }}"
+        _cs_ready: "{{ truenas_cs_status | default([]) | selectattr('missing', 'equalto', []) | map(attribute='name') | list }}"
+        _cs_declared: "{{ truenas_cloudsync_tasks | default([]) | map(attribute='description') | list }}"
+        _cs_expected: "{{ truenas_cloudsync_tasks | default([]) | selectattr('credentials', 'in', _cs_ready) | map(attribute='description') | list }}"
+        _cs_live: "{{ _post_cs.stdout | from_json | map(attribute='description') | list }}"
         _child: "{{ _live.datasets | rejectattr('id', 'equalto', truenas_pool) | list }}"
         _want_rs: "{{ (truenas_datasets | map(attribute='name') | map('regex_replace', '^', truenas_pool ~ '/') | list) | zip(truenas_datasets | map(attribute='recordsize') | list) | map('join', ':') | sort | list }}"
         _live_rs: "{{ (_child | map(attribute='id') | list) | zip(_child | map(attribute='recordsize') | map(attribute='value') | list) | map('join', ':') | sort | list }}"
@@ -164,6 +185,7 @@
           - _drift.quota_drift | length == 0
           - _drift.smb_shares_missing | length == 0
           - _drift.dataset_createtime_drift | length == 0
+          - _drift.cloudsync_tasks_missing | length == 0
         fail_msg: "Apply finished but the box did not converge -- see the drift report above."
-        success_msg: "Converged: every declared dataset (incl. create-time-only properties), export, SMB share, snapshot task, cron job and the scrub schedule are live."
+        success_msg: "Converged: every declared dataset (incl. create-time-only properties), export, SMB share, snapshot task, cron job, the scrub schedule and every Cloud Sync task with a loaded secret are live."
       when: not ansible_check_mode

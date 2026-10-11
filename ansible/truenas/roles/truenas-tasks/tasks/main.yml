@@ -235,3 +235,205 @@
       stdout: true
       stderr: false
   when: truenas_textfile_collector.description not in truenas_cron_descs
+
+# ---------------------------------------------------------------------------
+# Cloud Sync backup tasks -- `truenas_cloudsync_credentials` and
+# `truenas_cloudsync_tasks` in group_vars, where the design is explained.
+#
+# None of the methods used here is a job method (core.get_methods on 25.10.6:
+# job=false for cloudsync.credentials.create/update and cloudsync.create/update;
+# only cloudsync.sync is one), so no `--job`.
+#
+# Every task that can see a provider block is `no_log`: the middleware returns
+# stored passwords in the clear to a local caller, cloudsync.query nests the
+# whole credential in each task, and the create payload carries the password.
+# Two facts come out of this: `truenas_cs_want` (holds secrets, never printed)
+# and `truenas_cs_status` (names only, safe to report and used by the
+# convergence block in playbook.yml).
+#
+# Identity: a credential is matched by `name`, a task by `description`. Drift
+# in a declared field is reconciled with an update; nothing is ever deleted.
+# ---------------------------------------------------------------------------
+- name: Query existing Cloud Sync credentials
+  ansible.builtin.command:
+    argv: [midclt, call, cloudsync.credentials.query]
+  register: truenas_cs_cred_q
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Resolve the declared Cloud Sync credentials against the vault
+  ansible.builtin.set_fact:
+    truenas_cs_want: "{{ (truenas_cs_want | default([])) + [_want] }}"
+    truenas_cs_status: "{{ (truenas_cs_status | default([])) + [_status] }}"
+  vars:
+    _fields: "{{ (item.secrets | default({})).keys() | list }}"
+    _names: "{{ (item.secrets | default({})).values() | list }}"
+    _vals: "{{ query('ansible.builtin.vars', *_names, default='') if (_names | length > 0) else [] }}"
+    _missing: "{{ _names | zip(_vals) | selectattr('1', 'equalto', '') | map(attribute='0') | list }}"
+    _provider: "{{ item.provider | combine(dict(_fields | zip(_vals))) }}"
+    _live: "{{ truenas_cs_cred_q.stdout | from_json | selectattr('name', 'equalto', item.name) | list }}"
+    # Compared on the declared keys only: the middleware adds defaults such as
+    # `private_key: null`, which are not drift.
+    _live_declared: "{{ (_live | first).provider | dict2items | selectattr('key', 'in', _provider.keys() | list) | list | items2dict }}"
+    _want:
+      name: "{{ item.name }}"
+      provider: "{{ _provider }}"
+    _status:
+      name: "{{ item.name }}"
+      missing: "{{ _missing }}"
+      live_id: "{{ ((_live | first).id if (_live | length > 0) else 0) | int }}"
+      in_sync: "{{ ((_live | length > 0) and (_live_declared == _provider)) | bool }}"
+  loop: "{{ truenas_cloudsync_credentials | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Create missing Cloud Sync credentials
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - cloudsync.credentials.create
+      - "{{ truenas_cs_want[_i] | to_json }}"
+  loop: "{{ truenas_cs_status | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+    index_var: _i
+  when:
+    - item.missing | length == 0
+    - (item.live_id | int) == 0
+  no_log: true
+
+- name: Reconcile Cloud Sync credentials that drifted
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - cloudsync.credentials.update
+      - "{{ item.live_id | int | string }}"
+      - "{{ truenas_cs_want[_i] | to_json }}"
+  loop: "{{ truenas_cs_status | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+    index_var: _i
+  when:
+    - item.missing | length == 0
+    - (item.live_id | int) > 0
+    - not (item.in_sync | bool)
+  no_log: true
+
+# Loud on purpose, per credential: a converged-looking run with no backup
+# behind it is the failure this file exists to prevent.
+- name: Report Cloud Sync credentials whose vault variables are not loaded
+  ansible.builtin.debug:
+    msg: >-
+      Cloud Sync credential '{{ item.name }}' was NOT converged: vault
+      variable(s) {{ item.missing | join(', ') }} are not loaded. The credential
+      and every task that uses it are skipped -- there is NO backup behind them.
+      Add the variables to vars/vault.yml (see vars/vault.yml.example) and re-run.
+  loop: "{{ truenas_cs_status | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.missing | length > 0
+
+- name: Re-read Cloud Sync credentials
+  ansible.builtin.command:
+    argv: [midclt, call, cloudsync.credentials.query]
+  register: truenas_cs_cred_q2
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Index Cloud Sync credential ids by name
+  ansible.builtin.set_fact:
+    truenas_cs_cred_ids: "{{ dict(_l | map(attribute='name') | zip(_l | map(attribute='id'))) }}"
+  vars:
+    _l: "{{ truenas_cs_cred_q2.stdout | from_json }}"
+  no_log: true
+
+- name: Query existing Cloud Sync tasks
+  ansible.builtin.command:
+    argv: [midclt, call, cloudsync.query]
+  register: truenas_cs_task_q
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Build the declared Cloud Sync task payloads
+  ansible.builtin.set_fact:
+    truenas_cs_tasks: "{{ (truenas_cs_tasks | default([])) + [_entry] }}"
+  vars:
+    _k: ['minute', 'hour', 'dom', 'month', 'dow']
+    _live: "{{ truenas_cs_task_q.stdout | from_json | selectattr('description', 'equalto', item.description) | list }}"
+    _cur: "{{ _live | first }}"
+    _cred_id: "{{ (truenas_cs_cred_ids[item.credentials] | default(0)) | int }}"
+    # One expression, so the types survive templating: `credentials` has to
+    # reach the middleware as an integer and the two flags as booleans.
+    _payload: >-
+      {{ {
+           'description': item.description,
+           'path': '/mnt/' ~ truenas_pool ~ '/' ~ item.dataset,
+           'credentials': _cred_id | int,
+           'attributes': item.attributes,
+           'schedule': item.schedule,
+           'direction': 'PUSH',
+           'transfer_mode': item.transfer_mode,
+           'snapshot': item.snapshot | default(false) | bool,
+           'exclude': item.exclude | default([]),
+           'enabled': item.enabled | default(true) | bool
+         } }}
+    # Declared keys only, for the same reason as the credentials above.
+    _attrs_live: "{{ _cur.attributes | dict2items | selectattr('key', 'in', item.attributes.keys() | list) | list | items2dict }}"
+    _in_sync: >-
+      {{ (_live | length > 0)
+         and _cur.path == ('/mnt/' ~ truenas_pool ~ '/' ~ item.dataset)
+         and (_cur.credentials.id | int) == (_cred_id | int)
+         and _attrs_live == item.attributes
+         and (_k | map('extract', _cur.schedule) | map('string') | list) == (_k | map('extract', item.schedule) | map('string') | list)
+         and _cur.direction == 'PUSH'
+         and _cur.transfer_mode == item.transfer_mode
+         and (_cur.snapshot | bool) == (item.snapshot | default(false) | bool)
+         and (_cur.exclude | default([], true) | list) == (item.exclude | default([]) | list)
+         and (_cur.enabled | bool) == (item.enabled | default(true) | bool) }}
+    _entry:
+      description: "{{ item.description }}"
+      credentials: "{{ item.credentials }}"
+      cred_id: "{{ _cred_id | int }}"
+      live_id: "{{ ((_live | first).id if (_live | length > 0) else 0) | int }}"
+      in_sync: "{{ _in_sync | bool }}"
+      payload: "{{ _payload }}"
+  loop: "{{ truenas_cloudsync_tasks | default([]) }}"
+  loop_control:
+    label: "{{ item.description }}"
+  no_log: true
+
+- name: Create missing Cloud Sync tasks
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - cloudsync.create
+      - "{{ item.payload | to_json }}"
+  loop: "{{ truenas_cs_tasks | default([]) }}"
+  loop_control:
+    label: "{{ item.description }}"
+  when:
+    - (item.cred_id | int) > 0
+    - (item.live_id | int) == 0
+
+- name: Reconcile Cloud Sync tasks that drifted
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - cloudsync.update
+      - "{{ item.live_id | int | string }}"
+      - "{{ item.payload | to_json }}"
+  loop: "{{ truenas_cs_tasks | default([]) }}"
+  loop_control:
+    label: "{{ item.description }}"
+  when:
+    - (item.cred_id | int) > 0
+    - (item.live_id | int) > 0
+    - not (item.in_sync | bool)

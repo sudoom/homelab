@@ -75,6 +75,7 @@ check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
 | NFS exports to the OKD nodes | `truenas-shares` | matched on export path |
 | SMB Time Machine targets for the Macs | `truenas-smb` | global flag + groups/users/shares matched on name; dataset ACLs on owner/acltype/ACE drift |
 | Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
+| Cloud Sync backup tasks (first one: Immich → Synology over SFTP) | `truenas-tasks` | credential matched on `name`, task on `description`; declared fields reconciled on drift; skipped, loudly, while the vault lacks the secret |
 | garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
 | node_exporter custom app | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
 | Syncthing catalog app (Mac ↔ Mac sync of the projects tree, plus the mini's `~/Documents` mirror) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
@@ -465,6 +466,45 @@ button, not by hand.
 - **No offsite.** Tracked content is on GitHub; the untracked half lives on two
   Macs and this box, all one site.
 
+## Backup tasks (Cloud Sync)
+
+`truenas_cloudsync_credentials` and `truenas_cloudsync_tasks` in `group_vars/all.yml` declare
+rclone-based Cloud Sync tasks; the design notes are next to them. The first one copies
+`tank/immich` to the Synology every night at 05:00, into the `photo` share under
+`backups/immich`, over SFTP.
+
+- **`COPY`, not `SYNC`.** A photo deleted in Immich stays on the Synology. It is a backup, so it
+  only grows.
+- **From a snapshot**, so a file written mid-run is either wholly in or wholly out.
+- **Without `thumbs/` and `encoded-video/`**, which Immich regenerates. `backups/` (the nightly
+  database dump) is included and matters as much as the photos.
+- **Contents and modification times only.** rclone over SFTP does not carry Unix ownership or
+  mode, so a restore copies the files back and then chowns them to the immich namespace UID
+  (`owner_uid` on the `immich` dataset).
+
+What the Synology needs, by hand in DSM (it is not managed from this repo): the SFTP service
+enabled (Control Panel → File Services → FTP → SFTP; port 22 answered `Connection refused` on
+2026-10-11, so it was off), and an account with read/write on `photo` and the SFTP application
+permission. That account's name and password go into `vars/vault.yml` as
+`truenas_backup_synology_user` and `truenas_backup_synology_password`.
+
+Until those two variables are in the vault the role creates neither the credential nor the
+task, prints why on every run, and the convergence report lists the task under
+`cloudsync_tasks_without_secrets`. Once they are there, a task that fails to appear fails the
+run (`cloudsync_tasks_missing`).
+
+First run and check, after converging:
+
+```bash
+ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {id, description, enabled}'
+ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync <id>"     # cloudsync.sync is a JOB method
+ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished}'
+```
+
+A failed run raises a TrueNAS alert, which is mailed like every other alert. Nothing yet tells
+you about a task that simply stopped running; that staleness check is part of the OVH design
+and applies to this task too.
+
 ## Day-2
 
 ```bash
@@ -489,14 +529,14 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `inventory.yml` | Single host `truenas`, mgmt address, `truenas_admin` + sudo |
 | `group_vars/all.yml` | All declarative inputs: pool name, datasets, NFS clients, NTP, schedules |
 | `vars/vault.yml.example` | Committed template (no secrets) |
-| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials + the two SMB Time Machine passwords |
+| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, and the Synology account for the Cloud Sync backup |
 | `playbook.yml` | Full convergence (vault OPTIONAL since 2026-08-28 — only the SMTP alert-email vars need it) |
 | `check.yml` | Read-only state report (no vault) |
 | `roles/truenas-storage/` | Assert pool, converge datasets |
 | `roles/truenas-system/` | Timezone, NTP, alert email |
 | `roles/truenas-shares/` | NFS exports + service enablement |
 | `roles/truenas-smb/` | SMB Time Machine targets: `aapl_extensions`, per-Mac users/groups, dataset ACLs, shares, service |
-| `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots |
+| `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots, Cloud Sync backup tasks |
 | `roles/truenas-apps/` | garage (Velero BSL) and Syncthing as catalog apps, node_exporter as a custom app: deploy/update, and garage's layout/key/bucket bootstrap |
 | `files/sync-stignore-shared` | Syncthing ignore list for both folders (`projects`, `documents`). Copied to `<folder root>/.stignore-shared` on every member; not applied by Ansible |
 | `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
