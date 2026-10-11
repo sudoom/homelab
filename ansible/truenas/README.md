@@ -483,8 +483,8 @@ rclone-based Cloud Sync tasks; the design notes are next to them. The first one 
   (`owner_uid` on the `immich` dataset).
 
 What the Synology needs, by hand in DSM (it is not managed from this repo): the SFTP service
-enabled (Control Panel → File Services → FTP → SFTP; port 22 answered `Connection refused` on
-2026-10-11, so it was off), and an account with read/write on `photo` and the SFTP application
+enabled (Control Panel → File Services → FTP → SFTP; it was off until 2026-10-11, and with it
+off port 22 answers `Connection refused`), and an account with read/write on `photo` and the SFTP application
 permission. That account's name and password go into `vars/vault.yml` as
 `truenas_backup_synology_user` and `truenas_backup_synology_password`.
 

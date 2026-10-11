@@ -146,3 +146,49 @@ what DSM's SFTP root looks like — so the first real run is still a test.
 Not on the box yet. The DS418 refused a connection on port 22 today, so SFTP is off; it needs
 enabling, an account, two vault variables, a playbook run, and a first run that I then check
 against the original files.
+
+### Same evening — on the box, first run, checked against the source
+
+The operator enabled SFTP on the DS418, put the account in the vault and converged:
+`ok=74 changed=2 failed=0` — the two changes being the credential and the task. Read back:
+
+```
+credential  id 1  synology-sftp  SFTP 192.168.1.2:22  (user and password set)
+task        id 1  /mnt/tank/immich -> /photo/backups/immich  PUSH COPY snapshot=true enabled
+            exclude [/thumbs/**, /encoded-video/**]   schedule 0 5 * * *
+```
+
+The two things the stand-in could not prove both held: the middleware accepted `snapshot: true`
+for this dataset, and DSM's SFTP root is the list of shares —
+
+```bash
+midclt call cloudsync.list_directory '{"credentials": 1, "attributes": {"folder": "/"}}'
+#  Logs/ downloads/ home/ homes/ kubenfs/ music/ photo/
+```
+
+First run, started by hand rather than waiting for 05:00:
+
+```bash
+ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync 1"
+#  164 / 164, 1.241 GiB / 1.241 GiB    -> job state SUCCESS, error null, 78 s
+```
+
+164 is the 487 files of the library minus `thumbs/` (321) and `encoded-video/` (2), so the
+exclude list did what it says. Then the copy against the source, by content: sha256 of every
+file on TrueNAS over SSH, sha256 of every file under `photo/backups/immich` over SMB from the
+workstation, compared by relative path.
+
+```bash
+ssh truenas_admin@192.168.1.25 "cd /mnt/tank/immich && find . -type f -not -path './thumbs/*' \
+    -not -path './encoded-video/*' -print0 | xargs -0 sha256sum"
+(cd /Volumes/photo/backups/immich && find . -type f -not -name '.DS_Store' -print0 | xargs -0 shasum -a 256)
+```
+
+```
+source files: 164   backup files: 164
+identical: 164   different content: 0   missing from backup: 0   only in backup: 0
+source by folder: library 145, backups 15, upload 3, profile 1
+```
+
+Still open for this leg: `photo/backups` is not yet in the Hyper Backup task, so nothing new
+reaches C2; and nothing alerts on a task that stops running.
