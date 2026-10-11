@@ -88,7 +88,8 @@ library:
     # Step 1 - publish immich-library-nfs, binding the static PV
     # truenas-immich-library (enable it in components/storage/nfs-csi first).
     # Both PVCs then coexist; nothing consumes the new one.
-    stagePvc: false
+    # STAGED 2026-10-11 -- step 2 of tests/immich-truenas-migration/.
+    stagePvc: true
     #
     # Step 2 (CUTOVER) is deliberately NOT a flag here. `existingClaim` below is
     # a value passed to the upstream immich SUBCHART, and Helm does not template
@@ -103,7 +104,10 @@ library:
 # applications.yaml) so selfHeal doesn't fight the HPA. maxReplicas kept modest —
 # each replica can burst to the 8Gi mem limit, and the cluster runs memory-tight.
 hpa:
-  enabled: true
+  # OFF for the library move (2026-10-11, step 3 of tests/immich-truenas-migration/):
+  # a live HPA with minReplicas 1 undoes `oc scale --replicas=0` within ~30 s.
+  # Back to true once the server runs on the TrueNAS volume (step 6).
+  enabled: false
   minReplicas: 1
   maxReplicas: 2
   targetCPUUtilizationPercentage: 75
