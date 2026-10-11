@@ -1,5 +1,5 @@
-{{- if .Values.sharedData.truenasMigration.stagePvc }}
-# Second data PVC for the Synology -> TrueNAS migration.
+# The keepers download volume, on TrueNAS. (Created as the second PVC of the
+# Synology -> TrueNAS migration; the first one was removed 2026-10-11.)
 #
 # storageClassName: "" (empty, NOT absent) is load-bearing. Empty string means
 # "no class", which is what stops the default StorageClass from dynamically
@@ -16,8 +16,8 @@ metadata:
   name: keepers-data-nfs
   namespace: {{ .Values.namespace }}
   annotations:
-    # This PVC is the migration target. Never let a stray manifest change prune
-    # the object out from under a running copy or a live transmission.
+    # Never let a stray manifest change prune the object out from under a live
+    # transmission.
     argocd.argoproj.io/sync-options: Prune=false
 spec:
   storageClassName: ""
@@ -27,4 +27,3 @@ spec:
   resources:
     requests:
       storage: 2Ti
-{{- end }}

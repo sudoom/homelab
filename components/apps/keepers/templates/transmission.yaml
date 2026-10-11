@@ -116,18 +116,11 @@ spec:
             claimName: transmission-config-pvc
         - name: data
           persistentVolumeClaim:
-            {{- if .Values.sharedData.truenasMigration.cutover }}
-            {{- if not .Values.sharedData.truenasMigration.stagePvc }}
-            {{- fail "sharedData.truenasMigration.cutover requires stagePvc=true -- the target PVC would not exist" }}
-            {{- end }}
-            # CUT OVER to TrueNAS. mountPath stays /data and the directory layout
-            # is preserved by the copy, so transmission's torrent paths are
-            # unchanged and it does not need to re-verify. Rollback = set cutover
-            # back to false; keepers-data-pvc still holds the data (PV is Retain).
+            # TrueNAS, via the static PV truenas-keepers-data. Cut over from the
+            # Synology on 2026-08-28; the old keepers-data-pvc and its copy on the
+            # DS418 were reclaimed on 2026-10-11, so there is no second volume to
+            # switch back to.
             claimName: keepers-data-nfs
-            {{- else }}
-            claimName: keepers-data-pvc
-            {{- end }}
 ---
 apiVersion: v1
 kind: Service

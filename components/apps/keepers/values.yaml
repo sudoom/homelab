@@ -8,36 +8,14 @@ domain: apps.okd.sudops.pl
 storage:
   configClass: ceph-nvme-block
 
-# Shared download volume for keepers. On the NAS via NFS (nfs-csi) so large
-# downloads don't sit on the NVMe Ceph tier, and RWX so it survives the two
-# apps landing on different nodes (transmission + webtlo schedule independently).
-# transmission writes downloads here; webtlo otherwise talks to transmission
-# over RPC (:9091) — mount keepers-data-pvc into webtlo too only if you want it
-# to read the files directly. nfs-csi reclaimPolicy is Retain: deleting the PVC
-# leaves the NAS export + data, clean it on the NAS if you really want it gone.
-sharedData:
-  storageClassName: nfs-csi
-  size: 50Gi
-
-  # ---- Synology -> TrueNAS migration (staged 2026-08-28) -------------------
-  # Flip these IN ORDER. Runbook + copy Job: tests/keepers-truenas-migration/.
-  #
-  # Why two flags and not one: storageClassName is IMMUTABLE on a bound PVC, so
-  # the backend cannot be swapped in place. The move is therefore "stand up a
-  # SECOND PVC, copy into it, then repoint the consumer" -- and the copy needs
-  # both volumes mounted simultaneously, which is only possible while both PVCs
-  # exist. One flag could not express that intermediate state.
-  #
-  # The old keepers-data-pvc is deliberately NOT deleted by `cutover`. Its PV is
-  # Retain and its data is the only rollback that does not involve re-downloading
-  # 1.7 TiB. Reclaim it by hand, after a soak, once the new path has proven out.
-  truenasMigration:
-    # Step 1 - publish keepers-data-nfs (binds the static PV truenas-keepers-data,
-    # which must be enabled first in components/storage/nfs-csi). Both PVCs then
-    # coexist; nothing is consuming the new one yet. Safe to leave here for days.
-    stagePvc: true      # step 2, 2026-08-28
-    # Step 2 - repoint transmission's /data at the new PVC. Requires stagePvc.
-    cutover: true       # CUT OVER to TrueNAS 2026-08-28
+# Download volume for keepers: PVC keepers-data-nfs, bound to the static PV
+# truenas-keepers-data (192.168.10.10:/mnt/tank/keepers, published by
+# components/storage/nfs-csi). RWX over NFS so large downloads stay off the
+# NVMe Ceph tier. transmission writes there; webtlo talks to transmission over
+# RPC (:9091) and does not mount it. Not backed up on purpose -- torrents are
+# re-downloadable. Moved from the Synology on 2026-08-28
+# (tests/keepers-truenas-migration/); the old nfs-csi PVC and the migration
+# flags were removed on 2026-10-11, after the copy on the DS418 was deleted.
 
 apps:
   transmission:

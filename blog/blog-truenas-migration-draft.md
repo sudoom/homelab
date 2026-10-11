@@ -5346,3 +5346,34 @@ Runbook and Jobs: `tests/immich-truenas-migration/` (this also resolves the refe
    no HPA in the namespace, `immich-server` 1/1 and still mounting `immich-library`.
 
 Next is operator-run: scale the server to 0, run the copy Job, run the verify Job.
+
+## 2026-10-11 — keepers: the Synology copy is reclaimed (step 7, six weeks late)
+
+While preparing the immich move the operator asked whether `kubenfs/pvc-3f531e77-…` could go, then
+started deleting it. Checked first: `transmission` mounts `keepers-data-nfs`
+(`192.168.10.10:/mnt/tank/keepers`) and has since 2026-08-28, no pod in the namespace mounts
+`keepers-data-pvc`, and its PV is `Retain`. So the directory was only the rollback, and after six
+weeks nobody was going back.
+
+The chart still rendered the old PVC unconditionally and kept `cutover: false` as a live switch
+back to it, which would now mount a directory that is being deleted. Removed in one change:
+`templates/keepers-data-pvc.yaml`, the `stagePvc`/`cutover` flags and their template branches, and
+`sharedData.storageClassName`/`size`. `keepers-data-nfs` is rendered unconditionally and the
+Deployment names it directly.
+
+```bash
+helm lint components/apps/keepers/                      # 0 failed
+helm template keepers components/apps/keepers/ -n keepers -f components/apps/keepers/values.yaml
+diff <(grep -v -E '^\s*#|^\s*$' old.yaml) <(grep -v -E '^\s*#|^\s*$' new.yaml)
+```
+
+With comments stripped, the diff is the one PVC (`keepers-data-pvc`, `nfs-csi`, 50Gi) and nothing
+else: 15 objects before, 14 after, the Deployment byte-identical, so transmission does not restart.
+
+The keepers runbook had the reclaim order backwards (delete the PVC by hand, change the chart
+last); with selfHeal on, that recreates the PVC and `nfs-csi` provisions a new empty directory.
+Corrected there. What is left for the operator: the PV goes `Released` once ArgoCD prunes the PVC
+and has to be deleted by hand.
+
+Also seen in `kubenfs`: `pvc-6dac6815-…` belongs to `default/storage-bench-nfs-csi` (Bound), and
+`pvc-1e07045b-…` and `pvc-3099a28e-…` match no PV in the cluster.

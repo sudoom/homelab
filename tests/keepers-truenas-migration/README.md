@@ -329,6 +329,13 @@ oc -n keepers exec deploy/transmission -- transmission-remote -l | awk 'NR>1 && 
 
 ### Step 7 — soak, then reclaim
 
+> **DONE 2026-10-11**, six weeks after cutover. The operator deleted the directory on the
+> Synology; the chart lost `keepers-data-pvc`, `sharedData.storageClassName` and both
+> migration flags in the same change, so ArgoCD pruned the PVC. The order below (delete the
+> PVC by hand first, change the chart last) would not have held: with the template still in
+> the chart, selfHeal recreates the PVC and `nfs-csi` provisions a fresh empty directory.
+> Change the chart first.
+
 Leave `keepers-data-pvc` and its Synology data **in place for at least a week**.
 It is the only rollback that does not involve re-downloading 1.7 TiB. After the
 soak:
