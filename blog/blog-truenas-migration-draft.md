@@ -5338,3 +5338,11 @@ Runbook and Jobs: `tests/immich-truenas-migration/` (this also resolves the refe
    `components/storage/nfs-csi/values.yaml`. `helm lint` clean, 3 PVs rendered, the diff against
    the previous render is the one new PV (`truenas-immich-library` →
    `192.168.10.10:/mnt/tank/immich`, claimRef `immich/immich-library-nfs`), kubeconform 19/19 valid.
+2. `4c41d40` — `library.truenasMigration.stagePvc: true` and `hpa.enabled: false` in
+   `components/apps/immich/values.yaml`, pushed together. Render diff against the previous
+   commit: one PVC added (`immich-library-nfs`, `volumeName: truenas-immich-library`,
+   `storageClassName: ""`), the HPA removed, nothing else; kubeconform 19 valid, 1 skipped (Route).
+   Live at 17:23:05Z: `pv/truenas-immich-library` Bound, `pvc/immich-library-nfs` Bound (2Ti),
+   no HPA in the namespace, `immich-server` 1/1 and still mounting `immich-library`.
+
+Next is operator-run: scale the server to 0, run the copy Job, run the verify Job.
