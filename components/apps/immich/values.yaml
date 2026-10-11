@@ -190,11 +190,13 @@ immich:
         template: "{{y}}/{{y}}-{{MM}}-{{dd}}/{{filename}}"
     persistence:
       library:
-        # The RWX library PVC this chart templates (see templates/library-pvc.yaml).
-        # CUTOVER POINT: change to `immich-library-nfs` (requires
-        # library.truenasMigration.stagePvc: true, which creates that PVC).
-        # A one-line edit, not a flag -- see truenasMigration above for why.
-        existingClaim: immich-library
+        # CUT OVER to TrueNAS 2026-10-11 (tests/immich-truenas-migration/, step 5):
+        # immich-library-nfs binds the static PV truenas-immich-library
+        # (192.168.10.10:/mnt/tank/immich). The copy was verified first: 487 files,
+        # every checksum identical. Rollback = scale the server to 0, set this back
+        # to `immich-library` (the Synology PVC, still Bound and never written by
+        # the move), wait for ArgoCD, scale to 1.
+        existingClaim: immich-library-nfs
   # Bundled single Valkey (BullMQ queue). enabled per the 2026-06-18 decision
   # (no Redis operator). emptyDir is fine — the queue is reconstructable.
   valkey:
