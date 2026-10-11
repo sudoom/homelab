@@ -542,3 +542,60 @@ release; nothing was installed on this machine before). Checked against the v0.3
 Order from here: mount the archive share on the Mac, measure it (size, file count, extensions), dry-run
 against `family` and against each personal account to size the overlap, and only then decide when the
 real import runs. The import writes to the library; the measuring and the dry runs do not.
+
+## 2026-10-11 — stage 2, before any upload: sorting the archive
+
+The order of the day changed twice. The old single-account library was deleted on purpose, the
+library moved to TrueNAS, and a nightly copy to the Synology went live
+(`blog/blog-truenas-migration-draft.md`, `blog/blog-offsite-backup-draft.md`). The condition for
+the import — a backup that exists first — is met. The operator then asked for one more thing
+before uploading anything: separate what is a photo or video from what is not, to review the rest
+by hand and to avoid importing piles of duplicates.
+
+The personal-account keys I had asked for turned out to be unnecessary. They were for checking
+the archive against photos already in those accounts, and those accounts are now empty. Only the
+`family` key exists, in `~/immich-import/family/immich-go.toml`, outside the repo; `immich-go`
+reads it with `--config ./immich-go.toml` (its `--help` names `./immich-go.yaml` as the default,
+the docs name `.toml`, so I pass the file explicitly).
+
+A dry run on one small folder first: 67 assets found, 82.4 MB, 0 errors, and the file counts on
+TrueNAS unchanged afterwards (145 in `library/`, 3 in `upload/`) — the log says "Dry-run mode
+enabled. No changes will be made to the server."
+
+### Inventory (read-only walk of the share over SMB)
+
+One line per file — path, size, mtime, extension — into `~/immich-import/inventory/`, then sorted
+by what Immich v3.3.1 accepts (`docs/features/supported-formats.md` at that tag):
+
+| group | files | size |
+|---|---|---|
+| videos Immich accepts | 2,178 | 251.4 GiB |
+| photos Immich accepts | 49,693 | 85.9 GiB |
+| archives (one Google Takeout `.tgz`, two zips) | 3 | 49.4 GiB |
+| video Immich cannot take (`.vob`, DVD) | 5 | 4.2 GiB |
+| files that belong to a photo (15,280 Takeout `.json`, plus `.aae`, `.xmp`, `.thm`) | 15,329 | 0.01 GiB |
+| everything else (`.pdf`, `.db`, `.exe`, `.xml`, …) | 48 | 0.02 GiB |
+| **total** | **67,256** | **390.9 GiB** |
+
+That is 47 GiB more than this morning's 343.5 GiB: the operator added a folder in between.
+
+### Duplicates, as far as names and sizes can tell
+
+- 13,141 media files (69.5 GiB) have the same name and the same size as a file somewhere else in
+  the archive. Not hashed: confirming it would mean reading 209 GiB over SMB, and Immich rejects a
+  second identical file per account by checksum anyway.
+- Almost all of it is one thing: the Google Photos export is there three times — an extracted
+  folder with its `.json` files (14,115 media), a second folder without them (13,776 media), and
+  the `.tgz`. The two folders share 11,745 files by name and size; 2,031 (4.2 GiB) are only in
+  the second, 2,370 (2.8 GiB) only in the first.
+- Both zips match their extracted folders (169 entries vs 169 files; 230 vs 224, the difference
+  being directory entries).
+- Outside the Takeout copies, 561 of 23,980 media files also sit in one of them.
+
+What names and sizes cannot see is the same picture saved as a different file (resized, re-saved
+by a messenger, an edited copy). Those are the duplicates that would show in the timeline, and
+they are a job for Immich's duplicate utility after the import, not for a pre-check.
+
+Review lists left for the operator in `~/immich-import/inventory/`: `review-other.tsv`,
+`review-video-immich-cannot-take.tsv`, `review-archives.tsv`, `review-same-name-and-size.tsv`.
+Nothing on the share was changed.
