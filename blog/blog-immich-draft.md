@@ -432,3 +432,87 @@ NFS pg_dumpall. Do NOT start v2.7.5 against the migrated DB.
 
 Renovate #150 (v3 images) + #151 (chart 0.13.1) should auto-close/obsolete now that master
 carries both versions.
+
+## 2026-10-11 — multi-user design: a `family` account, partner sharing, a cluster group
+
+The question was whether the picture in my head is the right shape: every phone backs up to its own
+account, and one shared `family` folder is readable by everyone. Checked against the v3.3.1 docs and
+the v3.2.0 / v3.3.0 release notes rather than from memory:
+
+```bash
+gh api 'repos/immich-app/immich/contents/docs/docs/features/partner-sharing.md?ref=v3.3.1' --jq .content | base64 -d
+gh api 'repos/immich-app/immich/contents/docs/docs/features/sharing.md?ref=v3.3.1' --jq .content | base64 -d
+gh api 'repos/immich-app/immich/contents/docs/docs/administration/user-management.mdx?ref=v3.3.1' --jq .content | base64 -d
+gh api 'repos/immich-app/immich/contents/docs/docs/features/libraries.md?ref=v3.3.1' --jq .content | base64 -d
+gh release view v3.2.0 -R immich-app/immich --json body --jq .body   # cluster groups
+gh release view v3.3.0 -R immich-app/immich --json body --jq .body   # people sharing
+gh api 'repos/immich-app/immich/contents/server/src/schema/tables/album-asset.table.ts?ref=v3.3.1' --jq .content | base64 -d
+```
+
+What those say, as far as it drives the design:
+
+- Access is granted per account, never per folder. The on-disk tree (`library/<storage label>/…`)
+  only records who uploaded. The label applies to new uploads; applying it to existing assets needs
+  the Storage Migration job.
+- Partner sharing shares the *entire* library, one way: view and download, all metadata including
+  GPS, and the right to put those assets into one's own albums and share links. It does not carry
+  albums, favourites, or people and face data. Archived assets are not shared. "Show in timeline" is
+  a per-partner switch. Duplicates are detected per user only, so a photo held by two accounts shows
+  twice.
+- A shared album has editors and viewers; members add their own assets. Album membership is a row in
+  `album_asset` (albumId, assetId) — adding a partner's photo to an album copies nothing.
+- An external library belongs to one user and leaves the files where they are.
+- Deleting a user removes their library after 7 days by default.
+- Cluster group (v3.2.0): trusted users on the instance join a group so people are recognised across
+  the assets they share. As shipped it required resetting facial recognition for every member, which
+  drops names and birth dates. v3.3.0 added sharing a person with a group member (directional, both
+  can edit name and birth date) and cross-user merging, described as the way to avoid the reset.
+
+### Decided
+
+- **Accounts:** mine (admin, as today, label `Vadzim`), my wife's, and `family` — a normal non-admin
+  account that is logged in on no phone. More accounts (our son, maybe others) are undecided and do
+  not change anything: a new account gets one extra share from `family`.
+- **What `family` holds:** the old archive (plain folders on a Synology share) plus whatever is later
+  uploaded from a PC while logged in as `family`. Phone photos stay in the personal accounts.
+- **Who sees it:** `family` partner-shares its whole library, one way, with every personal account,
+  each with "show in timeline" on. Nobody shares back to `family`. This replaces the June plan of one
+  "Family" album: the library share picks up later uploads with no further step. Write access is
+  simply the `family` password, kept to the two of us.
+- **Between the personal accounts:** left open on purpose. It is a per-person switch that moves no
+  files. Suggested start: share both ways with "show in timeline" off.
+- **Duplicates rule:** phone photos are never uploaded into `family`; they are shared by reference
+  (albums or the library share). `family` uploads are for what no phone backs up — archive, camera
+  cards, scans, photos other people send.
+- **Faces:** go for the cluster group (me, wife, `family`) and people sharing, tried on about 20 test
+  photos before the archive import. Reason for doing it early: a forced reset costs 8 names today and
+  would cost hundreds after the archive is named. Fallback is separate People per account, which
+  means searching the archive by person only while logged in as `family`.
+
+### Ruled out
+
+- **No `family` account** (archive into my own account, partner-shared): People and search in one
+  place, but the archive would be mine alone to organise and would mix into `library/Vadzim/`.
+- **External library** on its own TrueNAS dataset: keeps the folders browsable outside Immich, but it
+  is a second dataset to back up, belongs to one user anyway, and loses Immich-side metadata whenever
+  a file is moved.
+
+### Rollout
+
+Stage 1 needs neither the UPS nor OVH and is all in the web UI: record the 8 named people, create the
+two accounts with storage labels set before any upload, share `family` out, upload ~20 photos as
+`family` from a separate browser profile, confirm from my wife's account that she sees them and
+cannot delete, form the cluster group, check People and search from my account and note whether a
+reset was forced, share one person, decide.
+
+Stage 2 is proposed, not yet confirmed, and waits for the library to be on TrueNAS with the OVH job
+running: measure the archive on the Synology (never measured; bounded at < ~2.2 TiB on 2026-08-29),
+compare it by checksum against the personal libraries and build an exclude list, import as `family`
+with immich-go v0.32.0 (`upload from-folder`, albums from folder names, API key created in the
+`family` account) — dry run, one small folder, then the rest — and check asset count against file
+count. Importing before the move would write a second copy of the archive onto the DS418 and make
+the move copy it again with Immich stopped.
+
+For the backup design this means the archive lands inside the Immich library, so the OVH task covers
+it without being named; the share on the DS418 stays as the untouched original until the box is
+sold; and the sell gate gains "a restore from OVH that includes `library/family/` was checked".

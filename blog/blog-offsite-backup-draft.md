@@ -78,3 +78,13 @@ The project wizard also offers a plain payment method (credit card or PayPal) in
 credit amounts from 40 zł upwards. The `FREETRIAL` promo code added 1,000 zł of free trial credit. A support
 case was opened with OVH on 2026-10-02 to confirm whether the project can run on a card with no prepayment;
 waiting on the answer.
+
+## 2026-10-11 — scope correction: the family archive is inside the Immich library
+
+While designing the rollout I had listed "family photos" as out of scope. The Immich account design
+agreed today (`blog/blog-immich-draft.md`, 2026-10-11) imports the old archive into Immich as a
+`family` account, so it lands in `library/family/` on `tank/immich` and the same Cloud Sync task
+uploads it. Consequences: the size to plan for is the library plus the archive, and the archive has
+never been measured (bounded at < ~2.2 TiB on 2026-08-29; ~18 zł net per TiB per month on
+Infrequent Access, so up to ~39 zł); the first upload is the existing library, and the archive
+follows when it is imported after the Immich move.
