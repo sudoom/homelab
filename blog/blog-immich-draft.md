@@ -505,8 +505,8 @@ two accounts with storage labels set before any upload, share `family` out, uplo
 cannot delete, form the cluster group, check People and search from my account and note whether a
 reset was forced, share one person, decide.
 
-Stage 2 is proposed, not yet confirmed, and waits for the library to be on TrueNAS with the OVH job
-running: measure the archive on the Synology (never measured; bounded at < ~2.2 TiB on 2026-08-29),
+Stage 2 (confirmed 2026-10-11) waits for the library to be on TrueNAS with the OVH job running, except
+for its first two steps, which only read: measure the archive on the Synology (never measured; bounded at < ~2.2 TiB on 2026-08-29),
 compare it by checksum against the personal libraries and build an exclude list, import as `family`
 with immich-go v0.32.0 (`upload from-folder`, albums from folder names, API key created in the
 `family` account) — dry run, one small folder, then the rest — and check asset count against file
@@ -516,3 +516,29 @@ the move copy it again with Immich stopped.
 For the backup design this means the archive lands inside the Immich library, so the OVH task covers
 it without being named; the share on the DS418 stays as the untouched original until the box is
 sold; and the sell gate gains "a restore from OVH that includes `library/family/` was checked".
+
+### Same day — stage 1 reported working; stage 2 prep
+
+The operator ran stage 1 in the web UI and reported it working, then asked to go on to stage 2.
+Whether joining the cluster group forced a facial-recognition reset was not reported; record it here
+when known.
+
+Prep done from the MacBook Air: `brew install immich-go` -> `immich-go version:0.32.0` (the Immich v3
+release; nothing was installed on this machine before). Checked against the v0.32.0 docs
+(`docs/commands/upload.md`, `docs/installation.md`, `docs/configuration.md`):
+
+- `immich-go upload from-folder` with `--dry-run`, `--folder-as-album FOLDER|PATH|NONE`,
+  `--album-path-joiner`, `--on-errors stop|continue|N`, `--concurrent-tasks`, `--log-file`.
+- The default `--ban-file` list already drops Synology junk (`@eaDir/`, `SYNOFILE_THUMB_*.*`).
+- `--pause-immich-jobs` defaults to `true` and then needs `--admin-api-key` (an admin-linked key with
+  `job.create` and `job.read`). Dry runs use `--pause-immich-jobs=false`.
+- API key permissions per account: `asset.read`, `asset.statistics`, `asset.update`, `asset.upload`,
+  `asset.copy`, `asset.delete`, `asset.download`, `album.create`, `album.read`, `albumAsset.create`,
+  `server.about`, `stack.create`, `tag.asset`, `tag.create`, `user.read`.
+- Keys stay out of chat, shell history and git: immich-go reads `immich-go.toml` from the current
+  directory (`[upload]` table: `server`, `api-key`, `admin-api-key`), so one directory per account
+  under `~/immich-import/`, files mode 600, and the commands carry no secret.
+
+Order from here: mount the archive share on the Mac, measure it (size, file count, extensions), dry-run
+against `family` and against each personal account to size the overlap, and only then decide when the
+real import runs. The import writes to the library; the measuring and the dry runs do not.
