@@ -174,3 +174,61 @@ Browse the UI at `https://zot.apps.okd.sudops.pl/`. Shows the cached repos, tag 
 - Off-cluster mirror for bootstrap images (etcd, kube-apiserver) — separate, bigger project; only matters for cold-cluster restart scenarios.
 - RGW-S3-backed storage migration — only if PVC pressure shows up or a multi-replica need surfaces. 50 GiB on NVMe has plenty of headroom for the steady-state cache.
 - Capture pull-time before/after measurements at some point (no rush — the win is structural, not perf).
+
+## 2026-10-11 — v2.1.22 stops syncing a Docker-format manifest and the catalog poll pod hangs
+
+Found by the session-start sweep, three days after the fact. One pod not Running and one new alert
+(`KubePodNotReady`, `openshift-marketplace`):
+
+```
+operatorhubio-catalog-4km9q Running 2026-10-08T12:58:52Z ready=true
+operatorhubio-catalog-ds67c Pending 2026-10-08T15:58:53Z ready=false ImagePullBackOff
+```
+
+The CatalogSource still reads `READY` because the older pod keeps serving; `ds67c` is the hourly
+registry-poll pod (`updateStrategy.registryPoll.interval: 60m`) that checks for a newer
+`quay.io/operatorhubio/catalog:latest`. `cnpg` and `nmstate` subscribe to this catalog, so they stop
+seeing new catalog content while it is stuck. Nothing else in the cluster is failing a pull.
+
+Timeline (UTC): Renovate #195 (zot v2.1.21 → v2.1.22) merged 15:22:06; `zot-0` restarted on the new
+image 15:27:52; the next hourly poll, 15:58:53, is the pod that hangs. The polls before it worked.
+
+The kubelet event, from `oc -n openshift-marketplace get events`:
+
+```
+Failed to pull image "quay.io/operatorhubio/catalog:latest": ... copying system image from manifest
+list: determining manifest MIME type for docker://quay.io/operatorhubio/catalog:latest: reading
+manifest sha256:1ec7c02d5a51... in zot.apps.okd.sudops.pl/operatorhubio/catalog: received
+unexpected HTTP status: 503 Service Unavailable
+```
+
+and zot's side, counted over the log it still holds (starts 2026-10-11T00:14Z, older lines rotated):
+
+```bash
+oc -n zot logs zot-0 --since=80h | grep -E '1ec7c02d5a51|"status":50[0-9]'
+```
+
+```
+330  trying to get updated image by syncing on demand
+330  skipping docker media type because http.compat docker2s2 is not enable[d]
+330  failed to get remote manifest ... docker.io/operatorhubio/catalog@sha256:1ec7... unauthorized
+330  failed to get remote manifest ... ghcr.io/operatorhubio/catalog@sha256:1ec7... unauthorized
+330  failed to get remote manifest ... registry.k8s.io/operatorhubio/catalog@sha256:1ec7... not found
+```
+
+So zot hands the node the image index, is then asked for the platform manifest, skips it on quay.io
+because it is a Docker v2 schema 2 manifest and `http.compat: [docker2s2]` is not set, tries the
+other three upstreams (where the repository does not exist) and answers 503. Our
+`components/apps/zot/values.yaml` sets no `compat` key. `gh api
+repos/project-zot/zot/compare/v2.1.21...v2.1.22` shows the `docker2s2` handling touched in that
+release (`pkg/api/config/config.go`, `pkg/cli/server/root.go`, `pkg/extensions/config/sync/config.go`,
+`pkg/extensions/sync/README_sparse_multiarch_sync.md`), which fits the sync rework in zot #4410.
+
+**What I got wrong.** My verdict on #195 was APPROVE with the reason "`mirrorSourcePolicy:
+AllowContactingSource`, so a bad zot only slows pulls". That holds when the mirror fails the first
+request. Here the mirror serves the index and fails on the platform manifest, and the pull fails
+without going back to quay.io.
+
+**Not established:** whether v2.1.21 logged the same skip and synced anyway (its logs are gone), and
+which other images share the shape. No fix applied yet. The two candidates are reverting the tag to
+v2.1.21 or setting `http.compat: [docker2s2]` after reading the v2.1.22 sync docs.
