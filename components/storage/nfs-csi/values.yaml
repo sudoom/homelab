@@ -101,7 +101,10 @@ truenas:
           namespace: media
           name: media-data-nfs-pvc
       - name: immich-library
-        enabled: false
+        # ENABLED 2026-10-11 -- step 1 of tests/immich-truenas-migration/.
+        # /mnt/tank/immich confirmed empty and owned by 1000980000 (the immich
+        # namespace UID) the same day; the library to copy is 1.3 GiB.
+        enabled: true
         share: /mnt/tank/immich
         capacity: 2Ti
         claim:
