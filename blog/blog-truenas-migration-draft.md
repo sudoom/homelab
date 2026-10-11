@@ -5254,3 +5254,87 @@ inbox, through the production route (`severity = critical` → `Critical`), the 
 `send_resolved`. It skips rule evaluation and Prometheus → Alertmanager, which every alert on the
 board already exercises. The README item that waited for one cluster mail to land is closed; what
 remains of it is asking Mailjet to lift the temporary 20 emails/hour limit from 09-28.
+
+## 2026-10-11 — immich: the library move starts, without the UPS and ahead of the offsite job
+
+The immich move had two things in front of it: the UPS, and the gate written into
+`components/apps/immich/values.yaml` — an offsite path from TrueNAS before cutover, because the
+Hyper Backup task backs up a path on the Synology and would go on reporting green against a
+directory that no longer changes. The operator decided today to move anyway, in this order:
+library to TrueNAS, then a TrueNAS → Synology copy into the `photo/backups` share folder, and only
+then the full archive import; OVH follows when the account is sorted. What that leaves exposed in
+between is whatever gets uploaded after cutover: it is on TrueNAS (RAIDZ2, nightly snapshots) and
+on the phone that took it. Postgres is unaffected.
+
+### What is there to move
+
+Not what the 2026-08-29 section planned for. Measured over SMB from the workstation (the Synology
+exports `kubenfs` and `photo` over SMB too, which nobody had used for this before):
+
+```
+/Volumes/kubenfs/pvc-57345d42-…   487 files, 6,135 directories, 1.3 GiB
+  library/        145 files  0.87 GiB   (Family: 141, Vadzim: 3)
+  backups/         15 files  0.37 GiB   (nightly DB dumps)
+  thumbs/         321 files  0.04 GiB
+  encoded-video/, upload/, profile/   6 files
+```
+
+On 08-29 it was 1,969 assets and 0.134 TiB. 617 of the 625 date folders under `library/Vadzim/`
+had an mtime of today between 17:00 and 18:00 local and were empty; thumbnails and transcodes
+were gone to match. I stopped and asked before going further: the operator had deleted the old
+single-account library on purpose, ahead of re-importing under the multi-user design. So the
+"copy the library, keep Postgres" reasoning from August still holds for the mechanism, but the
+copy is a minute rather than 47, and one quiesced pass replaces bulk-then-delta.
+
+A side finding from the same listing: Immich's own nightly dump has files for 09-20 to 10-01 and
+for 10-10 and 10-11, and nothing for 10-02 to 10-09. Eight nights without the built-in dump, while
+the CNPG archive to R2 stayed green. Not investigated yet.
+
+### Target checked before publishing anything
+
+Read-only `midclt` over SSH as `truenas_admin`:
+
+```bash
+midclt call pool.dataset.query '[["id","=","tank/immich"]]' '{"select":["id","used","available","recordsize","compression"]}'
+midclt call filesystem.stat /mnt/tank/immich
+midclt call filesystem.listdir /mnt/tank/immich
+midclt call sharing.nfs.query '[["path","=","/mnt/tank/immich"]]'
+midclt call pool.snapshottask.query
+```
+
+```
+tank/immich        used 191.81 KiB, available 6.14 TiB, recordsize 1M, LZ4
+/mnt/tank/immich   uid 1000980000, gid 1000980000, mode 0755, 0 entries
+NFS export         enabled, hosts [192.168.10.2, .3, .4], maproot_user root
+snapshot task      tank/immich, recursive, daily 02:00, 30 days, enabled
+```
+
+and on the cluster: `sa.scc.uid-range=1000980000/10000` on the namespace, `immich-server` running
+as 1000980000 with fsGroup 1000980000 under `restricted-v2`. The ownership coupling from `acc6ff7`
+still holds.
+
+### The copy Job cannot be the keepers one
+
+The keepers Job is alpine, root, `apk add rsync`. None of that works in a `baseline` namespace with
+no privileged binding. What I used instead: `quay.io/openshift/origin-cli:4.22`, already run by
+the repo's CronJobs. It has rsync because every OpenShift image inherits it —
+`openshift/images` `base/Dockerfile.rhel9` on `release-4.22` installs `procps-ng rsync iproute
+diffutils python3` — whereas `openshift/oc`'s own `images/cli/Dockerfile.rhel` adds nothing of
+the sort, so reading only that file says "no rsync". Not run-tested from here: both Jobs check
+for their tools first and exit 90 if one is missing.
+
+Two more adaptations. The Jobs set no `runAsUser`, so the SCC injects the namespace UID, which
+owns every file on both sides. And the copy passes the top-level entries to rsync by name rather
+than `/src/ /dst/`, so rsync does not stamp the Synology directory's mode and group onto the
+dataset root that `ansible/truenas` owns; the verify Job ignores exactly that one `./` line and
+checksums every file, not a sample of 20.
+
+Runbook and Jobs: `tests/immich-truenas-migration/` (this also resolves the reference that
+`acc6ff7` left pointing at a directory that was never committed).
+
+### Steps so far
+
+1. `772de93` — `staticVolumes.volumes[immich-library].enabled: true` in
+   `components/storage/nfs-csi/values.yaml`. `helm lint` clean, 3 PVs rendered, the diff against
+   the previous render is the one new PV (`truenas-immich-library` →
+   `192.168.10.10:/mnt/tank/immich`, claimRef `immich/immich-library-nfs`), kubeconform 19/19 valid.
