@@ -5433,3 +5433,29 @@ HPA restored in `6a41fa8`. Immich was down for about 20 minutes.
 What is deliberately left: `immich-library` (the Synology PVC) stays Bound as the rollback, and
 the Hyper Backup task now backs up a directory that no longer changes. Both wait for the
 TrueNAS → Synology copy, which is the next thing to build and comes before the archive import.
+
+## 2026-10-11 — the "monthly" scrub was a scrub every second month
+
+The operator noticed that no scrub ran on 2026-10-01. The task was there and enabled: 03:00 on
+day 1 of the month, threshold 35 days, last scrub finished 2026-09-08 20:36.
+
+The threshold is the cause, and the middleware's own code says how (`pool_/scrub.py` on 25.10.6):
+
+```python
+if (datetime.now() - last_scrub).total_seconds() < (threshold - 1) * 86400:
+    self.logger.debug('Pool %r last scrub %r', name, last_scrub)
+    return False
+```
+
+On 10-01 the last scrub was 23 days old, under the 34 required, so the run returned without
+starting anything — at debug level, which is why it left no trace. The setting is upstream's
+default and it is designed for upstream's default schedule: try every Sunday, actually scrub when
+35 days have passed. Here the schedule had been changed to monthly and the threshold left alone,
+and those two do not compose: 28 to 31 days after a scrub is never 34, so every other month is
+skipped. The task's description said "Monthly scrub" the whole time.
+
+Fixed in `group_vars/all.yml`: `truenas_scrub_threshold: 25`. The shortest gap between two 1sts
+is 28 days, so every month runs, and a scheduled scrub within about three and a half weeks of a
+manual one is still skipped. The role already reconciles threshold drift, so it applies on the
+next converge. Without a manual scrub the next run is 2026-11-01 either way (54 days after the
+last).

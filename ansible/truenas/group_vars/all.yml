@@ -610,7 +610,16 @@ truenas_pool_properties:
 
 # ---- Data protection ------------------------------------------------------
 truenas_scrub_day_of_month: "1"     # monthly
-truenas_scrub_threshold: 35         # days; skip a scheduled scrub if scrubbed more recently
+# THRESHOLD MUST BE SHORTER THAN THE SCHEDULE INTERVAL (found 2026-10-11). The
+# middleware skips a scheduled scrub when fewer than (threshold - 1) days have
+# passed since the last one (pool_/scrub.py: `< (threshold - 1) * 86400`). The
+# upstream default, 35, is meant for its weekly schedule, where the threshold IS
+# the interval. Paired with "day 1 of the month" it made this a scrub every
+# SECOND month: 28-31 days after a scrub is never >= 34. It is also why nothing
+# ran on 2026-10-01 -- the last scrub was 2026-09-08, 23 days earlier.
+# 25 runs every month (the shortest gap between two 1sts is 28 days) and still
+# skips a scheduled scrub that would land within ~3.5 weeks of a manual one.
+truenas_scrub_threshold: 25         # days; skip a scheduled scrub if scrubbed more recently
 truenas_scrub_description: "Monthly scrub (managed by ansible/truenas)"
 # NOTE: pool.create makes its OWN scrub task (weekly Sun 00:00, empty description).
 # truenas-tasks RECONCILES it to this rather than skipping, or the declaration
