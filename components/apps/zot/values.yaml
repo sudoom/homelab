@@ -4,7 +4,13 @@ host: zot
 
 image:
   repository: ghcr.io/project-zot/zot-linux-amd64
-  tag: v2.1.22
+  # Held at v2.1.21 (reverted 2026-10-11). v2.1.22 skips Docker v2 schema 2
+  # manifests during on-demand sync unless http.compat docker2s2 is set, answers
+  # 503 for them, and the node does not fall back to the source registry — the
+  # hourly operatorhubio-catalog poll pod sat in ImagePullBackOff for three days.
+  # Renovate will propose v2.1.22 again: NOT-APPROVE until the compat setting is
+  # understood. See blog/blog-zot-pullthrough-draft.md, 2026-10-11.
+  tag: v2.1.21
 
 storage:
   storageClassName: ceph-nvme-block

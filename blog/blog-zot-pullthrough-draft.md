@@ -232,3 +232,25 @@ without going back to quay.io.
 **Not established:** whether v2.1.21 logged the same skip and synced anyway (its logs are gone), and
 which other images share the shape. No fix applied yet. The two candidates are reverting the tag to
 v2.1.21 or setting `http.compat: [docker2s2]` after reading the v2.1.22 sync docs.
+
+### Same day — reverted to v2.1.21
+
+The operator chose the revert over the compat setting. One-line change in
+`components/apps/zot/values.yaml` (`tag: v2.1.22` → `v2.1.21`) with a comment recording why the tag
+is held. Checked before the commit:
+
+```bash
+helm lint components/apps/zot/                       # 1 chart(s) linted, 0 chart(s) failed
+helm template zot components/apps/zot/ -n zot -f components/apps/zot/values.yaml > new.yaml
+diff old.yaml new.yaml                               # only the image line, v2.1.22 -> v2.1.21
+kubeconform -strict -ignore-missing-schemas ... new.yaml   # Valid: 4, Invalid: 0, Skipped: 1 (Route)
+oc -n zot get statefulset zot -o jsonpath='{.spec.template.spec.containers[0].image}'   # live: v2.1.22
+```
+
+`oc diff` is refused for the readonly service account (the server-side dry run is a patch), so the
+render diff plus the live image read stand in for it.
+
+Open after the revert: Renovate will propose v2.1.22 again, and the tag stays held until the
+`http.compat: [docker2s2]` setting is understood. A downgrade also meets whatever v2.1.22 left in the
+cache for `operatorhubio/catalog` (an index whose platform manifest it never stored), so the thing to
+confirm is that the stuck poll pod pulls again, not just that `zot-0` is Ready.
