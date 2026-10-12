@@ -658,3 +658,48 @@ are to be no albums — timeline only. For the plain folders that is `--folder-a
 the Takeout it should mean `--sync-albums=false` as well, but Google's own albums are not the same
 thing as folder names, so that one gets asked before the run. The home video's year and what
 happens to its `.vob` originals are not decided. Nothing has been uploaded yet.
+
+## 2026-10-12 — stage 2, first upload: one camera-roll folder
+
+The first real upload, kept as small as the archive allows so that every file could be checked
+afterwards. By the inventory the smallest top-level folder is `102APPLE`: 67 JPEGs,
+86,411,730 bytes, no subfolders. Its dry run on 2026-10-11 had reported 67 to upload and no
+errors, and the folder had not changed since.
+
+Baseline first: sha1 of the 67 source files (list kept outside the repo), and file counts in the
+dataset on TrueNAS — `library/Family` 141, `thumbs` 300, `upload` 3.
+
+```bash
+cd ~/immich-import/family
+immich-go upload from-folder --config ./immich-go.toml --no-ui --on-errors continue \
+  --folder-as-album NONE --log-file ./upload-102APPLE.log /Volumes/photo/photo/102APPLE
+```
+
+Eight seconds (17:26:16Z to 17:26:24Z), exit 0, "uploaded successfully: 67 (82.4 MB)", errors 0.
+
+| check | result |
+|---|---|
+| `library/Family` file count | 141 → 208 |
+| the 67 new files against the 67 sources, by sha1 | 67 identical, 0 missing, 0 extra |
+| where the storage template filed them | `library/Family/2017/2017-07-17` (9), `2017-07-18` (58) |
+| `upload/` afterwards | 3, as before — nothing left waiting |
+| thumbnails | 300 → 436 within about three minutes |
+| the same command again with `--dry-run` | "server has duplicate: 67", nothing to upload |
+
+Three things worth keeping:
+
+- **One `ERR` line that is not an error.** At the end of a run immich-go sends a "resume" for the
+  `thumbnailGeneration` job, even with `pause-immich-jobs = false` in the config. The `family`
+  key is not an admin key, so the server answers `403 Forbidden`. Nothing had been paused, so
+  nothing needed resuming, and the thumbnail count shows the job running.
+- **`find -mmin` finds nothing after an upload.** Immich keeps each file's original modification
+  time, so the new files look years old. `find -cmin` (inode change time) is the one that works.
+- **The CPU autoscaler reacted.** `immich-server` went from 1 to 2 replicas while the thumbnails
+  were generated; both pods Ready, CPU back at 3% of the request afterwards. Expected, and a
+  reason not to read a second server pod during an import as a problem.
+
+The second dry run also counts "metadata updated: 67". In a dry run nothing is sent; what a real
+re-run would write to an asset the server already has, I have not checked.
+
+One sample, so no estimate for the rest yet: 67 files and 82 MB in 8 s, including start-up and
+reading from the DS418 over SMB with the default 10 concurrent tasks.
