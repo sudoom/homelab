@@ -82,17 +82,17 @@ library:
   # SECOND PVC, copy into it, repoint the consumer" -- and the copy needs both
   # mounted at once, which one flag cannot express.
   truenasMigration:
-    # Step 1 - publish immich-library-nfs, binding the static PV
-    # truenas-immich-library (enable it in components/storage/nfs-csi first).
-    # Both PVCs then coexist; nothing consumes the new one.
-    # STAGED 2026-10-11 -- step 2 of tests/immich-truenas-migration/.
+    # Renders immich-library-nfs, bound to the static PV truenas-immich-library
+    # (published by components/storage/nfs-csi). This is the LIVE library PVC
+    # since the cutover on 2026-10-11 -- it must stay true. The flag only exists
+    # because the old and the new PVC had to coexist for the copy.
     stagePvc: true
     #
-    # Step 2 (CUTOVER) is deliberately NOT a flag here. `existingClaim` below is
-    # a value passed to the upstream immich SUBCHART, and Helm does not template
+    # The cutover itself was never a flag. `existingClaim` further down is a
+    # value passed to the upstream immich SUBCHART, and Helm does not template
     # values.yaml -- a flag would render nothing and silently do nothing. That is
-    # exactly the failure mode the keepers `quiesced` flag hit (14327d4).
-    # Cut over by editing existingClaim: immich-library -> immich-library-nfs.
+    # exactly the failure mode the keepers `quiesced` flag hit (14327d4). It was
+    # cut over by editing existingClaim: immich-library -> immich-library-nfs.
 
 # HPA for immich-server (CPU-based). Possible now that thumbs no longer pin the
 # server to one node via an RWO PVC — its only PVC is the RWX NFS library, so >1
