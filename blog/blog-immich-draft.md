@@ -599,3 +599,55 @@ they are a job for Immich's duplicate utility after the import, not for a pre-ch
 Review lists left for the operator in `~/immich-import/inventory/`: `review-other.tsv`,
 `review-video-immich-cannot-take.tsv`, `review-archives.tsv`, `review-same-name-and-size.tsv`.
 Nothing on the share was changed.
+
+## 2026-10-12 — the archive checked by content, not by name
+
+Two things from the evening before. The operator asked for the files that are neither photo nor
+video to be moved aside, and for the Google `.tgz` to be compared with the two extracted copies
+"by content — it should match" before anything is skipped.
+
+### Moves and one conversion (the only changes made to the share)
+
+- 48 non-media files moved from `photo/photo/…` to `photo/docs_to_review/…`, keeping their
+  relative paths. A rename on the same share, so no copy; each checked for size at the
+  destination and absence at the source. List kept outside the repo.
+- Five `.vob` files turned out to be one 1 h 30 min home video (MPEG-2 720×576 PAL, 4:3,
+  interlaced, AC-3). "Remove vob" could have meant delete, and the share has no recycle bin, so I
+  asked; the answer was to convert. `brew install ffmpeg` (9.0.2), then:
+
+  ```bash
+  ffmpeg -fflags +genpts -i "concat:VTS_01_1.VOB|VTS_01_2.VOB|VTS_01_3.VOB|VTS_01_4.VOB|VTS_01_5.VOB" \
+    -map 0:v:0 -map 0:a:0 -vf "bwdif=mode=send_frame:parity=tff,scale=768:576:flags=lanczos,setsar=1" \
+    -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k \
+    -af "aresample=async=1:first_pts=0" -movflags +faststart out.mp4
+  ```
+
+  135,892 frames, 5,435.68 s in and out, 3.20 GiB against 4.2 GiB; a full decode of the result
+  reported nothing, three sampled frames looked right, and the source had one damaged B-frame
+  that the decoder concealed. Copied next to the originals and compared by sha1. The originals
+  are untouched; the recording date is unknown (the files carry their copy date).
+
+### The checksum run
+
+`sha1` of every member of the `.tgz` (streamed once with Python's `tarfile`), of every file in the
+two extracted Google folders, and of one folder pair that shared 792 names and sizes. sha1
+because it is what Immich uses to refuse a duplicate, so "equal here" is "the same asset there".
+188.3 GiB read over SMB in 8 h 36 min — the DS418 manages about three small files a second, and
+for the first three hours a full-tree `immich-go` dry run was competing for the link. I stopped
+that dry run: it reads every file completely, and a quarter of the way in it had already shown
+the one thing it could (13,687 warnings that the Takeout's `.json` files are ignored in
+`from-folder` mode).
+
+| question | answer |
+|---|---|
+| is the extracted Takeout folder the `.tgz`? | 29,392 of 29,396 members identical at the same path, none different. Three of the other four exist under another name; the fourth is the index page that had just been moved to `docs_to_review` |
+| what does the second Google folder add? | of 13,776 files, 12,778 (44.0 GiB) are byte-identical to something in the export; 998 (3.4 GiB) are not |
+| is the 792-file pair really the same? | all 792 identical (24.5 GiB); 56 small files exist on one side only |
+
+Name-and-size matching had put the second folder's surplus at 2,031 files; content puts it at
+998, because about a thousand files there are export files under different names. The 16 "read
+errors" in the run are the 16 files moved away after the inventory was taken.
+
+So the `.tgz` and both zips can be skipped, the Takeout folder goes through
+`immich-go upload from-google-photos` (its `--help` accepts a folder as well as the zips), and the
+second folder can be imported as a plain folder, where the server will turn away all but 998.
