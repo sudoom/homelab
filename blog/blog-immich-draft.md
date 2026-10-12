@@ -726,6 +726,27 @@ The consequence for this archive, which holds the same bytes in more than one fo
 deleted *and* purged from the trash is re-imported by the next folder that contains a copy.
 Culling belongs after the last folder is in, or the trash stays un-emptied until then.
 
+**Tried the same evening.** The operator removed two of the 67 photos, and I repeated the dry
+run and the count on TrueNAS at 17:35Z:
+
+```
+uploaded successfully              :       2  (1.6 MB)
+server has duplicate               :      65  (80.8 MB)
+library/Family 206 files | under 2017: 65 | thumbs 432
+```
+
+The two files were already gone from the dataset (208 → 206, four thumbnails with them), and by
+sha1 the two missing files are exactly the two the dry run wants to upload (1,688,917 bytes).
+That is the "permanently gone" case, not the trash case: the server's public settings say trash
+is on with 30 days (`/api/server/features` → `trash: true`, `/api/server/config` →
+`trashDays: 30`), so a plain delete would have left the files in place. The trash case therefore
+stays read from source, not tested.
+
+A side note from the same listing: the `.immich` marker file in every top-level folder had a
+change time of 17:26:54Z, with no upload touching those folders. That is the second
+`immich-server` pod starting under the autoscaler — the server rewrites the markers when it
+checks write access at start-up. By 17:35Z the deployment was back to one pod.
+
 Deletion from the live dataset is also not deletion everywhere: the dataset's daily snapshots
 keep a file for 30 days, and the nightly copy to the Synology is `COPY` mode on purpose, so
 anything that was present at a 05:00 run stays in `photo/backups/immich`.
