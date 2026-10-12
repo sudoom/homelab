@@ -651,3 +651,10 @@ errors" in the run are the 16 files moved away after the inventory was taken.
 So the `.tgz` and both zips can be skipped, the Takeout folder goes through
 `immich-go upload from-google-photos` (its `--help` accepts a folder as well as the zips), and the
 second folder can be imported as a plain folder, where the server will turn away all but 998.
+
+The operator's answers closed the open points for the upload itself: everything still in
+`photo/photo` goes into the `family` library, including the two folders I had flagged, and there
+are to be no albums — timeline only. For the plain folders that is `--folder-as-album=NONE`. For
+the Takeout it should mean `--sync-albums=false` as well, but Google's own albums are not the same
+thing as folder names, so that one gets asked before the run. The home video's year and what
+happens to its `.vob` originals are not decided. Nothing has been uploaded yet.
