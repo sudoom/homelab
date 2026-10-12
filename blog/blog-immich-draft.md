@@ -698,8 +698,37 @@ Three things worth keeping:
   were generated; both pods Ready, CPU back at 3% of the request afterwards. Expected, and a
   reason not to read a second server pod during an import as a problem.
 
-The second dry run also counts "metadata updated: 67". In a dry run nothing is sent; what a real
-re-run would write to an asset the server already has, I have not checked.
+The second dry run also counts "metadata updated: 67". Read from the v0.32.0 source afterwards
+(`app/upload/run.go`, case `SameOnServer`): for a file the server already has, immich-go records
+that event and re-applies album membership, nothing else. With no albums a real re-run writes
+nothing.
+
+### Deleting a photo, then importing the same folder again
+
+The operator's question after seeing the photos in the UI: if a couple are deleted from the
+`family` account, are they gone from disk, and does a repeat import skip the identical ones and
+bring back only the deleted ones? Checked in the source of both sides at the versions in use
+rather than answered from memory.
+
+- **Delete is trash first.** The file stays where it is on disk until the trash is emptied or its
+  retention passes (Immich's default is 30 days; the chart does not set it, and I cannot read
+  the admin setting). Only then are the original and its thumbnails removed.
+- **A trashed photo still counts as present.** Server v3.3.1,
+  `server/src/services/asset-media.service.ts`: an upload whose checksum matches an existing row
+  is answered `DUPLICATE`, and the bulk check reports `isTrashed` for it — it is neither stored
+  again nor restored. immich-go v0.32.0 lists trashed assets as well (`immich/metadata.go` adds a
+  `TrashedAfter` query) and matches by checksum, so it reports "server has duplicate" and does
+  not even try.
+- **So a deleted photo comes back only after it is permanently gone.** Before that a repeat
+  import skips it, and it then disappears for good when the trash expires.
+
+The consequence for this archive, which holds the same bytes in more than one folder: a photo
+deleted *and* purged from the trash is re-imported by the next folder that contains a copy.
+Culling belongs after the last folder is in, or the trash stays un-emptied until then.
+
+Deletion from the live dataset is also not deletion everywhere: the dataset's daily snapshots
+keep a file for 30 days, and the nightly copy to the Synology is `COPY` mode on purpose, so
+anything that was present at a 05:00 run stays in `photo/backups/immich`.
 
 One sample, so no estimate for the rest yet: 67 files and 82 MB in 8 s, including start-up and
 reading from the DS418 over SMB with the default 10 concurrent tasks.
