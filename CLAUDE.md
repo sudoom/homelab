@@ -74,6 +74,13 @@ since the split out of this file. Reference files read directly (`teardown.md`, 
   or `ansible/truenas/playbook.yml`**; `--syntax-check`, technitium `base-only.yml` and truenas `check.yml` I can.
 - Full rules and the TrueNAS middleware traps: `ansible/CLAUDE.md`, which loads automatically when I read a file
   under `ansible/`.
+- **The Immich photo library lives on TrueNAS since 2026-10-11** (`tank/immich`, static PV
+  `truenas-immich-library`, PVC `immich-library-nfs`); its Postgres stays on Ceph. The only copy of the photos off
+  that box is a nightly TrueNAS Cloud Sync task into the Synology share folder `photo/backups/immich` — `COPY`
+  mode on purpose, so a deletion in Immich never propagates. Nothing reaches a cloud for the photos until that
+  folder is in the Synology's Hyper Backup task or the OVH job exists; the old C2 task still reports green against
+  a frozen directory. **To stop `immich-server`, set `hpa.enabled: false` in git first** — ArgoCD ignores
+  replicas and the HPA undoes `oc scale --replicas=0` within ~30 s. Runbook: `tests/immich-truenas-migration/`.
 
 ## Architecture
 

@@ -254,3 +254,13 @@ Open after the revert: Renovate will propose v2.1.22 again, and the tag stays he
 `http.compat: [docker2s2]` setting is understood. A downgrade also meets whatever v2.1.22 left in the
 cache for `operatorhubio/catalog` (an index whose platform manifest it never stored), so the thing to
 confirm is that the stuck poll pod pulls again, not just that `zot-0` is Ready.
+
+### Outcome of the revert
+
+ArgoCD rolled `zot-0` onto v2.1.21 at 16:43:52Z (Ready 16:44:20Z). The stuck poll pod was still in
+back-off at 16:44:07Z; its next attempt pulled, and by 16:46:35Z it had replaced the old catalog
+pod (`operatorhubio-catalog-ds67c` Running and ready, `4km9q` gone, CatalogSource `READY`,
+`latestImageRegistryPoll` 16:46:04Z). In the 20 minutes after the restart zot logged no
+"skipping docker media type" line and a normal sync for that repository ("Copy layer" ×80), so
+v2.1.21 fetches the manifest v2.1.22 refused, and the half-stored index v2.1.22 left behind did
+not get in the way. No pod in the cluster was failing a pull afterwards. The tag stays held.
