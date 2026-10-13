@@ -192,3 +192,79 @@ source by folder: library 145, backups 15, upload 3, profile 1
 
 Still open for this leg: `photo/backups` is not yet in the Hyper Backup task, so nothing new
 reaches C2; and nothing alerts on a task that stops running.
+
+## 2026-10-13 — OVH still blocked: a second pass over the providers
+
+Eleven days on, the OVH support case has no answer, and the operator reports that the 40 zł
+route does not work either (what exactly fails is not recorded). So: what else, Polish vendors
+first, and then the operator's own question — Hetzner's S3. Read-only research today (web search
+and the vendors' pages); nothing was ordered or created. Currency at roughly 4.3 zł/€ and
+3.85 zł/$, the rates the 10-01 table implies, not re-read today.
+
+**One line of the 10-01 table was already stale when I wrote it.** Hetzner Object Storage is
+listed there at €4.99. The base price has been **€6.49 net since 2026-04-01** (announced
+2026-02-19); storage beyond the included 1 TB is €0.0087 per TB-hour (about €6.47 per TB-month),
+egress beyond the included 1 TB is €1.00 per TB. With 23% VAT that is ~34 zł a month flat to
+1 TB, not ~26 zł. Hetzner's product pages fill the prices in by script, so the figure comes from
+third-party write-ups of the price adjustment, which agree with each other. The Storage Box price
+after the same adjustment I could not confirm either way.
+
+Polish vendors, per month:
+
+| Provider | Price | Notes |
+|---|---|---|
+| Cloudorama Sp. z o.o. | from 69 zł per 1 TB package | One-month notice; versioning and Object Lock stated. Net or gross, and the data-centre location, not stated |
+| k.pl | 50 zł net for 500 GB, 90 zł net for 1 TB | Unchanged: 24-month contract |
+| Atman | 0.09–0.11 zł/GB → ~90–110 zł per TB | The price page is more than two years old |
+| CloudFerro | €0.020/GB → ~86 zł per TB | Standard tier on the CF2 price table; the cold tier in the 10-01 table is half that |
+| Aruba Cloud (arubacloud.pl) | pay-per-use 2.50 zł net per 10 GB block → 250 zł per TB; packages start at 4 TB for 285 zł net | The headline "from 0.051 zł/GB" is the 64 TB package. An account top-up in the menu suggests prepayment |
+| Remote Admin (Gdańsk) | 390 zł per TB | |
+
+None of them is near OVH's ~16 zł, and none beats the C2 licence (~27 zł net flat). Cloudsy
+advertises €7.69 per TB in Polish, but the seller is an Estonian company (Virtuaalinfra OÜ), so
+that is a foreign invoice.
+
+**A Polish invoice from a hyperscaler.** Google's support page says accounts of customers with a
+legal address in Poland are billed by Google Cloud Poland Sp. z o.o., all accounts including
+card-paying ones, with VAT as a separate line and the VAT ID entered in the payments profile.
+Cloud Storage has a Warsaw region (`europe-central2`). The per-GB prices I have for it are $0.023
+Standard, $0.013 Nearline, $0.006 Coldline and $0.0025 Archive; they match a 2022 capture of
+Google's table, and I could not read the live table today. If they hold, 1 TB is ~10 zł (Archive)
+or ~23 zł (Coldline) net a month. The cost moves to the restore: internet egress is about
+$0.12/GB plus a retrieval fee ($0.02/GB Coldline, $0.05/GB Archive) — roughly 540–650 zł net to
+pull 1 TB back — and the minimum storage duration is 90 days (Coldline) or 365 (Archive). The
+egress, retrieval and duration figures are from memory, not from today's page. That would turn the
+agreed "cancel C2 only after a full restore matches" gate into a paid drill, and the lock design
+would need redoing, because Google's retention features are not S3 Object Lock.
+
+**Hetzner Object Storage against the agreed design.** From Hetzner's documentation: S3-compatible,
+object versioning, Object Lock with governance and compliance modes and a default bucket retention
+in days or years — and, as on OVH, Object Lock can only be switched on when the bucket is created.
+`NoncurrentVersionExpiration` is supported with `NoncurrentDays`, which is what the 90-day expiry
+of old versions needs. Ingress and API calls are free, 1 TB of egress a month is included, billing
+is by the hour with a monthly cap, and an empty bucket is still billed the base price. Locations:
+Falkenstein, Nuremberg, Helsinki. So sections 1–3 of the design carry over unchanged; only the
+endpoint and the price differ. Hetzner invoices EU customers who have a valid VAT ID under reverse
+charge, without tax, and everyone else at their own country's rate.
+
+Not checked: TrueNAS Cloud Sync against Hetzner's endpoint; whether a compliance lock survives
+deleting the Hetzner project; the Storage Box price; Google's live Warsaw prices and how a new
+Google billing account is charged; who issues AWS's invoices for direct services in Poland (a
+Polish branch exists for Marketplace sales).
+
+No decision yet — the provider is the operator's call.
+
+Sources: [Hetzner Object Storage](https://www.hetzner.com/storage/object-storage/),
+[Hetzner supported S3 actions](https://docs.hetzner.com/storage/object-storage/supported-actions/),
+[Hetzner Object Lock retention](https://docs.hetzner.com/storage/object-storage/howto-protect-objects/protect-object-lock-retention),
+[Hetzner VAT](https://docs.hetzner.com/general/billing-and-account-management/billing-at-hetzner/value-added-tax),
+[Hetzner price write-up](https://european-alternatives.eu/product/hetzner-object-storage),
+[Google Cloud Poland billing FAQ](https://support.google.com/cloud/answer/10119385?hl=en),
+[Cloud Storage pricing](https://cloud.google.com/storage/pricing),
+[Cloudorama](https://cloudorama.pl/2026/07/15/s3-storage-backup-archiwum-firmy/),
+[k.pl](https://k.pl/pl/s3-object-storage/),
+[Atman](https://atman.pl/en/services/complementary-services/object-storage/),
+[CloudFerro](https://cloudferro.com/pricing/pricing-tables/cf2-cloud/object-storage),
+[Aruba Cloud](https://www.arubacloud.pl/object-storage-oferta.aspx),
+[Remote Admin](https://remoteadmin.store/store/storage-s3?language=english),
+[Cloudsy](https://cloudsy.partners/przechowywanieobiektws3).
