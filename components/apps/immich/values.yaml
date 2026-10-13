@@ -71,7 +71,7 @@ library:
   # directory to Synology C2 (per-PVC; verified 2026-08-29) and keeps reporting
   # green although nothing writes there any more. From the cutover on, new uploads
   # are NOT in C2. The operator moved knowing this; the replacement path (a
-  # TrueNAS -> Synology copy first, then OVH) is the README TODO "Immich library:
+  # TrueNAS -> Synology copy first, then the offsite job) is the README TODO "Immich library:
   # preserve offsite coverage across the TrueNAS migration".
   storageClass: nfs-csi
   size: 500Gi

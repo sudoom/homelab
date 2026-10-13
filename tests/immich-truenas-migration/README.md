@@ -70,9 +70,10 @@ immich-server            runs as 1000980000, fsGroup 1000980000, SCC restricted-
 cutover, because Hyper Backup task `Synology_C2_immich_photos_task` backs up a *path on the
 Synology* and will keep reporting green against a directory that no longer changes.
 
-On 2026-10-11 the operator chose to move anyway, without the UPS and before the OVH job
-exists, with this order: move the library → build and check the TrueNAS → Synology copy into
-`photo/backups` → only then the full archive import → OVH when the account is sorted.
+On 2026-10-11 the operator chose to move anyway, without the UPS and before any offsite job
+existed, with this order: move the library → build and check the TrueNAS → Synology copy into
+`photo/backups` → only then the full archive import → the offsite job (OVH at the time; a Hetzner
+Storage Box since 2026-10-13).
 Exposure in between: photos uploaded after cutover exist on TrueNAS (RAIDZ2, nightly
 snapshots) and on the phone that took them, and nowhere else. The database is unaffected
 (continuous archive to R2).

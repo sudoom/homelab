@@ -494,3 +494,57 @@ to 25 TB the Storage Box is cheapest, and from 5 TB up by about three times — 
 cheapest. Two caveats on the box at these sizes: snapshots use the same space, so the usable
 figure is lower than the plan's; and past 20 TB the data has to be split over two boxes and two
 tasks.
+
+## Decision (2026-10-13): a Hetzner Storage Box
+
+The operator, after the tables above: "Ok, let's move to storage box". This replaces the
+2026-10-02 decision. OVH never got past onboarding — the prepaid-credit order, a support case
+unanswered after eleven days, and the 40 zł route not working either — and among everything else
+that fits a nightly mirror the Storage Box is the cheapest at this archive's size over the next
+six years: BX11, 1 TB, €3.20 net a month (~17 zł with VAT), billed by the hour, no setup fee, no
+minimum term. The VAT is not recovered; that was accepted with the choice.
+
+What carries over from the OVH design: TrueNAS Cloud Sync declared in `truenas-tasks`, a nightly
+push of `tank/immich` from a snapshot, mirror mode, not encrypted on our side, the staleness
+alerts, and "C2 is cancelled only after a full restore matches". What changes: SFTP instead of
+S3, and the box's snapshots instead of bucket versioning and Object Lock.
+
+Read in Hetzner's documentation before adapting the design:
+
+- Snapshots appear under `/.zfs/snapshot`, one folder per snapshot showing the box as it was.
+  "It is not possible to write to the `/.zfs` directory or its subfolder." Single files and
+  whole directories can be copied out of it; restoring a snapshot from the console reverts the
+  whole box and removes any newer snapshot.
+- A new snapshot takes no space; space is used when a file it holds is later changed or
+  deleted. BX11 has 10 manual and 10 automatic slots; when the automatic slots are full the
+  oldest goes; manual ones stay until deleted.
+- A sub-account has its own login and "access to their own sub-directory only", and can be made
+  read-only. Up to 100 per box.
+- Up to 10 simultaneous connections per account. Traffic is unlimited. SFTP on port 22 is always
+  on. The data sits on a RAID array on a single host server.
+
+The design as adapted, put to the operator and not yet approved:
+
+1. **Target.** BX11 in Germany. TrueNAS logs in as a sub-account confined to one directory, so
+   the login stored on TrueNAS cannot reach the snapshot directory or anything else on the box;
+   the main account stays in the password manager.
+2. **Task.** A second credential (`type: SFTP`; host, user and password all from the vault,
+   because the host name contains the account number) and a second task: `tank/immich`, `SYNC`,
+   from a snapshot, nightly after the 05:00 Synology run, the same two excludes.
+3. **History.** One automatic snapshot a week, 10 slots, so about ten weeks back at weekly
+   steps — against the 90 days of versions and 30-day lock of the OVH design. Set once in
+   Hetzner's console; the box is not an Ansible-managed host.
+4. **Monitoring.** Unchanged: TrueNAS's failure email, plus the staleness metric and the
+   `TrueNASCloudSyncStale` / `TrueNASCloudSyncDisabled` alerts, now covering both tasks.
+5. **Rollout.** Order the box and make the sub-account; three vault variables; the two entries
+   in `group_vars`; a playbook run; the first run started by hand and checked against the source
+   by checksum; one file restored from a snapshot folder and a full restore to a scratch dataset
+   compared; only then is C2 cancelled. `photo/backups` no longer needs adding to Hyper Backup.
+6. **Review point.** At about 800 GB on the box: the 5 TB plan, or a bucket.
+
+To watch on the first run: rclone's defaults (4 transfers, 8 checkers) against the box's limit of
+10 connections.
+
+Sources: [Storage Box snapshots](https://docs.hetzner.com/robot/storage-box/snapshots),
+[creating snapshots](https://docs.hetzner.com/storage/storage-box/getting-started/creating-snapshots),
+[Storage Box general docs](https://docs.hetzner.com/storage/storage-box/general/).

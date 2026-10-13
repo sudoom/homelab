@@ -502,8 +502,8 @@ ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {descri
 ```
 
 A failed run raises a TrueNAS alert, which is mailed like every other alert. Nothing yet tells
-you about a task that simply stopped running; that staleness check is part of the OVH design
-and applies to this task too.
+you about a task that simply stopped running; that staleness check is part of the offsite-backup
+design and applies to this task too.
 
 ## Day-2
 

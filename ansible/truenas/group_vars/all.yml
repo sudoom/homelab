@@ -730,12 +730,13 @@ truenas_snapshot_tasks:
 # share folder photo/backups over SFTP. Immich moved here from the DS418 that
 # day, and the Hyper Backup -> C2 job on the DS418 backs up a path on the
 # Synology, so from the cutover on nothing left this box. This copy is the
-# bridge until the OVH job exists, and the DS418's temporary leg until it is
-# sold. The OVH target becomes a second credential and a second task here.
+# bridge until the offsite job exists, and the DS418's temporary leg until it is
+# sold. The offsite target -- a Hetzner Storage Box, chosen 2026-10-13 after OVH
+# fell through -- becomes a second credential and a second task here.
 #
 # WHY CLOUD SYNC AND NOT AN RSYNC TASK. Both exist on 25.10. Cloud Sync is the
-# mechanism the OVH design already uses (S3), so one code path serves both
-# legs; SFTP takes a plain DSM account and password, where rsync over SSH for
+# mechanism the offsite leg uses as well (SFTP again, to the Storage Box), so
+# one code path serves both legs; SFTP takes a plain DSM account and password, where rsync over SSH for
 # a non-admin DSM account needs key material planted in its home directory.
 # What it does NOT carry is Unix ownership and mode -- contents and
 # modification times only. Fine for a backup that is restored by copying files
