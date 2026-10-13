@@ -388,3 +388,35 @@ With hourly billing and no setup fee, both can be tested on a real box for cents
 Sources: [Hetzner Storage Box](https://www.hetzner.com/storage/storage-box/),
 [Storage Box general docs](https://docs.hetzner.com/storage/storage-box/general/),
 [Storage Box snapshots](https://docs.hetzner.com/robot/storage-box/snapshots).
+
+### Same day — Storage Box against Backblaze, by size
+
+The operator asked where each one wins. Both with 23% VAT: Backblaze is $6.95 per TB billed per
+GB with the first 10 GB free, so ~0.033 zł per GB a month; the Storage Box is a step function,
+~16.90 zł up to 1 TB (BX11) and ~57.70 zł up to 5 TB (BX21).
+
+| Data stored | Backblaze | Storage Box | Cheaper |
+|---|---|---|---|
+| 350 GB (now) | ~11 zł | ~17 zł | Backblaze by ~6 zł |
+| ~520 GB | ~17 zł | ~17 zł | equal |
+| 850 GB | ~28 zł | ~17 zł | Storage Box by ~11 zł |
+| 1 TB | ~33 zł | ~17 zł | Storage Box by ~16 zł |
+| just over 1 TB | ~33 zł | ~58 zł | Backblaze by ~25 zł |
+| ~1.76 TB | ~58 zł | ~58 zł | equal |
+| 3 TB | ~98 zł | ~58 zł | Storage Box by ~40 zł |
+
+On the measured path (350 GB, +100 GB a year) the crossings fall at about 1.7 years (520 GB) and
+6.5 years (1 TB). Five-year totals: ~1,160 zł for Backblaze, ~1,015 zł for the Storage Box. At
++50 GB a year Backblaze wins the five years by ~100 zł; at +200 GB a year the box fills in a
+little over three years. So over five years the two stay within about 150 zł of each other
+whatever the growth, and the price does not decide it. What does:
+
+- **The ceiling.** The box's snapshots use its own 1 TB, and rclone re-uploads a file that
+  moved. A large reorganisation in Immich therefore needs room for both copies until the
+  snapshots rotate; on Backblaze the same event is a few weeks of a higher bill, on the box it can
+  fill the disk.
+- **The history.** Backblaze keeps every changed or deleted file by itself for the 90 days the
+  design asks for, under a lock; the box keeps ten whole-box snapshots.
+- **The moving parts.** The box is the SFTP task type already running to the Synology and a
+  restore is a plain file copy; Backblaze is a new task type plus bucket settings made once in
+  its console.
