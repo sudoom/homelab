@@ -464,3 +464,33 @@ filled from TrueNAS and the old one is dropped.
 
 So starting on the Storage Box and moving to a bucket near 1 TB is a re-upload and at most a
 month of paying for both. Not confirmed: whether a BX11 can be enlarged to BX21 in place.
+
+### Same day — the same three, out to 25 TB
+
+Asked for by the operator. Same rates and VAT as above; the Storage Box column is the smallest
+plan that holds the data (BX11 1 TB, BX21 5 TB, BX31 10 TB, BX41 20 TB at €3.20 / €10.90 /
+€20.80 / €40.60). The largest plan is 20 TB, so the 25 TB row is two boxes, BX41 + BX21.
+
+| Data stored | Backblaze | Storage Box | Hetzner Object Storage | Cheapest |
+|---|---|---|---|---|
+| 350 GB | ~11 zł | ~17 zł (BX11) | ~34 zł | Backblaze |
+| ~520 GB | ~17 zł | ~17 zł | ~34 zł | Backblaze = Storage Box |
+| 1 TB | ~33 zł | ~17 zł | ~34 zł | Storage Box |
+| just over 1 TB | ~33 zł | ~58 zł (BX21) | ~34 zł | Backblaze |
+| ~1.76 TB | ~58 zł | ~58 zł | ~59 zł | all three about equal |
+| 2 TB | ~65 zł | ~58 zł | ~67 zł | Storage Box |
+| 3 TB | ~98 zł | ~58 zł | ~101 zł | Storage Box |
+| 5 TB | ~164 zł | ~58 zł | ~167 zł | Storage Box |
+| just over 5 TB | ~165 zł | ~110 zł (BX31) | ~167 zł | Storage Box |
+| 10 TB | ~329 zł | ~110 zł | ~332 zł | Storage Box |
+| just over 10 TB | ~329 zł | ~215 zł (BX41) | ~333 zł | Storage Box |
+| 15 TB | ~493 zł | ~215 zł | ~498 zł | Storage Box |
+| 20 TB | ~658 zł | ~215 zł | ~663 zł | Storage Box |
+| 25 TB | ~822 zł | ~272 zł (BX41 + BX21) | ~829 zł | Storage Box |
+
+Backblaze wins in two windows only: below ~520 GB, and from 1 TB to ~1.76 TB. Everywhere else up
+to 25 TB the Storage Box is cheapest, and from 5 TB up by about three times — both buckets cost
+~33 zł per TB at any size, a full box ~11 zł per TB. Hetzner Object Storage is never the
+cheapest. Two caveats on the box at these sizes: snapshots use the same space, so the usable
+figure is lower than the plan's; and past 20 TB the data has to be split over two boxes and two
+tasks.
