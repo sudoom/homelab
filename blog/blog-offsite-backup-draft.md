@@ -420,3 +420,47 @@ whatever the growth, and the price does not decide it. What does:
 - **The moving parts.** The box is the SFTP task type already running to the Synology and a
   restore is a plain file copy; Backblaze is a new task type plus bucket settings made once in
   its console.
+
+### Same day — Hetzner Object Storage in the same table, and what a move costs
+
+A second screenshot from the operator, Hetzner's own page: Object Storage €6.49 a month with
+1 TB, additional storage €6.26 per TB, excluding VAT. That confirms the third-party figure above
+(€0.0087 per TB-hour is €6.26 over a 30-day month). With 23% VAT: ~34.30 zł up to 1 TB, then
+~33.10 zł per further TB.
+
+| Data stored | Backblaze | Storage Box | Hetzner Object Storage | Cheapest |
+|---|---|---|---|---|
+| 350 GB (now) | ~11 zł | ~17 zł | ~34 zł | Backblaze |
+| ~520 GB | ~17 zł | ~17 zł | ~34 zł | Backblaze = Storage Box |
+| 850 GB | ~28 zł | ~17 zł | ~34 zł | Storage Box |
+| 1 TB | ~33 zł | ~17 zł | ~34 zł | Storage Box |
+| just over 1 TB | ~33 zł | ~58 zł | ~34 zł | Backblaze, Hetzner within ~2 zł |
+| ~1.7 TB | ~56 zł | ~58 zł | ~58 zł | all three about equal |
+| 3 TB | ~98 zł | ~58 zł | ~101 zł | Storage Box |
+
+Hetzner Object Storage is never the cheapest of the three: below 1 TB it costs two to three times
+the others, above it tracks Backblaze within a couple of złoty. Five years on the measured path:
+~2,060 zł. Its case is not price — it is the same vendor and account as the Storage Box, with the
+lock and versions the box lacks.
+
+**Moving between a Storage Box and a bucket, either way.** The copy on TrueNAS is the original
+and the cloud is a mirror, so a move is not a transfer between providers: the new destination is
+filled from TrueNAS and the old one is dropped.
+
+- *In the repo.* `truenas-tasks` is generic over the provider: a credential is a `provider` block
+  plus a `secrets` map of field name to vault variable, a task passes its `attributes` through.
+  A new destination is one entry in `truenas_cloudsync_credentials`, one in
+  `truenas_cloudsync_tasks`, the vault variables, and a playbook run — the same in both
+  directions. The role never deletes; the old task gets `enabled: false`, which it does support.
+  An S3-type credential has not been through the real middleware yet.
+- *The upload.* Ingress is free at all three. ~350 GB is about 39 h at 20 Mbit/s, 16 h at
+  50 Mbit/s, 8 h at 100 Mbit/s of uplink; the home uplink is not measured.
+- *What does not move.* History. Snapshots stay on the box and old versions stay in the bucket,
+  so the new destination's history starts on the day of the move. Keeping the old one through
+  one retention period covers the gap.
+- *Leaving the box* is immediate: no minimum term, cancellation takes effect at once.
+- *Leaving a bucket* with a compliance lock is not: locked objects cannot be deleted until the
+  lock runs out, 30 days in the design, so the old bucket is paid for up to a month longer.
+
+So starting on the Storage Box and moving to a bucket near 1 TB is a re-upload and at most a
+month of paying for both. Not confirmed: whether a BX11 can be enlarged to BX21 in place.
