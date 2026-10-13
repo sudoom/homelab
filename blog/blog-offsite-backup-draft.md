@@ -326,3 +326,40 @@ Sources: [Scaleway storage pricing](https://www.scaleway.com/en/pricing/storage/
 [Google Cloud Storage pricing guide](https://www.nops.io/blog/google-cloud-storage-pricing/),
 [AWS S3 pricing explained](https://upstash.com/blog/aws-s3-pricing-explained-2026),
 [objectstorageprices.com](https://objectstorageprices.com/).
+
+### Same day — the operator doubts the archive tier, and is right
+
+I had picked Google's Archive class as "cheapest to hold". The operator's reply: cheapest *for this
+use case*, and is deep archive even the right tier? It is not. An archive class is priced for data
+that is written once and read about never; this job is a nightly mirror that lists the bucket
+every night, expires old versions after 90 days and has to pass a restore test before C2 is
+cancelled. Against that:
+
+- the minimum billing period is 180 days (AWS) or 365 (Google), longer than the 90-day expiry of
+  old versions, so every expired version is paid for well past its deletion;
+- AWS and Scaleway need each object requested back and waited for, which a Cloud Sync task
+  cannot do;
+- on Google the class itself is usable (no wait), but the money comes back on the way out. Even
+  the milder Coldline class in Belgium (about $0.004/GB, ~550 zł net over five years, Polish
+  invoice) costs ~540 zł per TB restored — $0.02/GB retrieval plus about $0.12/GB egress — so one
+  full restore test cancels the saving.
+
+The class that fits is ordinary or infrequent-access storage with cheap or free download — what
+OVH's Infrequent Access was. With OVH out, measured against the archive as it now is (~350 GB,
++100 GB a year, so ~850 GB in year five; 23% VAT added):
+
+| Option | Now | Year five | Five years | Notes |
+|---|---|---|---|---|
+| Backblaze B2, EU Central (Amsterdam) | ~11.5 zł | ~28 zł | ~1,200 zł | Per GB, no minimum size or duration, first 10 GB free, download free up to 3× what is stored. Versioning always on, Object Lock (governance or compliance, default retention in days), "keep prior versions for N days" lifecycle rule. Native task type |
+| Hetzner Storage Box, 1 TB | ~17 zł | ~17 zł | ~1,000 zł | If the price is still €3.20 and the data stays under 1 TB. SFTP, snapshots instead of Object Lock |
+| IDrive e2, 1 TB plan | ~11.7 zł | ~23.5 zł | ~1,270 zł | Prepaid per year |
+| Hetzner Object Storage | ~34 zł | ~34 zł | ~2,050 zł | Flat |
+
+Read from Backblaze's own pages today: $6.95 per TB a month, the region is chosen when the
+account is created and cannot be changed afterwards, the price is the same in every region, and
+Object Lock can be enabled at creation or later but never disabled. Not read anywhere: how
+Backblaze invoices a Polish customer.
+
+Sources: [Backblaze Object Lock](https://www.backblaze.com/docs/cloud-storage-object-lock),
+[Backblaze data regions](https://www.backblaze.com/docs/cloud-storage-data-regions),
+[Backblaze B2 pricing](https://www.backblaze.com/cloud-storage/pricing).
