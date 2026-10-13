@@ -268,3 +268,61 @@ Sources: [Hetzner Object Storage](https://www.hetzner.com/storage/object-storage
 [Aruba Cloud](https://www.arubacloud.pl/object-storage-oferta.aspx),
 [Remote Admin](https://remoteadmin.store/store/storage-s3?language=english),
 [Cloudsy](https://cloudsy.partners/przechowywanieobiektws3).
+
+### Same day — the cheapest in the EU, and the cheapest anywhere
+
+The operator's follow-up: forget the Polish invoice for a moment — what is the cheapest in the EU,
+and the cheapest in the world? They turn out to be the same answer. The price floor is the archive
+class at the big clouds, about $1–1.2 per TB a month, and those classes exist in EU regions.
+Nothing outside the EU is cheaper than what is inside it; the cheap "ordinary" storage (Backblaze,
+IDrive) has EU regions too.
+
+Per month, foreign invoices with 23% VAT added as before, at ~350 GB (the archive today) and 1 TB:
+
+| Option | ~350 GB | 1 TB | Getting 1 TB back | Catches |
+|---|---|---|---|---|
+| Google Cloud Storage Archive, Belgium or Finland ($0.0012/GB) | ~1.6 zł net | ~4.6 zł net | ~650 zł net ($0.05/GB retrieval + ~$0.12/GB egress); no wait | Polish invoice. 365-day minimum per object. Lock design needs redoing |
+| AWS S3 Glacier Deep Archive ($0.00099/GB, US East figure) | ~1.6 zł | ~4.7 zł | ~400–500 zł, after a 12–48 h thaw requested per object | 180-day minimum. A plain Cloud Sync task cannot restore from it |
+| Scaleway Glacier, Paris (€0.00254/GB) | ~4.7 zł | ~13 zł | ~100 zł (€0.009/GB restore + €0.01/GB egress past 75 GB), after a thaw | Same thaw problem |
+| Backblaze B2, Amsterdam ($6.95/TB, billed per GB) | ~11.5 zł | ~33 zł | free (egress up to 3× stored) | US company. Versioning and Object Lock, no minimum duration |
+| Hetzner Storage Box, 1 TB (€3.20 in an October 2025 listing) | ~17 zł | ~17 zł | free | Flat; hard stop at 1 TB, next size is 5 TB. Snapshots, no Object Lock. Price since April not confirmed |
+| IDrive e2, 1 TB plan ($59.50 a year, $29.75 the first) | ~23.5 zł | ~23.5 zł | free (up to 3× stored) | Prepaid per year, 1 TB minimum |
+| Hetzner Object Storage (€6.49) | ~34 zł | ~34 zł | free (1 TB a month) | Flat base price |
+
+Five years at the planning sizes (600 GB + 100 GB a year): Google Archive ~240 zł net, Deep
+Archive ~240 zł, Scaleway Glacier ~690 zł, OVH Infrequent Access ~820 zł net (blocked), IDrive
+~1,270–1,550 zł, Storage Box ~1,000–1,500 zł, Backblaze ~1,680 zł, C2 licence ~1,975 zł net,
+Hetzner Object Storage ~2,050 zł.
+
+Two things the table hides. First, Backblaze bills per GB and Hetzner Object Storage bills a flat
+base, so at this archive's size Backblaze costs a third of Hetzner and only catches up at 1 TB.
+Second, the archive classes charge for the calls a nightly mirror makes: on Google a bucket
+listing is billed at the bucket's default class ($0.50 per 10,000 calls for Archive, from memory),
+so the task needs `fast_list` on — one call per 1,000 objects instead of one per folder — or the
+listing can cost more than the storage.
+
+What the box supports, read from it rather than remembered:
+
+```bash
+ssh truenas_admin@192.168.1.25 "midclt call cloudsync.providers"   # names and task options only
+#  S3: bucket, folder, fast_list, region, encryption, storage_class
+#  B2: bucket, folder, fast_list, b2_chunk_size
+#  GOOGLE_CLOUD_STORAGE: bucket, folder, fast_list, bucket_policy_only
+#  AZUREBLOB, SFTP, WEBDAV, PCLOUD, STORJ_IX, ... (18 in all)
+```
+
+So Backblaze and Google Cloud Storage are native task types on 25.10.6, and only the S3 type lets
+the task choose a storage class — on Google the class has to come from the bucket.
+
+Not confirmed from a vendor's own live page today: the Google prices (they match Google's table as
+quoted by search and a 2022 capture; the egress figure is from memory), the Deep Archive price in
+an EU region and its egress, the Storage Box price, IDrive's European regions.
+
+Sources: [Scaleway storage pricing](https://www.scaleway.com/en/pricing/storage/),
+[Backblaze B2 pricing](https://www.backblaze.com/cloud-storage/pricing),
+[Backblaze lifecycle rules](https://www.backblaze.com/docs/cloud-storage-enable-and-manage-lifecycle-rules),
+[IDrive e2 pricing](https://www.idrive.com/s3-storage-e2/pricing),
+[Cloud Storage pricing](https://cloud.google.com/storage/pricing),
+[Google Cloud Storage pricing guide](https://www.nops.io/blog/google-cloud-storage-pricing/),
+[AWS S3 pricing explained](https://upstash.com/blog/aws-s3-pricing-explained-2026),
+[objectstorageprices.com](https://objectstorageprices.com/).
