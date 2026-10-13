@@ -363,3 +363,28 @@ Backblaze invoices a Polish customer.
 Sources: [Backblaze Object Lock](https://www.backblaze.com/docs/cloud-storage-object-lock),
 [Backblaze data regions](https://www.backblaze.com/docs/cloud-storage-data-regions),
 [Backblaze B2 pricing](https://www.backblaze.com/cloud-storage/pricing).
+
+### Same day — the Storage Box price, confirmed by the operator
+
+The one price I could not read came back as a screenshot of Hetzner's order page (2026-10-13,
+21:28): BX11 €3.20, BX21 €10.90, BX31 €20.80, BX41 €40.60 a month at most, billed by the hour
+(BX11 €0.0051/h), excluding VAT, setup fee €0.00. So the April adjustment left the Storage Box
+alone and the ~17 zł flat line stands.
+
+That makes it the cheapest of the options that fit: ~1,000 zł over five years against ~1,200 zł
+for Backblaze. Backblaze is cheaper only while the data is under ~515 GB, which on +100 GB a year
+is the first year and a half or so.
+
+What choosing it would change in the design. No Object Lock and no per-object versions: history
+is the box's snapshots — on BX11 10 manual and 10 automatic slots, the oldest automatic one
+dropped when a new one is taken at the limit, and snapshots use the box's own capacity. The task
+type is SFTP (port 22, SSH keys supported), the same as the Synology leg, so the role code already
+running nightly serves it with a second credential. The box stops at 1 TB; the next size is 5 TB.
+
+Not confirmed: that a snapshot cannot be removed with the SFTP login (my recollection is a
+read-only directory, deletable only from Hetzner's console or API), and how a full box behaves.
+With hourly billing and no setup fee, both can be tested on a real box for cents.
+
+Sources: [Hetzner Storage Box](https://www.hetzner.com/storage/storage-box/),
+[Storage Box general docs](https://docs.hetzner.com/storage/storage-box/general/),
+[Storage Box snapshots](https://docs.hetzner.com/robot/storage-box/snapshots).
