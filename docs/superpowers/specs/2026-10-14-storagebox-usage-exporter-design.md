@@ -1,6 +1,6 @@
 # Storage Box usage and access settings in Prometheus
 
-Status: draft 2026-10-14, **not approved**. Follow-up to
+Status: **approved by the operator 2026-10-14**, together with Open 1 (a), replace `TrueNASOffsiteReviewDue`, and the allowlist route that emails the box's warnings. Follow-up to
 `docs/superpowers/specs/2026-10-13-offsite-backup-storage-box-design.md` (Monitoring).
 
 ## Why
@@ -149,7 +149,7 @@ PrometheusRule group `hetzner-storagebox`. The placeholders are escaped as in `t
    - (a) Replace it with the 80 % rule. That rule reads the box itself, snapshots included. It follows a rescale, and it is emailed.
    - (b) Keep both, with the dataset rule as an API-independent planning trigger.
 
-   **Recommended: (a).** The dataset rule counts data that is never uploaded.
+   **Decided 2026-10-14: (a).** The dataset rule counts data that is never uploaded. `TrueNASOffsiteReviewDue` is removed in the same commit that adds `HetznerStorageBoxFilling`.
 2. **Whether the main account's SSH and external settings gate sub-accounts.** Hetzner's docs do not say, so the
    premise that turning them off breaks the upload is unconfirmed.
 3. **Whether `stats.size` equals data plus snapshots.** Checked on the first scrape.
