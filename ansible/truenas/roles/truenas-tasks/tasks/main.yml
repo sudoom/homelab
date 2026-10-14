@@ -370,6 +370,8 @@
     _cred_id: "{{ (truenas_cs_cred_ids[item.credentials] | default(0)) | int }}"
     # One expression, so the types survive templating: `credentials` has to
     # reach the middleware as an integer and the two flags as booleans.
+    # `transfers` is a top-level field, not an attribute: the middleware turns
+    # it into rclone's `--transfers N`, and null leaves rclone's default (4).
     _payload: >-
       {{ {
            'description': item.description,
@@ -381,7 +383,8 @@
            'transfer_mode': item.transfer_mode,
            'snapshot': item.snapshot | default(false) | bool,
            'exclude': item.exclude | default([]),
-           'enabled': item.enabled | default(true) | bool
+           'enabled': item.enabled | default(true) | bool,
+           'transfers': item.transfers | default(none)
          } }}
     # Declared keys only, for the same reason as the credentials above.
     _attrs_live: "{{ _cur.attributes | dict2items | selectattr('key', 'in', item.attributes.keys() | list) | list | items2dict }}"
@@ -395,7 +398,8 @@
          and _cur.transfer_mode == item.transfer_mode
          and (_cur.snapshot | bool) == (item.snapshot | default(false) | bool)
          and (_cur.exclude | default([], true) | list) == (item.exclude | default([]) | list)
-         and (_cur.enabled | bool) == (item.enabled | default(true) | bool) }}
+         and (_cur.enabled | bool) == (item.enabled | default(true) | bool)
+         and (_cur.transfers | default(none)) == (item.transfers | default(none)) }}
     _entry:
       description: "{{ item.description }}"
       credentials: "{{ item.credentials }}"

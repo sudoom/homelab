@@ -482,6 +482,10 @@ rclone-based Cloud Sync tasks; the design notes are next to them. The first one 
   mode, so a restore copies the files back and then chowns them to the immich namespace UID
   (`owner_uid` on the `immich` dataset).
 
+`transfers` (optional, per task) is rclone's number of parallel file transfers. It is a top-level
+task field, not an attribute, and the role reconciles it like the others. Left out, it is `null`,
+which is rclone's default of 4.
+
 What the Synology needs, by hand in DSM (it is not managed from this repo): the SFTP service
 enabled (Control Panel → File Services → FTP → SFTP; it was off until 2026-10-11, and with it
 off port 22 answers `Connection refused`), and an account with read/write on `photo` and the SFTP application
