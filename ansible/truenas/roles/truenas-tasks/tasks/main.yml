@@ -246,7 +246,8 @@
 #
 # Every task that can see a provider block is `no_log`: the middleware returns
 # stored passwords in the clear to a local caller, cloudsync.query nests the
-# whole credential in each task, and the create payload carries the password.
+# whole credential in each task, cloudsync.create/update return the task the
+# same way, and the credential create payload carries the password.
 # Two facts come out of this: `truenas_cs_want` (holds secrets, never printed)
 # and `truenas_cs_status` (names only, safe to report and used by the
 # convergence block in playbook.yml).
@@ -425,6 +426,7 @@
   when:
     - (item.cred_id | int) > 0
     - (item.live_id | int) == 0
+  no_log: true
 
 - name: Reconcile Cloud Sync tasks that drifted
   ansible.builtin.command:
@@ -441,3 +443,4 @@
     - (item.cred_id | int) > 0
     - (item.live_id | int) > 0
     - not (item.in_sync | bool)
+  no_log: true
