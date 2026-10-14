@@ -185,3 +185,97 @@ spec:
               Sustained above 50C. HGST datacenter drives are rated to 60C but
               sustained heat is the main controllable driver of failure rate.
               Check chassis airflow.
+
+    # Cloud Sync backup tasks -- the Synology copy (05:00) and the offsite copy
+    # to the Hetzner Storage Box (06:00). TrueNAS mails a FAILED run itself;
+    # what nothing else catches is a task that stops running, or goes on
+    # failing after that first mail. Metrics: collect_cloudsync in the
+    # textfile collector. Spec:
+    # docs/superpowers/specs/2026-10-13-offsite-backup-storage-box-design.md
+    - name: truenas-backups
+      rules:
+        # The last success comes from Prometheus history, not from the current
+        # series: the collector exports it only while the LAST job succeeded,
+        # so one failed or running job would otherwise hide when the last good
+        # one was. 7d sits well inside this Prometheus's 15d retention.
+        - alert: TrueNASCloudSyncStale
+          expr: |
+            (time() - max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])) > 36 * 3600
+              and on(task) truenas_cloudsync_enabled == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backup task without a successful run for {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
+            description: |
+              Cloud Sync task "{{ "{{" }} $labels.task {{ "}}" }}" runs daily, and its
+              last successful run ended {{ "{{" }} $value | humanizeDuration {{ "}}" }} ago.
+              Read the last job (never print the whole reply -- it carries the
+              credential's password):
+              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}'`
+
+        - alert: TrueNASCloudSyncStale
+          expr: |
+            (time() - max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])) > 72 * 3600
+              and on(task) truenas_cloudsync_enabled == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backup task without a successful run for {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
+            description: |
+              Cloud Sync task "{{ "{{" }} $labels.task {{ "}}" }}" has missed three
+              nightly runs in a row. For the offsite task, the only copy outside
+              the house is now that old. Read the last job as in the warning.
+
+        # A task that has never succeeded has no success series at all, and one
+        # whose last success has left the 7-day window has none either -- the
+        # two rules above see nothing in both cases.
+        - alert: TrueNASCloudSyncStale
+          expr: |
+            truenas_cloudsync_enabled == 1
+              unless on(task) max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])
+          for: 1h
+          labels:
+            severity: critical
+            # Tells this alert apart from the 72h rule above: both are critical
+            # for the same task around the 7-day edge, and two rules may not
+            # produce the same alert identity.
+            window: no-success-7d
+          annotations:
+            summary: "Backup task has no successful run in 7 days"
+            description: |
+              Cloud Sync task "{{ "{{" }} $labels.task {{ "}}" }}" is enabled and has
+              not succeeded in the last 7 days, or ever. Right after playbook.yml
+              creates a task this fires until its first run. Otherwise read the
+              last job:
+              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}'`
+
+        - alert: TrueNASCloudSyncDisabled
+          expr: truenas_cloudsync_enabled == 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backup task disabled: {{ "{{" }} $labels.task {{ "}}" }}"
+            description: |
+              A disabled Cloud Sync task makes no backup, and the staleness rules
+              skip it. If this was not deliberate: the task is declared in
+              ansible/truenas/group_vars/all.yml (`enabled`); re-run playbook.yml.
+
+        # The Storage Box is a BX11 (1 TB), sized for ~350 GB growing ~100 GB a
+        # year. This reads the whole dataset -- including the excluded thumbs/
+        # and encoded-video/ and local snapshots -- so it fires early, which is
+        # the safe side. The box's own usage, snapshots included, is visible
+        # only in Hetzner's console.
+        - alert: TrueNASOffsiteReviewDue
+          expr: truenas_dataset_used_bytes{dataset="tank/immich"} > 800e9
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: "tank/immich passed 800 GB: review the 1 TB Storage Box"
+            description: |
+              Choose the 5 TB plan (BX21) or a bucket before the box fills. The
+              comparison is in blog/blog-offsite-backup-draft.md (2026-10-13).
+              Check the box's real usage, snapshots included, in Hetzner's console.

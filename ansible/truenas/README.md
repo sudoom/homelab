@@ -520,9 +520,12 @@ ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync <id>"     # clo
 ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished}'
 ```
 
-A failed run raises a TrueNAS alert, which is mailed like every other alert. Nothing yet tells
-you about a task that simply stopped running; that staleness check is part of the offsite-backup
-design and applies to this task too.
+A failed run raises a TrueNAS alert, which is mailed like every other alert. A task that stops
+running is caught in the cluster: the textfile collector exports each task's last job
+(`truenas_cloudsync_*`), and `TrueNASCloudSyncStale` fires 36 h (warning) and 72 h (critical)
+after the last success, or when an enabled task has none in 7 days.
+`TrueNASCloudSyncDisabled` covers a disabled task. Rules:
+`components/cluster-config/truenas-exporter/templates/prometheusrule.yaml`.
 
 ## Day-2
 
