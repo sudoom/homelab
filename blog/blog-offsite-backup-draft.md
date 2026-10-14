@@ -619,3 +619,16 @@ Two things for the spec:
 - It is not clear whether manual and automatic snapshots share the 10 slots, since they are counted separately.
   So the manual snapshot taken in rollout step 6 is deleted afterwards, and the question is listed as open.
 - The "Rescale" tab suggests a BX11 can be enlarged in place. Not tried.
+
+Later the same day the operator reported the rest done: the snapshot plan, the sub-account and the three vault
+variables. Checked from the repo without decrypting anything:
+
+```
+$ head -1 vars/vault.yml | cut -c1-40
+$ANSIBLE_VAULT;1.1;AES256
+$ git check-ignore -q vars/vault.yml && echo ignored
+ignored
+```
+
+The file is still encrypted, was modified at 16:55, and is not tracked. Whether the three names are in it shows
+only when the playbook runs: `cloudsync_tasks_without_secrets` reports a task whose vault variables are missing.
