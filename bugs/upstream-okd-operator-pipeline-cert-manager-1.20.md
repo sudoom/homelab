@@ -61,6 +61,25 @@ which is not run by default, consults the branch. So `init` pinned 4.20 content 
 claimed 4.21.
 `sudoom:feature/cert-manager-1.20` @ `fd314fc` -> `okd-project:main` @ `73f8e01`, 3 commits, 9 files, 64/24.
 
+**2026-10-14: #28 and #29 are stale, not broken.** Both are still `CLEAN`, with no review or comment, and nothing
+under `cert-manager/` changed on either base. The pins have aged, though:
+
+| gitlink | tracks | PR pin | behind the tip | notable commits ahead |
+|---|---|---|---|---|
+| `cert-manager/cert-manager` | `openshift/jetstack-cert-manager` `release-1.20` | `ddde1aa` (v1.20.3 + 4, 2026-06-25) | 46 | `bc643782` "Rebase release-1.20 to upstream v1.20.4 for CVE remediation" (09-23), two golang.org/x CVE bumps |
+| `cert-manager/operator` | `openshift/cert-manager-operator` `cert-manager-1.20` | `bd76823` (CSV v1.20.0) | 7 | operator 1.20.1, regenerated bundle, operand v1.20.4 (09-23/24) |
+
+Merged as is, they would ship the June operand without the v1.20.4 CVE fixes. Bumping the operator pin means
+regenerating `cert-manager/patches/operator.patch`: a subagent's `git apply --check` applies it at `bd76823` and
+fails at the tip `1adf341f` (the Makefile `DEFAULT_VERSION` hunk and the CSV skipRange hunk). The `yq` edits in
+`build.sh` need re-checking too. **1.20 is still the right target:** neither midstream repo has a 1.21 branch
+(`cert-manager-1.19`/`-1.20`, `release-1.19`/`-1.20` only), although upstream v1.21.2 is out. 1.20 is supported for
+Kubernetes 1.32-1.35 and OpenShift 4.19-4.21, and goes EOL when 1.22 ships (expected around 2026-11).
+**`main` now targets OKD 5.0** (`common.sh`: `OKD_VERSION=5.0.0-okd-scos.0`, 09-22), so #28 lands in the 5.0
+stream, past 1.20's OpenShift range. **#29's build:** `cert-manager-deploy.yaml` exists on `release-4.21`, so a
+maintainer can start it by hand on that branch even though its push trigger names `main`.
+Evidence: scratchpad `cm-research/report.md` (2026-10-14 session; not kept).
+
 **Still to do:** the companion `okderators-catalog-index` change adding the `olm.channel` entry. It cannot be
 written until this PR merges and a build is published, because the entry has to name the resulting
 `cert-manager-operator.v1.20.0-<date>` CSV.
