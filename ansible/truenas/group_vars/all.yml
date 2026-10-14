@@ -804,7 +804,7 @@ truenas_cloudsync_tasks:
     dataset: immich
     credentials: hetzner-storagebox
     # Relative to the sub-account's base directory, which is all it can see of
-    # the box. Checked with cloudsync.list_directory on "/" before the first run.
+    # the box. Check with cloudsync.list_directory on "/" before the first run (plan Task 7 Step 1).
     attributes:
       folder: /immich
     transfer_mode: SYNC

@@ -516,15 +516,19 @@ First run and check, after converging:
 
 ```bash
 ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {id, description, enabled}'
-ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync <id>"     # cloudsync.sync is a JOB method
+ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync <id>" | sed -E 's/u[0-9]+(-sub[0-9]+)?(\.your-storagebox\.de)?/<box>/g'     # cloudsync.sync is a JOB method; errors can name the box host
 ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished}'
 ```
+
+The `sed` redacts the Storage Box host (`u<digits>.your-storagebox.de`), which rclone and middleware
+errors can contain; add it to any command that prints a job's error or log.
 
 A failed run raises a TrueNAS alert, which is mailed like every other alert. A task that stops
 running is caught in the cluster: the textfile collector exports each task's last job
 (`truenas_cloudsync_*`), and `TrueNASCloudSyncStale` fires 36 h (warning) and 72 h (critical)
 after the last success, or when an enabled task has none in 7 days.
-`TrueNASCloudSyncDisabled` covers a disabled task. Rules:
+`TrueNASCloudSyncDisabled` covers a disabled task, and `TrueNASCloudSyncUnmonitored` fires when a task's
+series vanish (a failing `cloudsync.query`, or a removed task). Rules:
 `components/cluster-config/truenas-exporter/templates/prometheusrule.yaml`.
 
 ## Day-2
