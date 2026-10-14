@@ -79,8 +79,10 @@ since the split out of this file. Reference files read directly (`teardown.md`, 
   Two nightly TrueNAS Cloud Sync tasks copy the photos off that box: 05:00 into the Synology share folder
   `photo/backups/immich` (`COPY` on purpose, so a deletion in Immich never propagates there) and 06:00 to a Hetzner
   Storage Box sub-account (`SYNC`; history from the box's weekly snapshots × 10). The offsite task is in code since
-  2026-10-14 and exists on the box once `playbook.yml` has run; until its restore test passes, the old C2 task keeps
-  reporting green against a frozen directory. Both tasks alert in the cluster when stale (`TrueNASCloudSyncStale`).
+  2026-10-14 and exists on the box once `playbook.yml` has run. Its restore test passed on 2026-10-14 (a full
+  pull-back, 231 files with 0 differences, and a single-file restore from a box snapshot), so retiring the old C2
+  task is the operator's next step, expected within about a week; until then it keeps reporting green against a
+  frozen directory. Both tasks alert in the cluster when stale (`TrueNASCloudSyncStale`).
   **To stop `immich-server`, set `hpa.enabled: false` in git first** — ArgoCD ignores
   replicas and the HPA undoes `oc scale --replicas=0` within ~30 s. Runbook: `tests/immich-truenas-migration/`.
 
