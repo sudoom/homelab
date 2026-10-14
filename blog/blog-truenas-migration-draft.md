@@ -5538,8 +5538,10 @@ truenas rules go 16 to 17 (after the offsite-review rule's removal), and the rou
 **The two tiles.** The single pane's Health row gets a "TrueNAS update" stat. Its query is
 `truenas_update_available == 1 or label_replace(truenas_update_available == 0, "version", "up to date", "job", ".*")`:
 the offered version is the series' own `version` label, and the 0 sample is relabelled so the tile reads "up to
-date". When `update.status` cannot be read the collector exports no sample, so the tile shows its "no data" text,
-and "no data" never reads as up to date; a `promtool` test pins all three cases. The Capacity row gets a snapshot
+date". When `update.status` cannot be read, or its reply has a shape the collector cannot verify, the collector exports
+no sample, so the tile has no series to show and falls back to its "no data" text on a grey background; "no data"
+never reads as up to date. A `promtool` test pins the three PromQL cases, not Grafana's rendering; the final review
+fixed the collector (only an explicit `null` `new_version` means 0) and the tile colours. The Capacity row gets a snapshot
 space table (bytes and share of `truenas_dataset_used_bytes`), which is why the two timeseries there went from width
 12 to 8.
 

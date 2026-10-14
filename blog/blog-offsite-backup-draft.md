@@ -968,7 +968,7 @@ collector").
    premise that turning them off breaks the upload is unconfirmed.
 3. **Whether `stats.size` equals data plus snapshots.** Checked on the first scrape.
 
-### Rulings made while planning
+### Rulings 3–8 (from the plan)
 
 3. **`HCLOUD_EXPORTER_WEB_ADDRESS` is set from `.Values.port`.** The spec's env list leaves it at the default
    (`0.0.0.0:9501`). Setting it keeps one source for the port that the Service and probes use.
@@ -996,6 +996,14 @@ d87253b monitoring-config: email the Storage Box warnings
 ef76661 truenas-exporter: alert when a TrueNAS update is available
 c451fcb grafana-config: add the Backup row, snapshot space and the update tile to the TrueNAS single pane
 ```
+
+Plus a controller docs commit, `c802dcb` (the README's note that C2 retirement is expected within a week).
+
+**Final-review fix wave.** The whole-branch review found that ruling 7's "a `status` without `new_version` exports
+0" was wrong: the middleware model makes `new_version` required and `null` when nothing is offered, so only an
+explicit `null` now means 0 and any other shape exports nothing and counts an error; the new tiles' no-data states
+no longer render green; the exporter Deployment waits for the SealedSecret (sync wave) and sets
+`enableServiceLinks: false`.
 
 **The one unverified metric, now verified.** The ApiFailing ratio divides by
 `hcloud_request_duration_seconds_count{collector="storagebox"}`, which I had read about but not seen. At v3.30.0,
