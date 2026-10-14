@@ -632,3 +632,21 @@ ignored
 
 The file is still encrypted, was modified at 16:55, and is not tracked. Whether the three names are in it shows
 only when the playbook runs: `cloudsync_tasks_without_secrets` reports a task whose vault variables are missing.
+
+### 2026-10-14 — spec approved; implementation plan written
+
+The operator approved the written spec. The plan is in
+`docs/superpowers/plans/2026-10-14-offsite-backup-storage-box.md`:
+- **Part A, in git:** four code tasks, each tested against a stand-in before it is committed. The role's `transfers`
+  and the offsite declarations are tested against the fake `midclt` harness from 2026-10-11, extended to store
+  `transfers`. The collector is tested against a fake `cloudsync.query` with every job state and a password that
+  must not leak. The alert rules are tested with `promtool test rules`.
+- **Part B, on the box:** the operator-gated rollout steps.
+
+Read while writing it, on the box (filtered to job keys and types, no credential fields):
+`cloudsync.query` returns `transfers: null` for the Synology task, and the job's `time_finished` is
+`{"$date": <epoch ms>}`, the same shape the scrub collector already handles.
+
+One thing the spec did not see: `tank/backup` has a snapshot task every 6 hours with 90-day retention. A restore-test
+directory there is pinned for 90 days if a snapshot runs while it exists. That doesn't matter at today's ~2 GB, but
+it will at full size, so the full-size drill (rollout step 8) starts by choosing where the restore lands.

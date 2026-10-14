@@ -1,8 +1,9 @@
 # Offsite backup — TrueNAS to a Hetzner Storage Box
 
-Status: design approved by the operator 2026-10-14 (the six points in `blog/blog-offsite-backup-draft.md`,
-"Decision (2026-10-13)", including weekly snapshots). This spec awaits review. Nothing is built and the box is
-not ordered.
+Status: approved by the operator 2026-10-14 — the design (the six points in `blog/blog-offsite-backup-draft.md`,
+"Decision (2026-10-13)", including weekly snapshots) and then this written spec. The box was ordered and set up
+the same day. Implementation plan: `docs/superpowers/plans/2026-10-14-offsite-backup-storage-box.md` (awaiting
+review). Nothing is built yet.
 
 ## Why
 
