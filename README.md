@@ -1,6 +1,6 @@
 # okd-homelab-gitops
 
-GitOps repository for a 3-node bare-metal OKD 4.20 homelab cluster managed by ArgoCD.
+GitOps repository for a 3-node bare-metal OKD 4.21 homelab cluster managed by ArgoCD.
 
 **Repo:** https://github.com/sudoom/homelab
 
@@ -23,7 +23,10 @@ Manual bootstrap (one-time, bootstrap/phase0/)
               │     └── grafana-config (dashboards, datasources),
               │         monitoring-config (platform + UWM Prometheus),
               │         smartctl-exporter, mikrotik-exporter,
-              │         shelly-exporter, gatus
+              │         shelly-exporter, truenas-exporter,
+              │         hcloud-exporter, gatus,
+              │         synology-cert-sync, logging-stack,
+              │         image-mirror-zot, oadp, cnpg-clusters
               └── Wave 6: Applications
                     └── media stack
 ```
@@ -80,6 +83,10 @@ components/
     smartctl-exporter/     # Wave 5 — NVMe + SATA SMART metrics DaemonSet
     mikrotik-exporter/     # Wave 5 — mktxp / RouterOS metrics for the router + switch
     shelly-exporter/       # Wave 5 — Shelly Gen3 plug power telemetry via json_exporter
+    truenas-exporter/      # Wave 5 — socat forwarder + alerts for the node_exporter on the TrueNAS box
+    hcloud-exporter/       # Wave 5 — Hetzner Storage Box usage + access settings (promhippie/hcloud_exporter)
+    image-mirror-zot/      # Wave 5 — IDMS + ITMS routing cluster image pulls through the Zot pull-through cache
+    oadp/                  # Wave 5 — OADP DataProtectionApplication (garage S3 BSL) + daily Schedule
     synology-cert-sync/    # Wave 5 — daily CronJob mirroring the *.homelab.sudops.pl cert into Synology DSM
     gatus/                 # Wave 5 — uptime dashboard
   operators/
