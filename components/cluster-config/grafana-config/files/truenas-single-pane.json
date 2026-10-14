@@ -230,7 +230,7 @@
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 3,
         "x": 10,
         "y": 1
       },
@@ -293,8 +293,8 @@
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 14,
+        "w": 3,
+        "x": 13,
         "y": 1
       },
       "datasource": {
@@ -331,7 +331,7 @@
       "gridPos": {
         "h": 4,
         "w": 2,
-        "x": 18,
+        "x": 16,
         "y": 1
       },
       "datasource": {
@@ -384,8 +384,8 @@
       "type": "stat",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
+        "w": 3,
+        "x": 18,
         "y": 1
       },
       "datasource": {
@@ -429,6 +429,69 @@
       }
     },
     {
+      "id": 8,
+      "title": "TrueNAS update",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 21,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "truenas_update_available{instance=\"truenas\"} == 1 or label_replace(truenas_update_available{instance=\"truenas\"} == 0, \"version\", \"up to date\", \"job\", \".*\")",
+          "legendFormat": "{{version}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "textMode": "name",
+        "graphMode": "none",
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "no data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "The release TrueNAS's update train offers (`midclt call update.status`, read by the textfile collector every 5 minutes), or \"up to date\". Blue: an update is offered; TrueNASUpdateAvailable (info) shows in the console after an hour, and is never emailed. Installing it reboots the NAS and pauses every NFS consumer in the cluster, so it waits for a planned window. \"no data\" means update.status could not be read: never take that as up to date."
+    },
+    {
       "id": 101,
       "type": "row",
       "title": "Capacity",
@@ -447,7 +510,7 @@
       "type": "timeseries",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 6
       },
@@ -484,8 +547,8 @@
       "type": "timeseries",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 6
       },
       "datasource": {
@@ -514,6 +577,126 @@
         "overrides": []
       },
       "description": "Which dataset is actually growing. The POOL ROOT `tank` is excluded: it is the sum of every child, so it dominates the axis and flattens everything the panel exists to show. Pool-level usage is already on `truenas_zpool_allocated_bytes` / the capacity gauge, which is also the more correct number (it includes RAIDZ parity overhead; `zfs used` on the root does not). The same sum-of-children effect applies at smaller scale to the intermediate parents `tank/s3`, `tank/timemachine` and `tank/monitoring` -- they are kept because at their size the overlap is readable, but read them as totals, not as leaves. boot-pool and the .system/ix-apps trees are excluded by the collector itself."
+    },
+    {
+      "id": 12,
+      "title": "Snapshot space",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (dataset) (truenas_dataset_snapshots_used_bytes{instance=\"truenas\"})",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (dataset) (truenas_dataset_snapshots_used_bytes{instance=\"truenas\"}) / sum by (dataset) (truenas_dataset_used_bytes{instance=\"truenas\"})",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "dataset",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time A": true,
+              "Time B": true
+            },
+            "renameByName": {
+              "dataset": "Dataset",
+              "Value #A": "Snapshots",
+              "Value #B": "Share of used"
+            },
+            "indexByName": {
+              "dataset": 0,
+              "Value #A": 1,
+              "Value #B": 2
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Snapshots",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Snapshots"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Share of used"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Space held ONLY by each dataset's snapshots (`usedbysnapshots`): what destroying all of them would free, and the part of `used` that deleting files does not give back. On tank/backup (snapshots every 6 h, kept 90 days) a deleted folder stays here for 90 days. For the pool root `tank` this is the root's own snapshots only, not its children's. Share of used = snapshots / `truenas_dataset_used_bytes`."
     },
     {
       "id": 105,
@@ -1364,6 +1547,627 @@
         "overrides": []
       },
       "description": "eno1 is the 1G frontnet; the 10G backnet interface carries the NFS data path. Every node_* query here is scoped {instance=\"truenas\"}: Grafana's datasource is thanos-querier, which merges PLATFORM metrics, so an unscoped node_network_* query silently returns the 3 OKD nodes' interfaces (ceph-shim, ovs-system, genev_sys_6081) alongside the NAS's. Window is [2m], not [5m]: the scrape interval is 30s and the convention is a rate window of at least 4x that. Measured on the same hour, [5m] peaked at 130 Mb/s and [2m] at 152 -- [5m] was over-smoothing. NOTE this will never match TrueNAS's own graph at the peaks: netdata samples every 2 SECONDS and reported 314 Mb/s for the same window. The hourly MEANS agree almost exactly (46.6 vs 47.2 Mb/s), which is the check that proves neither is wrong -- a 2-second burst cannot survive a 30-second sample, and even irate() tops out at 161.8 here. Use TrueNAS's UI for burst peaks, this for sustained load."
+    },
+    {
+      "id": 106,
+      "type": "row",
+      "title": "Backup",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 60,
+      "title": "Last successful run, per task",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 56
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "time() - max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])",
+          "legendFormat": "{{task}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "textMode": "value_and_name",
+        "graphMode": "none",
+        "colorMode": "background",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "no success in 7 days",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 93600
+              },
+              {
+                "color": "red",
+                "value": 129600
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Time since each Cloud Sync task last succeeded, from Prometheus history (max_over_time over 7 days), so a failed or running job does not hide the last good one. Green under 26 h (one nightly run plus slack), yellow to 36 h, red beyond: 36 h is where TrueNASCloudSyncStale warns. A task missing here has no success in 7 days, or never ran."
+    },
+    {
+      "id": 61,
+      "title": "Task state",
+      "type": "table",
+      "gridPos": {
+        "h": 6,
+        "w": 16,
+        "x": 8,
+        "y": 56
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (task) (truenas_cloudsync_enabled)",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (task) (truenas_cloudsync_running)",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (task) (truenas_cloudsync_last_job_success)",
+          "format": "table",
+          "instant": true,
+          "refId": "C"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "task",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time A": true,
+              "Time B": true,
+              "Time C": true
+            },
+            "renameByName": {
+              "task": "Task",
+              "Value #A": "Enabled",
+              "Value #B": "Running now",
+              "Value #C": "Last job"
+            },
+            "indexByName": {
+              "task": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Enabled"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "DISABLED",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "yes",
+                        "color": "green",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Running now"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "idle",
+                        "color": "text",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "running",
+                        "color": "blue",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last job"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "FAILED",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "OK",
+                        "color": "green",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "One line per Cloud Sync task. Last job is empty while a job runs and before the first run: the middleware shows only the running job then. FAILED is also mailed by TrueNAS itself."
+    },
+    {
+      "id": 62,
+      "title": "Storage Box fill",
+      "type": "gauge",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 62
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_general_size / hcloud_storagebox_quota",
+          "legendFormat": "{{name}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "showThresholdMarkers": true,
+        "showThresholdLabels": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "The box's usage WITH snapshots against its plan size, the same ratio HetznerStorageBoxFilling alerts on: warning at 80 %, critical at 90 %. Snapshots keep deleted photos for up to ten weeks and count against the plan."
+    },
+    {
+      "id": 63,
+      "title": "Box usage over time",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 6,
+        "y": 62
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_data_size",
+          "legendFormat": "{{name}} data",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_snapshot_size",
+          "legendFormat": "{{name}} snapshots",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_quota",
+          "legendFormat": "{{name}} plan size",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Data and snapshot overhead, stacked, against the plan size (dashed). The gap between the stack and the line is the room left. Snapshot growth after a mass delete in Immich is expected and lasts until the oldest weekly snapshot holding the data expires."
+    },
+    {
+      "id": 64,
+      "title": "Box access settings",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 62
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_ssh",
+          "legendFormat": "SSH",
+          "refId": "A",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_external",
+          "legendFormat": "External",
+          "refId": "B",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_samba",
+          "legendFormat": "Samba",
+          "refId": "C",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_webdav",
+          "legendFormat": "WebDAV",
+          "refId": "D",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "hcloud_storagebox_zfs",
+          "legendFormat": "Snapshot dir",
+          "refId": "E",
+          "instant": true
+        }
+      ],
+      "options": {
+        "textMode": "value_and_name",
+        "graphMode": "none",
+        "colorMode": "background",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OFF",
+                  "color": "orange",
+                  "index": 0
+                },
+                "1": {
+                  "text": "on",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "off",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "ON",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "off",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "ON",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "description": "The main account's access settings. Green is the expected state: SSH, external reachability and the snapshot directory on, Samba and WebDAV off. Orange matches a warning alert (AccessClosed, SnapshotDirHidden), red a critical one (Exposed). A change the operator did not make means someone else is in the Hetzner account."
     }
   ],
   "description": "Single pane for the TrueNAS box. node_exporter runs ON the NAS as an Ansible-managed custom app; pool/scrub/SMART come from its textfile collector; power comes from the Shelly plug, which shares instance=\"truenas\". BREAK-GLASS NOTE: this dashboard runs on the OKD cluster with its PVC on Ceph, so it goes dark exactly when cluster storage is in trouble. If you cannot reach it, the NAS's own UI at https://192.168.1.25 is the independent path."

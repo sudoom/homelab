@@ -96,7 +96,10 @@ Shelly plug uses, so power and system metrics for this box share a name.
 **TrueNAS — single pane** (`grafana-config/files/truenas-single-pane.json`) is
 the NAS-specific half 1860 does not cover: pool health/capacity/scrub, ARC hit
 ratio and size, ZIL commit rate, per-disk SMART keyed by serial, NFS server ops,
-and the Shelly power draw on the same page.
+and the Shelly power draw on the same page. Since 2026-10-14 it also shows
+snapshot space per dataset (Capacity), the TrueNAS update on offer (Health at a
+glance), and a **Backup** row: each Cloud Sync task's last success and state, and
+the Hetzner Storage Box's fill, usage and access settings from `hcloud-exporter`.
 
 Those `truenas_*` metrics come from the textfile collector at
 `ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py`, which

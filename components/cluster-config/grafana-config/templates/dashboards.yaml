@@ -258,7 +258,11 @@ spec:
 #
 # The NAS-specific half that grafana.com 1860 does not cover: pool health,
 # capacity and scrub recency, ARC hit ratio / size, ZIL commit rate, per-disk
-# SMART keyed by SERIAL, NFS server ops, and the Shelly power draw.
+# SMART keyed by SERIAL, NFS server ops, and the Shelly power draw. Since
+# 2026-10-14 also snapshot space per dataset, the TrueNAS update on offer, and
+# a Backup row: the Cloud Sync tasks, and the Hetzner Storage Box's fill, usage
+# and access settings (hcloud_storagebox_* from hcloud-exporter, the only
+# panels here that are not about the NAS itself).
 #
 # The power panel is the reason this dashboard justifies the name: node_exporter
 # and shelly-exporter are different jobs, but the ServiceMonitor in
