@@ -66,7 +66,9 @@ unset HCLOUD_TOKEN
 
 Commit and push. The pod template carries a checksum of the sealed file, so ArgoCD rolls the pod; the exporter
 reads the token only at start. `file://` is read verbatim, so the token must not end in a newline (`read -rs`
-strips it). Revoke the old token once `hcloud_request_failures_total` stays at 0 on the new pod.
+strips it). Revoke the old token in the Hetzner console first, then confirm
+`hcloud_request_failures_total` stays at 0. If it climbs, the pod started with the old Secret: re-commit (or change
+the checksum) to roll it again.
 
 ## Validate
 

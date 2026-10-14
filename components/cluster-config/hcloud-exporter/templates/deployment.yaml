@@ -13,6 +13,10 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: hcloud-exporter
+  annotations:
+    # After the SealedSecret (wave 0, no annotation) is Healthy, so a rotated
+    # token is unsealed before the pod that reads it at start is rolled.
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   replicas: 1
   # maxSurge: 0 -- the old pod stops before the new one starts. The
@@ -38,6 +42,9 @@ spec:
         # token until someone restarts it by hand.
         checksum/token: {{ include (print $.Template.BasePath "/sealed-hcloud-token.yaml") . | sha256sum }}
     spec:
+      # The Service hcloud-exporter would inject HCLOUD_EXPORTER_* env vars
+      # (HCLOUD_EXPORTER_PORT, ...) that share the exporter's own flag prefix.
+      enableServiceLinks: false
       # It talks to api.hetzner.com only and has no use for a Kubernetes token.
       automountServiceAccountToken: false
       # restricted-v2. No runAsUser, deliberately: the image's USER is a name
