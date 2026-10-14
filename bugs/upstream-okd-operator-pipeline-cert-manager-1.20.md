@@ -108,6 +108,24 @@ with `NAME_UNKNOWN` until every operand image is pushed; and the `opm` container
 `/etc/containers/policy.json`, so `opm render <image>` inside it fails until one is mounted
 (`{"default":[{"type":"insecureAcceptAnything"}]}`).
 
+**`release-4.22`: deferred until #28/#29/#33 get reviews (operator, 2026-10-14).** Cut 2026-09-22,
+`OKD_VERSION=4.22.0-okd-scos.2`, head `8ab81e0`. Its `cert-manager/` tree and `.gitmodules` cert-manager entries are
+identical to `release-4.21` before #29, so #29's four cert-manager commits would apply as they are. Kubernetes 1.35 is
+inside 1.20's range (1.32-1.35), although cert-manager lists 1.20 for OpenShift 4.19-4.21 only. The trigger is the
+open question:
+
+- All 27 `*-deploy.yaml` callers on `release-4.22` trigger on `main`. The branch is not set up for push builds yet.
+- Its `operator-deploy.yaml` adds a `catalog-pr` job (`update_catalog` default `true`). The default
+  `catalog_branch` is **`release-4.21`**, and no caller overrides it. `okderators-catalog-index` has no
+  `release-4.22` branch (only `release-4.18`-`release-4.21`). So any build of this branch would open its catalog
+  PR against the 4.21 catalog.
+- cert-manager image tags carry no OKD version (`1.20.0-<date>`, floating `1.20.0`), so a 4.22 build writes the
+  same quay tags as a 4.21 build. The images come from the same sources.
+
+The options when this is picked up: (1) the bump only, with the trigger and `catalog_branch` default noted in the
+PR body for the maintainers; (2) bump plus trigger with `update_catalog: false`; (3) bump plus trigger with
+`catalog_branch: release-4.22`, which fails until that catalog branch exists. Option 1 is the recommendation.
+
 **Still to do:** the companion `okderators-catalog-index` change adding the `olm.channel` entry. It cannot be
 written until this PR merges and a build is published, because the entry has to name the resulting
 `cert-manager-operator.v1.20.0-<date>` CSV.
