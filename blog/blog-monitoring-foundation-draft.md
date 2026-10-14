@@ -465,3 +465,24 @@ Prometheus 3.7.3, revision `fac79ec7`, which does not exist in openshift/prometh
 whether the OKD payload carries the fix. Impact was a short scrape gap; the heartbeat did not go DOWN. No
 action taken; expect a repeat at the next rotation, and a repeat on a build that should contain the fix would
 be worth an upstream report.
+
+## 2026-10-14 — design record moved here from the spec
+
+2026-10-14: specs and plans are no longer kept in the repo; the design record is this draft. The
+dead-man's switch spec and plan are deleted; the decisions, their reasons and the verification are in the
+2026-09-25 section above. What was only in the spec:
+
+- **Check settings.** One healthchecks.io check, `okd-alertmanager-watchdog`: schedule Simple, period 5 min,
+  grace 15 min, the account's email integration enabled on the check. It mails DOWN when pings stop and UP
+  when they resume. The Hobbyist plan (20 checks, 100 log entries each) is enough for one check.
+- **Rollback.** Set `alertmanager.heartbeat.enabled: false`: the mount goes away and Watchdog returns to the
+  empty receiver. Pause the check in the healthchecks.io UI first, or a DOWN email arrives about 20 minutes
+  after the last ping. Delete the SealedSecret `alertmanager-healthchecks` only in a later commit, once the
+  mount is gone, so a delete never races a pod still expecting the Secret (the rollout order in reverse).
+- **If a pod sticks in `ContainerCreating` after enabling the flag**, the listed Secret is missing: `git revert`
+  the flag commit at once, since all alerting is down until the pods start.
+- **Secret migration.** `openshift-monitoring/alertmanager-healthchecks` (key `url`) is the 13th SealedSecret
+  to move to External Secrets and is cut over together with `alertmanager-mailjet`
+  (`blog/blog-external-secrets-bitwarden-draft.md`).
+- **Prerequisite.** The heartbeat needs `alertmanager.email.enabled`, because the `alertmanager.yaml` template is
+  behind that flag.
