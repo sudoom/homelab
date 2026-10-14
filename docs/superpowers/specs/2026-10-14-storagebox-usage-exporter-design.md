@@ -90,6 +90,31 @@ A new row, **Backup**, at the bottom of the TrueNAS single pane
 
 The Cloud Sync panels have data today. The box panels need the exporter, so the row ships in the same rollout.
 
+### TrueNAS additions (approved 2026-10-14)
+
+Two small collector additions ship in the same rollout. Both use `node-exporter-textfile.py`, the TrueNAS single pane
+and the `truenas-exporter` rules.
+
+- **Snapshot space per dataset.**
+  - Add `usedbysnapshots` to the collector's existing `zfs list -Hp -o name,used,available,referenced -t filesystem`
+    call, exported as `truenas_dataset_snapshots_used_bytes{dataset}`. The field-count check moves from 4 to 5.
+  - Why: a deleted folder in `tank/backup` stays on disk for 90 days through the 6-hourly snapshots, and nothing
+    shows that today. Found 2026-10-14 while planning the full-size restore drill.
+  - Dashboard: a panel in the single pane's **Capacity** row showing snapshot space per dataset, as bytes and as a
+    share of `truenas_dataset_used_bytes`.
+  - No alert. The operator asked to *see* it.
+- **Update available.**
+  - A new collector function reads `midclt call update.status`. It exports `truenas_update_available` = 1 with label
+    `version` = `status.new_version.version` when a new version is offered, and `truenas_update_available 0` (no
+    label) when none is.
+  - It also exports `truenas_update_downloaded` = 1 when `update_download_progress.percent` is 100 for that version.
+  - Read on the box 2026-10-14: `{"code": "NORMAL", "status": {"current_version": {...}, "new_version": {"version":
+    ...}}, "update_download_progress": {"percent": 100.0, "version": "25.10.7"}}`. Missing keys must not raise; a
+    failing call counts one collector error, like `cloudsync.query`.
+  - Alert `TrueNASUpdateAvailable`: `truenas_update_available == 1`, `for: 1h`, severity **info**. It is console-only,
+    like OKD's own `UpdateAvailable`.
+  - Dashboard: a stat tile in **Health at a glance** showing the offered version, or "up to date".
+
 ## Rollout
 
 1. **Operator**, from the repo root. Prove the token reads the box (safe fields only), then seal it:
