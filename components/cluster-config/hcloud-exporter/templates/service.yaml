@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hcloud-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: hcloud-exporter
+spec:
+  # ClusterIP, not headless: the readonly SA reads /metrics through the API
+  # server's service proxy (services/http:hcloud-exporter:9501/proxy/metrics),
+  # with no exec. spec.clusterIP is immutable once allocated (see
+  # truenas-exporter's README), so this is decided at create.
+  selector:
+    app.kubernetes.io/name: hcloud-exporter
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
+      protocol: TCP

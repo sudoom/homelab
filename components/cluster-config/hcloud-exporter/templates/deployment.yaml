@@ -1,0 +1,127 @@
+# ---------------------------------------------------------------------------
+# promhippie/hcloud_exporter, Storage Box collector only. One GET
+# /v1/storage_boxes against api.hetzner.com per scrape, with a read-only token.
+#
+# On an API error the exporter logs, counts hcloud_request_failures_total and
+# emits NO box series, while /metrics still answers 200 -- so `up` stays 1. The
+# alerts therefore watch the failure ratio and absent(), not `up` alone.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hcloud-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: hcloud-exporter
+spec:
+  replicas: 1
+  # maxSurge: 0 -- the old pod stops before the new one starts. The
+  # ServiceMonitor drops `pod`, so two overlapping pods would emit identical
+  # label sets. RollingUpdate rather than Recreate for the reason in
+  # shelly-exporter's deployment: switching an existing Deployment to Recreate
+  # later cannot be applied in place.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hcloud-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hcloud-exporter
+      annotations:
+        # The exporter reads the token once, at start. A re-sealed token changes
+        # this checksum, so ArgoCD rolls the pod instead of it keeping the old
+        # token until someone restarts it by hand.
+        checksum/token: {{ include (print $.Template.BasePath "/sealed-hcloud-token.yaml") . | sha256sum }}
+    spec:
+      # It talks to api.hetzner.com only and has no use for a Kubernetes token.
+      automountServiceAccountToken: false
+      # restricted-v2. No runAsUser, deliberately: the image's USER is a name
+      # (`exporter`), so the kubelet can verify runAsNonRoot only once the SCC
+      # has injected a numeric UID from the namespace's range, which it does
+      # when the pod sets none.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hcloud-exporter
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+          env:
+            # Read from the mounted Secret, never put into the environment.
+            # file:// is read verbatim, without trimming, so the sealed value
+            # must not end in a newline.
+            - name: HCLOUD_EXPORTER_TOKEN
+              value: file:///etc/hcloud-exporter/token
+            - name: HCLOUD_EXPORTER_WEB_ADDRESS
+              value: "0.0.0.0:{{ .Values.port }}"
+            # Under the 10 s scrape timeout, so a slow API is a counted failure
+            # rather than a failed scrape.
+            - name: HCLOUD_EXPORTER_REQUEST_TIMEOUT
+              value: 5s
+            - name: HCLOUD_EXPORTER_COLLECTOR_STORAGEBOXES
+              value: "true"
+            # NEVER add `server` or `username`: both carry the account number.
+            - name: HCLOUD_EXPORTER_STORAGEBOXES_LABELS
+              value: id,name,location
+            # Every other collector off, explicitly. Six are on by default and
+            # each is API calls for a project that has nothing else in it; the
+            # two that default off are set too, so an upstream default flip
+            # cannot turn them on.
+            - name: HCLOUD_EXPORTER_COLLECTOR_FLOATING_IPS
+              value: "false"
+            - name: HCLOUD_EXPORTER_COLLECTOR_IMAGES
+              value: "false"
+            - name: HCLOUD_EXPORTER_COLLECTOR_PRICING
+              value: "false"
+            - name: HCLOUD_EXPORTER_COLLECTOR_SERVERS
+              value: "false"
+            - name: HCLOUD_EXPORTER_COLLECTOR_LOAD_BALANCERS
+              value: "false"
+            - name: HCLOUD_EXPORTER_COLLECTOR_SSH_KEYS
+              value: "false"
+            - name: HCLOUD_EXPORTER_COLLECTOR_SERVER_METRICS
+              value: "false"
+            - name: HCLOUD_EXPORTER_COLLECTOR_VOLUMES
+              value: "false"
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          # Both endpoints always answer 200 and never call the API, so they
+          # prove only that the process serves HTTP. API health is in the
+          # failure counter and the absent() alert.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: token
+              mountPath: /etc/hcloud-exporter
+              readOnly: true
+      volumes:
+        # Secret hcloud-exporter, key `token`, unsealed from
+        # templates/sealed-hcloud-token.yaml. Until the sealed-secrets controller
+        # has created it, the pod waits in ContainerCreating.
+        - name: token
+          secret:
+            secretName: hcloud-exporter

@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: hcloud-exporter
+  namespace: hcloud-exporter
+spec:
+  encryptedData:
+    token: AgAo1fgDKpjX/S2+CSoce4/DSomwAOY2q+YZaB0fJtQOItihAowcRQq7/TjkWCMNiDpo3wdl/xi6lg7bv3g6g5QVuzATZfJgpaEh9vBpK13cSLNoBhovzdGgQhYqenjo4JEYSjpVhdD7NFIisAlFzPjQE55Dm8ltPek7Aa8H9RGLQzdzqcasPfqHzSzpesVjrH1/6NsNBNz4TZEc1fDDvhbkmcnraZlwgClBNIxV0F9r/ct3xigdZTW6LSUbkcTDu674iU2nXs0dvtoGSjKPEUuK+Z7tzF0GOXEkSqroa329NjPOsv4Esx3nnPzRViRJJUYkZqMnGGCMUR6RkxLUbUfhMBGOgnzedS6OIa6C8cicy5v/TG010sF30s9zUG5jRGbJ49WyoA0+3cahCvmX/SsEWwl89VQNMPfmoxFJKM+ENa/2VEJjvL6i1UEQ5g6m4eJWD/9qSbeUzg6b36JwF94OcWdcr5SFHeWeEjzg0wTCAVtNIvDp+++NPfXKfbddScr6x1pTZu8F97NBn2iroDXMb1IKaxFI3ZjYccLb5uo3hVQnvSo3Ywbkor6kU/9QZogPPdtjAqGgXjZ1LxWWexmmU5nJvPZO0CTxzK3nzM42SFNMKN2NW/9rR+tm9k7lW/Czdczw2N7nO5KMkRjDVgyqrnu+BrceB9A4eFmYW6dwOgnIelC/E5csU1pMC2R4+C5Lm6HFh2bFMmZBo6OH2tpXMfrcPwse+sp8aJQPbPVPtIppQNFOHyv1MaLVMwFDQW6uC1ZzzU7sU2M7Ccp+SPen
+  template:
+    metadata:
+      name: hcloud-exporter
+      namespace: hcloud-exporter

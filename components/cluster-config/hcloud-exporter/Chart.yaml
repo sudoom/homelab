@@ -1,0 +1,7 @@
+apiVersion: v2
+name: hcloud-exporter
+description: |
+  promhippie/hcloud_exporter with the Storage Box collector only. It reads the
+  Hetzner Storage Box that holds the offsite copy of tank/immich (usage with
+  snapshots, plan size, access settings) for user-workload Prometheus.
+version: 0.1.0

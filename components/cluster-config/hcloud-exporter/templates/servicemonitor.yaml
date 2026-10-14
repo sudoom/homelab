@@ -1,0 +1,30 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: hcloud-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: hcloud-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hcloud-exporter
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.scrapeInterval }}
+      scheme: http
+      # A stable `instance` instead of `<podIP>:9501`. `action: replace` is
+      # spelled out because prometheus-operator stamps it onto the live object
+      # and ArgoCD would otherwise show permanent drift (as in shelly-exporter).
+      relabelings:
+        - action: replace
+          sourceLabels: []
+          targetLabel: instance
+          replacement: {{ .Values.instanceLabel | quote }}
+      # These series describe the box, not the pod that fetched them; `pod`
+      # changes on every reschedule and would fork the series. `namespace` is
+      # kept: user-workload monitoring uses it for tenancy.
+      metricRelabelings:
+        - action: labeldrop
+          regex: "pod|container"

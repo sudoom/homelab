@@ -1,0 +1,35 @@
+namespace: hcloud-exporter
+
+# ---------------------------------------------------------------------------
+# promhippie/hcloud_exporter, Storage Box collector only. Design record:
+# blog/blog-offsite-backup-draft.md ("2026-10-14 — the box itself in
+# Prometheus").
+#
+# Pinned by tag AND digest: the digest is the OCI image index for 3.30.0
+# (linux/amd64, arm64, 386, arm/v6), resolved against ghcr.io on 2026-10-14.
+# Renovate's helm-values manager bumps the version and the digest together, as
+# a reviewed PR (no automerge rule covers components/cluster-config/).
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/promhippie/hcloud-exporter
+  tag: "3.30.0@sha256:f1dba83dfd23dc553f05c8693b6a9648d3602ab267b0d81270bbaf07b4ddd3de"
+
+# The exporter's listen port, passed to it as HCLOUD_EXPORTER_WEB_ADDRESS.
+port: 9501
+
+# Each scrape makes one GET /v1/storage_boxes against api.hetzner.com. Two
+# user-workload Prometheus replicas scrape it, so about 120 API calls an hour.
+scrapeInterval: 60s
+
+# Stamped as `instance` instead of `<podIP>:9501`, which changes on every
+# reschedule and would fork every series.
+instanceLabel: hcloud-exporter
+
+# Not upstream-sourced (upstream sets none): one small list call per scrape.
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 64Mi

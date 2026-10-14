@@ -299,6 +299,15 @@ applications:
     namespace: truenas-exporter
     syncWave: "5"
 
+  # promhippie/hcloud_exporter, Storage Box collector only: the offsite box's
+  # usage (snapshots included), plan size and access settings, for the
+  # hetzner-storagebox alerts. Read-only Hetzner API token in a SealedSecret.
+  hcloud-exporter:
+    enabled: true
+    path: components/cluster-config/hcloud-exporter
+    namespace: hcloud-exporter
+    syncWave: "5"
+
   # Phase 3 of the homelab.sudops.pl rollout. Daily CronJob; mirrors
   # the homelab-wildcard-tls cert (from cert-manager-config) into the
   # Synology DSM cert store via DSM's web API. DSM creds live in a
