@@ -21,7 +21,8 @@ gap catches #29: merging it would not build cert-manager either, because its wor
 **#33 adds the missing `nmstate-deploy.yaml`** (a copy of `secondary-scheduler-deploy.yaml`). It touches no
 `nmstate/` path, so its merge starts no build either. After the merge, a maintainer runs "Deploy NMState" by
 `workflow_dispatch` on `release-4.21`, then the catalog-index PR follows. The catalog half cannot be written before a build exists: the bundle file is `opm render` output of the pushed image
-(`hack/add-bundle.sh <bundle>`), digests included.
+(`hack/add-bundle.sh <bundle>`), digests included. Draft, with the procedure and the PR body: `bugs/upstream-okderators-catalog-index-nmstate-4.21-bundle.md`.
+It also replaces a bundle that still carries the #19 `ImageStream`: the 05-05 build predates #19 reaching `release-4.21` (2026-05-13).
 
 **#31 came out of a question rather than a defect, and the tone matters.** The first draft was an audit:
 three failure classes, red crosses, two implementation proposals. Rewritten against the register of
