@@ -1629,8 +1629,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "#808080",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
               },
               {
                 "color": "yellow",
