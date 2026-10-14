@@ -309,6 +309,14 @@ full writing rules.
 `.mcp.json` declares one project-scoped MCP server, launched via `npx` when Claude Code starts in this repo.
 
 - **`kubernetes`** (`mcp-server-kubernetes@4.1.7`, pinned) — structured `kubectl_get` / `kubectl_describe` / `kubectl_logs` / `explain_resource` / `list_api_resources` tools. It runs as the **readonly `claude-reader` SA** (`KUBECONFIG_PATH=${HOME}/.kube/config-readonly`), so it keeps working when the operator's OAuth login expires. `ALLOW_ONLY_NON_DESTRUCTIVE_TOOLS=true` only removes the delete-type tools; `kubectl_apply`, `kubectl_patch`, `kubectl_scale` and `exec_in_pod` are still listed, and the SA's RBAC is what refuses them. That SA can read Secrets — never read a secret value through it either. Verified 2026-09-24: the server listed the three nodes while `oc whoami` on the operator kubeconfig returned `Unauthorized`.
+- **Only `kubernetes` is meant to load here (2026-10-14).** The operator's user-scope servers `azure`,
+  `azure-devops` and `obsidian-vault` are disabled for this project with `/mcp disable <name>` (stored per project in
+  `~/.claude.json` as `disabledMcpServers`). The claude.ai connectors are off via `"disableClaudeAiConnectors": true`
+  and the claude.ai-synced `design` plugin via `"enabledPlugins": {"design@synced": false}`, both in
+  `.claude/settings.local.json`. Together they were about 190 deferred tool names plus three server-instruction blocks
+  in every session, and the two Azure servers run unpinned (`@latest`) with Azure CLI credentials. Re-enable one with
+  `/mcp enable <name>` when a task needs it. Claude in Chrome is still on by default: `/chrome` → Enabled by default
+  turns it off; that command is not available over Remote Control.
 - **GitHub: use `gh`, not an MCP server.** `@modelcontextprotocol/server-github` was removed 2026-09-24 — npm marks it deprecated ("Package no longer supported"), last release 2025.4.8. `gh` is not logged in on this workstation, so pass the token inline: `GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN" gh …`. Upstream cross-referencing works the same way (`gh issue view -R <owner>/<repo> <n>`, `gh search issues …`).
 
 For mutations against the cluster (apply/delete/patch/scale, etc.), still go through the user.
