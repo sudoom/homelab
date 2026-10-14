@@ -239,6 +239,60 @@ def collect_snapshots(out):
                    "Seconds since the newest snapshot for this dataset.", dataset=ds)
 
 
+def collect_cloudsync(out):
+    """
+    Cloud Sync (rclone) backup tasks, one set of series per task, labelled by
+    its description -- the identity the Ansible role matches on.
+
+    SECRETS: cloudsync.query nests each task's full credential, PASSWORD
+    INCLUDED, and the job carries its log excerpt and error text. Only
+    `description` and `enabled` are read from a row, and only `state` and
+    `time_finished` from its job. Export nothing else from these rows.
+
+    The job is the task's LAST job, and it survives a reboot: the middleware
+    writes it to the task's database row when the job completes
+    (persist_task_state_on_job_complete, read on 25.10.6 on 2026-10-14). While
+    a job runs, the in-memory job replaces it, so the previous result is
+    invisible until the run ends. That is why the alerts take the last success
+    from Prometheus history (max_over_time) -- and why a failed run does not
+    erase when the last good one was.
+    """
+    raw = run(["midclt", "call", "cloudsync.query"])
+    if not raw:
+        return
+    try:
+        tasks = json.loads(raw)
+    except ValueError:
+        global errors
+        errors += 1
+        return
+    for t in tasks:
+        task = t.get("description") or "id-%s" % t.get("id")
+        job = t.get("job") or {}
+        state = job.get("state")
+        end = job.get("time_finished")
+        # midclt renders timestamps as {"$date": <epoch_ms>}.
+        if isinstance(end, dict):
+            end = end.get("$date")
+        out.metric("cloudsync_enabled", 1 if t.get("enabled") else 0,
+                   "1 if the Cloud Sync task is enabled.", task=task)
+        out.metric("cloudsync_running", 1 if state in ("RUNNING", "WAITING") else 0,
+                   "1 while the task's job is running or waiting.", task=task)
+        if state not in ("SUCCESS", "FAILED", "ABORTED"):
+            continue
+        out.metric("cloudsync_last_job_success", 1 if state == "SUCCESS" else 0,
+                   "1 if the last finished job succeeded, 0 if it failed or was aborted. "
+                   "Absent while a job runs and if the task never ran.", task=task)
+        if not end:
+            continue
+        ts = float(end) / 1000.0
+        out.metric("cloudsync_last_job_finished_timestamp_seconds", ts,
+                   "Unix time the last finished job ended.", task=task)
+        if state == "SUCCESS":
+            out.metric("cloudsync_last_success_timestamp_seconds", ts,
+                       "Unix time the last job ended, exported only when that job succeeded.", task=task)
+
+
 def collect_smart(out):
     """
     Per-disk SMART, keyed by SERIAL rather than /dev/sdX.
@@ -323,7 +377,7 @@ def main():
     started = time.time()
 
     out = Out()
-    for fn in (collect_pools, collect_scrub, collect_datasets, collect_snapshots, collect_smart):
+    for fn in (collect_pools, collect_scrub, collect_datasets, collect_snapshots, collect_cloudsync, collect_smart):
         try:
             fn(out)
         except Exception as exc:            # one broken collector must not lose the rest
