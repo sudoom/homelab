@@ -18,8 +18,8 @@ Manual bootstrap (one-time, bootstrap/phase0/)
               ├── Wave 3: TLS consumers + Storage
               │     └── IngressController cert, APIServer cert, CephCluster
               ├── Wave 4: Storage classes
-              │     └── Ceph BlockPool + StorageClass, CephFS + StorageClass, NFS CSI
-              ├── Wave 5: Monitoring + observability
+              │     └── Ceph BlockPool + StorageClass, NFS CSI
+              ├── Wave 5: Monitoring, observability and cluster services
               │     └── grafana-config (dashboards, datasources),
               │         monitoring-config (platform + UWM Prometheus),
               │         smartctl-exporter, mikrotik-exporter,
@@ -76,7 +76,7 @@ components/
     api-server/            # Wave 3 — APIServer serving cert + etcd encryption at rest
     grafana-config/        # Wave 5 — dashboards, datasources, Grafana CR
     monitoring-config/     # Wave 5 — platform + user-workload Prometheus (retention, retentionSize, PVCs)
-    logging-stack/         # Wave 5 — LokiStack + ClusterLogForwarder + OBC for RGW chunks
+    logging-stack/         # Wave 5 — LokiStack + ClusterLogForwarder; chunks on garage S3 on TrueNAS
     loki-pdb-override/     # Wave 6 — CronJob keeping ingester PDB at MinAvailable=1 (drain headroom)
     descheduler/           # Wave 6 — Kube Descheduler CronJob (AffinityAndTaints, skips PVC pods)
     power-tuning/          # Wave 0 — Tuned profile (powersave governor + intel_pstate=passive + max_cstate=9), master MCP cluster-wide
