@@ -1576,17 +1576,21 @@ KUBECONFIG=~/.kube/config-readonly oc -n openshift-gitops get application truena
 KUBECONFIG=~/.kube/config-readonly oc -n truenas-exporter get prometheusrule truenas -o jsonpath='{.spec.groups[*].name}{"\n"}'
 ```
 
-Rule health in Prometheus. This is a read through the break-glass kubeconfig, which the operator authorised for
-checking alerts:
+Rule health in **Thanos Ruler**, which evaluates PrometheusRules in user namespaces; user-workload Prometheus's
+rule list does not contain them. This is a read through the break-glass kubeconfig, which the operator authorised
+for checking alerts:
 
 ```bash
-KUBECONFIG=~/.kube/config-breakglass oc -n openshift-user-workload-monitoring exec prometheus-user-workload-0 -c prometheus -- \
-  wget -qO- 'http://localhost:9090/api/v1/rules?type=alert' | jq -c '.data.groups[] | select(.name=="truenas-backups") | .rules[] | {name, health, state}'
+KUBECONFIG=~/.kube/config-breakglass oc -n openshift-user-workload-monitoring exec thanos-ruler-user-workload-0 -c thanos-ruler -- \
+  wget -qO- 'http://localhost:10902/api/v1/rules?type=alert' | jq -c '.data.groups[] | select(.name=="truenas-backups") | .rules[] | {name, health, state}'
 ```
 
-Expected: five rules, each `"health":"ok"` and `"state":"inactive"`. No `truenas_cloudsync_*` series exists yet, and
-`tank/immich` is far below 800 GB. If the exec is refused, say so and leave this check for Task 7 Step 4. That
-step's `ALERTS` query only answers if the rules loaded.
+Expected:
+- six rules after the final-review fix wave, each `"health":"ok"` and `"state":"inactive"`;
+- just after a sync, `"health":"unknown"` until the first evaluation, which takes about a minute.
+
+None can fire yet: no `truenas_cloudsync_*` series exists, and `tank/immich` is far below 800 GB. Done
+2026-10-14: six rules, all `ok` / `inactive`.
 
 ---
 
@@ -1676,10 +1680,17 @@ If there are refused connections or SSH handshake errors (the 10-connection limi
 ```bash
 ssh truenas_admin@192.168.1.25 "grep '^truenas_cloudsync' /mnt/tank/monitoring/textfile/truenas.prom"
 KUBECONFIG=~/.kube/config-breakglass oc -n openshift-user-workload-monitoring exec prometheus-user-workload-0 -c prometheus -- \
-  wget -qO- 'http://localhost:9090/api/v1/query?query=ALERTS%7Balertname%3D~%22TrueNASCloudSync.%2A%22%7D' | jq -c '.data.result'
+  wget -qO- 'http://localhost:9090/api/v1/query?query=truenas_cloudsync_last_job_success' | jq -c '[.data.result[] | {task: .metric.task, v: .value[1]}]'
+KUBECONFIG=~/.kube/config-breakglass oc -n openshift-user-workload-monitoring exec thanos-ruler-user-workload-0 -c thanos-ruler -- \
+  wget -qO- 'http://localhost:10902/api/v1/alerts' | jq -c '[.data.alerts[] | select(.labels.alertname | test("TrueNASCloudSync")) | {a: .labels.alertname, task: .labels.task, state}]'
 ```
 
-Expected: ten lines (two tasks × five metrics), both `last_job_success … 1`, and `[]` alerts.
+Expected:
+- ten lines in the file (two tasks × five metrics);
+- both tasks scraped with `last_job_success` 1;
+- `[]` from the alerts query, or only a `TrueNASCloudSyncStale` `window: no-success-7d` that is resolving after the first success.
+
+These rules are evaluated by **Thanos Ruler**, not by user-workload Prometheus: a PrometheusRule in a user namespace goes to the ruler unless it is scoped to Prometheus. So their alerts are queried at the ruler, never with `ALERTS` on Prometheus, which always answers `[]`. Seen on 2026-10-14 right after the push: all six rules in the ruler with `health: ok`, and none in Prometheus's rule list.
 
 - [ ] **Step 5:** Append the first-run chronology to the blog draft (commands and redacted output), then commit and
   push.

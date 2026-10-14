@@ -731,3 +731,25 @@ PrometheusRule CRD confirmed the field. The Stale descriptions now say to check 
 the first full upload can outlast 72 h. Corrections: "visible only in Hetzner's console" is wrong, the Hetzner API
 reports the box's usage and a follow-up will export it, and the plan's Task 6 now warns that its first run is
 unattended unless Task 7 follows within the hour.
+
+### 2026-10-14 — pushed; where the rules actually run
+
+Pushed `0fa3f23..94ae0da`. ArgoCD synced `truenas-exporter` to `94ae0da`, and the PrometheusRule now has a fourth
+group, `truenas-backups`.
+
+The rules are not in user-workload Prometheus. Its `/api/v1/rules` has no `truenas-*` group at all. They live in
+**Thanos Ruler**, because OKD sends a PrometheusRule in a user namespace there unless the rule is scoped to
+Prometheus:
+
+```bash
+KUBECONFIG=~/.kube/config-breakglass oc -n openshift-user-workload-monitoring exec thanos-ruler-user-workload-0 -c thanos-ruler -- \
+  wget -qO- 'http://localhost:10902/api/v1/rules?type=alert' | jq -c '.data.groups[] | select(.name=="truenas-backups") | .rules[] | {name, health, state}'
+```
+
+On the first read, all six showed `health: unknown`. About a minute later all six read `ok` / `inactive`, as
+expected before the collector is on the box. Two consequences:
+- The plan's Part B alert checks queried `ALERTS` on Prometheus. They would have answered `[]` whatever was firing,
+  so they now query the ruler.
+- The platform Prometheus (`prometheus-k8s`) has no `truenas-*` groups either. So the session-start alert sweep,
+  which reads `prometheus-k8s` `/api/v1/alerts`, cannot see any alert from a user-namespace PrometheusRule.
+  Alertmanager (`alertmanager-main` `/api/v2/alerts?active=true`) sees everything that is firing.
