@@ -1111,3 +1111,13 @@ with `truenas_textfile_collector_errors 0`.
 - `truenas_update_available{version="25.10.7"} 1` and `truenas_update_downloaded{version="25.10.7"} 1`, also visible
   in user-workload Prometheus. `TrueNASUpdateAvailable` (info, console only) is due an hour later. It stays until
   the 25.10.7 upgrade, which is a README TODO.
+
+The operator checked the TrueNAS single pane by eye the same evening:
+- the update tile reads "25.10.7" in blue;
+- the snapshot-space table is populated, with `tank/media` at 45.3 GiB;
+- the Backup row shows the last success per task (16.0 h Synology, 2.6 h offsite), both tasks idle and OK, the box at
+  0.127 %, and all five access tiles green, Samba and WebDAV "off" included. So the per-tile overrides render as
+  designed.
+
+The exporter work is done. Its spec and plan were local working files and are deleted; this draft is the design
+record.
