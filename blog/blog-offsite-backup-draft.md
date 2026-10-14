@@ -588,3 +588,34 @@ Added in the spec beyond the six approved points, for review:
   verify the box's key.
 
 Spec: `docs/superpowers/specs/2026-10-13-offsite-backup-storage-box-design.md`.
+
+### 2026-10-14 — box ordered; what the console looks like
+
+The box was ordered the same afternoon, in Hetzner's Cloud Console (Storage Boxes moved there from Robot). No ID
+check or deposit held it up.
+
+The creation form asks for:
+- location and plan;
+- **Access:** an SSH key from the Cloud project or a password. With a key, a random password is generated and can be
+  changed later; a typed or generated password is shown once;
+- **Additional settings:** four toggles, SMB, WebDAV, SSH and External Reachability. Without External Reachability
+  only Hetzner's own network can connect;
+- labels and a name.
+
+Main account as created: SSH on, External Reachability on, SMB and WebDAV off. Its login is in the password
+manager and nowhere else; Ansible never uses it.
+
+What the box page shows afterwards:
+- tabs Overview, Snapshots, Subaccounts, Rescale, Delete;
+- Overview: server name, username, **SSH port 23** (port 22 also serves SFTP), and four counters — disk usage,
+  "Snapshots 0/10", "Auto snapshots 0/10", "Subaccounts 0/100";
+- Snapshots: a **"Display snapshot directory"** checkbox, off by default, and two buttons, "Take manual snapshot"
+  and "Enable automatic snapshots". The page warns that restoring an earlier snapshot deletes every newer one, so
+  a console restore is the last resort; single files come out of `/.zfs/snapshot` over SFTP;
+- Subaccounts: one user per directory, which "will only be able to access the files that are saved in this
+  directory".
+
+Two things for the spec:
+- It is not clear whether manual and automatic snapshots share the 10 slots, since they are counted separately.
+  So the manual snapshot taken in rollout step 6 is deleted afterwards, and the question is listed as open.
+- The "Rescale" tab suggests a BX11 can be enlarged in place. Not tried.

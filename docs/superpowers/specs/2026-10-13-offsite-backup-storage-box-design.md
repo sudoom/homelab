@@ -188,7 +188,8 @@ Each step waits for the previous one.
 6. **Operator:**
    - take one manual snapshot in the console;
    - fetch one photo over SFTP with the main account from `/.zfs/snapshot/<name>/…`, from the Mac;
-   - I compare its sha256 with the original on TrueNAS.
+   - I compare its sha256 with the original on TrueNAS;
+   - delete the manual snapshot, so it does not hold one of the 10 slots (see Open).
 
    This proves the single-file path the weekly snapshots exist for.
 7. **Operator, after 5 and 6 pass:** retire `Synology_C2_immich_photos_task`. Cancel the C2 plan if nothing else
@@ -239,8 +240,13 @@ Same commits as the changes they describe:
 
 - The sub-account's path layout on port 22, and whether a `.zfs` entry is visible to it (step 4 checks both).
 - Whether the 10-connection limit applies per sub-account or to the box as a whole.
-- Whether a BX11 can be enlarged to BX21 in place. Needed before the review point, not now.
-- Whether Hetzner asks a new account for ID verification or a deposit.
+- Whether manual and automatic snapshots share the 10 slots. The console counts them separately, each out of 10
+  ("Snapshots 0/10", "Auto snapshots 0/10"). Until that is known, a manual snapshot is deleted once it has done its
+  job.
+- Whether a BX11 can be enlarged to BX21 in place. The console has a "Rescale" tab, so probably yes; not tried.
+  Needed before the review point, not now.
+- ~~Whether Hetzner asks a new account for ID verification or a deposit.~~ Answered 2026-10-14: the box was
+  created the same day.
 
 ## Out of scope
 
