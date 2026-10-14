@@ -1069,3 +1069,36 @@ update-available, in the collector").
 Nothing is pushed or live. After the push: the Application syncs; ten rules `ok` in Thanos Ruler;
 `general_size / quota` matches the console; the route is live on both Alertmanager pods; and the new `truenas_*`
 series appear once the operator runs `playbook.yml`, which deploys the collector.
+
+## 2026-10-14 — hcloud-exporter live: what the checks showed
+
+Pushed `f196d32..8c75dd0` (19 commits). Everything below is read-only.
+
+- **ArgoCD:** `hcloud-exporter`, `monitoring-config`, `grafana-config`, `truenas-exporter` and `root-app` all
+  `Synced Healthy` at `8c75dd0`.
+- **Pod:** `hcloud-exporter-…` runs under SCC `restricted-v2`, Running, 0 restarts, Ready. The SealedSecret condition
+  is `Synced=True`.
+- **Metrics,** read with the readonly kubeconfig through the API server's service proxy:
+  `oc get --raw /api/v1/namespaces/hcloud-exporter/services/http:hcloud-exporter:9501/proxy/metrics`.
+  - 13 `hcloud_storagebox_*` series. Their label keys are only `id`, `location` and `name`; a grep for `server=` or
+    `username=` gives 0, and a grep for an account-number shape gives 0.
+  - `general_size` = `data_size` = 1.398800384e+09, `snapshot_size` 0, `quota` 1.099511627776e+12.
+  - Access: `ssh` 1, `external` 1, `samba` 0, `webdav` 0, `zfs` 1.
+  - `hcloud_request_failures_total{collector="storagebox"}` 0; `hcloud_request_duration_seconds_count{collector="storagebox"}`
+    present.
+- **Scrape:** user-workload Prometheus target `serviceMonitor/hcloud-exporter/hcloud-exporter/0` is `up`, and
+  `up{job="hcloud-exporter"}` = 1. `general_size / quota` = 0.00127 for `homelab-offsite`. The first query, right after
+  the sync, returned nothing: the single API call counted at that point was my own proxy read, so the first real
+  scrape came a minute or two later.
+- **Rules in Thanos Ruler** (`thanos-ruler-user-workload-0`, port 10902, read via the break-glass kubeconfig the
+  operator authorised for alert checks): `hetzner-storagebox` has 10 rules, health ok, inactive. The truenas-exporter
+  groups are `truenas-availability` 3, `truenas-backups` 5, `truenas-disks` 3, `truenas-pools` 5 and
+  `truenas-updates` 1: 17 rules, all ok and inactive.
+- **Alertmanager:** `alertmanager-main-0` and `-1` both carry the route
+  `HetznerStorageBox(Filling|AccessClosed|SnapshotDirHidden|Unmonitored)` → Critical. No Hetzner or TrueNAS alert is
+  firing.
+- **Dashboards:** `grafana/truenas-single-pane` is `DashboardSynchronized=True`, 35 panels.
+- **Open question 3** (does `stats.size` equal data plus snapshots?) is still open: the box has 0 snapshot bytes. It
+  gets checked once a weekly snapshot holds changed data.
+- **Collector additions:** the operator then ran `playbook.yml` (`ok=72 changed=1 failed=0`; the one change is the
+  collector file). The check of the new `truenas_*` metrics follows.
