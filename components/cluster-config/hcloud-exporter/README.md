@@ -13,6 +13,7 @@ access settings. Design record: `blog/blog-offsite-backup-draft.md` ("2026-10-14
 | `templates/deployment.yaml` | The exporter under restricted-v2; token read from the mounted Secret; every collector but Storage Box off |
 | `templates/service.yaml` | ClusterIP Service, port `http` 9501. Not headless, so `/metrics` is readable through the API server's service proxy |
 | `templates/servicemonitor.yaml` | Scrape every 60 s; stamps `instance="hcloud-exporter"`, drops `pod`/`container` |
+| `templates/prometheusrule.yaml` | Group `hetzner-storagebox`, 10 alerts: fill at 80 % / 90 % (snapshots included), Samba or WebDAV on, SSH or external reachability off, snapshot directory hidden, exporter down, API failing, no box reported |
 | `templates/sealed-hcloud-token.yaml` | SealedSecret `hcloud-exporter`, key `token`: a **read-only** API token of the Hetzner Console project that owns the box |
 | `values.yaml` | Image (tag + digest), port, scrape interval, instance label, resources |
 
@@ -31,6 +32,24 @@ access settings. Design record: `blog/blog-offsite-backup-draft.md` ("2026-10-14
   (`pkg/exporter/storagebox.go` at v3.30.0), plus `absent()`.
 - The access settings are the **main account's**. The upload sub-account's own settings are not in the API call
   the exporter makes.
+
+## Alerts
+
+Group `hetzner-storagebox`, evaluated by **Thanos Ruler** (a PrometheusRule in a user namespace), so rule health
+is read at `thanos-ruler-user-workload-0`, port 10902, and never through `ALERTS` on Prometheus.
+
+| Alert | Fires when | Mailed |
+|---|---|---|
+| `HetznerStorageBoxFilling` | usage with snapshots over 80 % for 1 h (warning) or 90 % for 15 m (critical) | yes; the critical mutes the warning |
+| `HetznerStorageBoxExposed` | Samba or WebDAV on for the main account (critical, label `setting`) | yes |
+| `HetznerStorageBoxAccessClosed` | SSH or external reachability off for the main account (warning, label `setting`) | yes |
+| `HetznerStorageBoxSnapshotDirHidden` | "Display snapshot directory" off (warning) | yes |
+| `HetznerStorageBoxExporterDown` | `up == 0` for 10 m | console only |
+| `HetznerStorageBoxApiFailing` | over 10 % of API calls failing in 30 m, for 15 m | console only |
+| `HetznerStorageBoxUnmonitored` | no `hcloud_storagebox_general_size` for 30 m | console only |
+
+Fill and drift rules carry `keep_firing_for: 30m`, so a short API outage does not resolve and re-mail them.
+`HetznerStorageBoxFilling` replaced the dataset-based `TrueNASOffsiteReviewDue` on 2026-10-14.
 
 ## Rotating the token
 

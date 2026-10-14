@@ -17,7 +17,7 @@ ServiceMonitor around it.
 | `templates/deployment.yaml` | socat, `TCP-LISTEN:9100,fork` → `192.168.1.25:9100` |
 | `templates/service.yaml` | Headless Service with a real selector |
 | `templates/servicemonitor.yaml` | Scrape config; stamps `instance="truenas"`, drops `pod`/`container` |
-| `templates/prometheusrule.yaml` | 17 alerts: exporter down, collector stale, SMART unreadable, pool health/capacity/scrub, disk SMART/sectors/temperature, Cloud Sync stale (36 h / 72 h / none in 7 days) and disabled, Cloud Sync unmonitored (series vanished), offsite review at 800 GB |
+| `templates/prometheusrule.yaml` | 16 alerts: exporter down, collector stale, SMART unreadable, pool health/capacity/scrub, disk SMART/sectors/temperature, Cloud Sync stale (36 h / 72 h / none in 7 days) and disabled, Cloud Sync unmonitored (series vanished). The offsite box's own fill is `HetznerStorageBoxFilling` in `hcloud-exporter`, which replaced the 800 GB dataset alert on 2026-10-14 |
 | `values.yaml` | Target address/port, image, instance label, scrape interval, resources |
 
 ## Why a forwarder pod instead of a selectorless Service + Endpoints

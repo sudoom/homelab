@@ -1,0 +1,191 @@
+# ---------------------------------------------------------------------------
+# Alerts for the Hetzner Storage Box that holds the only offsite copy of
+# tank/immich. Design record: blog/blog-offsite-backup-draft.md
+# ("2026-10-14 — the box itself in Prometheus").
+#
+# Evaluated by Thanos Ruler (a PrometheusRule in a user namespace), so rule
+# health is read at thanos-ruler-user-workload-0, not in Prometheus.
+#
+# Email: the 90 % Filling and Exposed are critical and go out through the
+# severity route; the 80 % Filling, AccessClosed and SnapshotDirHidden through
+# an allowlist route in monitoring-config. ExporterDown, ApiFailing and
+# Unmonitored are console-only.
+# ---------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: hetzner-storagebox
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: hcloud-exporter
+spec:
+  groups:
+    - name: hetzner-storagebox
+      rules:
+        # Fill. general_size is the API's stats.size, the box's usage WITH
+        # snapshots; quota is storage_box_type.size, the plan size. Both HELP
+        # strings mislead ("Overall size", "Available storage"). Snapshots keep
+        # deleted photos for up to ten weeks and count against the plan.
+        #
+        # The two levels share one name, so Alertmanager's critical->warning
+        # inhibit rule mutes the 80 % mail once 90 % fires. keep_firing_for: on
+        # an API error the exporter emits no box series at all, and a short
+        # outage must not resolve (and re-mail) a standing alert.
+        - alert: HetznerStorageBoxFilling
+          expr: hcloud_storagebox_general_size / hcloud_storagebox_quota > 0.80
+          for: 1h
+          keep_firing_for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Storage Box {{ "{{" }} $labels.name {{ "}}" }} is {{ "{{" }} $value | humanizePercentage {{ "}}" }} full, snapshots included"
+            description: |
+              Usage with snapshots against the plan size. Split it into data and
+              snapshots on the TrueNAS single pane (Backup row), or with
+              `hcloud_storagebox_data_size` and `hcloud_storagebox_snapshot_size`.
+              Choose before 90 %: rescale to the 5 TB plan (BX21) in Hetzner's
+              console, or keep fewer snapshots. The comparison is in
+              blog/blog-offsite-backup-draft.md (2026-10-13).
+
+        - alert: HetznerStorageBoxFilling
+          expr: hcloud_storagebox_general_size / hcloud_storagebox_quota > 0.90
+          for: 15m
+          keep_firing_for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Storage Box {{ "{{" }} $labels.name {{ "}}" }} is {{ "{{" }} $value | humanizePercentage {{ "}}" }} full, snapshots included"
+            description: |
+              A full box fails the nightly offsite upload, and the newest weekly
+              snapshots are the history a restore would need. Rescale now (BX21)
+              in Hetzner's console. Deleting the oldest snapshots frees only what
+              no newer snapshot or the live data still holds.
+
+        # Drift from the expected access settings: SSH on, external on, Samba
+        # off, WebDAV off, snapshot directory on. These are the MAIN account's
+        # settings. A change the operator did not make means someone else is in
+        # the Hetzner account.
+        - alert: HetznerStorageBoxExposed
+          expr: hcloud_storagebox_samba == 1
+          for: 15m
+          keep_firing_for: 30m
+          labels:
+            severity: critical
+            setting: samba
+          annotations:
+            summary: "Storage Box {{ "{{" }} $labels.name {{ "}}" }}: {{ "{{" }} $labels.setting {{ "}}" }} is on"
+            description: |
+              Samba exposes the box's files over SMB, which this setup never uses.
+              If the operator did not turn it on, assume someone else is in the
+              Hetzner account: change its password, check its two-factor login,
+              and turn the setting off in the console (Storage Box -> Settings).
+
+        - alert: HetznerStorageBoxExposed
+          expr: hcloud_storagebox_webdav == 1
+          for: 15m
+          keep_firing_for: 30m
+          labels:
+            severity: critical
+            setting: webdav
+          annotations:
+            summary: "Storage Box {{ "{{" }} $labels.name {{ "}}" }}: {{ "{{" }} $labels.setting {{ "}}" }} is on"
+            description: |
+              WebDAV exposes the box's files over HTTPS, which this setup never
+              uses. If the operator did not turn it on, assume someone else is in
+              the Hetzner account: change its password, check its two-factor
+              login, and turn the setting off in the console.
+
+        # Off means the single-file restore path through the main account (SFTP
+        # into /.zfs/snapshot) is shut. Whether it also stops the sub-account's
+        # upload is unconfirmed (Hetzner's docs do not say);
+        # TrueNASCloudSyncStale catches that either way.
+        - alert: HetznerStorageBoxAccessClosed
+          expr: hcloud_storagebox_ssh == 0
+          for: 15m
+          keep_firing_for: 30m
+          labels:
+            severity: warning
+            setting: ssh
+          annotations:
+            summary: "Storage Box {{ "{{" }} $labels.name {{ "}}" }}: {{ "{{" }} $labels.setting {{ "}}" }} is off for the main account"
+            description: |
+              The main account can no longer reach the box over SSH/SFTP, so a
+              single file cannot be fetched from a snapshot. Turn it back on in
+              the console. If the operator did not turn it off, treat it as
+              someone else in the Hetzner account.
+
+        - alert: HetznerStorageBoxAccessClosed
+          expr: hcloud_storagebox_external == 0
+          for: 15m
+          keep_firing_for: 30m
+          labels:
+            severity: warning
+            setting: external
+          annotations:
+            summary: "Storage Box {{ "{{" }} $labels.name {{ "}}" }}: {{ "{{" }} $labels.setting {{ "}}" }} is off for the main account"
+            description: |
+              External reachability is off: the box answers only inside Hetzner's
+              network, and the house is outside it. Turn it back on in the
+              console. If the operator did not turn it off, treat it as someone
+              else in the Hetzner account.
+
+        - alert: HetznerStorageBoxSnapshotDirHidden
+          expr: hcloud_storagebox_zfs == 0
+          for: 15m
+          keep_firing_for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Storage Box {{ "{{" }} $labels.name {{ "}}" }}: snapshot directory hidden"
+            description: |
+              "Display snapshot directory" is off, so /.zfs/snapshot is gone from
+              the main account's root and single-file restores need a full
+              snapshot restore instead. Turn it back on in the console.
+
+        # Health of the feed itself. None of these is emailed: the session-start
+        # triage sees them, and a box that really fills still fails the upload,
+        # which TrueNASCloudSyncStale emails.
+        - alert: HetznerStorageBoxExporterDown
+          expr: up{job="hcloud-exporter"} == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "hcloud-exporter unreachable for 10m"
+            description: |
+              Prometheus cannot scrape the exporter, so every Storage Box alert is
+              blind. Check `oc -n {{ .Values.namespace }} get pods` and the pod's
+              log (`oc -n {{ .Values.namespace }} logs deploy/hcloud-exporter --tail=20`).
+
+        # On an API error the exporter emits no box series and `up` stays 1.
+        # The duration histogram counts every call, failed or not, so this is
+        # the failed share. One failed call in about 60 does not fire it.
+        - alert: HetznerStorageBoxApiFailing
+          expr: |
+            increase(hcloud_request_failures_total{collector="storagebox"}[30m])
+              / increase(hcloud_request_duration_seconds_count{collector="storagebox"}[30m]) > 0.1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $value | humanizePercentage {{ "}}" }} of Storage Box API calls failed in 30m"
+            description: |
+              GET /v1/storage_boxes is failing. The pod's log names the error
+              (`oc -n {{ .Values.namespace }} logs deploy/hcloud-exporter --tail=20`):
+              401 means the read-only token was revoked or expired; a timeout
+              points at egress to api.hetzner.com:443. A new token is re-sealed as
+              in the chart's README.
+
+        # Also catches a box missing from the API's list, and a token that reads
+        # a project without the box.
+        - alert: HetznerStorageBoxUnmonitored
+          expr: absent(hcloud_storagebox_general_size)
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No Storage Box reported for 30m"
+            description: |
+              No hcloud_storagebox_* series, so the fill and drift alerts cannot
+              fire. Either the API calls fail (see HetznerStorageBoxApiFailing),
+              the exporter is down, or the token's project has no box.

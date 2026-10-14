@@ -273,26 +273,6 @@ spec:
               skip it. If this was not deliberate: the task is declared in
               ansible/truenas/group_vars/all.yml (`enabled`); re-run playbook.yml.
 
-        # The Storage Box is a BX11 (1 TB), sized for ~350 GB growing ~100 GB a
-        # year. This reads the whole dataset -- including the excluded thumbs/
-        # and encoded-video/ and local snapshots -- so it fires early, which is
-        # the safe side. The box's own usage, snapshots included, is in Hetzner's
-        # console and API and is not yet monitored; a follow-up (agreed
-        # 2026-10-14) adds it through promhippie/hcloud_exporter.
-        - alert: TrueNASOffsiteReviewDue
-          expr: truenas_dataset_used_bytes{dataset="tank/immich"} > 800e9
-          for: 6h
-          labels:
-            severity: warning
-          annotations:
-            summary: "tank/immich passed 800 GB: review the 1 TB Storage Box"
-            description: |
-              Choose the 5 TB plan (BX21) or a bucket before the box fills. The
-              comparison is in blog/blog-offsite-backup-draft.md (2026-10-13).
-              Check the box's real usage, snapshots included, in Hetzner's console or
-              API. It is not yet monitored; a follow-up adds it through
-              promhippie/hcloud_exporter.
-
         # Every rule above needs truenas_cloudsync_enabled. If cloudsync.query
         # starts failing (an API change after a TrueNAS upgrade) or a task
         # disappears, those series vanish while the collector keeps running --
