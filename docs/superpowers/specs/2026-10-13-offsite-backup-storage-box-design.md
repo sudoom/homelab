@@ -242,7 +242,7 @@ Same commits as the changes they describe:
 
 ## Open, to confirm on the way
 
-- The sub-account's path layout on port 22, and whether a `.zfs` entry is visible to it (step 4 checks both).
+- ~~The sub-account's path layout on port 22, and whether a `.zfs` entry is visible to it.~~ Answered 2026-10-14. The sub-account's root is its base directory, empty, with no `.zfs`. Snapshots are at the main account's root: `/.zfs/snapshot/<name>/truenas/immich/…`.
 - Whether the 10-connection limit applies per sub-account or to the box as a whole.
 - Whether manual and automatic snapshots share the 10 slots. The console counts them separately, each out of 10
   ("Snapshots 0/10", "Auto snapshots 0/10"). Until that is known, a manual snapshot is deleted once it has done its

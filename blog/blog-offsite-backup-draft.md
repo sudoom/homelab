@@ -834,3 +834,22 @@ Critical, Watchdog to Watchdog, an unknown warning to Default).
 GREEN, after the change: all seven pass, and `amtool check-config` reports SUCCESS. amtool cannot test inhibition,
 so I compared the rendered `inhibit_rules` with `yq` before and after: only `equal` changed, to
 `["namespace", "alertname", "task"]` in both rules.
+
+### 2026-10-14 evening — one file back from a box snapshot (plan Part B, Task 9)
+
+The operator took a manual snapshot in the console (`2026-10-14T16-42-57`) and connected with the **main** account over
+SFTP from the Mac. The layout:
+- snapshots sit at the main account's root, under `/.zfs/snapshot/<name>/`;
+- the sub-account's base directory is a plain folder inside each snapshot, so the TrueNAS upload sits at
+  `/.zfs/snapshot/<name>/truenas/immich/…`.
+
+That answers the spec's last path question. Fetching a single photo:
+
+```
+sftp> get "/.zfs/snapshot/2026-10-14T16-42-57/truenas/immich/library/<path>.jpg" /Users/<me>/Downloads/
+```
+
+One trap: `sftp` does not expand `~` in the local path (`open local "~/Downloads/": No such file or directory`), so
+the local path has to be absolute. `shasum -a 256` of the fetched file equals the `sha256sum` of the original on
+TrueNAS, taken earlier for the pull-back. The snapshot path works for single-file restores, which is the job the
+weekly snapshots are there for. The manual snapshot is deleted afterwards, so it does not hold one of the 10 slots.
