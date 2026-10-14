@@ -653,8 +653,8 @@ it will at full size, so the full-size drill (rollout step 8) starts by choosing
 
 ### 2026-10-14 — built in git, tested against stand-ins
 
-The code for the offsite leg is in git, five commits, not pushed yet and nothing run against the real box's Cloud Sync
-config. Every piece was tested against a stand-in first, RED before GREEN.
+The code for the offsite leg is in git, five commits on master, and nothing has run against the real box's Cloud Sync
+config yet. Every piece was tested against a stand-in first, RED before GREEN.
 
 - `9ec39a2` truenas: let Cloud Sync tasks declare rclone transfers
 - `3080263` truenas: no_log the Cloud Sync task create and update calls (not in the plan, see finding 1)
