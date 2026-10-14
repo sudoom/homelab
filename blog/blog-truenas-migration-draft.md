@@ -5459,3 +5459,36 @@ is 28 days, so every month runs, and a scheduled scrub within about three and a 
 manual one is still skipped. The role already reconciles threshold drift, so it applies on the
 next converge. Without a manual scrub the next run is 2026-11-01 either way (54 days after the
 last).
+
+### 2026-10-14 — 25.10.7 is out; how much does its block-cloning fix matter here?
+
+TrueNAS 25.10.7 is available and already downloaded (`midclt call update.status`: `new_version.version` 25.10.7,
+download 100 %). Its notes include ZFS 2.3 → 2.3.9, "resolving silent read corruption after block cloning". Checked
+on the box first:
+
+```bash
+zpool get -H -o name,property,value feature@block_cloning tank      # active
+zpool get -H -o name,property,value bcloneused,bclonesaved,bcloneratio tank   # 16.1M / 16.1M / 2.00x
+cat /sys/module/zfs/parameters/zfs_bclone_enabled                    # 1
+zfs version                                                          # zfs-2.3.4-1
+```
+
+So clones exist, but only 16 MB of them. Most likely they came from one small copy job: something that calls
+`copy_file_range` (coreutils `cp`, NFS 4.2 server-side COPY, or Samba server-side copy). Which one can't be told from
+here.
+
+The upstream bug:
+- **The race (openzfs/zfs#18412).** A file is truncated, then `copy_file_range` writes over that range in a later
+  TXG. A read then returns zeros for the first 128 K record. The reporter found the on-disk data intact.
+- **The fix, in two steps.** PR #18421 (2.3.7) fixed it, but opened the opposite case: a block freed after being
+  cloned could read stale cloned data. PR #18724 (2.3.9) fixes that, so 2.3.9 is the real fix and 2.3.7 or 2.3.8
+  would not be.
+- **Existing clones.** I found no evidence that settled clones read wrong, though that is inference; upstream does
+  not say either way. There is no on-disk format change and no repair step, and ZFS cannot list affected files.
+
+The other ZFS fixes in 25.10.7 (redacted send, zvol sync writes and the ZIL, dRAID rebuilds) don't apply to a RAIDZ2
+pool with no zvols. The interim knob is `zfs_bclone_enabled=0`, which stops new clones. It isn't worth it at this
+risk. Forum reports on 25.10.7 show no ZFS, NFS or SMB regression; there is one unexplained boot hang.
+
+Decision: upgrade within days, in a planned window, because the reboot pauses every NFS consumer in the cluster.
+Tracked in the README TODO.
