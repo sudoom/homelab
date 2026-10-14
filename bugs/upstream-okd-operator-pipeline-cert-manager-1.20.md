@@ -8,6 +8,7 @@
 | [#29](https://github.com/okd-project/okd-operator-pipeline/pull/29) | cert-manager -> 1.20 (cherry-pick of the same 3 commits, identical diff) | `release-4.21` |
 | [#30](https://github.com/okd-project/okd-operator-pipeline/pull/30) | nmstate gitlinks release-4.20 -> release-4.21 — **MERGED 2026-09-15, never built** (below) | `release-4.21` |
 | [#31](https://github.com/okd-project/okd-operator-pipeline/issues/31) | *issue* — publish a per-branch operator support matrix | — |
+| [#33](https://github.com/okd-project/okd-operator-pipeline/pull/33) | nmstate deploy workflow on `release-4.21` (draft, opened 2026-10-14; cert-manager's `main` trigger left out on purpose) | `release-4.21` |
 
 **A merge to `release-4.21` builds nothing unless that branch carries the operator's deploy workflow (found
 2026-10-14).** `release-4.21` has three `*-deploy.yaml` callers of `operator-deploy.yaml`: `kube-descheduler` and
@@ -17,7 +18,9 @@ Quay's newest nmstate tags are still `4.21.0-2026-05-05-165851` and a `4.22.0-20
 The 05-05 build predates #30, which makes it the release-4.20 code. `okderators-catalog-index` `release-4.21` lists
 only that bundle (`catalog/kubernetes-nmstate-operator/`, one channel entry that `skips` the 4.20 bundle). The same
 gap catches #29: merging it would not build cert-manager either, because its workflow listens on `main`.
-The catalog half cannot be written before a build exists: the bundle file is `opm render` output of the pushed image
+**#33 adds the missing `nmstate-deploy.yaml`** (a copy of `secondary-scheduler-deploy.yaml`). It touches no
+`nmstate/` path, so its merge starts no build either. After the merge, a maintainer runs "Deploy NMState" by
+`workflow_dispatch` on `release-4.21`, then the catalog-index PR follows. The catalog half cannot be written before a build exists: the bundle file is `opm render` output of the pushed image
 (`hack/add-bundle.sh <bundle>`), digests included.
 
 **#31 came out of a question rather than a defect, and the tone matters.** The first draft was an audit:
