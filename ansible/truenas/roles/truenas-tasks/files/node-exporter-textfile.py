@@ -199,17 +199,23 @@ def collect_scrub(out):
 
 
 def collect_datasets(out):
-    raw = run(["zfs", "list", "-Hp", "-o", "name,used,available,referenced", "-t", "filesystem"])
+    # usedbysnapshots is the space only the dataset's snapshots hold -- what
+    # destroying all of them would free. On tank/backup (snapshots every 6 h,
+    # kept 90 days) a deleted folder stays on disk through them for 90 days,
+    # and until 2026-10-14 nothing showed that.
+    raw = run(["zfs", "list", "-Hp", "-o", "name,used,available,referenced,usedbysnapshots", "-t", "filesystem"])
     for line in raw.strip().splitlines():
         f = line.split("\t")
-        if len(f) != 4:
+        if len(f) != 5:
             continue
-        name, used, avail, refer = f
+        name, used, avail, refer, snaps = f
         if skip_dataset(name):
             continue
         out.metric("dataset_used_bytes", used, "Bytes used by the dataset.", dataset=name)
         out.metric("dataset_available_bytes", avail, "Bytes available to the dataset.", dataset=name)
         out.metric("dataset_referenced_bytes", refer, "Bytes referenced by the dataset.", dataset=name)
+        out.metric("dataset_snapshots_used_bytes", snaps,
+                   "Bytes held only by the dataset's snapshots (usedbysnapshots).", dataset=name)
 
 
 def collect_snapshots(out):
@@ -291,6 +297,51 @@ def collect_cloudsync(out):
         if state == "SUCCESS":
             out.metric("cloudsync_last_success_timestamp_seconds", ts,
                        "Unix time the last job ended, exported only when that job succeeded.", task=task)
+
+
+def collect_update(out):
+    """
+    Whether the update train offers a newer TrueNAS release. update.status,
+    read on 25.10.6 on 2026-10-14, returns
+      {"code": "NORMAL",
+       "status": {"current_version": {...}, "new_version": {"version": ...}},
+       "update_download_progress": {"percent": 100.0, "version": ...}}
+
+    Every key is read defensively. A reply without a `status` object exports
+    nothing, because unknown is not "up to date"; a `status` without a
+    `new_version` exports 0. A failed call, or a reply that is not a JSON
+    object, counts one collector error.
+    """
+    global errors
+    raw = run(["midclt", "call", "update.status"])
+    if not raw:
+        return
+    try:
+        reply = json.loads(raw)
+    except ValueError:
+        reply = None
+    if not isinstance(reply, dict):
+        errors += 1
+        return
+    status = reply.get("status")
+    if not isinstance(status, dict):
+        return
+    new = status.get("new_version")
+    version = new.get("version") if isinstance(new, dict) else None
+    help_text = "1, labelled with the version, when a newer TrueNAS release is offered; 0, unlabelled, when none is."
+    if not version:
+        out.metric("update_available", 0, help_text)
+        return
+    out.metric("update_available", 1, help_text, version=version)
+    progress = reply.get("update_download_progress")
+    if not isinstance(progress, dict):
+        progress = {}
+    try:
+        done = float(progress.get("percent") or 0) >= 100 and progress.get("version") == version
+    except (TypeError, ValueError):
+        done = False
+    out.metric("update_downloaded", 1 if done else 0,
+               "1 if the offered release is fully downloaded, 0 if not.", version=version)
 
 
 def collect_smart(out):
@@ -377,7 +428,8 @@ def main():
     started = time.time()
 
     out = Out()
-    for fn in (collect_pools, collect_scrub, collect_datasets, collect_snapshots, collect_cloudsync, collect_smart):
+    for fn in (collect_pools, collect_scrub, collect_datasets, collect_snapshots, collect_cloudsync, collect_update,
+               collect_smart):
         try:
             fn(out)
         except Exception as exc:            # one broken collector must not lose the rest
