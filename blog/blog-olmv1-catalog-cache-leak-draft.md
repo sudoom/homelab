@@ -204,31 +204,41 @@ commands below were run by the operator, not by me: `oc debug` creates a pod, wh
 **1. Kubelet stats summary.** First question: is a pod holding ephemeral storage? Per-pod `ephemeral-storage`
 from the kubelet stats summary on node5: nothing. The largest pod used 1.66 G. So the disk is not in pods.
 
-**2. Seven days of free space.** Query, run read-only against Prometheus:
+**2. Seven days of free space.** A `query_range` against the platform Prometheus, read through the break-glass
+kubeconfig, as a read, with one sample every 12 h:
 
-```promql
-node_filesystem_avail_bytes{mountpoint="/sysroot"}
+```bash
+end=$(date -u +%s); start=$((end-7*86400))
+KUBECONFIG=~/.kube/config-breakglass oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- \
+  wget -qO- "http://localhost:9090/api/v1/query_range?query=node_filesystem_avail_bytes%7Bmountpoint%3D%22%2Fsysroot%22%7D&start=$start&end=$end&step=43200" \
+  | jq -r '.data.result[] | "\(.metric.instance | split(".")[0]): " + ([.values[] | "\((.[1]|tonumber)/1073741824|floor)"] | join(" "))'
 ```
 
-over 7 days. node5 fell from 129 to 111 GiB (69 % used of 371, about 2.6 GiB a day); node4 stayed at about 216 GiB
+ node5 fell from 129 to 111 GiB (69 % used of 371, about 2.6 GiB a day); node4 stayed at about 216 GiB
 and node6 at about 148. A slow steady slope on one node, not a step like the 09-14 leak.
 
 **3. `du` on node5.**
 
 ```bash
-oc debug node/node5.okd.sudops.pl -- chroot /host du -xh --max-depth=1 /var
+oc debug node/node5.okd.sudops.pl -- chroot /host sh -c 'du -xsh /var/lib/containers /var/log /var/lib/kubelet /var/lib/etcd /var/tmp /tmp /var/lib/rook 2>/dev/null; journalctl --disk-usage'
 ```
 
 `/var/lib/containers` 236G, `/var/log` 9.2G, journal 3.9G, kubelet 2G. Logs and kubelet are noise; the container
 store is nearly everything.
 
-**4. `overlay`.** Same `du` on node4 for comparison: `/var/lib/containers/storage/overlay` is 236 G on node5 against
-132 G on node4. Image count with `crictl images | wc -l`: 739 on node5, 406 on node4.
+**4. `overlay`, node5 against node4.**
+
+```bash
+for n in node5 node4; do echo "== $n"; oc debug node/$n.okd.sudops.pl -- chroot /host sh -c 'du -xsh /var/lib/containers/storage/* 2>/dev/null | sort -h | tail -6; echo "images: $(crictl images -q | wc -l)  containers: $(crictl ps -a -q | wc -l)  exited: $(crictl ps -a --state exited -q | wc -l)"' 2>/dev/null; done
+```
+
+`/var/lib/containers/storage/overlay` is 236 G on node5 against 132 G on node4. Images: 739 against 406. Containers:
+185 against 233, so container layers are not it.
 
 **5. Per repository.**
 
 ```bash
-crictl images | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn | head
+oc debug node/node5.okd.sudops.pl -- chroot /host sh -c 'crictl images | awk "NR>1 {print \$1}" | sort | uniq -c | sort -rn | head -8' 2>/dev/null
 ```
 
 376 of node5's images are `registry.access.redhat.com/redhat/community-operator-index` and 85 are
