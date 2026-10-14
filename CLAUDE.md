@@ -226,7 +226,7 @@ Claude should refuse these actions and explain why briefly:
 
 ## Skills — the `superpowers` plugin
 
-Installed 2026-09-09. Not every skill fits this repo; three of them contradict rules stated elsewhere in this
+Installed 2026-09-09. Not every skill fits this repo; two kinds of them contradict rules stated elsewhere in this
 file. **A skill never overrides a guardrail.** If a skill's instructions conflict with the Guardrails section or
 with a rule below, the repo rule wins and I say which one I am following and why.
 
@@ -249,6 +249,12 @@ with a rule below, the repo rule wins and I say which one I am following and why
   "no drain headroom" and "30-minute cap" rules rather than replacing them.
 - **`requesting-code-review` / `receiving-code-review`** — upstream PR work, and any change to a chart that a
   degraded-window procedure depends on.
+- **Agents — use them as much as possible (operator, 2026-10-14; until then they needed an ask each time).**
+  Execute a written plan with `subagent-driven-development`, and hand research, broad code search, reviews and
+  other independent work to the Agent tool (`dispatching-parallel-agents` when several pieces are independent).
+  Subagents work on `master` like I do, with no worktree and no branch (rule below), and never push. Every
+  dispatch prompt repeats the rules its task touches: secrets, the commit message style, no `Co-Authored-By`
+  trailer. The Workflow tool's multi-agent scripts are not covered by this and still need the operator's ask.
 
 **These conflict with existing rules — the repo rule wins:**
 
@@ -257,9 +263,6 @@ with a rule below, the repo rule wins and I say which one I am following and why
   create a branch or worktree for homelab changes. **Exception:** upstream contribution clones under the
   scratchpad (`okd-operator-pipeline`, etc.) are separate repos with their own conventions, and there branches
   are correct.
-- **`dispatching-parallel-agents`, `subagent-driven-development`** assume spawning subagents. The operating
-  instructions for this project say not to use the Agent tool or workflows unless the user asks for it. Do not
-  invoke these on my own initiative; suggest one if a task genuinely warrants it and let the user decide.
 - **`test-driven-development`** assumes a unit-test suite. There isn't one. The analogue here is the
   **Validation workflow** (`helm lint` → `helm template` → `kubeconform` → `oc diff`) and, for upstream work,
   actually running `build_containers` / `make bundle` / `opm validate` before claiming a change works. Apply the
