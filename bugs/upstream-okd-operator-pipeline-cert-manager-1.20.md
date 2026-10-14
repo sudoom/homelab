@@ -80,6 +80,34 @@ stream, past 1.20's OpenShift range. **#29's build:** `cert-manager-deploy.yaml`
 maintainer can start it by hand on that branch even though its push trigger names `main`.
 Evidence: scratchpad `cm-research/report.md` (2026-10-14 session; not kept).
 
+**2026-10-14: both PRs refreshed and re-verified in-cluster.** Pushed as fast-forwards (no history rewrite):
+#28 `fd314fc..92e26eb`, #29 `04e9ef7..1379ca4`.
+
+| commit | branch | change |
+|---|---|---|
+| `f41d9dd` / `92e26eb` | #29 / #28 | `[cert-manager] Update to cert-manager 1.20.4 and operator 1.20.1`: gitlinks `bc643782` (jetstack `release-1.20`, v1.20.4-1) and `1adf341f` (operator `cert-manager-1.20`, CSV 1.20.1); `patches/operator.patch` regenerated, same substitutions; the `build.sh` graph comment no longer names 1.19 |
+| `1379ca4` | #29 only | `[ci] Build cert-manager on pushes to release-4.21`: the deploy workflow's push trigger `main` -> `release-4.21` |
+
+The old patch fails at the new operator pin (`git am -3` rc=128, CONFLICT in the CSV base: skipRange,
+description, replaces/version). The regenerated one applies through `./build.sh init` (`Applying: OKDify`, rc=0).
+Local arm64 `build_containers` and `make bundle` + `operator-sdk bundle validate` pass (subagent run).
+
+In-cluster, same method as 09-08 (scratch namespace `cert-manager-build`, runbook in the session scratchpad):
+
+| step | result |
+|---|---|
+| 4 binary builds, `output.to` zot `okd-test/cert-manager/*:1.20.0-2026-10-14-220000` | all Complete: istio-csr 417 s (node5), cert-manager 551 s, acme-solver 545 s, operator 469 s (node4, pinned there by `nodeSelector` because node5's root fs is at 70%) |
+| `build_bundle` (the pipeline's own function, `podman push` stubbed) | `operator-sdk` validation passed; CSV `cert-manager-operator.v1.20.0-2026-10-14-220000`, deploys cert-manager v1.20.4, every related image at the digest its build pushed, skipRange `>=1.0.0 <1.20.0-2026-10-14-220000`, replaces null, OKD 7 / Red Hat 0 |
+| test catalog = 4 published okderators bundles + the new one, `opm` v1.74.0 | positive (`replaces: …v1.18.0-2025-12-25-214537`) `opm validate` OK; negative with upstream's graph (`replaces: …v1.20.0`, skipRange `>=1.20.0 <1.20.1`) rejected: `multiple channel heads found in graph: cert-manager-operator.v1.18.0-2025-12-25-214537, cert-manager-operator.v1.20.0-2026-10-14-220000` |
+| namespace-scoped CatalogSource (amd64 catalog from okderators' own `catalog.Containerfile`) | READY in ~30 s; packagemanifest `currentCSV=cert-manager-operator.v1.20.0-2026-10-14-220000`, skipRange as above |
+| OperatorGroup + Manual Subscription | InstallPlan `install-8znhk`, `RequiresApproval`, `approved=false`, 19 steps from the unpacked bundle; never approved |
+| isolation | live Subscription still `v1.18.0-2025-12-25-214537` / `AtLatestKnown` / `okderators` / Manual, live CSV `Succeeded`, no other InstallPlan created that day, 0 Certificates not Ready |
+
+Two traps on the way: `common.sh` adds `--use-image-digests` to `BUNDLE_METADATA_OPTS`, so `build_bundle` fails
+with `NAME_UNKNOWN` until every operand image is pushed; and the `opm` container image has no
+`/etc/containers/policy.json`, so `opm render <image>` inside it fails until one is mounted
+(`{"default":[{"type":"insecureAcceptAnything"}]}`).
+
 **Still to do:** the companion `okderators-catalog-index` change adding the `olm.channel` entry. It cannot be
 written until this PR merges and a build is published, because the entry has to name the resulting
 `cert-manager-operator.v1.20.0-<date>` CSV.
