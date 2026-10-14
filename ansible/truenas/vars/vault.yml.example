@@ -67,3 +67,16 @@ truenas_smb_password_mba: CHANGEME
 # says so on every run -- the playbook still converges everything else.
 truenas_backup_synology_user: CHANGEME
 truenas_backup_synology_password: CHANGEME
+
+# ---- Offsite backup to a Hetzner Storage Box (Cloud Sync over SFTP) -------
+# The Storage Box SUB-ACCOUNT TrueNAS logs in with (Hetzner console ->
+# Storage Box -> Subaccounts): base directory `truenas`, SSH on, external
+# reachability on, not read-only, SMB and WebDAV off. Never the main account.
+# The server name carries the account number, so it is a secret here too.
+# Named by `secrets` in truenas_cloudsync_credentials (group_vars/all.yml).
+#
+# Without these three the role creates neither the credential nor the
+# offsite task and says so on every run.
+truenas_backup_hetzner_host: CHANGEME
+truenas_backup_hetzner_user: CHANGEME
+truenas_backup_hetzner_password: CHANGEME

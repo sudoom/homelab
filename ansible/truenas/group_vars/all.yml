@@ -726,26 +726,31 @@ truenas_snapshot_tasks:
 # ---------------------------------------------------------------------------
 # Cloud Sync backup tasks (rclone underneath; converged by truenas-tasks).
 #
-# FIRST CONSUMER, 2026-10-11: the Immich library, copied nightly to the Synology
-# share folder photo/backups over SFTP. Immich moved here from the DS418 that
-# day, and the Hyper Backup -> C2 job on the DS418 backs up a path on the
-# Synology, so from the cutover on nothing left this box. This copy is the
-# bridge until the offsite job exists, and the DS418's temporary leg until it is
-# sold. The offsite target -- a Hetzner Storage Box, chosen 2026-10-13 after OVH
-# fell through -- becomes a second credential and a second task here.
+# TWO LEGS FOR THE IMMICH LIBRARY. Immich moved here from the DS418 on
+# 2026-10-11, and the Hyper Backup -> C2 job on the DS418 backs up a path on
+# the Synology, so from the cutover on nothing left this box until these
+# existed:
+#   * 05:00 -> the Synology share folder photo/backups/immich (since
+#     2026-10-11). In the house; the DS418's temporary leg until it is sold.
+#   * 06:00 -> a Hetzner Storage Box sub-account, folder /immich (in code since
+#     2026-10-14; provider chosen 2026-10-13 after OVH fell through). The
+#     offsite copy. Spec:
+#     docs/superpowers/specs/2026-10-13-offsite-backup-storage-box-design.md
 #
-# WHY CLOUD SYNC AND NOT AN RSYNC TASK. Both exist on 25.10. Cloud Sync is the
-# mechanism the offsite leg uses as well (SFTP again, to the Storage Box), so
-# one code path serves both legs; SFTP takes a plain DSM account and password, where rsync over SSH for
-# a non-admin DSM account needs key material planted in its home directory.
-# What it does NOT carry is Unix ownership and mode -- contents and
-# modification times only. Fine for a backup that is restored by copying files
-# back; the restore then has to chown to the immich namespace UID (see the
-# immich dataset above).
+# WHY CLOUD SYNC AND NOT AN RSYNC TASK. Both exist on 25.10. Cloud Sync serves
+# both legs with one code path (SFTP to each), and SFTP takes a plain account
+# and password, where rsync over SSH for a non-admin DSM account needs key
+# material planted in its home directory. What it does NOT carry is Unix
+# ownership and mode -- contents and modification times only. Fine for a
+# backup that is restored by copying files back; the restore then has to chown
+# to the immich namespace UID (see the immich dataset above).
 #
-# transfer_mode COPY, NOT SYNC, ON PURPOSE: a file deleted in Immich stays on
-# the Synology. This is a backup, not a mirror -- it has to survive an
-# accidental delete at the source. The cost is that it only grows.
+# COPY TO THE SYNOLOGY, SYNC TO THE BOX -- different on purpose:
+#   * Synology, COPY: a file deleted in Immich stays there. It only grows, and
+#     it is what survives an accidental delete at the source.
+#   * Storage Box, SYNC: a mirror, so a delete reaches the box at the next run.
+#     History there comes from the box's own snapshots (weekly, 10 kept, set
+#     in Hetzner's console), which the sub-account login cannot touch.
 #
 # SECRETS never live here. `secrets` maps a provider field to the NAME of a
 # vault variable (vars/vault.yml). When one is not loaded the role creates
@@ -761,6 +766,16 @@ truenas_cloudsync_credentials:
     secrets:
       user: truenas_backup_synology_user
       pass: truenas_backup_synology_password
+  - name: hetzner-storagebox
+    provider:
+      type: SFTP
+      port: 22                 # SFTP is always on at 22; 23 is the box's interactive SSH
+    # The SUB-ACCOUNT (base directory `truenas`), never the main account. Its
+    # server name carries the account number, so the host is a vault variable too.
+    secrets:
+      host: truenas_backup_hetzner_host
+      user: truenas_backup_hetzner_user
+      pass: truenas_backup_hetzner_password
 
 truenas_cloudsync_tasks:
   # `description` is the identity the role matches on -- rename it and the role
@@ -782,6 +797,25 @@ truenas_cloudsync_tasks:
     schedule: { minute: "0", hour: "5", dom: "*", month: "*", dow: "*" }
     # Regenerable, and most of the small files. rclone filter syntax; a leading
     # slash anchors at the dataset root.
+    exclude:
+      - "/thumbs/**"
+      - "/encoded-video/**"
+  - description: "offsite: tank/immich -> hetzner storage box /immich (managed by ansible/truenas)"
+    dataset: immich
+    credentials: hetzner-storagebox
+    # Relative to the sub-account's base directory, which is all it can see of
+    # the box. Checked with cloudsync.list_directory on "/" before the first run.
+    attributes:
+      folder: /immich
+    transfer_mode: SYNC
+    snapshot: true
+    # The box allows 10 connections per account. rclone opens up to 8 checkers
+    # on top of its transfers, and TrueNAS does not expose the checker count.
+    transfers: 2
+    # 06:00 Europe/Warsaw: an hour after the Synology leg, from its own
+    # temporary snapshot. The box's weekly snapshot (Sunday 03:00 UTC) falls
+    # before this run in summer and in winter time.
+    schedule: { minute: "0", hour: "6", dom: "*", month: "*", dow: "*" }
     exclude:
       - "/thumbs/**"
       - "/encoded-video/**"

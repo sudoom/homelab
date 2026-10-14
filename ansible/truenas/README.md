@@ -75,7 +75,7 @@ check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
 | NFS exports to the OKD nodes | `truenas-shares` | matched on export path |
 | SMB Time Machine targets for the Macs | `truenas-smb` | global flag + groups/users/shares matched on name; dataset ACLs on owner/acltype/ACE drift |
 | Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
-| Cloud Sync backup tasks (first one: Immich → Synology over SFTP) | `truenas-tasks` | credential matched on `name`, task on `description`; declared fields reconciled on drift; skipped, loudly, while the vault lacks the secret |
+| Cloud Sync backup tasks (Immich → Synology and → Hetzner Storage Box, both over SFTP) | `truenas-tasks` | credential matched on `name`, task on `description`; declared fields reconciled on drift; skipped, loudly, while the vault lacks the secret |
 | garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
 | node_exporter custom app | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
 | Syncthing catalog app (Mac ↔ Mac sync of the projects tree, plus the mini's `~/Documents` mirror) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
@@ -469,13 +469,16 @@ button, not by hand.
 ## Backup tasks (Cloud Sync)
 
 `truenas_cloudsync_credentials` and `truenas_cloudsync_tasks` in `group_vars/all.yml` declare
-rclone-based Cloud Sync tasks; the design notes are next to them. The first one copies
-`tank/immich` to the Synology every night at 05:00, into the `photo` share under
-`backups/immich`, over SFTP.
+rclone-based Cloud Sync tasks; the design notes are next to them. Two legs copy `tank/immich`
+every night, both over SFTP:
 
-- **`COPY`, not `SYNC`.** A photo deleted in Immich stays on the Synology. It is a backup, so it
-  only grows.
-- **From a snapshot**, so a file written mid-run is either wholly in or wholly out.
+| Time | Target | Mode | Why |
+|---|---|---|---|
+| 05:00 | the Synology, `photo` share, `backups/immich` | `COPY` | In the house. A photo deleted in Immich stays there, so it only grows |
+| 06:00 | a Hetzner Storage Box sub-account, folder `/immich` | `SYNC` | Offsite mirror. History comes from the box's weekly snapshots (10 kept), which the TrueNAS login cannot touch |
+
+Both legs run **from a snapshot**, so a file written mid-run is either wholly in or wholly out.
+
 - **Without `thumbs/` and `encoded-video/`**, which Immich regenerates. `backups/` (the nightly
   database dump) is included and matters as much as the photos.
 - **Contents and modification times only.** rclone over SFTP does not carry Unix ownership or
@@ -492,7 +495,19 @@ off port 22 answers `Connection refused`), and an account with read/write on `ph
 permission. That account's name and password go into `vars/vault.yml` as
 `truenas_backup_synology_user` and `truenas_backup_synology_password`.
 
-Until those two variables are in the vault the role creates neither the credential nor the
+What the Storage Box needs, by hand in Hetzner's console (not managed from this repo; set up
+2026-10-14 and recorded in `blog/blog-offsite-backup-draft.md`):
+- a sub-account with base directory `truenas`, SSH and external reachability on, not read-only,
+  SMB and WebDAV off;
+- the automatic snapshot plan (weekly, Sunday 03:00, keep 10) and "Display snapshot directory" on.
+
+The sub-account's server name, user and password go into `vars/vault.yml` as
+`truenas_backup_hetzner_host`, `truenas_backup_hetzner_user` and
+`truenas_backup_hetzner_password`. The server name carries the account number, so it is a
+secret too. The offsite task sets `transfers: 2`, because the box allows 10 connections per
+account and rclone opens up to 8 checkers on top of its transfers.
+
+Until a leg's variables are in the vault the role creates neither its credential nor its
 task, prints why on every run, and the convergence report lists the task under
 `cloudsync_tasks_without_secrets`. Once they are there, a task that fails to appear fails the
 run (`cloudsync_tasks_missing`).
@@ -533,7 +548,7 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `inventory.yml` | Single host `truenas`, mgmt address, `truenas_admin` + sudo |
 | `group_vars/all.yml` | All declarative inputs: pool name, datasets, NFS clients, NTP, schedules |
 | `vars/vault.yml.example` | Committed template (no secrets) |
-| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, and the Synology account for the Cloud Sync backup |
+| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, the Synology account for the Cloud Sync backup, and the Hetzner Storage Box sub-account for the offsite one |
 | `playbook.yml` | Full convergence (vault OPTIONAL since 2026-08-28 — only the SMTP alert-email vars need it) |
 | `check.yml` | Read-only state report (no vault) |
 | `roles/truenas-storage/` | Assert pool, converge datasets |
