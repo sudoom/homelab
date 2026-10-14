@@ -75,6 +75,21 @@ PrometheusRule group `hetzner-storagebox`. The placeholders are escaped as in `t
 - Egress to `api.hetzner.com:443` is open. The repo has no NetworkPolicy. The cluster has no EgressFirewall or
   AdminNetworkPolicy, and its 68 NetworkPolicies sit in platform namespaces.
 
+### Dashboard (approved 2026-10-14)
+
+A new row, **Backup**, at the bottom of the TrueNAS single pane
+(`components/cluster-config/grafana-config/files/truenas-single-pane.json`), using the dashboard's `${datasource}`:
+
+| Panel | Query | Shows |
+|---|---|---|
+| Last successful run, per task | `time() - max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])` | Hours since the last success. Thresholds: green under 26 h, yellow to 36 h, red beyond, matching `TrueNASCloudSyncStale` |
+| Task state | `truenas_cloudsync_enabled`, `_running`, `_last_job_success` | One line per task: enabled, running now, last job OK or failed |
+| Storage Box fill | `hcloud_storagebox_general_size / hcloud_storagebox_quota` | Gauge with 80 % / 90 % marks, matching `HetznerStorageBoxFilling` |
+| Box usage over time | `hcloud_storagebox_data_size` and `_snapshot_size` stacked, `hcloud_storagebox_quota` as a line | Data against snapshot overhead, against the plan size |
+| Box access settings | `hcloud_storagebox_{ssh,external,samba,webdav,zfs}` | Five tiles, green in the expected state |
+
+The Cloud Sync panels have data today. The box panels need the exporter, so the row ships in the same rollout.
+
 ## Rollout
 
 1. **Operator**, from the repo root. Prove the token reads the box (safe fields only), then seal it:
@@ -131,6 +146,7 @@ PrometheusRule group `hetzner-storagebox`. The placeholders are escaped as in `t
 ## Docs
 
 - A new chart README.
+- `grafana-config`'s README or dashboard notes, if they list the single pane's rows.
 - `truenas-exporter`'s "not yet monitored" lines.
 - The parent spec's Monitoring bullet.
 - The blog draft.
