@@ -853,3 +853,5 @@ One trap: `sftp` does not expand `~` in the local path (`open local "~/Downloads
 the local path has to be absolute. `shasum -a 256` of the fetched file equals the `sha256sum` of the original on
 TrueNAS, taken earlier for the pull-back. The snapshot path works for single-file restores, which is the job the
 weekly snapshots are there for. The manual snapshot is deleted afterwards, so it does not hold one of the 10 slots.
+
+2026-10-14: specs and plans are no longer kept in the repo; the design record is this draft.

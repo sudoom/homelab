@@ -79,3 +79,5 @@ Same lesson as the nmstate gitlinks on 2026-09-09: read what was built, not what
   last.
 
 Next: spec review, then the implementation plan.
+
+2026-10-14: specs and plans are no longer kept in the repo; the design record is this draft.

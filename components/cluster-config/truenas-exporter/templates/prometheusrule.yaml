@@ -191,7 +191,8 @@ spec:
     # what nothing else catches is a task that stops running, or goes on
     # failing after that first mail. Metrics: collect_cloudsync in the
     # textfile collector. Spec:
-    # docs/superpowers/specs/2026-10-13-offsite-backup-storage-box-design.md
+    # blog/blog-offsite-backup-draft.md ("Decision (2026-10-13): a Hetzner
+    # Storage Box").
     - name: truenas-backups
       rules:
         # The last success comes from Prometheus history, not from the current

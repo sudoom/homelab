@@ -59,3 +59,6 @@ config-readonly
 # Python bytecode -- a .pyc under ansible/truenas was committed by accident (2026-09-08)
 __pycache__/
 *.pyc
+
+# Specs and plans are local working files, never committed; the design record is the blog draft (2026-10-14)
+docs/superpowers/

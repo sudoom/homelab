@@ -51,7 +51,7 @@ Pin these when generating manifests or commands — mismatched versions are the 
 ├── tests/                   # Manual-apply test artifacts not yet promoted to a chart
 ├── data/                    # Captured benchmark / SMART / log artifacts referenced from blog drafts
 │                            # └── storage-throughput.md — ALL measured throughput figures, with conditions
-├── docs/superpowers/specs/  # Design specs from brainstorming, reviewed before any implementation
+├── docs/superpowers/        # GITIGNORED — local specs and plans while work is in flight; the design record goes to blog/ afterwards
 ├── .claude/
 │   ├── settings.json        # Tracked: read-only allowlist + guardrail deny list (settings.local.json is not)
 │   └── skills/              # On-demand instructions split out of this file — cluster-health,
@@ -269,6 +269,9 @@ with a rule below, the repo rule wins and I say which one I am following and why
   actually running `build_containers` / `make bundle` / `opm validate` before claiming a change works. Apply the
   spirit — demonstrate the failure, then demonstrate the fix — not the letter. The 2026-09-09 cert-manager PR is
   the model: `opm validate` was shown failing on the unfixed graph *and* passing on the fixed one.
+- **`brainstorming`, `writing-plans`** say to commit the spec and plan. In this repo they stay local
+  (`docs/superpowers/` is gitignored; the repo is public). After implementation the design and its reasons go into
+  the blog draft and both files are deleted (operator, 2026-10-14).
 
 **`using-superpowers`** is the meta-index for finding the others. **`writing-skills`** only applies when
 authoring a new skill.

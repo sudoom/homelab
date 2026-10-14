@@ -735,7 +735,8 @@ truenas_snapshot_tasks:
 #   * 06:00 -> a Hetzner Storage Box sub-account, folder /immich (in code since
 #     2026-10-14; provider chosen 2026-10-13 after OVH fell through). The
 #     offsite copy. Spec:
-#     docs/superpowers/specs/2026-10-13-offsite-backup-storage-box-design.md
+#     blog/blog-offsite-backup-draft.md ("Decision (2026-10-13): a Hetzner
+#     Storage Box")
 #
 # WHY CLOUD SYNC AND NOT AN RSYNC TASK. Both exist on 25.10. Cloud Sync serves
 # both legs with one code path (SFTP to each), and SFTP takes a plain account
