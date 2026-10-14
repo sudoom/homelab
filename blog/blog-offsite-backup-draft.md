@@ -697,7 +697,8 @@ last finished, last success) and `errors 0`, and no host, user or password anywh
 **The promtool tests.** Four scenarios in `promtool test rules`: the stale ladder (silent at 35 h, warning at 36 h,
 critical at 72 h, the 7-day rule at 171 h), a task that never succeeded, a disabled task, and the offsite review point.
 RED on the unchanged chart: `rules: 11`, FAILED, every firing case reporting `exp:[...] got:[]`. GREEN: `16 rules`,
-SUCCESS. `helm lint` clean, kubeconform 5 valid, 0 invalid, and a live `oc diff` against the readonly kubeconfig showed
+SUCCESS. `helm lint` clean, kubeconform 5 valid, 0 invalid, and a read-only comparison against the live cluster (`oc -n truenas-exporter get prometheusrule truenas -o json | jq -S .spec`,
+diffed against the rendered `.spec`) showed
 one hunk, all additions, all inside the new `truenas-backups` group.
 
 **Finding 1: the role has leaked the Cloud Sync secret under `-v` since 2026-10-11.** The harness leak check was the
@@ -708,7 +709,7 @@ drifted" had the same gap. Fix: `no_log: true` on both, and the header comment n
 
 **Finding 2: the plan's alert rules collided.** The 72 h critical rule and the "no success in 7 days" rule were both
 `TrueNASCloudSyncStale{severity=critical}` with the same label set. promtool's lint reported a duplicate rule, and the
-unit test hit a duplicate sample at 170 h, where both fire for one task. A live Prometheus would have collided the same
+unit test hit a duplicate sample at 170 h. The two rules are mutually exclusive and hand over at the 7-day edge, and at that instant the outgoing alert's staleness marker and the incoming alert's first sample had the same label set. A live Prometheus would have collided the same
 way. The third rule got an extra label, `window: no-success-7d`; the only test change was that label in two expected
 label sets, no time or value was loosened.
 
@@ -716,3 +717,17 @@ label sets, no time or value was loosened.
 sub-account's root), its connection limit against the `transfers` value, and real rclone behaviour on the first big
 upload. The fake validates field names, not what the middleware or the box accepts. Those wait for the operator's
 playbook run and Part B of the plan.
+
+## Final review, 2026-10-14
+
+A whole-branch review of the offsite-backup commits came back "ready to push, with fixes", and the fixes went in as one wave.
+Job errors printed by the alert runbooks and the README are now piped through a `sed` that replaces the Storage Box
+host with `<box>`, since rclone errors can name it. A sixth rule, `TrueNASCloudSyncUnmonitored`, fires when a task's
+`truenas_cloudsync_enabled` series was there in the last 7 days and is not now: every other Cloud Sync alert needs that
+series, so a failing `cloudsync.query` would have silenced all of them. The probe also found a one-hour gap at the 7-day
+handoff, where the 36 h and 72 h rules lose their window before the 7-day rule's `for: 1h` has elapsed, sending a
+RESOLVED mail mid-outage; `keep_firing_for: 2h` on those two rules closes it, after `oc explain` on the cluster's
+PrometheusRule CRD confirmed the field. The Stale descriptions now say to check `truenas_cloudsync_running` first, since
+the first full upload can outlast 72 h. Corrections: "visible only in Hetzner's console" is wrong, the Hetzner API
+reports the box's usage and a follow-up will export it, and the plan's Task 6 now warns that its first run is
+unattended unless Task 7 follows within the hour.

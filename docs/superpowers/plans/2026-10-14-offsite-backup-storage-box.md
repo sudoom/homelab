@@ -746,7 +746,7 @@ truenas_cloudsync_tasks:
     dataset: immich
     credentials: hetzner-storagebox
     # Relative to the sub-account's base directory, which is all it can see of
-    # the box. Checked with cloudsync.list_directory on "/" before the first run.
+    # the box. Check with cloudsync.list_directory on "/" before the first run (plan Task 7 Step 1).
     attributes:
       folder: /immich
     transfer_mode: SYNC
@@ -1361,7 +1361,7 @@ Append to `components/cluster-config/truenas-exporter/templates/prometheusrule.y
               last successful run ended {{ "{{" }} $value | humanizeDuration {{ "}}" }} ago.
               Read the last job (never print the whole reply -- it carries the
               credential's password):
-              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}'`
+              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}' | sed -E 's/u[0-9]+(-sub[0-9]+)?(\.your-storagebox\.de)?/<box>/g'`
 
         - alert: TrueNASCloudSyncStale
           expr: |
@@ -1394,7 +1394,7 @@ Append to `components/cluster-config/truenas-exporter/templates/prometheusrule.y
               not succeeded in the last 7 days, or ever. Right after playbook.yml
               creates a task this fires until its first run. Otherwise read the
               last job:
-              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}'`
+              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}' | sed -E 's/u[0-9]+(-sub[0-9]+)?(\.your-storagebox\.de)?/<box>/g'`
 
         - alert: TrueNASCloudSyncDisabled
           expr: truenas_cloudsync_enabled == 0
@@ -1411,8 +1411,9 @@ Append to `components/cluster-config/truenas-exporter/templates/prometheusrule.y
         # The Storage Box is a BX11 (1 TB), sized for ~350 GB growing ~100 GB a
         # year. This reads the whole dataset -- including the excluded thumbs/
         # and encoded-video/ and local snapshots -- so it fires early, which is
-        # the safe side. The box's own usage, snapshots included, is visible
-        # only in Hetzner's console.
+        # the safe side. The box's own usage, snapshots included, is in Hetzner's
+        # console and API and is not yet monitored; a follow-up (agreed
+        # 2026-10-14) adds it through promhippie/hcloud_exporter.
         - alert: TrueNASOffsiteReviewDue
           expr: truenas_dataset_used_bytes{dataset="tank/immich"} > 800e9
           for: 6h
@@ -1596,6 +1597,10 @@ goes through a `jq` filter that names its fields.
 
 ### Task 6: Operator converges (spec rollout step 3)
 
+Run `playbook.yml` only when Task 7 can follow within the hour. The task is created enabled for 06:00, so
+otherwise its first run happens unattended before the `list_directory` check, and the 7-day Stale rule mails a
+critical 1 h after creation.
+
 - [ ] **Step 1 — Operator:**
 
 ```bash
@@ -1604,7 +1609,9 @@ cd ansible/truenas && ansible-playbook -i inventory.yml playbook.yml --ask-vault
 
 Expected:
 - "Create missing Cloud Sync credentials" changed for `hetzner-storagebox`;
-- "Create missing Cloud Sync tasks" changed for the offsite task;
+- "Create missing Cloud Sync tasks" changed for the offsite task. Since `no_log` (commit 3080263) these two
+  tasks show only as `censored` items, so Step 2's filtered read is the real check. A censored failure there means
+  re-running that one `midclt call cloudsync.create` by hand to see the middleware error;
 - "Install the node_exporter textfile collector" changed;
 - the convergence report has `cloudsync_tasks_missing: []` and `cloudsync_tasks_without_secrets: []`;
 - `failed=0`.
@@ -1642,7 +1649,7 @@ before any run.
 - [ ] **Step 2: Run it by hand.**
 
 ```bash
-ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync HZ_TASK" | tail -3
+ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync HZ_TASK" | tail -3 | sed -E 's/u[0-9]+(-sub[0-9]+)?(\.your-storagebox\.de)?/<box>/g'
 ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq -c '.[] | select(.id==HZ_TASK) | {state: .job.state, started: .job.time_started, finished: .job.time_finished}'
 ```
 

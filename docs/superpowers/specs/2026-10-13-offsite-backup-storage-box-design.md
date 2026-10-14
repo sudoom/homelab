@@ -143,13 +143,18 @@ success comes from Prometheus history (`max_over_time`, below).
 | `TrueNASCloudSyncStale` | same, `> 72h` | 15m | critical |
 | `TrueNASCloudSyncStale` | `truenas_cloudsync_enabled == 1 unless on(task) max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])`: an enabled task with no success in 7 days, or never | 1h | critical |
 | `TrueNASCloudSyncDisabled` | `truenas_cloudsync_enabled == 0` | 1h | warning |
+| `TrueNASCloudSyncUnmonitored` | `max_over_time(truenas_cloudsync_enabled[7d]) unless on(task) truenas_cloudsync_enabled`: a task reported in the last 7 days and not now (added after the final review, 2026-10-14) | 30m | critical |
 | `TrueNASOffsiteReviewDue` | `truenas_dataset_used_bytes{dataset="tank/immich"} > 800e9` | 6h | warning |
 
+- The 36 h and 72 h Stale rules carry `keep_firing_for: 2h` (added after the final review, 2026-10-14), so the handover
+  to the 7-day rule at the window edge never resolves mid-outage.
 - The third Stale rule covers a task that never succeeded, and the gap after a success drops out of the 7-day
   window.
 - The review alert reads the whole dataset, including the excluded `thumbs/` and `encoded-video/` and local
   snapshots. It fires early, which is the safe side.
-- Box usage, including snapshots, is visible only in Hetzner's console.
+- Box usage, including snapshots, is in Hetzner's console and API (`GET https://api.hetzner.com/v1/storage_boxes/{id}`:
+  `stats.size`, `stats.size_data`, `stats.size_snapshots`, and `storage_box_type.size` for the plan size). It is not yet
+  monitored; a follow-up, agreed with the operator 2026-10-14, adds it through `promhippie/hcloud_exporter`.
 - The rules can be pushed before the collector is deployed: with no `truenas_cloudsync_*` series, none of them can
   fire.
 
