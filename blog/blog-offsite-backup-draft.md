@@ -855,3 +855,209 @@ TrueNAS, taken earlier for the pull-back. The snapshot path works for single-fil
 weekly snapshots are there for. The manual snapshot is deleted afterwards, so it does not hold one of the 10 slots.
 
 2026-10-14: specs and plans are no longer kept in the repo; the design record is this draft.
+
+
+## 2026-10-14 — the box itself in Prometheus: hcloud-exporter, built in git
+
+The follow-up agreed in the Monitoring design above: the box's own fill, snapshots included, its access settings
+and the health of the API feed, in Prometheus, with the alerts that matter emailed. The operator made a read-only
+API token, proved it against `GET /v1/storage_boxes` (safe fields only) and sealed it; everything else is in git,
+tested against stand-ins first, RED before GREEN.
+
+The design spec and the plan are local working files and are deleted after implementation, so this section is the
+design record. Nothing here is pushed or live yet: the build is six commits on `master`, and the rollout checks
+(Part B) come after the push.
+
+### Why
+
+The box holds the only offsite copy of `tank/immich`, and nothing watched it. Its snapshots keep deleted photos for
+up to ten weeks, and they count against the 1 TB. Its access settings can change in the console unseen.
+`TrueNASOffsiteReviewDue` was only a proxy: it read the dataset, including data that is never uploaded.
+
+### Decisions
+
+| Decision | Choice | Note |
+|---|---|---|
+| Chart | `components/cluster-config/hcloud-exporter`, namespace `hcloud-exporter`, sync wave 5 | The same wave as the other exporters. |
+| Image | `ghcr.io/promhippie/hcloud-exporter`, tag `3.30.0` pinned with its index digest | Renovate's `helm-values` manager replaces version and digest together. Reviewed PR. |
+| Collectors | Storage Box only | Every other collector is set `false` explicitly. |
+| Labels | `id`, `name`, `location` | Never `server` or `username`. |
+| Token | Read-only. SealedSecret `hcloud-exporter`, key `token`, read through `file://` | The exporter reads it once, at start. |
+| Email | The critical route, plus one allowlist route | See Email and egress. |
+
+The chart follows `truenas-exporter`'s layout and `mikrotik-exporter`'s SealedSecret:
+- Deployment: 1 replica, `maxSurge: 0`, `automountServiceAccountToken: false`; `runAsNonRoot` with seccomp
+  `RuntimeDefault` and no `runAsUser` (restricted-v2 assigns the UID, which `runAsNonRoot` needs because the image's
+  `USER` is a name); read-only root filesystem, no privilege escalation, all capabilities dropped; probes on
+  `/healthz` and `/readyz`, port 9501; requests 10m / 32Mi, limits 100m / 64Mi.
+- Environment: the token from `file:///etc/hcloud-exporter/token`; `HCLOUD_EXPORTER_REQUEST_TIMEOUT=5s`, under the
+  10 s scrape timeout; the Storage Box collector on, the other eight collectors off; labels `id,name,location`.
+- Service: ClusterIP, not headless, so the API server's service proxy can read `/metrics`.
+- ServiceMonitor: every 60 s, `instance: hcloud-exporter`, `labeldrop pod|container`. Two Prometheus replicas scrape
+  it, about 120 API calls an hour.
+
+### Alerts
+
+PrometheusRule group `hetzner-storagebox`, ten rules:
+
+| Alert | Expression | for | Severity |
+|---|---|---|---|
+| `HetznerStorageBoxFilling` | `hcloud_storagebox_general_size / hcloud_storagebox_quota > 0.80` | 1h | warning |
+| `HetznerStorageBoxFilling` | same, `> 0.90` | 15m | critical |
+| `HetznerStorageBoxExposed` | `hcloud_storagebox_samba == 1` (label `setting: samba`), and the same for `webdav` | 15m | critical |
+| `HetznerStorageBoxAccessClosed` | `hcloud_storagebox_ssh == 0` (label `setting: ssh`), and the same for `external` | 15m | warning |
+| `HetznerStorageBoxSnapshotDirHidden` | `hcloud_storagebox_zfs == 0` | 15m | warning |
+| `HetznerStorageBoxExporterDown` | `up{job="hcloud-exporter"} == 0` | 10m | warning |
+| `HetznerStorageBoxApiFailing` | `increase(hcloud_request_failures_total{collector="storagebox"}[30m]) / increase(hcloud_request_duration_seconds_count{collector="storagebox"}[30m]) > 0.1` | 15m | warning |
+| `HetznerStorageBoxUnmonitored` | `absent(hcloud_storagebox_general_size)` | 30m | warning |
+
+- **Fill.** `general_size` is the API's usage with snapshots, and `quota` is the plan size; both HELP strings
+  mislead. The two levels share one name, so the existing inhibit rule mutes the 80 % one once 90 % fires.
+- **Drift.** The expected state is SSH on, external on, Samba off, WebDAV off, snapshot directory on. These are the
+  main account's settings (see Limits). `AccessClosed` therefore means the single-file restore path is shut. A
+  change the operator did not make means someone else is in the account.
+- **Failures.** On an API error the exporter emits no box series, and `up` stays 1. The ratio ignores one failed
+  call in about 60. `absent()` also catches a box that is missing from the list.
+- **`keep_firing_for: 30m`** on the fill and drift rules, so a short API outage does not resolve them. A long one
+  does: after 30 minutes without series they resolve, and `Unmonitored` takes over.
+
+### Email and egress
+
+- The critical route emails `Filling` at 90 % and `Exposed`.
+- A new allowlist route in `monitoring-config`, `alertname =~ "HetznerStorageBox(Filling|AccessClosed|SnapshotDirHidden)"`,
+  emails the warnings. They are actionable when they arrive, and none is standing.
+- Console-only: `ExporterDown`, `ApiFailing`, `Unmonitored`. The session-start triage sees them. The backstop is the
+  upload failing on a full box, which `TrueNASCloudSyncStale` emails.
+- Egress to `api.hetzner.com:443` is open. The repo has no NetworkPolicy, the cluster has no EgressFirewall or
+  AdminNetworkPolicy, and its 68 NetworkPolicies sit in platform namespaces.
+
+### Dashboard
+
+A new row, **Backup**, at the bottom of the TrueNAS single pane, using the dashboard's `${datasource}`:
+
+| Panel | Query | Shows |
+|---|---|---|
+| Last successful run, per task | `time() - max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])` | Hours since the last success. Green under 26 h, yellow to 36 h, red beyond, matching `TrueNASCloudSyncStale` |
+| Task state | `truenas_cloudsync_enabled`, `_running`, `_last_job_success` | One line per task: enabled, running now, last job OK or failed |
+| Storage Box fill | `hcloud_storagebox_general_size / hcloud_storagebox_quota` | Gauge with 80 % / 90 % marks, matching `HetznerStorageBoxFilling` |
+| Box usage over time | `hcloud_storagebox_data_size` and `_snapshot_size` stacked, `hcloud_storagebox_quota` as a line | Data against snapshot overhead, against the plan size |
+| Box access settings | `hcloud_storagebox_{ssh,external,samba,webdav,zfs}` | Five tiles, green in the expected state |
+
+The Cloud Sync panels have data today. The box panels need the exporter, so the row ships in the same rollout.
+
+### TrueNAS additions
+
+Two small collector additions ship in the same rollout: snapshot space per dataset (a Capacity-row panel, no alert)
+and an update-available metric (a Health tile and an info alert). Their design and build are in
+`blog/blog-truenas-migration-draft.md` ("2026-10-14 — snapshot space per dataset and update-available, in the
+collector").
+
+### Limits
+
+- **Sub-account settings are invisible.** The exporter calls `StorageBox.All` only, so it reads the box's access
+  settings, not the upload sub-account's own. `TrueNASCloudSyncStale` still catches a broken upload.
+- **No snapshot plan and no snapshot count**, only `snapshot_size` in bytes.
+- **No success metric.** A failure looks like missing data.
+
+### Open items
+
+1. **`TrueNASOffsiteReviewDue`.** Decided 2026-10-14: replace it with the 80 % rule. That rule reads the box itself,
+   snapshots included, follows a rescale, and is emailed; the dataset rule counted data that is never uploaded. It
+   is removed in the commit that adds `HetznerStorageBoxFilling`.
+2. **Whether the main account's SSH and external settings gate sub-accounts.** Hetzner's docs do not say, so the
+   premise that turning them off breaks the upload is unconfirmed.
+3. **Whether `stats.size` equals data plus snapshots.** Checked on the first scrape.
+
+### Rulings made while planning
+
+3. **`HCLOUD_EXPORTER_WEB_ADDRESS` is set from `.Values.port`.** The spec's env list leaves it at the default
+   (`0.0.0.0:9501`). Setting it keeps one source for the port that the Service and probes use.
+4. **A `checksum/token` pod annotation over the sealed file.** The exporter reads the token once, at start
+   (`config.Value` in `pkg/action/server.go`). Without the annotation a re-sealed token would need a manual restart,
+   which is a mutating command; with it, ArgoCD rolls the pod when the file changes.
+5. **`hcloud_request_duration_seconds_count{collector="storagebox"}` exists** (verified below). Unlike the failure
+   counter, the histogram is not pre-initialised, so its series appears from the first scrape.
+6. **The task-state panel's three queries are wrapped in `max by (task)`**, so the table joins on `task` alone.
+7. **`update.status` edge cases** follow from "missing keys must not raise": a reply without a `status` object
+   exports nothing, because unknown is not "up to date"; a `status` without `new_version` exports
+   `truenas_update_available 0`; `truenas_update_downloaded` carries the offered `version` and exists only while an
+   update is offered.
+8. **The spec's "Out of scope: a dashboard" is superseded** by its Dashboard section, approved the same day.
+
+### The build
+
+Six commits on `master`, in order (base `f196d32`), then a docs commit for the README:
+
+```
+e6c125c hcloud-exporter: add promhippie/hcloud_exporter for the Storage Box at sync wave 5
+f289109 hcloud-exporter: alert on Storage Box fill, access drift and API health; replace TrueNASOffsiteReviewDue
+d87253b monitoring-config: email the Storage Box warnings
+83549fa truenas: export dataset snapshot space and the offered TrueNAS update
+ef76661 truenas-exporter: alert when a TrueNAS update is available
+c451fcb grafana-config: add the Backup row, snapshot space and the update tile to the TrueNAS single pane
+```
+
+**The one unverified metric, now verified.** The ApiFailing ratio divides by
+`hcloud_request_duration_seconds_count{collector="storagebox"}`, which I had read about but not seen. At v3.30.0,
+`pkg/exporter/storagebox.go` observes the histogram right after the API call and before the error check:
+
+```go
+storageboxes, err := c.client.StorageBox.All(ctx)
+c.duration.WithLabelValues("storagebox").Observe(time.Since(now).Seconds())
+```
+
+So `_count` counts failed calls too, and the ratio is sound. (`pkg/config/config.go` reads `file://` with
+`os.ReadFile` and does not trim, which is why the token file must hold the bare token.)
+
+**The image.** The tag's index digest was re-resolved against ghcr on 2026-10-14: an OCI image index
+(`oci.image.index.v1+json`) with 386, amd64, arm/v6 and arm64 manifests, digest
+`sha256:f1dba83dfd23dc553f05c8693b6a9648d3602ab267b0d81270bbaf07b4ddd3de`, the value already in the values file.
+
+**The chart check** (a scratch script that renders the chart and asserts on the objects; not committed). RED with no
+chart: 1 failed (`helm template renders`). GREEN: 25 PASS, 0 failed. It includes the `checksum/token` assertion: the
+pod template must carry a 64-character checksum of the sealed file, so a re-sealed token rolls the pod. Lint passed,
+kubeconform found 5 valid resources, and a read-only comparison with live showed the namespace and Application
+absent, as they should be before the push. The root-app render goes from 47 to 48 Applications; the new one is at
+wave 5 with prune and selfHeal.
+
+**The rules.** `promtool test rules` against a scratch render. RED: `rules: 0` with 14 failing expectations (every
+case that expects an alert). GREEN: 10 rules, `promtool check rules` SUCCESS, and the eight cases pass:
+1. fill, warning at 85 % after an hour and critical at 95 % after 15 minutes, both firing together;
+2. `keep_firing_for` bridges a short API outage;
+3. and does not bridge a long one: the series stop at 29 minutes, the critical is held to about 65 minutes, then resolves;
+4. access settings: the expected state fires nothing; then Samba on, SSH off and the snapshot directory hidden at 30 minutes, WebDAV on and external off at 60, one alert per setting;
+5. API failures below the 10 % line stay quiet;
+6. and above it, fire;
+7. the exporter answers but reports no box: `Unmonitored` fires;
+8. a box is reported, then the scrape fails from 10 minutes on: `ExporterDown` fires 10 minutes later, `Unmonitored` stays quiet.
+
+A second script checks the alert table in this section against the rendered rules (22 PASS). Two mutations proved
+the tests bite: removing every `keep_firing_for` fails cases 2 and 3, and replacing the ApiFailing ratio with
+`increase(failures[30m]) > 0` fails case 5. A read-only comparison against live Thanos-evaluated rules showed only
+`TrueNASOffsiteReviewDue` as the difference after the removal.
+
+**`TrueNASOffsiteReviewDue` removed in the same commit** (Open 1), with its test case. The truenas-exporter rules go
+17 to 16, and `truenas-backups` from 6 rules to 5.
+
+**The route.** An amtool script feeds label sets to the rendered Alertmanager config and checks the receiver. RED on
+the unchanged config: 3 FAIL (the three warnings reached `Default`, wanted `Critical`), 10 PASS. GREEN: 13 PASS,
+`amtool check-config` SUCCESS, and the earlier 7-case script still passes. The inhibit rules are unchanged (diffed
+before and after). The live config is a Secret and was not read; the route is checked on the live pods in Part B.
+
+**The dashboard.** The single pane goes from 27 to 35 panels. RED: 11 failed checks (the missing row and panels).
+GREEN: 18 PASS, 0 failed. The Backup row sits at y 55, directly under the last existing panel; nothing below the
+edited rows moved. An expression test (`promtool`) pins the update tile's PromQL. Lint passed, kubeconform found 32
+valid resources, and the live dashboard still reads 27 panels with `DashboardSynchronized=True` until the push.
+
+**Real-box facts, read 2026-10-14** (the console and API, safe fields only): the API answered the box name
+`homelab-offsite` in location `fsn1`; 1.40 GB of data, 0 snapshot bytes, quota 1 TiB (1,099,511,627,776 bytes);
+access settings as designed.
+
+The TrueNAS additions are in `blog/blog-truenas-migration-draft.md` ("2026-10-14 — snapshot space per dataset and
+update-available, in the collector").
+
+### Still to come (Part B)
+
+Nothing is pushed or live. After the push: the Application syncs; ten rules `ok` in Thanos Ruler;
+`general_size / quota` matches the console; the route is live on both Alertmanager pods; and the new `truenas_*`
+series appear once the operator runs `playbook.yml`, which deploys the collector.

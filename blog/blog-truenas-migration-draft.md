@@ -5492,3 +5492,56 @@ risk. Forum reports on 25.10.7 show no ZFS, NFS or SMB regression; there is one 
 
 Decision: upgrade within days, in a planned window, because the reboot pauses every NFS consumer in the cluster.
 Tracked in the README TODO.
+
+
+### 2026-10-14 — snapshot space per dataset and update-available, in the collector
+
+Two additions shipped with the Storage Box exporter; the rest of that rollout is in
+`blog/blog-offsite-backup-draft.md` ("2026-10-14 — the box itself in Prometheus").
+
+**Why.**
+- A deleted folder in `tank/backup` stays on disk for 90 days through the 6-hourly snapshots, and nothing showed it.
+  I found that while planning the full-size restore drill.
+- The 25.10.7 update (section above) was visible only in the UI.
+
+**The collector** (`ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py`):
+- `usedbysnapshots` is now the fifth column of the existing `zfs list -Hp -o name,used,available,referenced,usedbysnapshots -t filesystem`
+  call, exported as `truenas_dataset_snapshots_used_bytes{dataset}`. The field-count check moves from 4 to 5.
+- `collect_update` reads `midclt call update.status`. It exports `truenas_update_available` = 1 with label `version`
+  (from `status.new_version.version`) when a release is offered, and `truenas_update_available 0` with no label when
+  none is. `truenas_update_downloaded` is 1 when `update_download_progress.percent` is 100 for that version.
+- Rulings. A reply with no `status` object exports nothing and counts no error: unknown is not "up to date". A
+  `status` without `new_version` exports `truenas_update_available 0`. A download for another version than the
+  offered one exports `truenas_update_downloaded 0`, and the metric is exported only while an update is offered.
+  A failing call, or a reply that is not an object, counts one collector error, like `cloudsync.query`.
+- Missing keys never raise. The code uses no syntax newer than Python 3.9.
+
+**The harness.** The stand-in `zfs` prints exactly the columns requested, and the stand-in `midclt` answers
+`update.status` in eight modes (`offered`, `none`, `other-version`, `partial`, `nostatus`, `notobject`, `fail`,
+`bad`). RED against the unchanged collector: 8 failed. GREEN: 28 PASS, 0 failed, and the old collector test still
+passes.
+
+**The real-box read-only run.** I ran the collector's read paths against the box over SSH, with no write. It printed
+18 `truenas_dataset_snapshots_used_bytes` lines: `tank/backup` 130,944 bytes (not zero, as expected), `tank/media`
+about 48.6 GB, `tank/sync` about 7.06 GB, `tank/immich` about 92 MB, the rest 0. The update lines, as printed:
+
+```
+truenas_update_available{version="25.10.7"} 1
+truenas_update_downloaded{version="25.10.7"} 1
+```
+
+with 0 errors. 25.10.7 is offered and already downloaded.
+
+**`TrueNASUpdateAvailable`.** Severity `info`, `for: 1h`, console-only, in a new `truenas-updates` group. The
+truenas rules go 16 to 17 (after the offsite-review rule's removal), and the route test pins it to `Default`.
+
+**The two tiles.** The single pane's Health row gets a "TrueNAS update" stat. Its query is
+`truenas_update_available == 1 or label_replace(truenas_update_available == 0, "version", "up to date", "job", ".*")`:
+the offered version is the series' own `version` label, and the 0 sample is relabelled so the tile reads "up to
+date". When `update.status` cannot be read the collector exports no sample, so the tile shows its "no data" text,
+and "no data" never reads as up to date; a `promtool` test pins all three cases. The Capacity row gets a snapshot
+space table (bytes and share of `truenas_dataset_used_bytes`), which is why the two timeseries there went from width
+12 to 8.
+
+**Still to come.** The metrics exist only after the operator's next `playbook.yml` run (Part B, Task 10); until then
+the tile shows "no data" and the snapshot table is empty.
