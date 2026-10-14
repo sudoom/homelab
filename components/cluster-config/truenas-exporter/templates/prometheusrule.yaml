@@ -203,6 +203,7 @@ spec:
             (time() - max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])) > 36 * 3600
               and on(task) truenas_cloudsync_enabled == 1
           for: 15m
+          keep_firing_for: 2h
           labels:
             severity: warning
           annotations:
@@ -210,23 +211,28 @@ spec:
             description: |
               Cloud Sync task "{{ "{{" }} $labels.task {{ "}}" }}" runs daily, and its
               last successful run ended {{ "{{" }} $value | humanizeDuration {{ "}}" }} ago.
+              Check `truenas_cloudsync_running` first: 1 means a long run (the
+              first full upload can take days) is still in progress, not a missed one.
               Read the last job (never print the whole reply -- it carries the
               credential's password):
-              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}'`
+              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}' | sed -E 's/u[0-9]+(-sub[0-9]+)?(\.your-storagebox\.de)?/<box>/g'`
 
         - alert: TrueNASCloudSyncStale
           expr: |
             (time() - max_over_time(truenas_cloudsync_last_success_timestamp_seconds[7d])) > 72 * 3600
               and on(task) truenas_cloudsync_enabled == 1
           for: 15m
+          keep_firing_for: 2h
           labels:
             severity: critical
           annotations:
             summary: "Backup task without a successful run for {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
             description: |
-              Cloud Sync task "{{ "{{" }} $labels.task {{ "}}" }}" has missed three
-              nightly runs in a row. For the offsite task, the only copy outside
-              the house is now that old. Read the last job as in the warning.
+              Cloud Sync task "{{ "{{" }} $labels.task {{ "}}" }}" has had no successful
+              run in over 72 hours. Check `truenas_cloudsync_running` first: 1 means
+              a long run is still in progress, not a missed one. For the offsite
+              task, the only copy outside the house is now that old. Read the last
+              job as in the warning.
 
         # A task that has never succeeded has no success series at all, and one
         # whose last success has left the 7-day window has none either -- the
@@ -238,9 +244,12 @@ spec:
           for: 1h
           labels:
             severity: critical
-            # Tells this alert apart from the 72h rule above: both are critical
-            # for the same task around the 7-day edge, and two rules may not
-            # produce the same alert identity.
+            # The 72h rule above and this one are mutually exclusive and hand
+            # over at the 7-day edge. The label keeps them apart because at the
+            # handover instant the outgoing alert's staleness marker and the
+            # incoming alert's first sample would share one label set: promtool
+            # reports "duplicate sample for timestamp" and `promtool check rules`
+            # a duplicate rule.
             window: no-success-7d
           annotations:
             summary: "Backup task has no successful run in 7 days"
@@ -249,7 +258,7 @@ spec:
               not succeeded in the last 7 days, or ever. Right after playbook.yml
               creates a task this fires until its first run. Otherwise read the
               last job:
-              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}'`
+              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq '.[] | {description, state: .job.state, finished: .job.time_finished, error: .job.error}' | sed -E 's/u[0-9]+(-sub[0-9]+)?(\.your-storagebox\.de)?/<box>/g'`
 
         - alert: TrueNASCloudSyncDisabled
           expr: truenas_cloudsync_enabled == 0
@@ -266,8 +275,9 @@ spec:
         # The Storage Box is a BX11 (1 TB), sized for ~350 GB growing ~100 GB a
         # year. This reads the whole dataset -- including the excluded thumbs/
         # and encoded-video/ and local snapshots -- so it fires early, which is
-        # the safe side. The box's own usage, snapshots included, is visible
-        # only in Hetzner's console.
+        # the safe side. The box's own usage, snapshots included, is in Hetzner's
+        # console and API and is not yet monitored; a follow-up (agreed
+        # 2026-10-14) adds it through promhippie/hcloud_exporter.
         - alert: TrueNASOffsiteReviewDue
           expr: truenas_dataset_used_bytes{dataset="tank/immich"} > 800e9
           for: 6h
@@ -278,4 +288,29 @@ spec:
             description: |
               Choose the 5 TB plan (BX21) or a bucket before the box fills. The
               comparison is in blog/blog-offsite-backup-draft.md (2026-10-13).
-              Check the box's real usage, snapshots included, in Hetzner's console.
+              Check the box's real usage, snapshots included, in Hetzner's console or
+              API. It is not yet monitored; a follow-up adds it through
+              promhippie/hcloud_exporter.
+
+        # Every rule above needs truenas_cloudsync_enabled. If cloudsync.query
+        # starts failing (an API change after a TrueNAS upgrade) or a task
+        # disappears, those series vanish while the collector keeps running --
+        # and every Cloud Sync alert would go silent with them. Renaming or
+        # removing a task in code fires this too, until the old series leaves
+        # the 7-day window; silence it then.
+        - alert: TrueNASCloudSyncUnmonitored
+          expr: |
+            max_over_time(truenas_cloudsync_enabled[7d])
+              unless on(task) truenas_cloudsync_enabled
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backup task no longer reported: {{ "{{" }} $labels.task {{ "}}" }}"
+            description: |
+              Cloud Sync task "{{ "{{" }} $labels.task {{ "}}" }}" was reported in the last
+              7 days and is not now, so none of the Cloud Sync alerts can see it.
+              Either the textfile collector's cloudsync.query call fails
+              (`truenas_textfile_collector_errors` > 0), or the task was removed
+              or renamed. Check the task list without printing credentials:
+              `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq -c '.[] | {id, description, enabled}'`
