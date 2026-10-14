@@ -650,3 +650,69 @@ Read while writing it, on the box (filtered to job keys and types, no credential
 One thing the spec did not see: `tank/backup` has a snapshot task every 6 hours with 90-day retention. A restore-test
 directory there is pinned for 90 days if a snapshot runs while it exists. That doesn't matter at today's ~2 GB, but
 it will at full size, so the full-size drill (rollout step 8) starts by choosing where the restore lands.
+
+### 2026-10-14 — built in git, tested against stand-ins
+
+The code for the offsite leg is in git, five commits, not pushed yet and nothing run against the real box's Cloud Sync
+config. Every piece was tested against a stand-in first, RED before GREEN.
+
+- `9ec39a2` truenas: let Cloud Sync tasks declare rclone transfers
+- `3080263` truenas: no_log the Cloud Sync task create and update calls (not in the plan, see finding 1)
+- `9baf988` truenas: declare the offsite Cloud Sync leg to the Hetzner Storage Box
+- `97fbeb1` truenas: export Cloud Sync task state from the textfile collector
+- `f19827c` truenas-exporter: alert on stale or disabled Cloud Sync tasks and the offsite review point
+
+**The role harness.** A fake `midclt` on `PATH` that keeps credentials and Cloud Sync tasks in a JSON file, validates
+the payload fields the way the real middleware does, and logs every call. The playbook runs against localhost with the
+fake and obviously fake vault values (a test host, user and two passwords). `check.py <case>` asserts on the stored
+state and the call log. `ansible-playbook` does not start inside the sandbox (multiprocessing socket), so these runs
+were unsandboxed; the fake never touches the NAS.
+
+| Case | What it proves | Result |
+|---|---|---|
+| `t1-create`, unchanged role (RED) | test task created with `transfers: 2` | FAIL, stored `null`; the role never sent it |
+| `t1-create`, after the change | both tasks created, `transfers` 2 on the test task, `null` on Synology, one credential and two tasks | 0 failed |
+| `t1-rerun` | second run changes nothing, no new calls | PASS |
+| `t1-drift` (after `drift-transfers`) | exactly one update, `transfers` back to 2 | PASS |
+| `t1-oldrow` (task row with no `transfers` key) | no update, no change (live-side `default(none)`) | PASS |
+| `t1-check` (`--check`, empty box) | no middleware calls | PASS |
+| `t2-create`, before the declarations (RED) | two credentials, offsite fields, folder, credential link | 5 failed |
+| `t2-create`, after | all of the above, Synology task unchanged | 8 PASS, 0 failed |
+| `t2-rerun` | idempotent | PASS |
+| `t2-nosecret` | only the Synology leg is created; the offsite task is reported as lacking secrets, not as missing; the run names the three missing vault variables | PASS |
+| `t2-addsecret` | adds exactly the offsite credential and task, updates nothing | PASS |
+| leak | none of the fake secrets in any log, `-v` on | 0 hits each |
+
+`check.yml` against the real NAS afterwards: `ok=5 changed=0 failed=0`, read-only.
+
+**The collector test.** A fake `cloudsync.query` with seven fixture states: never run, running, waiting, success,
+failed, aborted-and-disabled, and a task name containing a quote and a backslash. Planted `LEAK-*` strings sit in the
+credential, the job log excerpt and the error field. RED against the unchanged collector: 3 failed (series missing,
+and the two malformed-input cases not counted as a collector error). GREEN: 13 PASS, 0 failed, including "every sample
+line parses", "one TYPE line per metric" and "no credential or job-log field reaches the output". Only `description`,
+`enabled`, `job.state` and `job.time_finished` are read. The same function was then run read-only against the real box
+(code over stdin, nothing written): it returned the Synology task's five series (enabled, running, last job success,
+last finished, last success) and `errors 0`, and no host, user or password anywhere in the output.
+
+**The promtool tests.** Four scenarios in `promtool test rules`: the stale ladder (silent at 35 h, warning at 36 h,
+critical at 72 h, the 7-day rule at 171 h), a task that never succeeded, a disabled task, and the offsite review point.
+RED on the unchanged chart: `rules: 11`, FAILED, every firing case reporting `exp:[...] got:[]`. GREEN: `16 rules`,
+SUCCESS. `helm lint` clean, kubeconform 5 valid, 0 invalid, and a live `oc diff` against the readonly kubeconfig showed
+one hunk, all additions, all inside the new `truenas-backups` group.
+
+**Finding 1: the role has leaked the Cloud Sync secret under `-v` since 2026-10-11.** The harness leak check was the
+only thing that looked. With `-v`, "Create missing Cloud Sync tasks" printed the middleware's reply, and
+`cloudsync.create` returns the task with its credential nested, password included. "Reconcile Cloud Sync tasks that
+drifted" had the same gap. Fix: `no_log: true` on both, and the header comment now says why. The leak count went from
+4 hits to 0 on the identical run. Without `-v` nothing printed, which is why it went unnoticed.
+
+**Finding 2: the plan's alert rules collided.** The 72 h critical rule and the "no success in 7 days" rule were both
+`TrueNASCloudSyncStale{severity=critical}` with the same label set. promtool's lint reported a duplicate rule, and the
+unit test hit a duplicate sample at 170 h, where both fire for one task. A live Prometheus would have collided the same
+way. The third rule got an extra label, `window: no-success-7d`; the only test change was that label in two expected
+label sets, no time or value was loosened.
+
+**What the stand-ins cannot prove.** The Storage Box's real SFTP path layout (where `/immich` lands relative to the
+sub-account's root), its connection limit against the `transfers` value, and real rclone behaviour on the first big
+upload. The fake validates field names, not what the middleware or the box accepts. Those wait for the operator's
+playbook run and Part B of the plan.
