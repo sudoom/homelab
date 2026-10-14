@@ -1102,3 +1102,12 @@ Pushed `f196d32..8c75dd0` (19 commits). Everything below is read-only.
   gets checked once a weekly snapshot holds changed data.
 - **Collector additions:** the operator then ran `playbook.yml` (`ok=72 changed=1 failed=0`; the one change is the
   collector file). The check of the new `truenas_*` metrics follows.
+
+The collector check that followed the operator's `playbook.yml` run: the next 5-minute cron run wrote the new series,
+with `truenas_textfile_collector_errors 0`.
+- 18 `truenas_dataset_snapshots_used_bytes` series, among them `tank/media` at 48,599,816,496 bytes, `tank/immich`
+  at 91,988,160 and `tank/backup` at 130,944. So the deleted restore-test directory never made it into a
+  `tank/backup` snapshot.
+- `truenas_update_available{version="25.10.7"} 1` and `truenas_update_downloaded{version="25.10.7"} 1`, also visible
+  in user-workload Prometheus. `TrueNASUpdateAvailable` (info, console only) is due an hour later. It stays until
+  the 25.10.7 upgrade, which is a README TODO.
