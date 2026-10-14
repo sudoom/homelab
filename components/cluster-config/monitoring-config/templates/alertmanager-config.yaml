@@ -110,12 +110,17 @@ stringData:
         # AccessClosed and SnapshotDirHidden are `warning`; each is actionable
         # when it arrives and none is standing. Filling at 90 % and Exposed are
         # critical and already go out through the severity route above.
-        # ExporterDown, ApiFailing and Unmonitored stay console-only: the
-        # session-start triage sees them, and a box that really fills still
-        # fails the upload, which TrueNASCloudSyncStale emails. The 80 % Filling
-        # replaced the console-only TrueNASOffsiteReviewDue (2026-10-14).
+        # Unmonitored is mailed too: when the box drops out of the API data for
+        # 30 minutes (a Hetzner API outage, or a revoked token), the fill and
+        # settings alerts resolve and this alert takes over; before this it was
+        # a RESOLVED mail with nothing behind it. It never stands in normal
+        # operation, so it does not nag. ExporterDown and ApiFailing stay
+        # console-only: the session-start triage sees them, and a box that
+        # really fills still fails the upload, which TrueNASCloudSyncStale
+        # emails. The 80 % Filling replaced the console-only
+        # TrueNASOffsiteReviewDue (2026-10-14).
         - receiver: "Critical"
-          matchers: ["alertname =~ HetznerStorageBox(Filling|AccessClosed|SnapshotDirHidden)"]
+          matchers: ["alertname =~ HetznerStorageBox(Filling|AccessClosed|SnapshotDirHidden|Unmonitored)"]
     receivers:
       - name: "Default"
       - name: "Watchdog"

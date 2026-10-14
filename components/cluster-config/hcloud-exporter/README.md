@@ -46,7 +46,7 @@ is read at `thanos-ruler-user-workload-0`, port 10902, and never through `ALERTS
 | `HetznerStorageBoxSnapshotDirHidden` | "Display snapshot directory" off (warning) | yes |
 | `HetznerStorageBoxExporterDown` | `up == 0` for 10 m | console only |
 | `HetznerStorageBoxApiFailing` | over 10 % of API calls failing in 30 m, for 15 m | console only |
-| `HetznerStorageBoxUnmonitored` | no `hcloud_storagebox_general_size` for 30 m | console only |
+| `HetznerStorageBoxUnmonitored` | no `hcloud_storagebox_general_size` for 30 m | yes; takes over when the fill and settings alerts resolve in an API outage |
 
 Fill and drift rules carry `keep_firing_for: 30m`, so a short API outage does not resolve and re-mail them.
 `HetznerStorageBoxFilling` replaced the dataset-based `TrueNASOffsiteReviewDue` on 2026-10-14.

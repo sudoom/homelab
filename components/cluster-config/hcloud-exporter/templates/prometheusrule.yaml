@@ -8,8 +8,9 @@
 #
 # Email: the 90 % Filling and Exposed are critical and go out through the
 # severity route; the 80 % Filling, AccessClosed and SnapshotDirHidden through
-# an allowlist route in monitoring-config. ExporterDown, ApiFailing and
-# Unmonitored are console-only.
+# an allowlist route in monitoring-config, as is Unmonitored (it takes over when
+# the fill and settings alerts resolve during an API outage). ExporterDown and
+# ApiFailing are console-only.
 # ---------------------------------------------------------------------------
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -142,9 +143,10 @@ spec:
               the main account's root and single-file restores need a full
               snapshot restore instead. Turn it back on in the console.
 
-        # Health of the feed itself. None of these is emailed: the session-start
-        # triage sees them, and a box that really fills still fails the upload,
-        # which TrueNASCloudSyncStale emails.
+        # Health of the feed itself. Unmonitored is emailed (allowlist route);
+        # ExporterDown and ApiFailing are not: the session-start triage sees
+        # them, and a box that really fills still fails the upload, which
+        # TrueNASCloudSyncStale emails.
         - alert: HetznerStorageBoxExporterDown
           expr: up{job="hcloud-exporter"} == 0
           for: 10m
