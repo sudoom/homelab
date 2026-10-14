@@ -548,3 +548,43 @@ To watch on the first run: rclone's defaults (4 transfers, 8 checkers) against t
 Sources: [Storage Box snapshots](https://docs.hetzner.com/robot/storage-box/snapshots),
 [creating snapshots](https://docs.hetzner.com/storage/storage-box/getting-started/creating-snapshots),
 [Storage Box general docs](https://docs.hetzner.com/storage/storage-box/general/).
+
+### 2026-10-14 — design approved; what the box said before the spec was written
+
+The operator approved the six points above as written, weekly snapshots included. Three things the
+spec depends on were read on TrueNAS rather than assumed. The reads were done over SSH, with nothing
+printed from the credentials:
+
+```bash
+midclt call core.get_methods cloudsync      # cloudsync.create top-level fields
+grep -n transfers /usr/lib/python3/dist-packages/middlewared/plugins/cloud_sync.py
+sed -n 33,55p /usr/lib/python3/dist-packages/middlewared/utils/service/task_state.py
+```
+
+- **Connection count.** `cloudsync.create` has a top-level `transfers` field (an integer above 0, or
+  `null` for rclone's default). The middleware turns it into `--transfers N`. Checkers are not
+  exposed (only the `args` string, marked "slated for removal"). The role's payload does not pass
+  `transfers` yet. The spec sets 2: up to 8 checkers + 2 transfers stays within the box's 10
+  connections. rclone on the box is v1.70.2.
+- **The last job survives a reboot.** `persist_task_state_on_job_complete` writes each finished job
+  into the task's database row, and `cloudsync.query` returns that row unless a newer job is in
+  memory. So the collector can stay stateless.
+  - The Synology task's last job: `SUCCESS`, 5 s.
+  - `core.get_jobs` holds four `SUCCESS` runs of it since 10-11.
+- **A restore needs no saved task.** `cloudsync.sync_onetime` exists (a job method), so the full
+  pull-back runs as a one-off `PULL`.
+
+Also measured:
+- `tank/immich` is 2 GB today; the archive import has only started, so the first upload is small and
+  the bulk follows the import nightly.
+- `tank/backup` is empty with 6.8 TB free. The restore test goes into a directory there rather than
+  a new dataset, because the roles never remove one.
+
+Added in the spec beyond the six approved points, for review:
+- `transfers: 2`.
+- A third stale rule for a task with no success in seven days.
+- A `TrueNASOffsiteReviewDue` alert at 800 GB in place of a calendar note.
+- An accepted risk: TrueNAS's SFTP credential has no field for a known host key, so rclone does not
+  verify the box's key.
+
+Spec: `docs/superpowers/specs/2026-10-13-offsite-backup-storage-box-design.md`.
