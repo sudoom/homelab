@@ -103,11 +103,19 @@ stringData:
         # alerts for that backup. TrueNASCloudSyncStale at 36h and
         # TrueNASCloudSyncDisabled are `warning`, so without this route a
         # disabled offsite task would never send an email (2026-10-14).
-        # TrueNASOffsiteReviewDue is deliberately NOT routed: it is console-only
-        # by the owner's choice, because once it fires it stays firing until the
-        # plan changes and would re-send at every repeat_interval.
         - receiver: "Critical"
           matchers: ["alertname =~ TrueNASCloudSync.*"]
+        # The Hetzner Storage Box (hetzner-storagebox group, hcloud-exporter
+        # chart) holds that offsite copy. HetznerStorageBoxFilling at 80 %,
+        # AccessClosed and SnapshotDirHidden are `warning`; each is actionable
+        # when it arrives and none is standing. Filling at 90 % and Exposed are
+        # critical and already go out through the severity route above.
+        # ExporterDown, ApiFailing and Unmonitored stay console-only: the
+        # session-start triage sees them, and a box that really fills still
+        # fails the upload, which TrueNASCloudSyncStale emails. The 80 % Filling
+        # replaced the console-only TrueNASOffsiteReviewDue (2026-10-14).
+        - receiver: "Critical"
+          matchers: ["alertname =~ HetznerStorageBox(Filling|AccessClosed|SnapshotDirHidden)"]
     receivers:
       - name: "Default"
       - name: "Watchdog"
