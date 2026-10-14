@@ -210,8 +210,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   fragmentation, no scrub state, no SMART. All of those now come from a Python **textfile collector**
   (`ansible/truenas/roles/truenas-tasks/files/node-exporter-textfile.py`) on a 5-minute `cronjob.create`, emitting
   `truenas_zpool_*`, `truenas_dataset_*`, `truenas_snapshot_age_seconds`, `truenas_disk_*` and staleness guards.
-  Plus **11 alerts** (`components/cluster-config/truenas-exporter/templates/prometheusrule.yaml`) and a custom
-  **TrueNAS — single pane** dashboard (15 panels) that puts `shelly_power_watts{instance="truenas"}` on the same
+  Plus **17 alerts** (`components/cluster-config/truenas-exporter/templates/prometheusrule.yaml`; 11 at phase 2, plus the backup and update groups since 2026-10-14) and a custom
+  **TrueNAS — single pane** dashboard (35 panels including rows since 2026-10-14, 15 at phase 2) that puts `shelly_power_watts{instance="truenas"}` on the same
   page as ARC/ZIL/SMART.
   **Graphite/InfluxDB were evaluated and rejected, with evidence** — `reporting.exporters.exporter_schemas` offers
   exactly one type, `GRAPHITE` (there is no InfluxDB exporter on 25.10), and it is fed by netdata, whose shape
