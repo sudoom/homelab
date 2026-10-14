@@ -753,3 +753,56 @@ expected before the collector is on the box. Two consequences:
 - The platform Prometheus (`prometheus-k8s`) has no `truenas-*` groups either. So the session-start alert sweep,
   which reads `prometheus-k8s` `/api/v1/alerts`, cannot see any alert from a user-namespace PrometheusRule.
   Alertmanager (`alertmanager-main` `/api/v2/alerts?active=true`) sees everything that is firing.
+
+### 2026-10-14 evening — converged, first run, full pull-back (plan Part B, Tasks 6–8)
+
+The operator ran `playbook.yml`: `ok=74 changed=3 failed=0`. The three changes were the Hetzner credential, the
+offsite task and the new collector. Read back with field-filtered queries:
+
+```bash
+ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq -c '.[] | {id, description, enabled, transfers, transfer_mode, snapshot, path, folder: .attributes.folder, cred: .credentials.name, state: .job.state}'
+```
+
+The result: task 2 has `transfers: 2`, `SYNC`, snapshot on, `/mnt/tank/immich` → `/immich`, 06:00, both excludes, and
+no job yet. The Synology task is unchanged, with `transfers: null`.
+
+**The sub-account's view**, before any run:
+
+```bash
+ssh truenas_admin@192.168.1.25 "midclt call cloudsync.list_directory '{\"credentials\": 2, \"attributes\": {\"folder\": \"/\"}}'" | jq -c '[.[] | {Name, IsDir}]'
+[]
+```
+
+That is an empty root with no `.zfs`. The login works, and the sub-account's root really is its base directory, so
+`/immich` is right. This answers the spec's open question on the path layout over port 22.
+
+**First run, by hand** (`midclt call --job cloudsync.sync 2`, output through the host-redaction `sed`):
+- `SUCCESS` in 96 s: 231 of 231 files, 1.305 GiB, 12–18 MiB/s.
+- Not one error, refused-connection or handshake line, so `transfers: 2` stays inside the box's 10-connection
+  limit at this size.
+- The job's `logs_excerpt` is the head of the log. The full log under `logs_path` is root-only, so the progress
+  output that `--job` prints is the better witness here.
+
+**Pull-back.** `cloudsync.sync_onetime` accepts the task fields; it requires `path`, `credentials`, `attributes`,
+`direction` and `transfer_mode` (read with `midclt call core.get_methods cloudsync`). The steps:
+1. A fresh push: 5 s, nothing changed.
+2. `midclt call filesystem.mkdir '{"path": "/mnt/tank/backup/restore-test-20261014"}'`. The middleware creates the
+   directory, so no sudo is needed.
+3. The pull-back itself:
+
+```bash
+ssh truenas_admin@192.168.1.25 "midclt call --job cloudsync.sync_onetime '{\"path\": \"/mnt/tank/backup/restore-test-20261014\", \"credentials\": 2, \"attributes\": {\"folder\": \"/immich\"}, \"direction\": \"PULL\", \"transfer_mode\": \"COPY\", \"transfers\": 2}'"
+```
+
+It took 65 s for 231 of 231 files, 1.305 GiB, at about 18 MiB/s down, with no errors. Then `sha256sum` over every file
+on both sides: `tank/immich` without `thumbs/` and `encoded-video/` against the restore directory.
+
+| | files | read errors |
+|---|---|---|
+| source | 231 | 0 |
+| restored | 231 | 0 |
+| differing lines | 0 | |
+
+The whole library comes back byte for byte from the box. At this size the restore time is about a minute; the
+full-size drill (rollout step 8) gives the real number. The restore directory is deleted next. It was created after
+the 18:00 `tank/backup` snapshot, so if it goes before 00:00, no snapshot pins it.
