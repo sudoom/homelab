@@ -44,13 +44,17 @@ stringData:
       smtp_auth_username: {{ .Values.alertmanager.email.username | quote }}
       smtp_auth_password_file: "/etc/alertmanager/secrets/{{ .Values.alertmanager.email.credentialsSecret }}/password"
       smtp_require_tls: true
+    # `task` is in `equal` so a critical TrueNASCloudSyncStale for one Cloud
+    # Sync task cannot inhibit another task's warning (2026-10-14). A label
+    # missing on both sides counts as equal, so alerts with no `task` label
+    # inhibit exactly as before.
     inhibit_rules:
       - source_matchers: ["severity = critical"]
         target_matchers: ["severity =~ warning|info"]
-        equal: ["namespace", "alertname"]
+        equal: ["namespace", "alertname", "task"]
       - source_matchers: ["severity = warning"]
         target_matchers: ["severity = info"]
-        equal: ["namespace", "alertname"]
+        equal: ["namespace", "alertname", "task"]
     route:
       group_by: ["namespace"]
       group_wait: 30s
@@ -95,6 +99,15 @@ stringData:
         # arrives 45 minutes into an outage that is already losing offsite RPO.
         - receiver: "Critical"
           matchers: ["alertname =~ CNPGWALArchiveFailing.*"]
+        # The offsite photo-backup alerts (truenas-backups group) are the only
+        # alerts for that backup. TrueNASCloudSyncStale at 36h and
+        # TrueNASCloudSyncDisabled are `warning`, so without this route a
+        # disabled offsite task would never send an email (2026-10-14).
+        # TrueNASOffsiteReviewDue is deliberately NOT routed: it is console-only
+        # by the owner's choice, because once it fires it stays firing until the
+        # plan changes and would re-send at every repeat_interval.
+        - receiver: "Critical"
+          matchers: ["alertname =~ TrueNASCloudSync.*"]
     receivers:
       - name: "Default"
       - name: "Watchdog"

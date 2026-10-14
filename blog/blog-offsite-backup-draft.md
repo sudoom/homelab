@@ -806,3 +806,31 @@ on both sides: `tank/immich` without `thumbs/` and `encoded-video/` against the 
 The whole library comes back byte for byte from the box. At this size the restore time is about a minute; the
 full-size drill (rollout step 8) gives the real number. The restore directory is deleted next. It was created after
 the 18:00 `tank/backup` snapshot, so if it goes before 00:00, no snapshot pins it.
+
+## 2026-10-14 — the backup warnings are emailed
+
+The `truenas-backups` alerts shipped earlier today, but the Alertmanager routing only emails `severity = critical`
+plus two allowlist routes. `TrueNASCloudSyncStale` fires as a warning at 36 h and `TrueNASCloudSyncDisabled` is a
+warning, so a disabled offsite task would have sent nothing; both would only have shown in the console.
+
+Two changes in `components/cluster-config/monitoring-config/templates/alertmanager-config.yaml`:
+
+1. A new allowlist route, next to the `CNPGWALArchiveFailing` one: `alertname =~ TrueNASCloudSync.*` to `Critical`.
+   These are the only alerts for the offsite photo backup. `TrueNASOffsiteReviewDue` is deliberately not matched. It
+   stays console-only by the owner's choice: once it fires it stays firing until the plan changes, so it would
+   re-send at every 12 h `repeat_interval`.
+2. `task` added to `equal` in both inhibit rules. Without it a critical Stale for one Cloud Sync task would inhibit
+   another task's warning (same namespace and alertname). A label missing on both sides counts as equal, so alerts
+   without `task` inhibit as before.
+
+Test first, with `amtool` v0.34.1 (checksum verified against the release `sha256sums.txt`). Rendered the Alertmanager
+YAML from the Secret with `helm template ... --show-only templates/alertmanager-config.yaml | yq`, then ran
+`amtool config routes test --config.file=<rendered> <labels>` for seven cases.
+
+RED, unchanged config: `TrueNASCloudSyncDisabled` (warning) and `TrueNASCloudSyncStale` (warning) both went to
+`Default`. The other five cases passed (Stale critical to Critical, ReviewDue to Default, CNPGWALArchiveFailing to
+Critical, Watchdog to Watchdog, an unknown warning to Default).
+
+GREEN, after the change: all seven pass, and `amtool check-config` reports SUCCESS. amtool cannot test inhibition,
+so I compared the rendered `inhibit_rules` with `yq` before and after: only `equal` changed, to
+`["namespace", "alertname", "task"]` in both rules.
