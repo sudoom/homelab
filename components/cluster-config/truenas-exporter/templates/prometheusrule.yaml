@@ -295,3 +295,23 @@ spec:
               (`truenas_textfile_collector_errors` > 0), or the task was removed
               or renamed. Check the task list without printing credentials:
               `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq -c '.[] | {id, description, enabled}'`
+
+    # A TrueNAS release offered by the update train, read from update.status
+    # by the textfile collector. Info and console-only, like OKD's own
+    # UpdateAvailable: installing it reboots the NAS and pauses every NFS
+    # consumer in the cluster, so it is planned rather than clicked.
+    - name: truenas-updates
+      rules:
+        - alert: TrueNASUpdateAvailable
+          expr: truenas_update_available == 1
+          for: 1h
+          labels:
+            severity: info
+          annotations:
+            summary: "TrueNAS {{ "{{" }} $labels.version {{ "}}" }} is available"
+            description: |
+              The update train offers a newer release; `truenas_update_downloaded`
+              1 means it is already downloaded. Installing it reboots the NAS,
+              which pauses Immich, media, Loki and Velero on their NFS mounts.
+              Read the release notes, plan a window, and stop Immich first
+              (`hpa.enabled: false` in git, see CLAUDE.md).
