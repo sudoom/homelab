@@ -194,3 +194,68 @@ alert reflects unbounded growth. The only symptom is a *different* subsystem's d
   `Serving=True`/`Progressing=Succeeded`. Nothing in either surface hinted at 2097 orphaned dirs.
 - Worth an alert: node `/var` free-space trend, and/or a `predict_linear` on
   `node_filesystem_avail_bytes` so "9 days to full" fires while it is still boring.
+
+## 2026-10-14 — node5's disk again: catalog index images, not the operator-controller
+
+Ceph went `HEALTH_WARN` again on 2026-10-13 12:55: `CephMonDiskspaceLow` for mon c, which runs on node5. Same
+alert as 09-14, so I assumed the same culprit. It was not the operator-controller this time. The `oc debug node/...`
+commands below were run by the operator, not by me: `oc debug` creates a pod, which is a cluster write.
+
+**1. Kubelet stats summary.** First question: is a pod holding ephemeral storage? Per-pod `ephemeral-storage`
+from the kubelet stats summary on node5: nothing. The largest pod used 1.66 G. So the disk is not in pods.
+
+**2. Seven days of free space.** Query, run read-only against Prometheus:
+
+```promql
+node_filesystem_avail_bytes{mountpoint="/sysroot"}
+```
+
+over 7 days. node5 fell from 129 to 111 GiB (69 % used of 371, about 2.6 GiB a day); node4 stayed at about 216 GiB
+and node6 at about 148. A slow steady slope on one node, not a step like the 09-14 leak.
+
+**3. `du` on node5.**
+
+```bash
+oc debug node/node5.okd.sudops.pl -- chroot /host du -xh --max-depth=1 /var
+```
+
+`/var/lib/containers` 236G, `/var/log` 9.2G, journal 3.9G, kubelet 2G. Logs and kubelet are noise; the container
+store is nearly everything.
+
+**4. `overlay`.** Same `du` on node4 for comparison: `/var/lib/containers/storage/overlay` is 236 G on node5 against
+132 G on node4. Image count with `crictl images | wc -l`: 739 on node5, 406 on node4.
+
+**5. Per repository.**
+
+```bash
+crictl images | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn | head
+```
+
+376 of node5's images are `registry.access.redhat.com/redhat/community-operator-index` and 85 are
+`quay.io/operatorhubio/catalog`. Hundreds of tags-less digests of the same two repositories: index images that
+were each pulled once and never removed.
+
+**6. The catalog sources.** `community-operators` polls every 240m and is managed by marketplace-operator (so not
+ours to change). `okderators` and `operatorhubio-catalog` poll every 60m. All three catalog pods run on node5, which
+is why node5 carries the pile and node4 does not. Every poll that finds a new digest pulls a fresh index image; the
+old one stays on disk until something removes it. `operatorhubio-catalog` is in no file in this repo (created by
+hand at some point), so its interval has never been under version control.
+
+**7. Why nothing cleaned up.** The kubelet's image GC starts at 85 % disk use (`imageGCHighThresholdPercent`).
+Ceph's mon warns at 70 % used. The disk crosses the warning line 15 points before GC would ever run, so the
+images accumulate until Ceph complains, and only then does it look like a Ceph problem.
+
+### Fix and status
+
+Nothing has been run yet. Tracked as two README TODOs (Queued — platform plumbing):
+
+- Prune node5's unused images (operator): `oc debug node/node5.okd.sudops.pl -- chroot /host crictl rmi --prune`.
+  Removes only images no container uses; anything needed again is pulled through zot.
+- Stop the churn. Step 1, in git: put `operatorhubio-catalog` next to `okderators` in
+  `bootstrap/phase0/01_catalog_source.yaml` with `registryPoll.interval` 24h. Step 2: a KubeletConfig with
+  `imageGCHighThresholdPercent: 65` / `imageGCLowThresholdPercent: 55`, but a KubeletConfig makes MCO reboot every
+  node in turn (a degraded window for 3 OSDs), so it waits for the next planned node roll, with the
+  `network-change` pre-flight. Without step 1 the warning comes back 5-6 weeks after a prune.
+
+Lesson: this is the second time `CephMonDiskspaceLow` was a node-disk alert. Check `node_filesystem_avail_bytes` per
+node first, then `du`, then the image count, before touching Ceph.
