@@ -307,10 +307,15 @@ def collect_update(out):
        "status": {"current_version": {...}, "new_version": {"version": ...}},
        "update_download_progress": {"percent": 100.0, "version": ...}}
 
-    Every key is read defensively. A reply without a `status` object exports
-    nothing, because unknown is not "up to date"; a `status` without a
-    `new_version` exports 0. A failed call, or a reply that is not a JSON
-    object, counts one collector error.
+    The middleware model (UpdateStatus, api v25_10_5) makes `status.new_version`
+    a required key, null when no newer release is offered, and `code` is
+    NORMAL or ERROR (`status` is null on ERROR). So only an explicit null
+    means "up to date" and exports 0. Anything else the collector cannot
+    verify -- code ERROR, a missing `status` or `new_version`, a
+    `new_version` that is not an object with a non-empty string `version` --
+    exports nothing and counts one collector error, because unknown is not
+    "up to date". A failed call, or a reply that is not a JSON object, counts
+    one collector error too.
     """
     global errors
     raw = run(["midclt", "call", "update.status"])
@@ -320,17 +325,21 @@ def collect_update(out):
         reply = json.loads(raw)
     except ValueError:
         reply = None
-    if not isinstance(reply, dict):
+    if not isinstance(reply, dict) or reply.get("code") == "ERROR":
         errors += 1
         return
     status = reply.get("status")
-    if not isinstance(status, dict):
+    if not isinstance(status, dict) or "new_version" not in status:
+        errors += 1
         return
-    new = status.get("new_version")
-    version = new.get("version") if isinstance(new, dict) else None
+    new = status["new_version"]
     help_text = "1, labelled with the version, when a newer TrueNAS release is offered; 0, unlabelled, when none is."
-    if not version:
+    if new is None:
         out.metric("update_available", 0, help_text)
+        return
+    version = new.get("version") if isinstance(new, dict) else None
+    if not isinstance(version, str) or not version:
+        errors += 1
         return
     out.metric("update_available", 1, help_text, version=version)
     progress = reply.get("update_download_progress")
