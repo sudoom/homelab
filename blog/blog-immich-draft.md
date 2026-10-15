@@ -753,3 +753,99 @@ anything that was present at a 05:00 run stays in `photo/backups/immich`.
 
 One sample, so no estimate for the rest yet: 67 files and 82 MB in 8 s, including start-up and
 reading from the DS418 over SMB with the default 10 concurrent tasks.
+
+## 2026-10-15 — stage 2, step 1: the small folders, and immich-go's "upgrade" rule
+
+The import plan, agreed with the operator the same morning: the camera and phone folders first, smallest
+first, then the Google export through `from-google-photos`, then the second Google folder, which is mostly
+byte-identical to the export. Every folder gets a full sha1 check afterwards (the operator's call: "just to
+fully close"). Step 1 was seven folders of 0.9 to 2.6 GiB plus the seven loose files in the share root.
+
+### The checker
+
+A small driver (kept outside the repo, next to the import logs) runs one folder at a time:
+
+1. index the `family` account's files on TrueNAS, `library/Family` plus `upload/<user id>`, hashing only paths
+   it has not seen (`ssh … 'cd /mnt/tank/immich && xargs -0 sha1sum -z'`);
+2. upload the folder (`caffeinate -i immich-go upload from-folder … --folder-as-album NONE`);
+3. wait until nothing on the dataset changes for a minute;
+4. index again, sha1 every source file the upload log names, and match each one to its last event: an upload
+   must appear among the new server files, a duplicate must already be there, and nothing may appear on the
+   server without a source or disappear from it.
+
+Loose root files go in with `--recursive=false` on the share root. A dry run first showed exactly the seven
+files and the three archives skipped as "useless file".
+
+### What the first photographer's folder showed
+
+One folder is a photographer's delivery: 78 shots, each as a normal JPEG of about 2 MB, most also as a
+print-size version of about 12 MB in a subfolder, and 15 as a third edit in another. immich-go 0.32.0 reported
+46 "server asset upgraded" and stopped on four `CopyAsset … 400 Bad Request` errors. The source explains both
+(`app/upload/advice.go`, `app/upload/run.go` at tag v0.32.0):
+
+- After the checksum check, immich-go looks for a server asset with the **same file name and a capture time
+  within ±5 s**. A bigger local file "upgrades" it: upload the new file, `PUT /api/assets/copy` to carry albums
+  and favourites over, then `DeleteAssets(…, force=true)`. **Force means no trash**: the smaller asset is gone
+  from Immich at once. A smaller local file is skipped instead ("bigger size … exists").
+- With the default 10 concurrent uploads, two versions sent at the same moment do not see each other. The
+  folder ended with 42 shots holding only the print version, 32 holding print and normal, one holding all three
+  and three holding one of the smaller ones: the result depended on timing.
+- The four 400s were the copy step failing on an asset that was itself only seconds old. The delete never ran,
+  so both versions stayed. The same race left four files the storage template could not move out of `upload/`
+  (`duplicate key value violates unique constraint "UQ_newPath"`).
+
+Across the archive the 10-11 dry run had counted 7,842 such replacements and about 2,200 skips, so the rule
+decides about ten thousand files. Put to the operator as a choice — keep immich-go's rule with one upload at a
+time, or de-duplicate by checksum only and review near-duplicates in Immich — they chose to keep every distinct
+file.
+
+### immich-go, checksum-only
+
+A one-change build from the v0.32.0 tag (`f7d19fc`): in `ShouldUpload`, after the checksum lookup, return
+"not on server" instead of falling through to the name match.
+
+```bash
+git clone --depth 1 --branch v0.32.0 https://github.com/simulot/immich-go.git
+# patch app/upload/advice.go (8 lines), then, outside the sandbox (its proxy breaks Go's TLS check):
+GOCACHE=… GOMODCACHE=… go build -trimpath \
+  -ldflags "-X github.com/simulot/immich-go/app.Version=0.32.0-checksum-only" -o immich-go-cs .
+```
+
+`go vet` clean; the package has no tests upstream. The real test was a dry run of the photographer's folder
+against the server as it stood:
+
+| build | upload | replace | skip for a bigger copy | already on server |
+|---|---|---|---|---|
+| stock 0.32.0 | 47 | 1 | 9 | 112 |
+| checksum-only | 57 | 0 | 0 | 112 |
+
+57 = the 46 force-deleted versions plus the 11 skipped ones. The real re-run uploaded those 57 and the check
+found all 169 source files on the server.
+
+### Step 1 result
+
+| folder (kind) | source files checked | uploaded | already there / local duplicate | problems |
+|---|---|---|---|---|
+| a family-history export (2024) | 176 | 171 | 0 / 5 | 0 |
+| the photographer's delivery | 169 | 112 + 57 (re-run) | — | 0 |
+| a family-history export (2023) | 224 | 220 + 1 (retry) | 0 / 3 | 0 |
+| iPad camera roll | 356 | 355 | 0 / 1 | 0 |
+| iPhone camera roll | 434 | 434 | 0 | 0 |
+| two iPhone `1xxAPPLE` folders | 509, 470 | 509, 468 + 1 (retry) | 0 / 1 | 0 |
+| loose files in the root | 7 | 7 | 0 | 0 |
+
+The `family` library went from 208 files to 2,543 media files.
+
+Things the checker turned up on the way, none of them a loss:
+
+- **Two transient upload failures.** `write: broken pipe` to the ingress VIP at 11:22:52 (a reused keep-alive
+  connection, most likely; the autoscaler started a second server pod a few seconds later) and one
+  `502 Bad Gateway` at 11:45:28 with nothing in either server pod's log and no scaling event. The driver now
+  re-runs a failed folder once: with checksum-only de-duplication the re-run uploads only what is missing, and its
+  log names every source file, so verifying the re-run covers the whole folder.
+- **Sidecars Immich writes itself.** 172 `.xmp` files appeared with no source. They hold a capture time immich-go
+  took from the file name, for files without EXIF dates (`IMG_20200105_174314.jpg` →
+  `<exif:DateTimeOriginal>2020-01-05T17:43:14.000+01:00`). The checker now lists them as notes.
+- **Three `.AAE` files** (iOS edit instructions) were skipped as unknown; the photos they belong to are in.
+- **Seven files are still in `upload/`**: two from before today, four from the race above, one more from step 1.
+  Immich serves them from there; the Storage Template Migration job moves them at the end of the import.
