@@ -1006,3 +1006,37 @@ skips: 10 `.THM` thumbnails next to camera `.MPG`/`.AVI` clips (immich-go: unkno
 3 more files (two JPGs, one `.3gp`) stayed in `upload/` after the settle, for the close-out Storage Template
 Migration job. The `family` library now holds 21,157 files on TrueNAS, counting sidecars; 21,196 source files
 verified so far across steps 0–5.
+
+## 2026-10-15 — stage 2, step 6: the last local folder, and a renamed copy inside it
+
+2,797 files (68 GiB): 1,398 loose iPhone files (HEIC, MOV, JPG, PNG), a one-photo subfolder, and a subfolder
+`test` with another 1,398 files named `YYYYMMDD_HHMMSS_NNNN.ext`. Its size multiset matched the loose files
+exactly, so before uploading anything I hashed both sides in full:
+
+```
+test files 1398; identical to a top-level file 1398; not found 0
+distinct top-level sha1 1394
+```
+
+`test` is a renamed copy. Uploaded together, each photo would still land once (checksum de-duplication), but the
+name Immich keeps would depend on which of two parallel uploads finished first. That matters for the Google
+steps: the skip-smaller rule matches by same name, so a photo stored as `20211130_104642_1092.mov` would not
+match its Google copy `IMG_1092.MOV`, and the re-encode would come in as an extra asset. The operator chose to
+skip the folder. `imp.py run` got a `--ban PATTERN` option that passes immich-go's `--ban-file`, and a dry run
+confirmed the effect before the real one: immich-go logs `discovered banned file file=vadim_backup:test
+reason=banned folder` once and never reads the folder, and the extra pattern is appended to the default ban list
+(`.DS_Store`, `@eaDir/`, …) rather than replacing it.
+
+```
+19:43:08 upload: rc=1 in 1063s; uploaded successfully 1386, server has duplicate 8, discarded local duplicate 3, server error 2
+20:01:48 upload (retry): rc=0 in 660s; uploaded successfully 2, metadata updated 1397, server has duplicate 1397
+20:17:16 verify: 1399 source files sha1-checked; server has duplicate 1397, uploaded successfully 2; problems 0
+```
+
+One of the two errors was new: `400 Bad Request` with `io: read/write on closed pipe` on a 71 MB iPhone clip,
+meaning the other end answered and closed while the body was still streaming. Nothing in either server pod's
+log (Immich does not log 4xx), and `ffprobe` showed an ordinary 10.5 s HEVC clip with valid creation dates, the
+same shape as its neighbours. The retry uploaded it, so it was transient, not the file. 191 of the MOVs are Live
+Photo motion parts paired by name with a HEIC/JPG; 30 of them were still in `upload/` after the settle, along
+with 2 HEICs, for the close-out Storage Template Migration job. The `family` library now holds 22,545 files on
+TrueNAS; 22,595 source files verified across steps 0–6, all local folders done.
