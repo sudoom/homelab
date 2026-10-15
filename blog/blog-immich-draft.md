@@ -849,3 +849,40 @@ Things the checker turned up on the way, none of them a loss:
 - **Three `.AAE` files** (iOS edit instructions) were skipped as unknown; the photos they belong to are in.
 - **Seven files are still in `upload/`**: two from before today, four from the race above, one more from step 1.
   Immich serves them from there; the Storage Template Migration job moves them at the end of the import.
+
+### Same day — what the "bigger copies" in two large folders are, and a rule for the Google steps
+
+The 10-11 dry run had two big camera folders down for 3,830 and 2,497 "upgrades". Before importing them, the
+operator asked what the smaller copies actually are. Matching each bigger file to the smaller one with the
+same name and a capture time within ±5 s, read with `sips -g pixelWidth -g pixelHeight -g model -g creation`,
+on 150 random pairs per folder:
+
+| | folder 1 (3,830) | folder 2 (2,497) |
+|---|---|---|
+| smaller copy comes from one of the two Google Photos folders | 150 / 150 | 150 / 150 |
+| same pixel dimensions | 150 / 150 | 149 / 150 |
+| smaller ÷ bigger file size, median | 0.60 | 0.57 |
+
+Same camera, same timestamp, same resolution, about 60 % of the bytes: Google's re-encoded copies of the camera
+originals, not separate edits. A local comparison page (thumbnails plus 1:1 crops from the centre) let the
+operator look before deciding. Name-only matching had first produced pairs from different cameras, so the date
+check matters.
+
+Decision: for the two Google steps only, skip a local file when the server already holds a **bigger** asset
+with the same name and capture time; never delete anything. The camera folders go first, so the originals are
+in place when their Google copies arrive. The patched build gained a switch for it (`IMMICH_GO_SKIP_SMALLER=1`);
+without it the build stays checksum-only.
+
+The first test of the switch skipped nothing. `--log-level DEBUG` showed why:
+
+```
+Immich asset: FileName=IMG_1005.JPG Capture date=2014-01-13 15:54:41.433 +0100 CET FileSize=1593562
+upload asset: file.OriginalFileName=IMG_1005.JPG file.FileSize=835942 file.CaptureDate=2014-01-13 14:54:41
+```
+
+An EXIF time has no zone. Immich takes it as UTC and immich-go as the Mac's local time, so the same photo reads
+an hour apart and upstream's ±5 s comparison misses it (upstream has the same gap). The patched comparison
+accepts a difference of a whole zone offset — any multiple of 15 minutes up to 14 h — within ±5 s. Retested on
+three real pairs: the originals were uploaded for real (they belong to a later step anyway), then their Google
+copies dry-run against the server — default mode uploads all three, the switch skips all three with "same
+name … but with bigger size … exists on the server".
