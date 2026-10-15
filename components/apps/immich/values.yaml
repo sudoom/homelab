@@ -241,6 +241,18 @@ immich:
                 memory: 1Gi
               limits:
                 memory: 8Gi   # thumbnail + ffmpeg transcode jobs spike during import
+            # Upstream's server probes time out after 1 s. During the archive import the
+            # server's own thumbnail and face jobs kept it busy enough that /api/server/ping
+            # missed that; three misses dropped the pod from the Service for ~30 s and
+            # uploads in flight got 502 (2026-10-15). 5 s rides that out; the 10 s period
+            # and failureThreshold 3 stay upstream's.
+            probes:
+              liveness:
+                spec:
+                  timeoutSeconds: 5
+              readiness:
+                spec:
+                  timeoutSeconds: 5
   # CPU-only ML for v1 (the RAM sink — give it headroom, it OOMKills if starved).
   # cache stays the chart-default emptyDir for now; switch to a PVC later so the
   # HuggingFace model download survives a reschedule.

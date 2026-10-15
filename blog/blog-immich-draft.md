@@ -886,3 +886,33 @@ accepts a difference of a whole zone offset — any multiple of 15 minutes up to
 three real pairs: the originals were uploaded for real (they belong to a later step anyway), then their Google
 copies dry-run against the server — default mode uploads all three, the switch skips all three with "same
 name … but with bigger size … exists on the server".
+
+## 2026-10-15 — stage 2, step 2: the first large camera folder, and the 502s explained
+
+The largest family folder so far: 5,957 photos and videos (29 GiB), including the converted home video, which
+has no recording date and therefore sorts to its conversion date until the operator sets one in Immich.
+
+```
+12:47:04 upload: rc=1 in 1171s; uploaded successfully 5943, discarded local duplicate 13, server error 1
+13:06:15 upload (retry): rc=0 in 533s; uploaded successfully 1, server has duplicate 5956
+13:23:06 verify: 5957 source files sha1-checked; server has duplicate 5956, uploaded successfully 1; problems 0
+```
+
+About 25 MB/s for the upload itself, then 16 minutes to read every source file back over SMB for the sha1 check.
+
+The one error was a third transient (`502 Bad Gateway` at 12:38:31), and this time the namespace events lined
+up with it:
+
+```
+Readiness probe failed: Get "http://10.130.0.199:2283/api/server/ping": context deadline exceeded
+Liveness probe failed:  Get "http://10.130.0.199:2283/api/server/ping": context deadline exceeded
+```
+
+The upstream chart (0.13.4, `templates/server.yaml`) gives `immich-server` liveness and readiness probes on
+`/api/server/ping` with `timeoutSeconds: 1`, `periodSeconds: 10`, `failureThreshold: 3`. Each server pod also
+runs Immich's background jobs, and during an import the thumbnail and face-detection work keeps it busy enough to
+miss a one-second ping. Three misses take the pod out of the Service for about 30 s, and an upload routed to it
+in that window gets a 502 from the router. There is no CPU limit on the container, so this is load, not
+throttling. Fix, between steps: `timeoutSeconds: 5` on both probes in `components/apps/immich/values.yaml`
+(the chart merges `server:` values over its defaults, so only the two fields change; rendered diff two lines,
+`helm lint` and kubeconform clean). The import's single retry per folder had already covered all three errors.
