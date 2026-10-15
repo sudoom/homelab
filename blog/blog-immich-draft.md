@@ -916,3 +916,22 @@ in that window gets a 502 from the router. There is no CPU limit on the containe
 throttling. Fix, between steps: `timeoutSeconds: 5` on both probes in `components/apps/immich/values.yaml`
 (the chart merges `server:` values over its defaults, so only the two fields change; rendered diff two lines,
 `helm lint` and kubeconform clean). The import's single retry per folder had already covered all three errors.
+
+## 2026-10-15 — stage 2, step 3: the second camera folder
+
+4,154 photos and videos (29 GiB), the first step on the 5 s probes. The three originals uploaded early for the
+skip-rule test were found as server duplicates.
+
+```
+13:54:01 upload: rc=1 in 1060s; uploaded successfully 4147, server has duplicate 3, discarded local duplicate 2, server error 2
+14:11:45 upload (retry): rc=0 in 594s; uploaded successfully 2, server has duplicate 4152
+14:23:02 verify: 4154 source files sha1-checked; server has duplicate 4152, uploaded successfully 2; problems 0
+```
+
+No readiness or liveness failure since the probe change, so the two errors (`502 Bad Gateway` at 13:38:49,
+`EOF` mid-request at 13:46:07) are something else, with nothing in either server pod's log. Most likely the
+usual race between a Node.js server closing an idle keep-alive connection after 5 s and the router reusing it
+for a POST; about one upload in seven thousand, covered by the retry. The same server logs show a few
+machine-learning calls failing with `write EPIPE` (face detection, CLIP) while the ML pod itself stayed up with no
+errors: those photos miss faces or smart search until the "Missing" runs of both jobs at the end of the import.
+The `family` library now holds 12,962 files on TrueNAS, counting Immich's own sidecars.
