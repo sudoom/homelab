@@ -5,7 +5,7 @@ DS418. Applied manually from a workstation; **not** wired into ArgoCD (the NAS
 must not depend on the cluster being up).
 
 Hardware: Supermicro X11SCH-F / Xeon E-2146G / 32 GB DDR4 ECC / 6× HGST 4 TB
-(`HUS726040ALA610`) + Intel DC S3510 boot. TrueNAS 25.10.6 "Goldeye" Community.
+(`HUS726040ALA610`) + Intel DC S3510 boot. TrueNAS 25.10.7 "Goldeye" Community (upgraded from 25.10.6 on 2026-10-15).
 
 ## Why `midclt`, not the REST API
 

@@ -5547,3 +5547,77 @@ space table (bytes and share of `truenas_dataset_used_bytes`), which is why the 
 
 **Still to come.** The metrics exist only after the operator's next `playbook.yml` run (Part B, Task 10); until then
 the tile shows "no data" and the snapshot table is empty.
+
+## 2026-10-15 — 25.10.6 → 25.10.7, in a planned window
+
+The upgrade decided on 2026-10-14 (block-cloning fix in ZFS 2.3.9, section above). The operator ran the install;
+I did the pre-flight and the checks afterwards, all read-only.
+
+### Pre-flight (08:24Z)
+
+```bash
+ssh truenas_admin@192.168.1.25 'midclt call system.version; midclt call update.status; \
+  midclt call core.get_jobs "[[\"state\",\"=\",\"RUNNING\"]]"; zpool status -x tank; \
+  midclt call boot.environment.query; midclt call smb.status SESSIONS; midclt call alert.list'
+```
+
+| check | result |
+|---|---|
+| version, update | TrueNAS-25.10.6; 25.10.7 downloaded (100 %) |
+| running jobs | none |
+| pool | `tank` healthy, 56 %; `boot-pool` 1 % |
+| boot environments | 25.10.5, 25.10.6 (active) — the rollback if the reported boot hang hit |
+| SMB sessions | one, the Mac's Time Machine user; `tmutil status` on the Mac: `Running = 0` |
+| alerts on the box | `HasUpdate` only |
+| next scheduled work | 12:00 Warsaw (`tank/backup` every 6 h, `tank/sync` every 2 h); Cloud Sync 05:00/06:00 had both succeeded |
+
+What the reboot touches in the cluster, read from the PVs and the chart values:
+
+- three static NFS PVs, all `mountOptions: ["nfsvers=4.1","hard"]`, against `192.168.10.10`:
+  `immich/immich-library-nfs` (immich-server), `media/media-data-nfs-pvc` (jellyfin, sonarr, radarr, bazarr, both
+  transmissions), `keepers/keepers-data-nfs` (transmission);
+- garage S3 at `192.168.1.25:30188`: Loki's object store and the Velero BSL `truenas-garage`.
+
+With `hard` mounts the I/O blocks during the reboot and resumes afterwards rather than failing, and no import or
+backup was running, so Immich was not stopped first.
+
+### Window
+
+| time (UTC) | evidence |
+|---|---|
+| 08:28:45 | first Loki ingester `failed to flush chunks ... S3: PutObject ... StatusCode: 0` |
+| ~08:30 | box up (`uptime` at 08:31:35 read `up 1 min`) |
+| 08:31:10 | Velero BSL validated `Unavailable` (garage not answering yet) |
+| 08:31:12 | last Loki flush error |
+| 08:32:16 | Velero BSL `Available` |
+
+About two and a half minutes of garage and NFS unavailability, end to end.
+
+### After
+
+```
+TrueNAS-25.10.7
+zfs-2.3.9-1
+zfs-kmod-2.3.9-1
+pool 'tank' is healthy          boot-pool ONLINE 2%   tank ONLINE 56%
+boot environments               25.10.5, 25.10.6, 25.10.7 (active)
+update.status                   new_version: null
+alert.list                      empty
+services                        nfs, cifs, ssh RUNNING
+apps                            syncthing, garage, node-exporter RUNNING
+nfs.get_nfs4_clients            192.168.10.2, .3, .4 — minor version 1, confirmed
+```
+
+- `ansible-playbook -i inventory.yml check.yml`: ok=5 changed=0, version `TrueNAS-25.10.7`, the three NFS exports
+  present.
+- Every NFS consumer pod kept running with no new restarts (the transmissions' 22 are the 03:00 UTC liveness
+  restart), and none logged an error, `EIO`, stale-handle or timeout line in the 12 minutes around the window.
+- Loki logged no flush error after 08:31:12. At 08:34Z both ingesters' `loki_ingester_flush_queue_length` read 0 and
+  each had flushed 12 chunks in the previous 3 minutes; `increase(loki_ingester_chunks_flush_failures_total[15m])`
+  was 27 and 10, the same as the log lines.
+- The cluster alert board held only the known set (Ceph mon disk on node5, the CNPG PDBs, nmstate `TargetDown`,
+  Insights, `UpdateAvailable`, Watchdog). Nothing TrueNAS-related fired.
+- The textfile collector's 08:30 run fell inside the boot, so `truenas.prom` still held the 08:25:05Z values
+  (`truenas_update_available{version="25.10.7"} 1`) until the 08:35:06Z run wrote `truenas_update_available 0`,
+  unlabelled, and no `truenas_update_downloaded` line. UWM Prometheus read the same at 08:35:30Z, so
+  `TrueNASUpdateAvailable` is resolved.
