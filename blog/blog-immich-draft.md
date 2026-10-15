@@ -978,3 +978,31 @@ for assets that had already moved to `library/`. The sidecar for one of them, `2
 left in `upload/`. It looks like the sidecar-write and metadata re-read that follow immich-go's metadata update
 raced the move and used the old path. Not traced further. The `family` library now holds 17,464 files on
 TrueNAS, counting sidecars.
+
+## 2026-10-15 — stage 2, step 5: the fourth large folder
+
+4,489 photos and videos (37 GiB). One of its subfolders is a byte-for-byte copy of a subfolder imported in
+step 4, and those 792 files came back as server duplicates, as the checksum-only rule intends.
+
+```
+17:45:15 upload: rc=1 in 864s; uploaded successfully 3688, metadata updated 804, server has duplicate 793, discarded local duplicate 7, server error 1
+18:03:03 upload (retry): rc=0 in 656s; uploaded successfully 1, metadata updated 4488, server has duplicate 4488
+18:26:12 verify: 4489 source files sha1-checked; server has duplicate 4488, uploaded successfully 1; problems 0
+```
+
+The one error was a `502 Bad Gateway` at 15:35:31Z. The HPA had added a second server pod at 15:31:27Z
+(Ready 15:31:57Z, router reload 15:31:58Z), and in step 4 the first errors also came about three minutes after a
+scale-up, so I checked the pattern: step 4's later cluster (14:09–14:10Z) had no scale event or reload anywhere
+near it. No correlation; same transient class as before.
+
+A photographer's set in this folder was edited in ACDSee, which keeps each unedited original in an
+`[Originals]` subfolder and writes a `NAME.JPG.xmp` next to it with its develop settings
+(`acdsee:image_edited False`, no date, rating or GPS). immich-go logged all 20 as `discovered sidecar` and
+attached them to the originals; Immich did not keep them as files (the only new `.xmp` files on TrueNAS are
+four it wrote itself). Edited and original versions differ in bytes, so both went in as separate photos, in line
+with the keep-every-distinct-file rule; the Duplicates review at the end is where they get culled. The other
+skips: 10 `.THM` thumbnails next to camera `.MPG`/`.AVI` clips (immich-go: unknown file), 4 `.DS_Store`.
+
+3 more files (two JPGs, one `.3gp`) stayed in `upload/` after the settle, for the close-out Storage Template
+Migration job. The `family` library now holds 21,157 files on TrueNAS, counting sidecars; 21,196 source files
+verified so far across steps 0–5.
