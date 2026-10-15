@@ -935,3 +935,46 @@ for a POST; about one upload in seven thousand, covered by the retry. The same s
 machine-learning calls failing with `write EPIPE` (face detection, CLIP) while the ML pod itself stayed up with no
 errors: those photos miss faces or smart search until the "Missing" runs of both jobs at the end of the import.
 The `family` library now holds 12,962 files on TrueNAS, counting Immich's own sidecars.
+
+## 2026-10-15 — stage 2, step 4: the third large folder, and what the retry pass really does
+
+4,172 photos and videos (73 GiB, 283 of them videos), plus 15 `.AAE` edit sidecars and 2 Finder `.DS_Store`
+files that immich-go skips by design. The `.AAE` files are the Photos app's edit recipes; Immich cannot read
+them, so the 15 photos they belong to arrive as their unedited originals and the sidecars stay on the share.
+
+```
+16:16:07 upload: rc=1 in 2584s; uploaded successfully 4154, metadata updated 354, server has duplicate 1, discarded local duplicate 11, server error 7
+16:47:07 upload (retry): rc=0 in 1214s; uploaded successfully 6, metadata updated 4166, server has duplicate 4166
+17:18:09 verify: 4172 source files sha1-checked; server has duplicate 4166, uploaded successfully 6; problems 0
+```
+
+Seven transient errors this time, six `EOF` and one `502 Bad Gateway`, in clusters (15:36 ×2, 16:09 ×2,
+16:10 ×3, Warsaw time). Checked against each: both server pods Ready since they started (no Ready transition,
+0 restarts), no probe or Unhealthy event in the namespace, nothing in either server log at those seconds, and
+the last router reload at 13:33:55Z, when the HPA added a second server pod, 2.5 minutes before the first
+cluster. So not this morning's probe problem; the same keep-alive races as step 3 (the router closing an idle
+client connection as immich-go reuses it → `EOF`; Node.js closing an idle backend connection after 5 s as the
+router reuses it → `502`). Neither Go nor HAProxy retries a POST or PUT on its own. About 0.4 % of uploads,
+higher than step 3, probably because large videos leave some of the ten connections idle between requests.
+
+One of the seven was a metadata update (`PUT /api/assets/<id>` after a successful upload). I first assumed
+the retry pass would skip that file as a duplicate and never re-send the update, which would leave a wrong date
+that the sha1 check cannot see. The retry log says otherwise:
+
+```
+16:28:44 INF server has duplicate file=…/2016/02.2016/IMG_1043.PNG
+16:28:44 INF metadata updated file=…/2016/02.2016/IMG_1043.PNG
+```
+
+immich-go re-applies its metadata to every server duplicate (4,166 duplicates, 4,166 metadata updates), so the
+retry pass covers both kinds of failure and a client-side retry patch would only save the ~20-minute second
+pass. Not patched; to re-check before the Google steps what the skip-smaller path applies to the server's bigger
+copy.
+
+Left over in `upload/` after the 5-minute settle: 3 JPGs the storage template had not moved (unique files, sha1
+present nowhere else, so counted as present; the close-out Storage Template Migration job is the fix) and 26
+`.xmp` sidecars. The server log has about 30 `Error reading exif data (/data/upload/…): File not found` warnings
+for assets that had already moved to `library/`. The sidecar for one of them, `2c84….PNG.xmp`, is among the 26
+left in `upload/`. It looks like the sidecar-write and metadata re-read that follow immich-go's metadata update
+raced the move and used the old path. Not traced further. The `family` library now holds 17,464 files on
+TrueNAS, counting sidecars.
