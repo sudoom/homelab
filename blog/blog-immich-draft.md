@@ -1068,3 +1068,30 @@ to limit Immich before it. Three options:
 3. Leave it as is.
 
 The operator chose 3. The alerts were warnings, they cleared on their own and nothing failed.
+
+## 2026-10-16 — v3.3.3 before the Takeout, and a schema-drift warning that was a startup race
+
+The operator merged Renovate's #200 (server and machine-learning `v3.3.1` → `v3.3.3`: a people-query speed-up and a
+mobile fix) before the Takeout step, so that step runs on the version the import finishes on. ArgoCD rolled it at
+10:29Z; both pods were ready on v3.3.3 within two minutes with no restarts.
+
+The new server logged a schema-drift warning once at startup:
+
+```
+10:29:16 [Microservices:DatabaseService] No schema drift detected
+10:29:19 [Api:DatabaseService] Detected schema drift ...
+           - The index "geodata_places"."idx_geodata_places_name" is missing and needs to be created
+           - ... idx_geodata_places_admin2_name, idx_geodata_places_admin1_name, idx_geodata_places_alternate_names
+           - The constraint "geodata_places"."geodata_places_pkey" (primary-key) is missing and needs to be created
+10:29:20 [Microservices:MapRepository] Starting geodata import
+10:29:59 [Microservices:MapRepository] Geodata import completed
+```
+
+It was a race between the two workers in the pod, not drift. The image carries a newer geodata date file, so the
+microservices worker re-imports the reverse-geocoding table. In v3.3.3's `server/src/repositories/map.repository.ts`
+that import replaces `geodata_places` with a copy made `LIKE geodata_places INCLUDING ALL EXCLUDING INDEXES`
+(lines 304–310), loads it, and only then adds back the primary key and the four name indexes (lines 419–437). The
+API worker ran its drift check inside that window, and the five objects it named are exactly the five that step
+recreates. The microservices worker had checked three seconds earlier, before the swap, and found nothing. The
+import completed 40 s later; nothing to do. To confirm it explicitly, `immich-admin schema-check` inside the server
+pod would report it, which is an exec and so operator-run.
