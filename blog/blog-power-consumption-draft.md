@@ -1513,3 +1513,42 @@ reboot reliably zeroes that node's forwarding" (2026-09-08). Recorded, not expla
 mandatory. The firing board afterwards was the known set (`TargetDown` nmstate, `PodDisruptionBudgetAtLimit`,
 `KubeCPUOvercommit`, `UpdateAvailable`, `InsightsRecommendationActive`, `Watchdog`) plus `CephMonDiskspaceLow` /
 `CephHealthWarning` for mon c on node5, both since 12:09Z today.
+
+## 2026-10-16 — powersave off by hand, on purpose this time: one clean three-node reroll
+
+The operator removed the `powersave-experimental` Tuned CR by hand ("as it limits cpu freq"), temporarily. Unlike
+2026-09-14 they switched off auto-sync on **both** `power-tuning` and `root-app` first, so nothing recreated the CR
+and the pool target never flipped back. Read afterwards under the readonly kubeconfig:
+
+```
+oc -n openshift-gitops get application power-tuning -o jsonpath='automated={.spec.syncPolicy.automated}'   # automated=
+oc -n openshift-gitops get application root-app     -o jsonpath='automated={.spec.syncPolicy.automated}'   # automated=
+oc -n openshift-cluster-node-tuning-operator get tuned                                                     # default only
+oc get mc 50-nto-master                                                                                    # NotFound
+```
+
+NTO deleted `50-nto-master`, MCO rendered `rendered-master-62ce1c60…` at 10:36:54Z (the previous
+`rendered-master-fc1a3706…` minus `intel_pstate=passive processor.max_cstate=9`) and rolled it one node at a time.
+Times are when a 20 s poll first saw each node back `Ready`, schedulable and `Done`:
+
+| node | back on the new config | notes |
+|---|---|---|
+| node4 | 10:43:00Z | CNPG switched both primaries away first; node5's evicted pods started on node4 |
+| node5 | 10:49:13Z | |
+| node6 | by 10:57Z | pool `updated=3/3`, `degraded=0`, `Updated=True` |
+
+No drain blocked. While a node was down the PDBs at 0 were the expected set (control-plane guards, the mon PDB, the
+other hosts' OSD PDBs, the two CNPG primaries); Loki's ingester PDB was not among them. Ceph showed one mon and one
+OSD down and 33.3 % of objects degraded during each window, and was back to the two standing warnings
+(`BLUESTORE_SLOW_OP_ALERT`, mon c low on space) at the end. Both CNPG clusters stayed `ContinuousArchiving=True`
+throughout, and no ArgoCD app went `sync=Unknown`.
+
+**`br-ex.forwarding` stayed `1` on every node.** The operator ran the per-node sysctl check after node4 came back
+and again after all three: `1`, `1`, `1` both times, so no `ovnkube-node` restart was needed. That contradicts the
+2026-09-08 note in the `network-change` skill that "a node reboot reliably zeroes THAT NODE'S
+`br-ex.forwarding`". These were MCO reboots rather than a power-off, and I don't know what differs. Until it is
+understood the post-reboot check stays mandatory; it is just not guaranteed to find a 0.
+
+State left behind: git still declares the Tuned, and both Applications are `OutOfSync` by design. Turning powersave
+back on is re-enabling auto-sync on `root-app` (which restores `power-tuning`'s own policy) and costs one more
+three-node reroll, which must not start while this one is in progress.
