@@ -1552,3 +1552,19 @@ understood the post-reboot check stays mandatory; it is just not guaranteed to f
 State left behind: git still declares the Tuned, and both Applications are `OutOfSync` by design. Turning powersave
 back on is re-enabling auto-sync on `root-app` (which restores `power-tuning`'s own policy) and costs one more
 three-node reroll, which must not start while this one is in progress.
+
+**What the cap cost (operator's Grafana, 24 h, read the same afternoon).** With powersave on, the cluster sat at about
+32 % CPU overnight; after the reroll it settled at about 11 % from 14:00 local with the same workloads (only moved
+between nodes: node6 came back last and stayed nearly empty). Same work, roughly a third of the CPU time. And on
+2026-10-15 from 19:30 to 22:00 local, node4 and node6 were pinned at ~99 % for two and a half hours on step 6's Immich
+job backlog, the window of the control-plane CPU alerts; today's Takeout, about half as many new files and less
+video, peaked at ~50 % cluster-wide (node4 ~85 %) for about half an hour.
+
+That fits how the profile works. The chart's own comment says `intel_pstate=passive` is there so "the cpufreq
+governor (powersave from sub-step A) actually drives freq decisions". In passive mode the governor is the generic
+cpufreq one, and the kernel's cpufreq documentation describes `powersave` as setting the CPU statically to the
+lowest frequency within `scaling_min_freq`/`scaling_max_freq`; only intel_pstate's *active* mode has a dynamic
+algorithm under the same name. So Lever 1's −146 W was most likely every core held at its minimum clock. I have not
+read `scaling_cur_freq` on a node to confirm it (that needs an exec). If powersave comes back, a middle ground worth
+measuring against the Shelly numbers: keep `processor.max_cstate=9`, and either drop `intel_pstate=passive` (active
+mode's own powersave with EPP) or keep passive with the `schedutil` governor.
