@@ -971,6 +971,9 @@ retry pass covers both kinds of failure and a client-side retry patch would only
 pass. Not patched; to re-check before the Google steps what the skip-smaller path applies to the server's bigger
 copy.
 
+(Corrected 2026-10-16: wrong. "metadata updated" after "server has duplicate" is a bookkeeping label with no API
+call behind it, and the retry did not re-send the PUT. See the 2026-10-16 code-check section below.)
+
 Left over in `upload/` after the 5-minute settle: 3 JPGs the storage template had not moved (unique files, sha1
 present nowhere else, so counted as present; the close-out Storage Template Migration job is the fix) and 26
 `.xmp` sidecars. The server log has about 30 `Error reading exif data (/data/upload/…): File not found` warnings
@@ -1101,3 +1104,59 @@ Migrations are up to date
 
 No schema drift detected
 ```
+
+## 2026-10-16 — the Takeout code check: what immich-go writes onto photos already on the server
+
+Before the Takeout step I had immich-go v0.32.0's source read, with our patch applied (tag v0.32.0, commit
+f7d19fc), for everything `upload from-google-photos` can do to an asset that is already on the server. Paths
+below are in that tree.
+
+**"metadata updated" on a duplicate is only a label.** The `SameOnServer` branch (`app/upload/run.go:387-393`)
+records `DiscardedServerDuplicate` and `ProcessedMetadataUpdated` in the tracker and then calls
+`manageAssetAlbums`, and that is all. The only `PUT /assets/{id}` is in `uploadAsset`, after a fresh upload, and
+it is gated:
+
+```go
+if a.FromApplication != nil && ar.Status != immich.StatusDuplicate {
+    a.UseMetadata(a.FromApplication)
+    _, err := uc.client.Immich.UpdateAsset(ctx, a.ID, immich.UpdAssetField{
+        Description: a.Description, Latitude: a.Latitude, Longitude: a.Longitude,
+        Rating: a.Rating, DateTimeOriginal: a.CaptureDate,
+    })
+```
+
+So the step 4 conclusion above was wrong. The one failed PUT in steps 0–6 (all 22 upload logs: 1 `updateAsset`
+error, plus 4 `CopyAsset` errors from the stock-binary run on the first folder) was IMG_1043.PNG, and the retry
+did not re-send it. In `from-folder`, `FromApplication` is only set from an immich-go JSON sidecar, iCloud
+metadata, or, for a file with no EXIF date, the date `--date-from-name` (default true) parses from the name or
+path (`adapters/folder/run.go:325-395`). That PNG has no date in its name, so `TakeTimeFromPath`
+(`internal/filenames/namesdate.go:16`) fell back to the whole path, and its regex reads `2016/02.2016/IMG_1043.PNG`
+as 2016-02-20 16:00 (checked with the same regex: groups `2016`, `02`, `20`, `16`). The lost PUT would have set
+that artefact, not a real date. The same parse did go through for every other EXIF-less file in folders named
+`YYYY/MM.YYYY`, which is something to look at in the close-out review.
+
+For the Takeout the gate matters more: there, `FromApplication` is the Google JSON (date, GPS, description) for
+every file. If that PUT fails on a transient error the upload has already happened, so the retry pass sees a
+server duplicate and the JSON metadata never arrives. The sha1 verification cannot see it.
+
+**What reaches an existing asset**, with or without `IMMICH_GO_SKIP_SMALLER=1`:
+
+- Album membership, with `--sync-albums` (default true): `PUT /albums/{id}/assets` or `POST /albums`. It only
+  adds, and it extends any existing Immich album with the same title.
+- A stack. `series.Group` runs in every adapter (`cmdFromGooglePhotos.go:151`, and `app/upload/upload.go:171`
+  for `from-folder`). It groups images with the same radical and capture time; a group that is not RAW+JPEG,
+  HEIC+JPEG or a burst becomes `GroupByOther` (`internal/groups/series/series.go:66`), which no filter or flag
+  un-groups, and `handleGroup` stacks it (`run.go:322-338`). An asset's ID is the existing server ID when it is a
+  duplicate or skipped as smaller, so a Takeout original that is already on the server gets stacked with its new
+  `-edited` copy. The cover is index 0 of an unstable sort over map-ordered input, so which photo shows on the
+  timeline is effectively random. Steps 0–6 created no stacks: the only "stack" lines in the 22 logs are the three
+  flag defaults, and the "stacked" event logs at the same level as "server has duplicate".
+- Nothing else: delete, trash, replace, copy and visibility changes are unreachable in the patched build, and
+  tags (`--takeout-tag`, `--people-tag`) go only on new uploads (`run.go:568-575`). `--overwrite` is a no-op
+  with the patch.
+
+Also from the read: `--include-archived=false` does nothing (the filter at `googlephotos.go:515` tests a field the
+Google adapter never sets); trashed Takeout items are dropped by default; partner-shared items are imported by
+default as the uploader's own; `--pause-immich-jobs` would pause five job queues even under `--dry-run`, but our
+config sets it false (`--pause-immich-jobs=false origin=config file` in every log), so the only job call is the
+harmless resume that answers 403.
