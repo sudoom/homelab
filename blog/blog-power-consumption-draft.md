@@ -1583,3 +1583,7 @@ the deep C-states and the clock floor rather than at work done faster. About +13
 1,140–1,310 kWh and 1,440–1,660 zł a year at 1.263 zł/kWh, against the 2026-05-26 Lever 1 result of −146 W. So the
 cap is worth keeping for an idle cluster; the question for the middle ground is how much of that idle saving
 survives without pinning the clock.
+
+The restore rollout ran 16:54–17:12Z (node4 back at 16:59:49Z, node6 at 17:05:58Z, node5 at 17:12:06Z). Ceph was back
+to its two standing warnings at 17:14:24Z once `osd-1` on node5 finished its init containers. The operator's sysctl
+check afterwards read `1` on all three nodes again: six MCO reboots in one day, and `br-ex.forwarding` never dropped.
