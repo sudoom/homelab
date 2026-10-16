@@ -1208,3 +1208,38 @@ is on the server only as its still. The trashed file is not on the server either
 `imp.py` gained `--google` (same flow, `from-google-photos` with the flags above) and, in `verify`, two accounted
 outcomes instead of problems: "not imported: no matching JSON" and "not imported: filtered (trashed)", each listed
 in the notes with whether its sha1 is on the server. Anything else without a final event still stops the run.
+
+## 2026-10-16 — stage 2, step 7: the Takeout is in
+
+The operator kept the one trashed item, so the run added `--include-trashed=true` (the dry run had shown it is the
+only trashed entry; nothing marks it trashed on upload, so it lands on the timeline with its Google date and GPS).
+
+```
+14:40:23 index pre-20261016-144022: 22545 files (73 in upload/), 0 newly hashed
+15:46:51 upload Takeout: rc=0 in 3987s; ... uploaded successfully 6215, metadata updated 14091, server has duplicate 245,
+         discarded local duplicate 29, associated metadata 14112, missing metadata 3, tagged 6215
+15:55:09 index after-Takeout: 34983 files (80 in upload/), 12440 newly hashed
+16:45:20 verify Takeout: 14115 source files sha1-checked; uploaded successfully 6215, discarded local duplicate 29,
+         bigger copy already on server 7623, server has duplicate 245, not imported: no matching JSON 3,
+         server-written .xmp 5711; server +12438 -0 files; problems 2
+```
+
+No upload error at all, so no retry pass and no metadata-PUT retry fired (`grep -c 'retrying (homelab build)'` = 0).
+Against the dry run: two more uploads, one more local duplicate and three fewer skips. The skip index also holds
+assets uploaded earlier in the same run and the input order comes from map iteration, so a few same-name,
+same-moment pairs resolve differently from run to run; every file still lands in one accounted outcome. The kept
+photo is at `library/Family/2020/2020-01-29/`. Of the 12,440 new paths, 6,217 are media (5,841 `.jpg`, 251 `.png`,
+86 `.mov`, 17 `.mp4`, 11 `.avi`, 10 `.3gp`, 1 `.gif`: the 6,215 uploads plus two older `upload/` leftovers the
+template moved) and 6,221 are `.xmp` sidecars Immich wrote for the assets whose date or GPS the PUT set (5,712
+distinct contents; photos sharing a date and place get byte-identical sidecars).
+
+The two "problems" were `upload/…/<uuid>.jpg.xmp_exiftool_tmp` and `…JPG.xmp_exiftool_tmp`, written at 15:17 and
+15:35 and still there an hour later, with no final `.xmp` beside them and their assets already moved to `library/`:
+exiftool's sidecar write cut off by the storage-template move, the same race as step 4's orphaned sidecars. The
+database holds the date and GPS either way. What the run left in `upload/` is 6 `.xmp` and these 2 temp files, no
+media. Left for the close-out with the other `upload/` leftovers.
+
+The Immich job load this time: the machine-learning pod at ~3.3 cores, the two server pods at 0.1–0.2 cores each
+once the upload ended, nodes at 6.7 / 3.9 / 0.8 cores, against step 6's two and a half hours at ~99 % on node4 and
+node6 under the powersave cap. Archive total: 36,710 source files sha1-verified across steps 0–7; TrueNAS holds
+34,983 files for the `family` user, sidecars included. Left: the second Google folder (step 8) and the close-out.
