@@ -1093,5 +1093,11 @@ that import replaces `geodata_places` with a copy made `LIKE geodata_places INCL
 (lines 304–310), loads it, and only then adds back the primary key and the four name indexes (lines 419–437). The
 API worker ran its drift check inside that window, and the five objects it named are exactly the five that step
 recreates. The microservices worker had checked three seconds earlier, before the swap, and found nothing. The
-import completed 40 s later; nothing to do. To confirm it explicitly, `immich-admin schema-check` inside the server
-pod would report it, which is an exec and so operator-run.
+import completed 40 s later. The operator confirmed it afterwards (an exec, so operator-run):
+
+```
+$ oc -n immich exec deploy/immich-server -- immich-admin schema-check
+Migrations are up to date
+
+No schema drift detected
+```
