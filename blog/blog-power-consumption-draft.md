@@ -1574,3 +1574,12 @@ mode's own powersave with EPP) or keep passive with the `schedutil` governor.
 16:53:46Z, NTO recreated `50-nto-master` at 16:53:47Z, and the pool's target went straight back to
 `rendered-master-fc1a3706…` — no intermediate render, so again one reboot per node. node4 was cordoned first.
 Powersave was off from 10:36Z to 16:53Z.
+
+**The power side of those six hours** (operator's Grafana, Shelly plugs, local time): the rack drew ~200 W through
+the night with powersave on, stepped to ~330–350 W the moment the reroll finished (~12:40) and peaked at 460–490 W
+while the Takeout and the second Google folder were being processed. node6 went from ~45 W to ~75–80 W even though
+it carried almost nothing after the reboots (0.8 cores at 15:55): most of the saving is at idle, which points at
+the deep C-states and the clock floor rather than at work done faster. About +130–150 W, which is roughly
+1,140–1,310 kWh and 1,440–1,660 zł a year at 1.263 zł/kWh, against the 2026-05-26 Lever 1 result of −146 W. So the
+cap is worth keeping for an idle cluster; the question for the middle ground is how much of that idle saving
+survives without pinning the clock.
