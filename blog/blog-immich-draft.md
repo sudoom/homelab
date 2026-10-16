@@ -1160,3 +1160,51 @@ Google adapter never sets); trashed Takeout items are dropped by default; partne
 default as the uploader's own; `--pause-immich-jobs` would pause five job queues even under `--dry-run`, but our
 config sets it false (`--pause-immich-jobs=false origin=config file` in every log), so the only job call is the
 harmless resume that answers 403.
+
+## 2026-10-16 — step 7 dry run: the Google Takeout
+
+Decisions for the Takeout, made by the operator after the code check: no stacking (patched out), no albums
+(`--sync-albums=false`), `--takeout-tag=true` (it lands only on assets this run creates, so it marks exactly what
+came from Google), `--people-tag=false`, and a retry on the metadata PUT. Partner sharing was moot: none of the
+15,280 JSON files has a `fromPartnerSharing` key. The build is `0.32.0-homelab.4`: the homelab.3 patch plus two
+`app/upload/run.go` changes, the stacking block replaced by an INFO line `group not stacked (homelab build)`
+listing the files, and `UpdateAsset` retried up to three times (3 s, then 6 s) before the error is recorded. The
+module cache was gone, so it was rebuilt from `proxy.golang.org`; inside the sandbox Go failed every download
+with `x509: OSStatus -26276` (it uses the macOS trust store), outside it `go mod verify` reported all modules
+verified. Upstream's tests for `internal/groups/...` and `adapters/googlePhotos` pass; `app/upload` has none.
+
+```bash
+IMMICH_GO_SKIP_SMALLER=1 immich-go-cs upload from-google-photos --config ./immich-go.toml --no-ui \
+  --on-errors continue --sync-albums=false --takeout-tag=true --people-tag=false --dry-run \
+  --log-file dry-takeout.log /Volumes/photo/photo/Takeout
+```
+
+55 minutes over SMB (13:10–14:05), exit 0. 14,115 media files, 45.9 GB (13,638 images, 477 videos), 14,112 of
+them matched to a JSON. By each file's final event:
+
+| outcome | files |
+|---|---|
+| would upload | 6,212 (12.1 GB, 123 videos) |
+| skipped: a bigger same-name, same-moment copy is on the server | 7,626 |
+| server has the same bytes | 245 |
+| local duplicate (same bytes twice in the Takeout, e.g. `MOV00001(1).3gp`) | 28 |
+| no matching JSON, not imported | 3 |
+| trashed in Google, not imported (`--include-trashed=false`) | 1 |
+
+The skip reason reads e.g. `An asset with the same name:"DSC00006.JPG" and date:"2007-04-10 15:23:55" but with
+bigger size:59.7 KB exists on the server. No need to upload.` — it is logged as "metadata updated", so the run
+summary's `metadata updated: 14097` mixes these skips with the PUT that follows every new upload. The only `ERR`
+was the usual `403` on the `thumbnailGeneration` resume.
+
+18 groups would have been stacked by upstream: `(1)` copies of the same photo, Google's `image(N).jpg` series
+within one second, and one original + `(1)` + `-измененный` (Russian "edited") trio. With the patch they stay
+separate assets and the log lists them for review.
+
+The three files without a JSON are all `NAME(1).JPG` next to a `NAME.JPG` with one JSON between them, and `file`
+says every one is `Apple QuickTime movie`: Live Photo motion clips Google exported under the still's name. Two
+have the sha1 of a `.mov` already in the library from the local folders; the third (a 3 s clip from 2018-09-17)
+is on the server only as its still. The trashed file is not on the server either.
+
+`imp.py` gained `--google` (same flow, `from-google-photos` with the flags above) and, in `verify`, two accounted
+outcomes instead of problems: "not imported: no matching JSON" and "not imported: filtered (trashed)", each listed
+in the notes with whether its sha1 is on the server. Anything else without a final event still stops the run.
