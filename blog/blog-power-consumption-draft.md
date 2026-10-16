@@ -1568,3 +1568,9 @@ algorithm under the same name. So Lever 1's −146 W was most likely every core 
 read `scaling_cur_freq` on a node to confirm it (that needs an exec). If powersave comes back, a middle ground worth
 measuring against the Shelly numbers: keep `processor.max_cstate=9`, and either drop `intel_pstate=passive` (active
 mode's own powersave with EPP) or keep passive with the `schedutil` governor.
+
+**Back on at 16:53Z the same day.** Auto-sync came back on for `root-app` (16:54:11Z sync) and with it
+`power-tuning` (`automated={"prune":true,"selfHeal":true}`, sync 16:53:46Z). ArgoCD recreated the Tuned at
+16:53:46Z, NTO recreated `50-nto-master` at 16:53:47Z, and the pool's target went straight back to
+`rendered-master-fc1a3706…` — no intermediate render, so again one reboot per node. node4 was cordoned first.
+Powersave was off from 10:36Z to 16:53Z.

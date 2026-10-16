@@ -159,12 +159,12 @@ Rules that hold even when the skill is not loaded:
   2 instances since 2026-09-15.
 - **Never delete the `powersave-experimental` Tuned CR by hand** — NTO drops `50-nto-master` and MCO rerolls a node.
   Change `bootArgs` in `components/cluster-config/power-tuning/values.yaml` instead.
-  **State since 2026-10-16: the operator removed it on purpose, temporarily** (it pins the CPUs at minimum frequency),
-  with auto-sync switched off on both `power-tuning` and `root-app` first, so the master pool rerolled once and
-  nothing flips it back. Both Applications read `OutOfSync` by design, and **while `root-app` auto-sync is off, a
-  change to `bootstrap/root-app/values.yaml` does not reach the cluster**; child apps still sync themselves.
-  Re-enabling `root-app` auto-sync restores powersave and costs another three-node reroll
-  (`blog/blog-power-consumption-draft.md` 2026-10-16).
+  The way to take it off temporarily without the double reboot (done 2026-10-16, 10:36Z): switch off auto-sync on
+  **both** `power-tuning` and `root-app` first, then delete the CR — one clean three-node reroll. While `root-app`
+  auto-sync is off, a change to `bootstrap/root-app/values.yaml` does not reach the cluster. Switching `root-app`
+  auto-sync back on restores `power-tuning`'s policy and the CR, which is a second clean reroll (16:53Z the same
+  day). The CR pins every core at its minimum frequency (passive driver + `powersave` governor); see
+  `blog/blog-power-consumption-draft.md` 2026-10-16.
 - The unblock recipe and the full history: `network-change` skill.
 
 ## Validation workflow
