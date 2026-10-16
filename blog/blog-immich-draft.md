@@ -1040,3 +1040,31 @@ same shape as its neighbours. The retry uploaded it, so it was transient, not th
 Photo motion parts paired by name with a HEIC/JPG; 30 of them were still in `upload/` after the settle, along
 with 2 HEICs, for the close-out Storage Template Migration job. The `family` library now holds 22,545 files on
 TrueNAS; 22,595 source files verified across steps 0–6, all local folders done.
+
+## 2026-10-16 — before the Takeout: the job-load alerts, and no CPU cap
+
+Step 6 left Immich a backlog of thumbnail, metadata and video jobs for 312 videos. From 17:36Z on 2026-10-15 both
+`immich-server` pods ran at about 7.1–7.3 cores each, node4 and node6 reached about 15.6 of their 16 threads, and
+`ExtremelyHighIndividualControlPlaneCPU` (×2), `HighOverallControlPlaneCPU`, `NodeSystemSaturation` (×2) and
+`PrometheusMissingRuleEvaluations` (×2) fired. All three nodes are control plane, so the job workers were competing
+with etcd and the API server. The server container has a memory limit (8Gi) but no CPU limit.
+
+By the next morning the queue had drained and every one of those alerts was gone from Alertmanager. Read through the
+metrics API under the readonly SA:
+
+```bash
+oc get --raw /apis/metrics.k8s.io/v1beta1/namespaces/immich/pods   # immich-server 5m CPU, one replica
+oc get --raw /apis/metrics.k8s.io/v1beta1/nodes                    # node4 5.1, node5 3.1, node6 7.3 cores
+oc -n immich get hpa                                                # cpu: 1%/75%, replicas 1
+```
+
+No pod restarted and no upload failed because of it. The Takeout is the largest step left, so the question was whether
+to limit Immich before it. Three options:
+
+1. A CPU limit of 4 cores on the server container (at most 8 across the HPA's 2 replicas). The API and the job
+   workers share that one container, so a throttled pod would also slow the uploads.
+2. Lower job concurrency in the Immich admin settings. That alone does not bound video conversion: one ffmpeg job
+   uses as many threads as Immich's ffmpeg `threads` setting allows, and its default lets ffmpeg take them all.
+3. Leave it as is.
+
+The operator chose 3. The alerts were warnings, they cleared on their own and nothing failed.
