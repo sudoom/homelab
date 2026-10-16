@@ -1243,3 +1243,44 @@ The Immich job load this time: the machine-learning pod at ~3.3 cores, the two s
 once the upload ended, nodes at 6.7 / 3.9 / 0.8 cores, against step 6's two and a half hours at ~99 % on node4 and
 node6 under the powersave cap. Archive total: 36,710 source files sha1-verified across steps 0–7; TrueNAS holds
 34,983 files for the `family` user, sidecars included. Left: the second Google folder (step 8) and the close-out.
+
+## 2026-10-16 — stage 2, step 8: the second Google folder, and the import is finished
+
+The last folder is a Google Photos web download, plain files with no JSON, so it went through `from-folder` with the
+skip-smaller rule like the camera folders. The dry run (16:52–17:19) found 13,776 media files, 47.4 GB, and would
+upload 1,592 (30.0 GB). The triage of 2026-10-12 had said this folder adds 998 files by content, so I matched each
+would-be upload against `inventory/hashes.tsv` (a sha1 for every file on the share and every member of the `.tgz`):
+
+| would upload | files | size |
+|---|---|---|
+| among the triage's "only in this folder" files | 615 | 2.7 GiB |
+| same bytes as a Takeout file step 7 skipped as the smaller copy | 977 | 27.4 GiB |
+
+The other 383 of the 998 were already in the library (381, from before the archive import) or duplicated inside the
+folder (2). The 977 are 631 `.jpg`, 229 `.mov` and 117 `.mp4`. 631 carry a different name from their Takeout twin
+(`IMG_0124 (1).JPG`), so the same-name rule cannot see them; the other 346 have the same name but `from-folder`
+reads no capture date for them (the Takeout took its dates from the JSON), so `sameMoment` is false. I offered to
+skip them with a sha1 list built from step 7's skipped files; the operator chose to upload all 1,592 and clean up
+with Immich's Review duplicates, which compares by content and so will pair each re-encode with its original.
+
+```
+17:27:04 index pre-20261016-172702: 34983 files (80 in upload/), 0 newly hashed
+17:58:48 upload dwn: rc=0 in 1903s; ... uploaded successfully 1592, metadata updated 12184, server has duplicate 5906,
+         discarded local duplicate 2
+18:01:47 index after-dwn: 36575 files (28 in upload/), 1708 newly hashed
+18:47:39 verify dwn: 13776 source files sha1-checked; uploaded successfully 1592, server has duplicate 5906,
+         bigger copy already on server 6276, discarded local duplicate 2; server +1592 -0 files; problems 0
+18:47:39 ALL DONE: dwn
+```
+
+Exactly the dry run's numbers, no upload error, no PUT retry. No sidecars this time: `from-folder` sends no
+application metadata for files that have EXIF dates, so Immich has nothing to export, and the server grew by exactly
+1,592 files. The storage template also cleared 52 of the earlier `upload/` leftovers (80 → 28).
+
+A side question from the Synology copy: `library/` holds `Family/`, `Vadzim/` and `5693963b-6338-…/`. Immich names a
+user's folder after their storage label and falls back to the user ID; the third folder is the second personal
+account, which never got a label (2 files). Fix in the admin UI (Users → edit → storage label), then the Storage
+Template Migration job; the Synology copy is COPY-mode, so the old ID folder stays there.
+
+The import is complete: 50,486 source files sha1-verified across steps 0–8, 36,575 files on TrueNAS for `family`.
+What remains is the close-out list in the README TODO.
