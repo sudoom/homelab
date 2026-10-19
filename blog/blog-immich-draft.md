@@ -1284,3 +1284,47 @@ Template Migration job; the Synology copy is COPY-mode, so the old ID folder sta
 
 The import is complete: 50,486 source files sha1-verified across steps 0–8, 36,575 files on TrueNAS for `family`.
 What remains is the close-out list in the README TODO.
+
+## 2026-10-19 — close-out, part 1: the totals
+
+A fresh index of the `family` files on TrueNAS, then every per-folder source report (`verify/src-*.tsv`, 17 of them,
+re-runs included) checked against it. Step 0's 67 files predate the reports, so they were re-hashed from the share.
+
+```
+imp.py index final-20261019
+15:43:42 index final-20261019: 36575 files (8 in upload/), 20 newly hashed
+```
+
+On TrueNAS for `family`: 36,575 files = 29,683 media files (230.8 GiB, every one a distinct sha1), 6,890 `.xmp`
+sidecars and the 2 `*.xmp_exiftool_tmp` orphans from step 7. The 20 newly hashed files are moves, not new content:
+20 media files that step 8 left in `upload/` have since been filed into their date folders by the storage template,
+with the same sha1s. `upload/` now holds only six `.xmp` sidecars and the two `_tmp` files.
+
+Source side, by distinct path (a later run of a folder overrides an earlier one):
+
+| outcome | source files |
+|---|---|
+| already on the server byte for byte | 27,114 |
+| uploaded (steps 1–8) | 9,354 |
+| uploaded (step 0) | 65 |
+| skipped, a bigger same-name copy is on the server | 12,922 |
+| skipped as smaller by step 7, the same bytes uploaded by step 8 | 977 |
+| duplicated inside a folder | 37 |
+| Live Photo clip with no JSON (2 already on the server as `.mov`, 1 not) | 3 |
+| deleted on purpose in the 2026-10-12 delete test (`IMG_8183.JPG`, `IMG_8204.JPG`) | 2 |
+| **total** | **50,474** |
+
+Every source file that was on the server when its folder was checked is still there: 0 went missing between
+2026-10-15 and today. The two delete-test photos are still absent, as intended.
+
+Correction: the running total I kept from 2026-10-15 to 2026-10-16 said 50,486. It was a sum of per-step figures and
+was 12 too high; the "steps 1–6, 22,595" figure was really steps 0–6 and is 22,583. The recount by distinct path
+above is the number of record. I did not find which re-run the 12 came from.
+
+The server also holds 143 media files with no source in the archive (0.63 GiB of `.jpg`, 139 under
+`2024/2024-01-01` and 4 under `2000/2000-01-01`). All 143 are in `index-baseline`, taken before step 1: they are the
+photos the `family` account already had (141 in `library/Family` before step 0 on 2026-10-12, plus 2 that arrived in
+`upload/` before 2026-10-15). 63 share a name with an archive file but not its bytes, so the Duplicates review is
+where they meet their twins, if they are re-encodes.
+
+Source sha1s on the server (29,540) plus those 143 equal the server's 29,683 media files exactly.
