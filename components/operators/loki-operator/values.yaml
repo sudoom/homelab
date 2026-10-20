@@ -4,7 +4,7 @@
 namespace: openshift-operators-redhat
 
 subscription:
-  # Match cluster-logging — both ship paired from okderators v6.3.0.
+  # Match cluster-logging; both run okderators v6.5.0-2026-06-04 (installed from the 4.20 catalog).
   channel: alpha
   source: okderators
   sourceNamespace: openshift-marketplace
