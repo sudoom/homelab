@@ -804,3 +804,25 @@ Options were another measuring run or freeing disk in the workflow. The operator
 Change (fork branch `cluster-logging-6.6`, commit 1466fa3): an opt-in boolean input `free_disk_space` on the shared `operator-deploy.yaml`, default false, so no other operator's workflow changes; only `cluster-logging-deploy.yaml` passes true. When true, a step runs `df -h /`, removes `/usr/share/dotnet`, `/usr/local/lib/android`, `/opt/ghc`, `/usr/local/.ghcup` and `/opt/hostedtoolcache/CodeQL`, prunes docker images, and runs `df -h /` again, so the log shows before and after.
 
 The amount freed is unmeasured until the first real CI run; that run's two `df` lines are the check.
+
+## 2026-10-20 — pipeline PRs filed
+
+The operator asked for the PRs while the soak runs, so they went up before it ended; the main PR says a 24 h soak is running and that its results will follow as a comment.
+
+| PR | base | head |
+|---|---|---|
+| [#35](https://github.com/okd-project/okd-operator-pipeline/pull/35) | `main` | `sudoom:cluster-logging-6.6` (1466fa3) |
+| [#36](https://github.com/okd-project/okd-operator-pipeline/pull/36) | `release-4.22` | `sudoom:cluster-logging-6.6-4.22` (15ba530) |
+| [#37](https://github.com/okd-project/okd-operator-pipeline/pull/37) | `release-4.21` | `sudoom:cluster-logging-6.6-4.21` (e7222e4) |
+| [#38](https://github.com/okd-project/okd-operator-pipeline/pull/38) | `release-4.20` | `sudoom:cluster-logging-6.6-4.20` (50b2959) |
+
+All four are drafts. `gh pr view` reads `mergeable=MERGEABLE` on each, and every fork branch was 0 commits behind its base at filing (`gh api repos/okd-project/okd-operator-pipeline/compare/<base>...sudoom:<branch>`). Titles follow the repo's `[<operator>] Update to <version>` convention; the backports add ` (release-4.2x)`, as the merged `[nmstate] Update submodules to release-4.21` does. There is no PR template.
+
+Every PR body carries `Addresses okd-project/okderators-catalog-index#44 and okd-project/okderators-catalog-index#48`. Both issues live in the catalog repo, not the pipeline repo: the pipeline repo has no logging issue at all (`gh issue list --state all`, titles matching logging/loki/vector). "Addresses", not "Closes", because neither issue is fixed until the catalog PRs land.
+
+Facts corrected while reviewing the drafts, before filing:
+
+- LOG-9632 and 6.6: the reason 6.6 does not have the S3 bug is that its LokiStack config uses the `thanos-io/objstore` backend instead of the AWS SDK S3 client (Red Hat LOG-7392, fixVersion 6.6.0). The bug is fixed in 6.5.3 by a backport of the same change; Red Hat did not take grafana/loki PR #22003.
+- Toolchain: the diff moves `ubi9/go-toolset` from 1.25 to 1.26 in every Go Containerfile, not only Loki's. It contains no Rust version change.
+- The weekly `operator-updates.yaml` bot: `gh run list --workflow operator-updates.yaml --limit 100` returns 33 runs since 2026-03-09, none successful (latest 2026-10-19).
+- The backports build nothing on merge. `release-4.22`'s `cluster-logging-deploy.yaml` triggers on pushes to `main` only; `release-4.21` and `release-4.20` have no such workflow. The images for every catalog come from the `main` build, and the backports keep each release branch's `cluster-logging/` tree at the version its catalog will list.
