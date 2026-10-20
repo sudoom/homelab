@@ -47,6 +47,18 @@ ABSENT_RE='manifest unknown|name unknown|repository name not known|not found|(^|
 # olm.maxOpenShiftVersion every bundle must carry.
 MAX_OCP=4.23
 
+# Branding baseline (P21): the "Red Hat" text that okderators' OKDify patches leave in, and
+# that the accepted okderators 6.5.0 CSVs (cluster-logging and loki-operator
+# v6.5.0-2026-06-04-101319, installed here) carry too: the loki-operator maintainer attribution
+# and three API field descriptions in the cluster-logging CSV. Fixed substrings of one text line
+# of a CSV string value; a "Red Hat" anywhere else fails the branding check.
+BRANDING_BASELINE=(
+  'When forwarding logs to the Red Hat Managed Elasticsearch, the index must match the pattern'
+  'LokiStack configures forwarding log events to a Red Hat managed Loki deployment'
+  'using the Red Hat tenancy model'
+  'Red Hat, AOS Logging'
+)
+
 # Pinned tools. Every sha256 is the one the project publishes (go.dev JSON, GitHub release
 # checksums files, mirror.openshift.com sha256sum.txt).
 GO_VERSION=1.26.10
@@ -457,6 +469,44 @@ check() {  # check <name> PASS|FAIL <detail...>
   if [[ $2 == FAIL ]]; then VERIFY_FAILS=$((VERIFY_FAILS + 1)); fi
 }
 
+# branding_check <csv.json> <pkg> (P21). FAIL on any valid-subscription (keys or values), on a
+# support annotation that names Red Hat, and on any "Red Hat" outside BRANDING_BASELINE.
+# The text is every string value and key of the CSV JSON, split at its own newlines, so a
+# multi-line description is checked line by line whatever YAML folding would do to it.
+branding_check() {
+  local csv=$1 pkg=$2 vs support result allowed bad
+  local -a problems=()
+  vs=$( { jq -c . "$csv" | grep -oi 'valid-subscription' || true; } | wc -l | tr -d ' ')
+  if [[ $vs != 0 ]]; then problems+=("${vs}x valid-subscription"); fi
+  support=$(jq -r '.metadata.annotations.support // ""' "$csv")
+  if grep -qiE 'red ?hat' <<<"$support"; then problems+=("support annotation '${support}'"); fi
+  result=$(jq -r '(.. | strings), ([paths | .[] | strings] | unique | .[])' "$csv" \
+    | BASELINE="$(printf '%s\n' "${BRANDING_BASELINE[@]}")" awk '
+        BEGIN { n = split(ENVIRON["BASELINE"], allow, "\n"); allowed = 0 }
+        tolower($0) ~ /red hat/ {
+          line = $0
+          for (i = 1; i <= n; i++) {
+            if (allow[i] == "") continue
+            while ((p = index(line, allow[i])) > 0) {
+              line = substr(line, 1, p - 1) substr(line, p + length(allow[i]))
+              allowed++
+            }
+          }
+          if (tolower(line) ~ /red hat/) print "BAD " substr($0, 1, 100)
+        }
+        END { print "ALLOWED " allowed }')
+  allowed=$(sed -n 's/^ALLOWED //p' <<<"$result")
+  bad=$(grep -c '^BAD ' <<<"$result" || true)
+  if [[ $bad != 0 ]]; then
+    problems+=("${bad} Red Hat lines outside the baseline: $(sed -n 's/^BAD //p' <<<"$result" | sed -n '1,3p' | paste -sd '|' -)")
+  fi
+  if [[ ${#problems[@]} == 0 ]]; then
+    check "branding/${pkg}" PASS "no valid-subscription, support not Red Hat, ${allowed} baseline Red Hat hits allowed"
+  else
+    check "branding/${pkg}" FAIL "$(printf '%s; ' "${problems[@]}")${allowed} baseline hits allowed"
+  fi
+}
+
 verify() {  # verify <array name> <registry the bundles reference>
   local -n arr=$1
   local reg=$2 name ref repo digest dir pkg max n prov src img pg want payload seen_loki=0
@@ -478,7 +528,6 @@ verify() {  # verify <array name> <registry the bundles reference>
       check "csv/${pkg}" FAIL "no ClusterServiceVersion in opm render ${repo}@${digest}"
       continue
     fi
-    yq -p json -o yaml "$dir/csv.json" >"$dir/csv.yaml"
     echo "INFO verify ${pkg} ${repo}@${digest} $(jq -r '.metadata.name' "$dir/csv.json")"
 
     max=$(jq -r '[.properties[]? | select(.type == "olm.maxOpenShiftVersion") | .value | tostring] | first // "missing"' "$dir/bundle.json")
@@ -528,12 +577,7 @@ verify() {  # verify <array name> <registry the bundles reference>
       check "kube-rbac-proxy-from-payload/${pkg}" PASS "$payload"
     fi
 
-    n=$(grep -ciE 'valid-subscription|Red Hat' "$dir/csv.yaml" || true)
-    if [[ $n == 0 ]]; then
-      check "branding/${pkg}" PASS "0 lines match valid-subscription|Red Hat"
-    else
-      check "branding/${pkg}" FAIL "${n} lines: $(grep -iE 'valid-subscription|Red Hat' "$dir/csv.yaml" | sed -n '1,3p' | cut -c1-100 | paste -sd '|' -)"
-    fi
+    branding_check "$dir/csv.json" "$pkg"
 
     prov=$(jq -r '.spec.provider.name // "missing"' "$dir/csv.json")
     if [[ $prov == "OKD Community" ]]; then

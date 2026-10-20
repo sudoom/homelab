@@ -147,8 +147,8 @@ image, and per package:
 | `max-openshift-version/<pkg>` | `olm.maxOpenShiftVersion` is `4.23` |
 | `images/<pkg>` | every `relatedImages[].image` and every `RELATED_IMAGE_*` / `*_IMAGE` env value in the CSV is `${BASE_REGISTRY}/…@sha256:…` (no `quay.io/openshift-logging`, no `registry.redhat.io`, no tags). One exception: the kube-rbac-proxy image `build.sh` resolves from the OKD release payload (`quay.io/okd/scos-content@sha256:…`), accepted only if it is exactly that value and by digest |
 | `images-built/<pkg>` | each of those `${BASE_REGISTRY}` references is a digest this run pushed or copied |
-| `kube-rbac-proxy-from-payload/<pkg>` | printed (always PASS) when the bundle carries the payload kube-rbac-proxy, with the exact reference, so the log records which OKD release it came from |
-| `branding/<pkg>` | `grep -ciE 'valid-subscription\|Red Hat'` on the CSV is 0 |
+| `kube-rbac-proxy-from-payload/<pkg>` | printed (always PASS) when the bundle carries the payload kube-rbac-proxy, with the exact reference, so the log records which OKD release it came from. The 6.6.1 loki-operator has no kube-rbac-proxy sidecar (the manager serves its metrics on 8443 itself), so the line is absent for both bundles |
+| `branding/<pkg>` | the okderators OKDify standard, measured against the accepted okderators 6.5.0 CSVs: no `valid-subscription` anywhere (keys or values), no `support` annotation naming Red Hat (`red ?hat`, any case), and no `Red Hat` line outside `BRANDING_BASELINE` in `build.sh`. That baseline lists four fixed substrings the 6.5.0 CSVs carry too: the loki-operator maintainer `Red Hat, AOS Logging` and three cluster-logging API field descriptions. The text checked is every string value and key of the CSV JSON, split at its own newlines; the PASS detail counts the baseline hits allowed |
 | `provider/<pkg>` | `spec.provider.name` is `OKD Community` |
 | `passthrough-gateway/loki-operator` | only if the cloned `build.sh` defines `IMG_PASSTHROUGH_GATEWAY`: the loki-operator CSV carries `RELATED_IMAGE_PASSTHROUGH_GATEWAY` pointing at that image |
 
