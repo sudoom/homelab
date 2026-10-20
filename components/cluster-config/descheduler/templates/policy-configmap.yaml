@@ -8,7 +8,7 @@ data:
     apiVersion: "descheduler/v1alpha2"
     kind: "DeschedulerPolicy"
     # All eviction goes through the kube-apiserver eviction API, so
-    # PDBs are respected (drains we set up — e.g. loki-pdb-override —
+    # PDBs are respected (e.g. the LokiStack and CNPG PDBs
     # still gate this). Two profiles:
     #   1. AffinityAndTaints — fix placement violations
     #   2. LoadBalancing     — even out per-node pod count

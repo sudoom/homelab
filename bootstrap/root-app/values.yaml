@@ -338,15 +338,6 @@ applications:
     namespace: openshift-logging
     syncWave: "5"
 
-  # After LokiStack is up. CronJob that re-patches the loki-operator-
-  # hardcoded ingester PDB MinAvailable=2 to 1 — needed because we
-  # run 2 ingester replicas (deliberate) and 2/2 PDB blocks all drains.
-  loki-pdb-override:
-    enabled: true
-    path: components/cluster-config/loki-pdb-override
-    namespace: openshift-logging
-    syncWave: "6"
-
   # Prunes CNPG volumeSnapshot backups; CNPG's retentionPolicy does not cover
   # them. Wave 6 so it lands after the CNPG clusters it reads (wave 5).
   # Live (dryRun: false) since 2026-09-09.

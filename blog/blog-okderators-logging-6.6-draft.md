@@ -659,3 +659,17 @@ PUSHED zot.apps.okd.sudops.pl/okd-test/logging-catalog:2026-10-20-153109@sha256:
 | base | `quay.io/operator-framework/opm@sha256:b32d38916166…`, `ENTRYPOINT /bin/opm`, `serve /configs --cache-dir=/tmp/cache`, cache pre-built with `--cache-only` |
 
 Next step is the homelab `okd-test-logging` CatalogSource pointing at this image.
+
+## 2026-10-20 — loki-operator 6.6 live: PDBs, and the override retired
+
+After the loki-operator upgrade to the okderators 6.6 test build, the operator creates every LokiStack PDB in `openshift-logging` with `maxUnavailable: 1` and no `minAvailable`. All six show `disruptionsAllowed: 1`, including `logging-loki-ingester` (2/2 ingesters). Before 6.6 the ingester PDB was `minAvailable: 2` with 2 replicas (0 disruptions, drains blocked), which is why `components/cluster-config/loki-pdb-override/` existed: a CronJob every 5 minutes that merge-patched `minAvailable: 1`.
+
+Against the 6.6 PDB it reads `.spec.minAvailable`, finds it empty, and patches `minAvailable: 1`, which the API now rejects (a PDB cannot carry both fields). Every run fails; Job `loki-pdb-override-29875200` logs:
+
+```
+The PodDisruptionBudget "logging-loki-ingester" is invalid: spec: Invalid value: {"MinAvailable":1,…
+```
+
+That fires `UserNamespaceJobFailed` (emailed). Retired the component: entry removed from `bootstrap/root-app/values.yaml`, chart deleted, so ArgoCD prunes the Application and its resources-finalizer removes the CronJob, RBAC and the failed Jobs. The README TODO "expose PDB tunables on LokiStack" went with it: its only motivation was the 0 disruption budget. The `network-change` skill text (pre-flight step 1 scaling the operator to 0, step 6 restoring it) is now stale; a proposed patch is kept locally since `.claude/skills/` is user-applied.
+
+Separately, 6.6 sets a new LokiStack condition `Warning=True`, reason `InsufficientIngesterReplicas`, message "The ingester replicas (2) are less than or equal to the replication factor (2). Which causes log ingestion to stop when ingester pods get restarted." The `1x.pico` shape is unchanged from 6.5 (2 ingesters, replication factor 2); 6.6 only reports it. Options: replication factor 1, or 3 ingesters. No change made.

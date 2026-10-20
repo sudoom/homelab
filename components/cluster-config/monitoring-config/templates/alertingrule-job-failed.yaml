@@ -7,7 +7,7 @@
 #                   namespace=~"(openshift-.*|kube-.*|default)"} > 0
 #
 # — so every CronJob this repo ships in its own namespace is invisible to job
-# failure alerting: synology-cert-sync, node-fstrim, loki-pdb-override,
+# failure alerting: synology-cert-sync, node-fstrim,
 # rbd-trash-purge, the OADP schedules. The metric is present and correct; simply
 # nothing evaluates it outside the platform namespaces.
 #
