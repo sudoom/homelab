@@ -84,3 +84,21 @@ No storage error lines in any ingester, compactor or index-gateway log since the
 
 Design and plan are local (`docs/superpowers/`, gitignored); the record of what gets built and why goes here as the
 work proceeds.
+
+## 2026-10-20 — the 6.6.1 pin table
+
+| component | repo | branch | commit | Red Hat image |
+|---|---|---|---|---|
+| cluster-logging-operator | openshift/cluster-logging-operator | release-6.6 | `7560420af4` | openshift-logging/cluster-logging-rhel9-operator |
+| loki-operator | openshift/loki | release-6.6 | `678e5e8f46` | openshift-logging/loki-rhel9-operator |
+| loki-operand | openshift/loki | upstream-v3.7.3 | `2c9bd11954` | openshift-logging/logging-loki-rhel9 |
+| vector | ViaQ/vector | v0.54.0-rh | `5e0a160980` | openshift-logging/vector-rhel9 |
+| log-file-metric-exporter | ViaQ/log-file-metric-exporter | main | `4e32570016` | openshift-logging/log-file-metric-exporter-rhel9 |
+| lokistack-gateway | ViaQ/observatorium-api | main | `aeb2833b06` | openshift-logging/lokistack-gateway-rhel9 |
+| opa-openshift | ViaQ/opa-openshift | main | `5fc280ff7b` | openshift-logging/opa-openshift-rhel9 |
+| eventrouter | openshift/eventrouter | master | `4cd32dfcce` | openshift-logging/eventrouter-rhel9 |
+| passthrough-gateway | openshift/loki | release-6.6 | `678e5e8f46` | none (same commit as loki-operator) |
+
+I read `io.openshift.build.commit.id` from the Red Hat container catalog GraphQL API (`find_operator_bundles` for the 6.6.1 `cluster-logging` and `loki-operator` bundles on 4.21, then `get_image` labels per related image, with python urllib because curl is denied here). Every sha was proven with `gh api repos/<repo>/commits/<sha>` and `compare/<branch>...<sha>` (`behind` or `identical`).
+
+Three things differ from the obvious reading. The Loki operand commit is identical to `openshift/loki` `upstream-v3.7.3`. The gateway and OPA commits are on the ViaQ forks, not on the upstream `observatorium/*` main (diverged). Eventrouter is not in the 6.6.1 bundles, but Red Hat built an `eventrouter-rhel9` image with `version=6.6.1`, so that commit is pinned. The Red Hat Dockerfiles for each image were saved for comparison with the pipeline's Containerfiles.
