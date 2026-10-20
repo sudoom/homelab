@@ -430,3 +430,164 @@ Local test mode afterwards: 26 CHECK lines, all PASS, exit 0 (two `bundle-versio
 skipRange controls, `opm-validate-image`). The earlier REDs still fail as before (a tree that already has the
 bundles, a channel with two heads, a reused `RUN_DIR`). `kubeconform` on `oc kustomize` and on the `MODE=catalog`
 Job: 5 and 1 valid.
+
+## 2026-10-20 — the first in-cluster build
+
+First run of the Job from `tests/okderators-logging-build/` on the cluster. Two full runs: the first stopped at the
+tag check, the second built everything and failed only on my own branding check.
+
+Commands (from the repo root, operator's kubeconfig, per the README):
+
+```bash
+oc apply -k tests/okderators-logging-build/
+DATE=$(date -u +%Y-%m-%d-%H%M%S)
+oc process --local -f tests/okderators-logging-build/job-template.yaml \
+  -p MODE=full -p DATE=$DATE | oc -n okd-build create -f -
+oc -n okd-build logs job/build-full-$DATE | grep -E '^(STEP|DISK|PUSHED|CHECK|RESULT) '
+```
+
+Before the first apply: zot `data-zot-0` had 18.6 GiB free of 48.9, Ceph `nvme-replicated` `MAX AVAIL` was 271.2 GiB,
+so the 100Gi thin PVC fit.
+
+### Run 1 (`2026-10-20-133814`): failed at tag-check after 65 s
+
+Steps before it: tools 57 s, podman-setup 4 s, clone 4 s, `DISK` 1.03 GB. The tag check asks zot whether
+`cluster-logging/operator:6.6.0-<DATE>` already exists, and accepts only an "absent" answer. The repository did not exist
+yet (first push ever under `okd-test/cluster-logging`), and zot answers that with `NAME_UNKNOWN`, which skopeo prints as
+`repository name not known to registry`. `build.sh` accepted only `manifest unknown|name unknown|not found|404`, so the
+wording missed and the check failed closed. Fix: `6047126` adds `repository name not known` to `ABSENT_RE`.
+
+Reading the pattern again for the fix showed the opposite bug: a bare `404` matched anywhere in the error text, and a
+`DATE` such as `2026-10-20-404…` is part of the reference skopeo echoes back, so any error for such a tag would have read
+as "absent" and the check would have failed open. The `404` alternative is now tied to an HTTP status. A scoped
+re-review found no new breakage. Left as is: the `not found` alternative is unanchored, so a DNS or credential-helper
+message containing it would also read as absent; pre-existing and narrow.
+
+### Run 2 (`2026-10-20-134619`)
+
+Step durations (`STEP` lines are epoch seconds; END minus START):
+
+| step | duration |
+|---|---|
+| tools | 24 s |
+| podman-setup | 3 s |
+| clone | 3 s |
+| tag-check | 2 s |
+| init | 254 s |
+| build_containers | 4914 s (81.9 min) |
+| push_containers | 48 s |
+| build_bundle | 263 s |
+| deinit | 19 s |
+| verify | 3 s |
+
+Tools to verify took 5569 s of wall clock (92.8 min, about 93). `build_containers` is 88 % of it.
+
+Per-image times from `podman build` to `Successfully tagged` (`oc logs --timestamps`):
+
+| image | time |
+|---|---|
+| vector | 42 min 34 s |
+| operator | 9 min 19 s |
+| loki | 8 min 48 s |
+| loki-operator | 6 min 10 s |
+| lokistack-gateway | 4 min 25 s |
+| opa-openshift | 3 min 20 s |
+| eventrouter | 3 min 07 s |
+| log-file-metric-exporter | 2 min 11 s |
+| passthrough-gateway | 1 min 00 s |
+| bundles (two) | 9 s and 6 s |
+
+Vector alone is more than half of the image build time. The `powersave-experimental` Tuned (all cores at minimum
+frequency) was on for the whole run, so these are slow-clock numbers.
+
+`DISK` after each step (`du -sx` of `/var/lib/containers` + `/work`):
+
+| after | bytes | GB |
+|---|---|---|
+| tools .. tag-check | 1,034,469,376 | 1.03 |
+| init | 4,123,422,720 | 4.12 |
+| build_containers | 33,642,942,464 | 33.64 |
+| push_containers | 33,643,122,688 | 33.64 |
+| build_bundle | 37,036,376,064 | 37.04 |
+| deinit | 37,036,539,904 | 37.04 |
+| verify | 37,038,800,896 | 37.04 |
+
+Peak: 37.0 GB. The bundle step adds 3.4 GB on its own; I have not broken that down yet.
+
+### What got pushed
+
+All under `zot.apps.okd.sudops.pl/okd-test/cluster-logging/`. Digest = sha256 of the manifest bytes zot serves, first 12
+hex characters; size = config + layer bytes from the `PUSHED` line.
+
+| image | tag | digest | size |
+|---|---|---|---|
+| operator | `6.6.0-2026-10-20-134619` | `457d295bbdff` | 160.5 MB |
+| vector | `6.6.0-2026-10-20-134619` | `3a8b699a7c29` | 141.2 MB |
+| loki | `6.6.0-2026-10-20-134619` | `095978a652d8` | 115.5 MB |
+| loki-operator | `6.6.0-2026-10-20-134619` | `8deb587b9b6c` | 108.9 MB |
+| log-file-metric-exporter | `6.6.0-2026-10-20-134619` | `6c131fcf58d9` | 94.1 MB |
+| lokistack-gateway | `6.6.0-2026-10-20-134619` | `80dd5377a699` | 89.7 MB |
+| opa-openshift | `6.6.0-2026-10-20-134619` | `52d82172480f` | 83.6 MB |
+| passthrough-gateway | `6.6.0-2026-10-20-134619` | `74f025435d73` | 75.4 MB |
+| eventrouter | `latest` | `ded7a2403861` | 68.6 MB |
+| operator-bundle | `6.6.0-2026-10-20-134619` | `2567fa857acc` | 61 KB |
+| loki-operator-bundle | `6.6.0-2026-10-20-134619` | `2f191a1152c1` | 59 KB |
+
+The nine images sum to 937,411,468 B. `eventrouter` is pushed as `latest` because that is the tag the pipeline's own
+`build.sh` gives it. The OpenShift Route in front of zot carried every upload
+(no haproxy timeout). zot free space: 18.6 GiB before, 16.9 GiB after (15:20Z), so 1.7 GiB for the nine images and two
+bundles.
+
+### Verify
+
+```
+CHECK max-openshift-version/cluster-logging PASS 4.23
+CHECK images/cluster-logging PASS 6 refs, all zot.apps.okd.sudops.pl/okd-test/...@sha256 or the payload kube-rbac-proxy
+CHECK images-built/cluster-logging PASS every zot.apps.okd.sudops.pl/okd-test ref is a digest this run pushed
+CHECK provider/cluster-logging PASS OKD Community
+CHECK max-openshift-version/loki-operator PASS 4.23
+CHECK images/loki-operator PASS 10 refs, all zot.apps.okd.sudops.pl/okd-test/...@sha256 or the payload kube-rbac-proxy
+CHECK images-built/loki-operator PASS every zot.apps.okd.sudops.pl/okd-test ref is a digest this run pushed
+CHECK provider/loki-operator PASS OKD Community
+CHECK passthrough-gateway/loki-operator PASS zot.apps.okd.sudops.pl/okd-test/cluster-logging/passthrough-gateway@sha256:74f025435d73…
+CHECK branding/cluster-logging FAIL 3 lines: …Red Hat Managed Elasticsearch… | …Red Hat managed Loki deployment | …Red Hat tenancy model
+CHECK branding/loki-operator FAIL 1 lines:       name: Red Hat, AOS Logging
+RESULT FAIL verify: 2 checks failed
+```
+
+Every build-related check passed: both bundles carry `olm.maxOpenShiftVersion` 4.23, every related image is a zot
+digest this run pushed, provider is `OKD Community`, and the passthrough gateway is wired into the loki-operator CSV.
+
+### The branding finding
+
+The branding check was my invention and stricter than the standard okderators applies: it failed on any line with
+"Red Hat". The four hits are three API field descriptions in the cluster-logging CRDs (`Red Hat Managed Elasticsearch`,
+`Red Hat managed Loki deployment`, `Red Hat tenancy model`) and the loki-operator maintainer entry (`Red Hat, AOS
+Logging`). All four are verbatim in the accepted okderators 6.5.0 CSVs running on this cluster (checked with the live
+CSVs: 3 lines in cluster-logging, 1 in loki-operator). They are maintainer attribution and API documentation, not a
+release label. Anti-goal stays: a source must never be re-labelled as a Red Hat release.
+
+Ruling P21: the check now fails on `valid-subscription` (keys or values), on a `support` annotation naming Red Hat, on a
+non-OKD provider, and on any "Red Hat" line outside a 4-string baseline taken from the accepted 6.5.0 CSVs (commit
+`fc99643`; the live 6.5.0 CSVs pass it with the 4 allowed lines). Ruling P22: run 2 is accepted as the full build
+without a rebuild, since every other check passed and the branding hits equal the 6.5.0 baseline; later check runs
+re-verify with the corrected check. Deferred minors: the baseline substrings are not anchored to a field, and
+`RedHat` or odd-spacing variants are not caught (deliberate: `redhat` also matches the namespace and an email in the
+accepted CSVs).
+
+### Correction: kube-rbac-proxy
+
+Earlier in this draft, and in ruling P14, I wrote that the payload `kube-rbac-proxy` (`quay.io/okd/scos-content@sha256:…`
+resolved from the OKD release) would be pinned in the bundle, and that on `main` it would be the OKD 5.0 payload's
+image. That was wrong for 6.6. Neither 6.6 CSV carries a kube-rbac-proxy: the loki-operator `678e5e8f` manager serves
+its metrics itself on 8443. That is why no `CHECK kube-rbac-proxy-from-payload/<pkg>` line was printed, and why the
+`images` counts are 6 (cluster-logging) and 10 (loki-operator) refs, all zot. The original spec note, "unused at 6.5+",
+was right, and the 5.0-payload concern does not arise.
+
+### Open question for the operator
+
+Peak disk was 37.0 GB. A GitHub `ubuntu-latest` runner has about 14 GB free, which is what upstream's CI would build
+on. This has to be decided before the upstream PRs are filed: whether the upstream PR text states the figure and leaves
+the CI question to the maintainer, or whether the build can be shrunk (`vector` is 42 min of the 82; I have not yet
+broken the 33.6 GB down by image). Wall time, 93 min on throttled cores, is
+not the concern.
