@@ -4,9 +4,11 @@
 namespace: openshift-operators-redhat
 
 subscription:
-  # Match cluster-logging; both run okderators v6.5.0-2026-06-04 (installed from the 4.20 catalog).
+  # Paired with cluster-logging; both now come from the zot test catalog okd-test-logging (okderators
+  # Logging/Loki 6.6 built from Red Hat's 6.6.1 commits, components/operators/logging-test-catalog/),
+  # until okderators publishes 6.6 and the source goes back to okderators.
   channel: alpha
-  source: okderators
+  source: okd-test-logging
   sourceNamespace: openshift-marketplace
   # Manual, deliberately (set 2026-09-08, before the 4.21 catalog flip).
   # The okderators CatalogSource is pinned per-OKD-minor and these subscriptions
