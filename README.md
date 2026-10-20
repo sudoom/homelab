@@ -396,7 +396,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   `NodeControllerDegraded: master nodes not ready: node6`. Both self-cleared. `etcd` never degraded. Also expect one
   API blip per node drain (a bare `oc` can return `Unauthorized` if OAuth replicas are mid-move — **that is the
   break-glass kubeconfig's purpose**, it is an SA token and keeps working).
-  **HOP 2 REMAINS BLOCKED — trigger condition unchanged: `quay.io/okderators/catalog-index:4.22` does not exist.**
+  **HOP 2 REMAINS BLOCKED — trigger condition unchanged: `quay.io/okderators/catalog-index:4.22` does not exist.** **Update 2026-10-20: the trigger has fired** — the tag was pushed 2026-10-15. Its logging/Loki head is still 6.3.0 (`maxOpenShiftVersion` 4.20) and gitops is still 1.19.0, so the hop needs re-assessing against this list, not starting.
   Also still open: a supervised, version-coherent Rook bump to a CSI-working v1.20.x+ (v1.19.5 is at the exact top
   of its Kube window at 1.35, zero slack), and GitOps/Logging releases documenting 4.22. **4.22 is no longer
   "too fresh"** — z-streams `.6`-`.9` are now offered, which weakens one of the June DEFER arguments; the catalog
