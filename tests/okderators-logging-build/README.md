@@ -16,8 +16,10 @@ Chronology and results: `blog/blog-okderators-logging-6.6-draft.md`.
 | file | what |
 |---|---|
 | `manifests.yaml` | Namespace `okd-build` (PSA `privileged`, SCC label sync off), ServiceAccount `builder` (no token), RoleBinding to ClusterRole `system:openshift:scc:privileged`, PVC `build-storage` 100Gi `ceph-nvme-block` RWO |
-| `kustomization.yaml` | `manifests.yaml` plus ConfigMap `build-scripts`, generated from `build.sh` (no hash suffix), so the script exists once |
+| `kustomization.yaml` | `manifests.yaml` plus ConfigMap `build-scripts`, generated from `build.sh`, `catalog-edit.sh` and `catalog-walk.py` (no hash suffix), so each script exists once |
 | `build.sh` | the Job's entry point, mounted at `/scripts/build.sh` |
+| `catalog-edit.sh` | `MODE=catalog`: the okderators catalog edit, its checks and the test catalog image ([below](#modecatalog)) |
+| `catalog-walk.py` | the upgrade-graph walker `catalog-edit.sh` runs (Python 3, standard library only) |
 | `job-template.yaml` | OpenShift Template for one run: Job `build-<MODE>-<DATE>` |
 | `log-reader.yaml` | read-only pod for the log files on the PVC once a build pod is gone |
 
@@ -34,7 +36,7 @@ Chronology and results: `blog/blog-okderators-logging-6.6-draft.md`.
 ## Apply, run, read, delete
 
 ```bash
-# static part: namespace, SA, RBAC, PVC, ConfigMap (re-run after editing build.sh)
+# static part: namespace, SA, RBAC, PVC, ConfigMap (re-run after editing any of the scripts)
 oc apply -k tests/okderators-logging-build/
 
 # one run
@@ -106,7 +108,7 @@ and is in the pod log only.
 |---|---|
 | `full` | tools → podman setup → clone `PIPELINE_BRANCH` → tag check → `init` → `build_containers` → `push_containers` → `build_bundle` → `deinit` → verify. Each pipeline step is a separate `./build.sh <step>` run, the same functions `main` runs when given no arguments, so each is timed. |
 | `check` | no image build. `skopeo copy --all` of every `IMG_*` image of `DATE` from `${BASE_REGISTRY}/cluster-logging/` to `${BASE_REGISTRY}/check-<branch>/cluster-logging/` (zot dedupes the blobs), then `init` → `build_bundle` → `deinit` against that registry, then verify. For the other pipeline branches, and to redo bundles and verify after a fix without rebuilding images. |
-| `catalog` | runs `/scripts/catalog-edit.sh`, which the catalog step of this work adds to this directory and to the `configMapGenerator`. Until then the run ends `RESULT FAIL catalog-edit.sh not present`. It gets `CATALOG_BRANCHES`, `BUNDLES`, `BASE_REGISTRY`, `DATE` and `RUN_DIR` (an empty working directory); a `CHECK … FAIL` line from it fails the run. |
+| `catalog` | tools → podman setup → tag check of `${BASE_REGISTRY}/logging-catalog:<DATE>` → `/scripts/catalog-edit.sh` in an empty `/work/run`: the 6.6 entries added to each okderators catalog branch in `CATALOG_BRANCHES`, `opm validate`, graph walk, negative control, then the test catalog image. Its `CHECK` lines go into the contract, a `CHECK … FAIL` or a non-zero exit fails the run, and `build.sh` prints `PUSHED` for the catalog image. [Details below](#modecatalog). |
 
 `./build.sh update` never runs (it moves the gitlinks to branch tips).
 
@@ -119,8 +121,8 @@ and is in the pod log only.
 | `PIPELINE_REPO` | `https://github.com/sudoom/okd-operator-pipeline.git` | |
 | `PIPELINE_BRANCH` | `cluster-logging-6.6` | |
 | `BASE_REGISTRY` | `zot.apps.okd.sudops.pl/okd-test` | anything outside `zot.apps.okd.sudops.pl/okd-test` is refused |
-| `CATALOG_BRANCHES` | empty | `catalog` only |
-| `BUNDLES` | empty | `catalog` only |
+| `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.20 release-4.21 release-4.22`; must include `release-4.21` (the test catalog's source) |
+| `BUNDLES` | empty | `catalog` only: the two bundle refs (cluster-logging and loki-operator, any order), as the full run's `PUSHED` lines print them |
 
 ## Output contract
 
@@ -131,8 +133,8 @@ these lines in the pod log and the `.log` file; the `.contract` file holds only 
 |---|---|
 | `STEP <name> START\|END <seconds>` | epoch seconds; the duration is END − START |
 | `DISK <bytes>` | `du -sx` of `/var/lib/containers` + `/work`, after every step |
-| `PUSHED <ref>@<digest> <bytes>` | after `push_containers` / the `check` copy and after `build_bundle`. Digest = sha256 of the manifest bytes zot serves; bytes = config + layer sizes in that manifest (compressed, as stored), summed over the children of an index |
-| `CHECK <name> PASS\|FAIL <detail>` | verify, below |
+| `PUSHED <ref>@<digest> <bytes>` | after `push_containers` / the `check` copy and after `build_bundle`; in `catalog`, for the catalog image. Digest = sha256 of the manifest bytes zot serves; bytes = config + layer sizes in that manifest (compressed, as stored), summed over the children of an index |
+| `CHECK <name> PASS\|FAIL <detail>` | verify, below; in `catalog`, the checks of [MODE=catalog](#modecatalog) |
 | `RESULT PASS\|FAIL <reason>` | the last line. On an error, or on SIGTERM (deadline, deleted Job), the reason is the step that was running. A SIGTERM is handled while a pipeline step, a skopeo copy or the catalog script runs; during a shorter command it waits for that command, and the kubelet's SIGKILL 30 s after SIGTERM leaves no `RESULT` line at all. |
 
 ## Verify
@@ -153,6 +155,75 @@ image, and per package:
 The image list is never written down here: `build.sh` sources the cloned
 `cluster-logging/build.sh` and reads its `IMG_*` variables. Any `FAIL` ends the run
 `RESULT FAIL`.
+
+## MODE=catalog
+
+Adds the two 6.6 bundles of a full run to the okderators catalog branches, proves the upgrade
+graphs, and builds the test catalog image for the homelab's `okd-test-logging` CatalogSource (next step).
+
+```bash
+DATE=$(date -u +%Y-%m-%d-%H%M%S)      # new for the catalog run; it only names the image tag
+oc process --local -f tests/okderators-logging-build/job-template.yaml \
+  -p MODE=catalog -p DATE=$DATE \
+  -p CATALOG_BRANCHES='release-4.20 release-4.21 release-4.22' \
+  -p BUNDLES='<loki bundle ref@digest> <clo bundle ref@digest>' | oc -n okd-build create -f -
+oc -n okd-build logs -f job/build-catalog-$DATE
+oc -n okd-build logs job/build-catalog-$DATE | grep -E '^(STEP|PUSHED|CHECK|RESULT) '
+```
+
+`BUNDLES` takes the two bundle refs from the full run's `PUSHED` lines
+(`…/cluster-logging/loki-operator-bundle:6.6.0-<DATE>@sha256:…` and
+`…/cluster-logging/operator-bundle:6.6.0-<DATE>@sha256:…`). The tag is dropped before use: opm
+v1.74.0 refuses a reference with both a tag and a digest (`Docker references with both a tag and
+digest are currently not supported`), so the catalog references each bundle by digest only.
+
+For each branch, in a depth-1 clone of `okd-project/okderators-catalog-index`:
+
+1. Each package (`cluster-logging`, `loki-operator`) must have exactly one head in channel `alpha`,
+   computed as operator-registry does: the entry no other entry names in `replaces` or `skips`.
+   That head is what the new entry replaces (6.5.0 on 4.20, 6.3.0 on 4.21/4.22), read from the
+   tree, not written in the script.
+2. The bundles go in with the branch's own `hack/add-bundle.sh`. On `release-4.2x` that script
+   `podman create`s the bundle to read the CSV name, which fails for a bundle built `FROM scratch`
+   with no `CMD` (every bundle the pipeline builds; okderators-catalog-index PR #59, open, drops
+   that step). The script then writes the same file the same way: `opm render <bundle> -o yaml` to
+   `catalog/<package>/<CSV name>.yaml`. The `bundles-<branch>` detail says which path ran.
+3. `yq` appends one entry per package: `name: <6.6 CSV>`, `replaces: <head>`,
+   `skipRange: '>=6.2.0-0 <6.6.0'`.
+
+| check | passes when |
+|---|---|
+| `bundles-<branch>` | adding the bundles created exactly one new file per package and changed no tracked file (a tree that already has them fails here) |
+| `edit-<branch>-<pkg>` | one head before the edit, the 6.6 CSV not in the channel yet, and the package file changed by exactly the three appended lines (plus a final newline where it had none) |
+| `opm-validate-<branch>` | `opm validate catalog` passes on the edited tree |
+| `walk-<branch>-<pkg>` | `catalog-walk.py`: from every channel entry, and from `<pkg>.v6.5.0-2026-06-04-101319` (what the homelab runs; absent from the 4.21/4.22 catalogs), every OLM v0 upgrade edge (`replaces`, `skips`, version inside `skipRange`) ends at the single head with no other dead end on the way, and the head has the highest version. The head's own version `6.6.0-<DATE>` lies inside its own `skipRange` (a prerelease sorts below `6.6.0`); that is not an edge, and `opm validate` passing shows the catalog accepts it |
+| `negative-control-<branch>` | a copy of the edited tree with the new entries' `replaces` removed fails `opm validate` with `multiple channel heads found in graph: <old head>, <6.6 CSV>` for both packages (`skipRange` does not count as an edge there) |
+| `opm-validate-image` | the image context passes `opm validate`: the edited `release-4.21` tree, `cluster-logging` and `loki-operator` only |
+| `catalog-image` | the image, built from `release-4.21`'s own `catalog.Containerfile` with its `FROM quay.io/operator-framework/opm:latest` pinned to `quay.io/operator-framework/opm@sha256:b32d3891616662620da08d7f0ec42c2e69fa2de43427dc975d35b12f7a969a0f` (the v1.74.0 index, which `:latest` pointed at on 2026-10-20), is pushed, rendered back from zot with `opm render`, and has exactly the two packages, the 6.6 heads and passing walks. It is not built when an earlier check failed |
+
+The push target is fixed in `build.sh`: `${BASE_REGISTRY}/logging-catalog:${DATE}`, passed through
+`guard_registry` and the tag check (the tag must not exist yet) and handed to `catalog-edit.sh` as
+`CATALOG_IMAGE`, which itself refuses anything outside `zot.apps.okd.sudops.pl/okd-test/`.
+`build.sh` prints the `PUSHED` line for it, also when a later check failed, so it can be deleted.
+Left in `/work/run` until the next run: `<branch>.diff` (the whole edit per branch, for the catalog
+PRs), the `render-*.json` files, `catalog-edit.log` and the image context `catalog-image/`.
+
+Test mode runs the same script on a laptop, without the Job, images or podman (bash 3.2 is
+enough). `CATALOG_EDIT_TEST_BUNDLES` points at a directory of `olm.bundle` YAML documents that
+replace the add-bundle step; the image context is assembled and validated but not built:
+
+```bash
+# T=<scratch dir>; CAT=<a clone of okderators-catalog-index>; opm v1.74.0 and yq v4 on PATH
+git init -q --bare $T/mirror.git
+git -C $T/mirror.git fetch -q $CAT refs/remotes/origin/release-4.20:refs/heads/release-4.20 \
+  refs/remotes/origin/release-4.21:refs/heads/release-4.21 refs/remotes/origin/release-4.22:refs/heads/release-4.22
+mkdir $T/run
+RUN_DIR=$T/run CATALOG_REPO=$T/mirror.git CATALOG_BRANCHES='release-4.20 release-4.21 release-4.22' \
+  CATALOG_EDIT_TEST_BUNDLES=$T/bundles bash tests/okderators-logging-build/catalog-edit.sh
+```
+
+A test bundle needs `schema: olm.bundle`, `name`, `package`, `image` and an `olm.package` property
+with `packageName` and `version` (for example `6.6.0-2026-10-20-000000`).
 
 ## How it runs, and why
 
@@ -198,4 +269,4 @@ Tools, all pinned and checked against the sha256 their project publishes:
 | yq | v4.54.1 | release `checksums` (SHA-256 column) |
 | kustomize | v5.8.1 (loki's own bingo pin) | release `checksums.txt` |
 | oc | 4.21.36 (`stable-4.21` on 2026-10-20) | `mirror.openshift.com/…/4.21.36/sha256sum.txt` |
-| git, make, jq, skopeo | Fedora packages of the podman image | dnf |
+| git, make, jq, skopeo, python3 | Fedora packages of the podman image | dnf |

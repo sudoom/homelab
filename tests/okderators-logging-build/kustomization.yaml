@@ -10,6 +10,8 @@ configMapGenerator:
     namespace: okd-build
     files:
       - build.sh
+      - catalog-edit.sh
+      - catalog-walk.py
     options:
       disableNameSuffixHash: true
       labels:

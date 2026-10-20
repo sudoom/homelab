@@ -12,6 +12,7 @@
 #   BASE_REGISTRY     must be zot.apps.okd.sudops.pl/okd-test or a path under it
 #   CATALOG_BRANCHES  MODE=catalog only, passed through to catalog-edit.sh
 #   BUNDLES           MODE=catalog only, passed through to catalog-edit.sh
+# MODE=catalog pushes one image, ${BASE_REGISTRY}/logging-catalog:${DATE}, chosen and guarded here.
 #
 # Machine-greppable output (everything else is free-form):
 #   STEP <name> START|END <epoch seconds>
@@ -261,6 +262,8 @@ install_tools() {
   local -a rpms=(git make jq skopeo tar gzip gawk findutils diffutils which)
   # The Fedora base ships curl (or curl-minimal); asking for "curl" next to curl-minimal conflicts.
   if ! command -v curl >/dev/null; then rpms+=(curl); fi
+  # catalog-walk.py (MODE=catalog), standard library only
+  if ! command -v python3 >/dev/null; then rpms+=(python3); fi
   dnf -y -q --setopt=install_weak_deps=False --setopt=system_cachedir="$CACHE/dnf" install "${rpms[@]}"
 
   fetch "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" "$GO_SHA256" "go${GO_VERSION}.linux-amd64.tar.gz"
@@ -297,6 +300,7 @@ install_tools() {
   echo "INFO tool $(first_line skopeo --version)"
   echo "INFO tool $(first_line git --version)"
   echo "INFO tool $(first_line jq --version)"
+  echo "INFO tool $(first_line python3 --version)"
   echo "INFO tool $(first_line make --version)"
 }
 
@@ -433,8 +437,8 @@ report_pushed() {  # report_pushed <array name> <IMG_* names...>
   done
 }
 
-tag_check() {  # P12: a full run never re-pushes a tag
-  local ref="${BASE_REGISTRY}/cluster-logging/operator:${V[MAJOR]}.${V[MINOR]}.0-${DATE}" err
+tag_check() {  # tag_check <ref>. P12: a run never re-pushes a tag
+  local ref=$1 err
   if err=$(skopeo inspect --raw "docker://${ref}" 2>&1 >/dev/null); then
     finish FAIL "tag exists ${ref}"
   fi
@@ -576,7 +580,7 @@ mode_full() {
   step_end
 
   step_start tag-check
-  tag_check
+  tag_check "${BASE_REGISTRY}/cluster-logging/operator:${V[MAJOR]}.${V[MINOR]}.0-${DATE}"
   step_end
 
   for s in init build_containers push_containers; do
@@ -621,18 +625,39 @@ mode_check() {
 }
 
 mode_catalog() {
-  local n
+  local n rc=0
+  local -A C=([IMG_CATALOG]="${BASE_REGISTRY}/logging-catalog:${DATE}")
+  guard_registry "${C[IMG_CATALOG]%:*}"
   rm -rf "$RUN"
   mkdir -p "$RUN"
-  export RUN_DIR=$RUN
+
+  step_start tag-check
+  tag_check "${C[IMG_CATALOG]}"
+  step_end
+
+  export RUN_DIR=$RUN CATALOG_IMAGE=${C[IMG_CATALOG]}
   step_start catalog-edit
-  run_bg env -C "$RUN" bash -c 'set -o pipefail; bash /scripts/catalog-edit.sh 2>&1 | tee "$RUN_DIR/catalog-edit.log"'
+  # run_bg without its errexit: the CHECK lines are copied whatever the script's exit status.
+  env -C "$RUN" bash -c 'set -o pipefail; bash /scripts/catalog-edit.sh 2>&1 | tee "$RUN_DIR/catalog-edit.log"' &
+  CHILD=$!
+  wait "$CHILD" || rc=$?
+  CHILD=
   step_end
   # catalog-edit.sh prints its CHECK lines to stdout; copy them into the contract file too
   grep '^CHECK ' "$RUN/catalog-edit.log" >>"$CONTRACT" || true
+  # A pushed catalog image is reported even if a later check failed, so it can be deleted.
+  if [[ -f $RUN/catalog-image.pushed ]]; then
+    report_pushed C IMG_CATALOG
+  fi
   n=$(grep -c '^CHECK [^ ]* FAIL' "$RUN/catalog-edit.log" || true)
   if [[ $n != 0 ]]; then
     finish FAIL "catalog: ${n} checks failed"
+  fi
+  if [[ $rc != 0 ]]; then
+    finish FAIL "catalog-edit.sh exit ${rc}"
+  fi
+  if [[ ! -f $RUN/catalog-image.pushed ]]; then
+    finish FAIL "catalog: no catalog image pushed"
   fi
 }
 

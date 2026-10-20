@@ -216,3 +216,153 @@ what they depend on exists: ClusterRole `system:openshift:scc:privileged` (`use`
 The local bash is 3.2, so `bash -n` here does not exercise the bash 4+ parts (`local -n`, `declare -A`,
 `inherit_errexit`); those first run in the pod. If verify trips over a script bug at the end of a long build, `check`
 redoes the bundles and verify without rebuilding the images.
+
+## 2026-10-20 — catalog graphs: the edit and the walker
+
+The catalog step of the build Job: `MODE=catalog` adds the two 6.6 bundles to the okderators catalog branches,
+checks the upgrade graphs, and builds the test catalog image the homelab will subscribe to. The code is
+`tests/okderators-logging-build/catalog-edit.sh` plus a walker, `catalog-walk.py`; the Job has not run it yet.
+Everything below ran on the Mac against local copies of the three catalog branches (tips unchanged upstream:
+`release-4.20` bfbb297, `release-4.21` 6c737c9, `release-4.22` 252d764), with opm v1.74.0 for darwin-arm64,
+sha256 checked against the release's `checksums.txt`.
+
+**The failing check first.** On the unedited trees the 4.21 and 4.22 heads are the 6.3.0 builds, capped at 4.20:
+
+```
+$ opm render <tree>/catalog/<pkg> -o json | jq -s '<heads, then their olm.maxOpenShiftVersion>'
+release-4.21 cluster-logging  cluster-logging.v6.3.0-2025-08-08-133408  olm.maxOpenShiftVersion="4.20"
+release-4.21 loki-operator    loki-operator.v6.3.0-2025-08-08-133408    olm.maxOpenShiftVersion="4.20"
+release-4.22 cluster-logging  cluster-logging.v6.3.0-2025-08-08-133408  olm.maxOpenShiftVersion="4.20"
+release-4.22 loki-operator    loki-operator.v6.3.0-2025-08-08-133408    olm.maxOpenShiftVersion="4.20"
+```
+
+and the homelab's two Subscriptions (CatalogSource `okderators`, `catalog-index:4.21`, `READY`) sit at the
+6.5.0 they were installed with from the 4.20 catalog, with nothing to move to:
+
+```
+$ KUBECONFIG=~/.kube/config-readonly oc -n openshift-logging get subscription \
+    -o jsonpath='{range .items[*]}{.metadata.name} {.status.state} {.status.installedCSV}{"\n"}{end}'
+cluster-logging AtLatestKnown cluster-logging.v6.5.0-2026-06-04-101319
+$ ... -n openshift-operators-redhat ...
+loki-operator AtLatestKnown loki-operator.v6.5.0-2026-06-04-101319
+```
+
+The walker says the same about the unedited 4.21 tree: 6.5.0 is not in it, and no entry's `replaces`, `skips` or
+`skipRange` takes it anywhere.
+
+```
+$ python3 -I catalog-walk.py walk render-4.21-cl.json cluster-logging alpha \
+    cluster-logging.v6.3.0-2025-08-08-133408 --installed cluster-logging.v6.5.0-2026-06-04-101319
+FAIL stranded: cluster-logging.v6.5.0-2026-06-04-101319 (installed, absent from the channel) dead ends: cluster-logging.v6.5.0-2026-06-04-101319
+```
+
+**The edit.** Per branch: clone, find each package's single head in `alpha` (operator-registry's rule: the entry
+no other entry names in `replaces` or `skips`; more than one is a FAIL before anything changes), add the bundles,
+and append one entry per package with yq:
+
+```yaml
+  - name: cluster-logging.v6.6.0-<DATE>
+    replaces: cluster-logging.v6.3.0-2025-08-08-133408     # 4.20: the 6.5.0 entry
+    skipRange: '>=6.2.0-0 <6.6.0'
+```
+
+The script checks that yq changed nothing but those three lines (it re-emits the whole file; the only other diff
+is a final newline on `loki-operator.yaml`, which has none upstream, as in the 6.5.0 commit on 4.20).
+
+**The walker.** `opm validate` only proves a single head and no `replaces` cycle; it says nothing about whether a
+cluster on 5.9.0, 6.2.0 or 6.3.0 gets to the head, and nothing at all about a CSV that is not in the catalog. So
+`catalog-walk.py` follows OLM v0's upgrade edges forward from every entry and from the installed
+`<pkg>.v6.5.0-2026-06-04-101319`: X → Y when Y `replaces` X, Y `skips` X, or X's version is inside Y's
+`skipRange` (semver as blang/semver orders it, the library OLM uses). PASS needs the only reachable dead end to be
+the head, so whichever edge OLM picks at each step it ends there. The head's own version, `6.6.0-<DATE>`, is a
+prerelease below `6.6.0` and so inside its own skipRange; that is not an edge, and `opm validate` passing is the
+evidence that the catalog accepts it. On the edited 4.21 tree:
+
+```
+INFO walk clusterlogging.v5.9.0-2024-05-05-192913 -(replaces)-> cluster-logging.v6.2.0-2025-05-26-200125 -(skipRange)-> cluster-logging.v6.6.0-2026-10-20-000000
+INFO walk cluster-logging.v6.2.0-2025-05-26-200125 -(skipRange)-> cluster-logging.v6.6.0-2026-10-20-000000
+INFO walk cluster-logging.v6.3.0-2025-08-08-133408 -(replaces+skipRange)-> cluster-logging.v6.6.0-2026-10-20-000000
+INFO walk cluster-logging.v6.5.0-2026-06-04-101319 -(skipRange)-> cluster-logging.v6.6.0-2026-10-20-000000 (installed, absent from the channel)
+```
+
+**Negative control.** A copy of the edited tree with the new entries' `replaces` removed must fail `opm validate`:
+`skipRange` does not count toward heads, so 6.3.0 (6.5.0 on 4.20) becomes a second head. opm prints the whole
+error tree as one logfmt `msg` with literal `\n` separators, so my first matcher, a grep for the line with
+"multiple channel heads" and the new CSV name, would have passed on one package's error alone; the script now
+splits the message and needs one line per package naming both heads.
+
+**Three things found on the way.**
+
+- opm v1.74.0 refuses a bundle reference with both a tag and a digest, which is the form the full run's `PUSHED`
+  lines print: `Docker references with both a tag and digest are currently not supported`. The script keeps the
+  digest and drops the tag, so the test catalog references both bundles by digest only.
+- `hack/add-bundle.sh` on the release branches reads the CSV name with `podman create` on the bundle. The 6.5.0 loki
+  bundle on quay has no `Cmd` and no `Entrypoint` in its image config (`FROM scratch`, labels only), and podman
+  refuses to create a container without a command; the 6.6 bundles are built the same way. okderators-catalog-index
+  PR #59 (open) takes the name from `opm render` instead. The script runs the branch's own `add-bundle.sh` first and,
+  when it fails, writes the same file the same way. Rendering the real 6.5.0 loki bundle by digest that way
+  reproduced the published `loki-operator.v6.5.0-2026-06-04-101319.yaml` exactly, except the two `image:` lines
+  (digest instead of tag).
+- `opm validate` passes on a tree whose 6.6 entry has no `skipRange`, while the installed 6.5.0 is stranded. That is
+  the case the walker exists for (RED below).
+
+**Local results.** Test mode (`CATALOG_EDIT_TEST_BUNDLES`) swaps the add-bundle step for synthetic `olm.bundle`
+documents (`<pkg>.v6.6.0-2026-10-20-000000`, version `6.6.0-2026-10-20-000000`, a placeholder digest) and builds no
+image; the clones come from a throwaway bare repo holding the three branches.
+
+GREEN, all three branches, exit 0:
+
+```
+CHECK opm-validate-release-4.20 PASS opm validate catalog
+CHECK walk-release-4.20-cluster-logging PASS 5 entries reach cluster-logging.v6.6.0-2026-10-20-000000
+CHECK walk-release-4.20-loki-operator PASS 5 entries reach loki-operator.v6.6.0-2026-10-20-000000
+CHECK negative-control-release-4.20 PASS opm validate failed as expected, multiple channel heads: cluster-logging.v6.5.0-2026-06-04-101319, cluster-logging.v6.6.0-2026-10-20-000000 | loki-operator.v6.5.0-2026-06-04-101319, loki-operator.v6.6.0-2026-10-20-000000
+CHECK opm-validate-release-4.21 PASS opm validate catalog
+CHECK walk-release-4.21-cluster-logging PASS 4 entries + 1 installed CSV absent from the channel reach cluster-logging.v6.6.0-2026-10-20-000000
+CHECK walk-release-4.21-loki-operator PASS 4 entries + 1 installed CSV absent from the channel reach loki-operator.v6.6.0-2026-10-20-000000
+CHECK negative-control-release-4.21 PASS opm validate failed as expected, multiple channel heads: cluster-logging.v6.3.0-2025-08-08-133408, cluster-logging.v6.6.0-2026-10-20-000000 | loki-operator.v6.3.0-2025-08-08-133408, loki-operator.v6.6.0-2026-10-20-000000
+CHECK opm-validate-release-4.22 PASS opm validate catalog
+CHECK walk-release-4.22-cluster-logging PASS 4 entries + 1 installed CSV absent from the channel reach cluster-logging.v6.6.0-2026-10-20-000000
+CHECK walk-release-4.22-loki-operator PASS 4 entries + 1 installed CSV absent from the channel reach loki-operator.v6.6.0-2026-10-20-000000
+CHECK negative-control-release-4.22 PASS opm validate failed as expected, multiple channel heads: cluster-logging.v6.3.0-2025-08-08-133408, cluster-logging.v6.6.0-2026-10-20-000000 | loki-operator.v6.3.0-2025-08-08-133408, loki-operator.v6.6.0-2026-10-20-000000
+CHECK opm-validate-image PASS opm validate catalog
+```
+
+(22 CHECK lines in all, every one PASS; the `bundles-` and `edit-` lines are left out here.) RED, three ways:
+
+```
+# 1. the edited 4.21 tree with the 6.6 cluster-logging entry's skipRange deleted
+$ opm validate catalog; echo rc=$?
+rc=0
+$ python3 -I catalog-walk.py walk r.json cluster-logging alpha cluster-logging.v6.6.0-2026-10-20-000000 \
+    --installed cluster-logging.v6.5.0-2026-06-04-101319
+INFO walk cluster-logging.v6.3.0-2025-08-08-133408 -(replaces)-> cluster-logging.v6.6.0-2026-10-20-000000
+FAIL stranded: cluster-logging.v6.5.0-2026-06-04-101319 (installed, absent from the channel) dead ends: cluster-logging.v6.5.0-2026-06-04-101319
+
+# 2. a 4.21 branch that already carries the edit, and a 4.22 branch whose loki channel has two heads; exit 1
+CHECK bundles-release-4.21 FAIL 0 new bundle files, want one per package (cluster-logging loki-operator); already in the catalog?
+CHECK edit-release-4.22-loki-operator FAIL 2 heads in alpha before the edit: loki-operator.v6.2.0-2025-05-26-200125 loki-operator.v6.3.0-2025-08-08-133408
+CHECK catalog-image FAIL not built: 2 checks failed before it
+
+# 3. the same RUN_DIR a second time
+ERROR <run dir>/release-4.21 exists: catalog-edit.sh runs once per RUN_DIR
+```
+
+The non-test path ran too, with the real 6.5.0 bundles from quay (passed as `tag@digest`) standing in for 6.6 on
+4.21 and a `podman` stub on `PATH` that refuses everything: the tags were dropped, `add-bundle.sh` failed at
+`podman pull`, the opm-render fallback wrote both files, every check up to the image passed, and the stub's refusal
+of `podman build` ended the run with `CHECK catalog-image FAIL podman build failed`, exit 1 and no pushed-image
+marker for `build.sh` to report.
+
+**The test catalog image.** From the edited `release-4.21` tree, `cluster-logging` and `loki-operator` only, built
+with that branch's own `catalog.Containerfile` (`ADD catalog /configs`, `opm serve --cache-only`). Its
+`FROM quay.io/operator-framework/opm:latest` is pinned to the digest: `:latest` and `v1.74.0` are the same index
+today, `sha256:b32d3891616662620da08d7f0ec42c2e69fa2de43427dc975d35b12f7a969a0f`. The Job pushes it to
+`zot.apps.okd.sudops.pl/okd-test/logging-catalog:<DATE>` (the name is fixed in `build.sh`, which guards it and
+checks that the tag does not exist yet), renders it back from zot and walks it again; `build.sh` prints its
+`PUSHED` line. `build.sh` also gained `python3` in its dnf list and a ref argument for `tag_check`.
+
+Offline checks: `bash -n` on both scripts, `oc kustomize tests/okderators-logging-build/ | kubeconform -strict …`
+→ 5 valid (the ConfigMap now holds `build.sh`, `catalog-edit.sh`, `catalog-walk.py`), and the
+`MODE=catalog` Job from `oc process --local` → 1 valid. The bash 4 parts of `build.sh` (`mode_catalog`) cannot run on
+the Mac's bash 3.2; `catalog-edit.sh` is written for 3.2 so the same file ran here.
