@@ -786,4 +786,11 @@ loki_objstore_bucket_operation_failures_total
 
 so the "after" row above comes from those (ruling P25; the plan's metric name no longer exists). This matters beyond dashboards: that client is the change that fixes LOG-9632, so zero failures on it over the soak is the actual evidence for the fix. Any alert or panel built on the old `loki_s3_*` name goes silent rather than red.
 
-Pending: the operator's check of recent logs in the console; the 24 h soak follows.
+Query check (17:11Z): this cluster has no console Logs view (that comes from the Cluster Observability Operator's
+`logging` UIPlugin, which is not installed), so the check went through Grafana's `Loki (infrastructure)` datasource.
+The "error/warn/fatal lines per namespace" panel has data for the whole hour, with no gap across either approval
+(loki-operator 15:52Z, cluster-logging 16:14Z), and the recent-lines panel shows current entries. Queries work end to
+end through the 6.6 gateway and queriers. Two short error-rate bumps (about 16:20–16:27Z and 16:50–16:57Z) get a
+namespace breakdown in the soak check.
+
+The 24 h soak runs from the cluster-logging approval at 16:14:35Z; its checks are due from 2026-10-21 16:15Z.
