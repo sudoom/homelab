@@ -1371,3 +1371,9 @@ does. The counts close against TrueNAS exactly:
 So the six `.xmp` in `upload/` are orphans: Immich wrote them to the upload path while the storage template was
 moving the asset, then recorded the sidecar at the asset's new path. The two `_tmp` files are exiftool's temporary
 files from the same race and were never recorded at all. None of the eight is referenced.
+
+The operator chose to delete them. `truenas_admin` cannot: the files belong to UID 1000980000 (the pod's UID, mode
+644 in 755 directories) and `sudo` on the box wants a password. So the delete ran inside the pod, as the files' owner
+(`oc -n immich exec deploy/immich-server -- sh -c 'cd /data/upload/<family-uid> && rm -v …'`, eight `removed` lines).
+Afterwards `upload/` holds 0 files and `index after-orphans-20261020` reads 36,567: exactly those eight gone,
+nothing new, nothing changed.
