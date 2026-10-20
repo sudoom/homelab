@@ -794,3 +794,13 @@ end through the 6.6 gateway and queriers. Two short error-rate bumps (about 16:2
 namespace breakdown in the soak check.
 
 The 24 h soak runs from the cluster-logging approval at 16:14:35Z; its checks are due from 2026-10-21 16:15Z.
+
+## 2026-10-20 — CI disk: freeing runner space
+
+The upstream `cluster-logging-deploy.yaml` runs on `ubuntu-latest`, which has about 14 GB free. The in-cluster build's disk figures put the peak at 37.0 GB, by step: +3.1 GB for init, +29.5 GB for `build_containers`, +3.4 GB for bundles. It would not fit as it stands.
+
+Options were another measuring run or freeing disk in the workflow. The operator chose to free disk in the workflow.
+
+Change (fork branch `cluster-logging-6.6`, commit 1466fa3): an opt-in boolean input `free_disk_space` on the shared `operator-deploy.yaml`, default false, so no other operator's workflow changes; only `cluster-logging-deploy.yaml` passes true. When true, a step runs `df -h /`, removes `/usr/share/dotnet`, `/usr/local/lib/android`, `/opt/ghc`, `/usr/local/.ghcup` and `/opt/hostedtoolcache/CodeQL`, prunes docker images, and runs `df -h /` again, so the log shows before and after.
+
+The amount freed is unmeasured until the first real CI run; that run's two `df` lines are the check.
