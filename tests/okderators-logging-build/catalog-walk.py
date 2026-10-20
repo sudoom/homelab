@@ -13,9 +13,14 @@ and olm.bundle documents, concatenated). Standard library only; run it with `pyt
       Start from every channel entry and from every --installed CSV (a CSV a cluster may run
       that can be absent from this channel; its version is read from its name,
       <name>.v<version>) and follow OLM v0 upgrade edges forward: X -> Y when Y `replaces`
-      X, Y `skips` X, or X's version is inside Y's `skipRange`. Y == X is never an edge: an
-      entry whose own version is inside its own skipRange (6.6.0-<DATE> is a prerelease
-      below 6.6.0) does not upgrade to itself.
+      X, Y `skips` X, or X's version is inside Y's `skipRange`. Y == X is never an edge, so
+      an entry whose own version is inside its own skipRange (6.6.0-<DATE> is a prerelease
+      below 6.6.0) is not taken to upgrade to itself. `opm validate` cannot show that: it
+      parses a skipRange but never evaluates it. OLM in use does (checked 2026-10-20): the
+      okderators catalog-index:4.21 this cluster serves already has
+      ingress-node-firewall.v4.21.0-2026-05-19-130000 with entry skipRange '>=4.11.0 <4.21.0',
+      and here oadp-operator.v1.5.0-2026-01-05-165341 (CSV olm.skipRange '>=1.4.0 <1.5.3') and
+      cluster-logging.v6.5.0-2026-06-04-101319 ('>=6.3.0-0 <6.5.0') sit at AtLatestKnown.
       PASS when HEAD is the channel's only head, HEAD has the highest version in the
       channel, and from every start the only dead end (an entry with no outgoing edge) that
       can be reached is HEAD. Then OLM ends at HEAD whichever edge it takes at each step.
@@ -255,7 +260,7 @@ def cmd_walk(render, package, channel, head, installed):
         m = NAME_VERSION.search(csv)
         if not m:
             raise BadInput("cannot read a version from installed CSV name %r" % csv)
-        starts.append((csv, parse_version(m.group(1)), " (installed, absent from the channel)"))
+        starts.append((csv, parse_version(m.group(1)), " (absent from the channel)"))
         absent += 1
 
     stranded = []
@@ -273,7 +278,7 @@ def cmd_walk(render, package, channel, head, installed):
         print("FAIL " + " | ".join(failures))
         return 1
     print("PASS %d entries%s reach %s" % (
-        len(ch.names), " + %d installed CSV absent from the channel" % absent if absent else "", head))
+        len(ch.names), " + %d CSV%s absent from the channel" % (absent, "" if absent == 1 else "s") if absent else "", head))
     return 0
 
 

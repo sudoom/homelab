@@ -177,7 +177,12 @@ oc -n okd-build logs job/build-catalog-$DATE | grep -E '^(STEP|PUSHED|CHECK|RESU
 v1.74.0 refuses a reference with both a tag and a digest (`Docker references with both a tag and
 digest are currently not supported`), so the catalog references each bundle by digest only.
 
-For each branch, in a depth-1 clone of `okd-project/okderators-catalog-index`:
+First, once: each bundle is rendered and must be a `cluster-logging` or `loki-operator` bundle
+(one of each) with a `6.6.*` version (`BUNDLE_MINOR` in the script, which also sets the
+skipRange's upper bound). Anything else, say a 6.5 bundle pasted by mistake, stops the run before
+any clone, edit or push.
+
+Then for each branch, in a depth-1 clone of `okd-project/okderators-catalog-index`:
 
 1. Each package (`cluster-logging`, `loki-operator`) must have exactly one head in channel `alpha`,
    computed as operator-registry does: the entry no other entry names in `replaces` or `skips`.
@@ -193,11 +198,13 @@ For each branch, in a depth-1 clone of `okd-project/okderators-catalog-index`:
 
 | check | passes when |
 |---|---|
+| `bundle-version-<pkg>` | once, before any branch: the bundle for `<pkg>` exists, is the only one, and has a `6.6.*` version |
 | `bundles-<branch>` | adding the bundles created exactly one new file per package and changed no tracked file (a tree that already has them fails here) |
 | `edit-<branch>-<pkg>` | one head before the edit, the 6.6 CSV not in the channel yet, and the package file changed by exactly the three appended lines (plus a final newline where it had none) |
 | `opm-validate-<branch>` | `opm validate catalog` passes on the edited tree |
-| `walk-<branch>-<pkg>` | `catalog-walk.py`: from every channel entry, and from `<pkg>.v6.5.0-2026-06-04-101319` (what the homelab runs; absent from the 4.21/4.22 catalogs), every OLM v0 upgrade edge (`replaces`, `skips`, version inside `skipRange`) ends at the single head with no other dead end on the way, and the head has the highest version. The head's own version `6.6.0-<DATE>` lies inside its own `skipRange` (a prerelease sorts below `6.6.0`); that is not an edge, and `opm validate` passing shows the catalog accepts it |
+| `walk-<branch>-<pkg>` | `catalog-walk.py`: from every channel entry, from `<pkg>.v6.5.0-2026-06-04-101319` (what the homelab runs; absent from the 4.21/4.22 catalogs) and from `<pkg>.v6.2.0-2025-05-25-184240` (a past entry, today named only in the 6.2.0-2025-05-26 entry's `skips`), every OLM v0 upgrade edge (`replaces`, `skips`, version inside `skipRange`) ends at the single head with no other dead end on the way, and the head has the highest version. The head's own version `6.6.0-<DATE>` lies inside its own `skipRange` (a prerelease sorts below `6.6.0`); the walker does not count that as an edge. `opm validate` cannot confirm it (it parses a skipRange but never evaluates it); OLM in use does: catalog-index:4.21, served on this cluster, already has `ingress-node-firewall.v4.21.0-2026-05-19-130000` with entry skipRange `>=4.11.0 <4.21.0`, and here `oadp-operator.v1.5.0-2026-01-05-165341` (CSV `olm.skipRange` `>=1.4.0 <1.5.3`) and `cluster-logging.v6.5.0-2026-06-04-101319` (`>=6.3.0-0 <6.5.0`) sit at `AtLatestKnown` |
 | `negative-control-<branch>` | a copy of the edited tree with the new entries' `replaces` removed fails `opm validate` with `multiple channel heads found in graph: <old head>, <6.6 CSV>` for both packages (`skipRange` does not count as an edge there) |
+| `negative-control-skiprange-<branch>` | only where the homelab's 6.5.0 CSVs are absent from the channel (4.21, 4.22): a copy of the edited tree with the new entries' `skipRange` removed still passes `opm validate`, and the walker strands both 6.5.0 CSVs. This is the failure `opm validate` cannot see and the walker exists for |
 | `opm-validate-image` | the image context passes `opm validate`: the edited `release-4.21` tree, `cluster-logging` and `loki-operator` only |
 | `catalog-image` | the image, built from `release-4.21`'s own `catalog.Containerfile` with its `FROM quay.io/operator-framework/opm:latest` pinned to `quay.io/operator-framework/opm@sha256:b32d3891616662620da08d7f0ec42c2e69fa2de43427dc975d35b12f7a969a0f` (the v1.74.0 index, which `:latest` pointed at on 2026-10-20), is pushed, rendered back from zot with `opm render`, and has exactly the two packages, the 6.6 heads and passing walks. It is not built when an earlier check failed |
 

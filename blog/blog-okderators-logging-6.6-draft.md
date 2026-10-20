@@ -275,8 +275,9 @@ cluster on 5.9.0, 6.2.0 or 6.3.0 gets to the head, and nothing at all about a CS
 `<pkg>.v6.5.0-2026-06-04-101319`: X → Y when Y `replaces` X, Y `skips` X, or X's version is inside Y's
 `skipRange` (semver as blang/semver orders it, the library OLM uses). PASS needs the only reachable dead end to be
 the head, so whichever edge OLM picks at each step it ends there. The head's own version, `6.6.0-<DATE>`, is a
-prerelease below `6.6.0` and so inside its own skipRange; that is not an edge, and `opm validate` passing is the
-evidence that the catalog accepts it. On the edited 4.21 tree:
+prerelease below `6.6.0` and so inside its own skipRange; the walker does not count that as an edge.
+`opm validate` is no evidence either way: it parses a skipRange but never evaluates it (corrected after review;
+the evidence is in the next section). On the edited 4.21 tree:
 
 ```
 INFO walk clusterlogging.v5.9.0-2024-05-05-192913 -(replaces)-> cluster-logging.v6.2.0-2025-05-26-200125 -(skipRange)-> cluster-logging.v6.6.0-2026-10-20-000000
@@ -366,3 +367,66 @@ Offline checks: `bash -n` on both scripts, `oc kustomize tests/okderators-loggin
 → 5 valid (the ConfigMap now holds `build.sh`, `catalog-edit.sh`, `catalog-walk.py`), and the
 `MODE=catalog` Job from `oc process --local` → 1 valid. The bash 4 parts of `build.sh` (`mode_catalog`) cannot run on
 the Mac's bash 3.2; `catalog-edit.sh` is written for 3.2 so the same file ran here.
+
+## 2026-10-20 — catalog graphs: review fixes
+
+The review approved the catalog step and asked for four changes before the Job runs it.
+
+**Old entries as start points.** `cluster-logging.v6.2.0-2025-05-25-184240` and
+`loki-operator.v6.2.0-2025-05-25-184240` were channel entries once and survive only in the `skips` of the
+6.2.0-2025-05-26 entries. A cluster could still run them, so the walker now starts from them too, next to the
+homelab's 6.5.0 pair. They reach the head directly through the new skipRange (and through `skips`):
+
+```
+INFO walk cluster-logging.v6.2.0-2025-05-25-184240 -(skipRange)-> cluster-logging.v6.6.0-2026-10-20-000000 (absent from the channel)
+CHECK walk-release-4.21-cluster-logging PASS 4 entries + 2 CSVs absent from the channel reach cluster-logging.v6.6.0-2026-10-20-000000
+```
+
+**Bundle versions up front.** Before any clone, each bundle is rendered and must be the only `cluster-logging` or
+`loki-operator` bundle with a `6.6.*` version (one variable, `BUNDLE_MINOR=6.6`, which also gives the skipRange
+its `<6.6.0`). Passing the real 6.5.0 bundles from quay as `BUNDLES`:
+
+```
+CHECK bundle-version-loki-operator FAIL loki-operator.v6.5.0-2026-06-04-101319 has version 6.5.0-2026-06-04-101319, want 6.6.*
+CHECK bundle-version-cluster-logging FAIL cluster-logging.v6.5.0-2026-06-04-101319 has version 6.5.0-2026-06-04-101319, want 6.6.*
+INFO catalog-edit: stopped before any edit, 2 checks failed
+```
+
+Two bundles for one package stop the run the same way (`two bundles for cluster-logging: …`).
+
+**The self-in-skipRange case.** I had written that `opm validate` passing shows the catalog accepts an entry whose
+own version is inside its own skipRange. It does not: `opm validate` parses a skipRange (an unparseable one fails,
+`invalid skipRange "this is not a range": Could not get version from string: "this"`) but never evaluates which
+versions it covers. Better evidence is OLM in use, checked today:
+
+```
+$ KUBECONFIG=~/.kube/config-readonly oc get subscription -A -o jsonpath='…' | grep oadp
+openshift-adp oadp-operator AtLatestKnown oadp-operator.v1.5.0-2026-01-05-165341 okderators
+$ KUBECONFIG=~/.kube/config-readonly oc -n openshift-adp get csv oadp-operator.v1.5.0-2026-01-05-165341 \
+    -o jsonpath='{.spec.version} {.metadata.annotations.olm\.skipRange}'
+1.5.0-2026-01-05-165341 >=1.4.0 <1.5.3
+```
+
+`cluster-logging.v6.5.0-2026-06-04-101319` is the same shape (CSV `olm.skipRange` `>=6.3.0-0 <6.5.0`) and also sits
+at `AtLatestKnown`. Both are CSV annotations: in okderators' FBC the channel entries of those two bundles carry no
+`skipRange`. A channel-entry skipRange covering its own entry, which is what this edit adds, is already in the
+catalog this cluster serves: scanning every entry of `release-4.21` with the walker's semver code finds exactly one,
+`ingress-node-firewall.v4.21.0-2026-05-19-130000` with `skipRange: '>=4.11.0 <4.21.0'`, and the packagemanifest
+from `okderators` lists it as `alpha`'s current CSV. Nothing here subscribes to it, so the first live Subscription
+on such an entry is the homelab's own move to 6.6.
+
+**A second control in the run.** The case the walker exists for, the new entry without its skipRange, was only
+shown on the Mac. Now every branch where the homelab's 6.5.0 CSVs are absent (4.21 and 4.22) gets
+`negative-control-skiprange`: a copy of the edited tree with the new entries' `skipRange` removed must still pass
+`opm validate` while the walker strands both 6.5.0 CSVs. On 4.20 they are channel entries and the control is skipped
+with an `INFO` line.
+
+```
+CHECK negative-control-skiprange-release-4.21 PASS without the new skipRange opm validate passes and the walker strands cluster-logging.v6.5.0-2026-06-04-101319 loki-operator.v6.5.0-2026-06-04-101319
+CHECK negative-control-skiprange-release-4.22 PASS without the new skipRange opm validate passes and the walker strands cluster-logging.v6.5.0-2026-06-04-101319 loki-operator.v6.5.0-2026-06-04-101319
+```
+
+Local test mode afterwards: 26 CHECK lines, all PASS, exit 0 (two `bundle-version`, seven per branch, two
+skipRange controls, `opm-validate-image`). The earlier REDs still fail as before (a tree that already has the
+bundles, a channel with two heads, a reused `RUN_DIR`). `kubeconform` on `oc kustomize` and on the `MODE=catalog`
+Job: 5 and 1 valid.

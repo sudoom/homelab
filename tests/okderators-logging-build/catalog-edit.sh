@@ -2,17 +2,22 @@
 # MODE=catalog of the okderators-logging-build Job (README.md, "MODE=catalog"). build.sh runs it
 # as /scripts/catalog-edit.sh in an empty RUN_DIR and copies its CHECK lines into the contract.
 #
-# For each okderators-catalog-index branch in CATALOG_BRANCHES:
+# First, once: each bundle in BUNDLES must belong to one of PACKAGES and have a
+# BUNDLE_MINOR.* version, or the run stops before any edit   CHECK bundle-version-<pkg>
+# Then for each okderators-catalog-index branch in CATALOG_BRANCHES:
 #   1. clone it; each package in PACKAGES must have exactly one head in channel CHANNEL
 #   2. add the two bundles in BUNDLES with the branch's own hack/add-bundle.sh
 #                                                              CHECK bundles-<branch>
 #   3. append one entry per package to the channel: name <bundle CSV>, replaces <that head>,
 #      skipRange SKIP_RANGE                                    CHECK edit-<branch>-<pkg>
 #   4. opm validate catalog                                    CHECK opm-validate-<branch>
-#   5. graph walk (catalog-walk.py) from every entry and from the installed CSVs in INSTALLED
+#   5. graph walk (catalog-walk.py) from every entry and from the CSVs in INSTALLED
 #                                                              CHECK walk-<branch>-<pkg>
 #   6. negative control: a copy with the new entries' replaces removed must fail opm validate
 #      with "multiple channel heads"                           CHECK negative-control-<branch>
+#   7. second control, where the homelab's CSVs (HOMELAB_CSVS) are absent from the channel: a
+#      copy with the new entries' skipRange removed must still pass opm validate while the
+#      walker strands those CSVs                      CHECK negative-control-skiprange-<branch>
 # Then, only if every check passed: the test catalog image from the edited IMAGE_BRANCH tree,
 # PACKAGES only, built from that branch's own catalog.Containerfile with the opm base image
 # pinned, pushed to CATALOG_IMAGE, rendered back and walked    CHECK catalog-image
@@ -42,10 +47,16 @@ TEST_BUNDLES=${CATALOG_EDIT_TEST_BUNDLES:-}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PACKAGES=(cluster-logging loki-operator)
 CHANNEL=alpha
-SKIP_RANGE='>=6.2.0-0 <6.6.0'
-# CSVs the homelab runs (installed from the 4.20 catalog), absent from the 4.21/4.22 catalogs:
-# each must reach the new head through skipRange.
-INSTALLED=(cluster-logging.v6.5.0-2026-06-04-101319 loki-operator.v6.5.0-2026-06-04-101319)
+# The release the bundles must be, and the skipRange of the new entries (brief: '>=6.2.0-0 <6.6.0').
+BUNDLE_MINOR=6.6
+SKIP_RANGE=">=6.2.0-0 <${BUNDLE_MINOR}.0"
+# CSVs a cluster may run that a channel does not list; the walker starts from them too.
+# HOMELAB_CSVS: what the homelab runs (installed from the 4.20 catalog), absent from the
+# 4.21/4.22 catalogs, so only the new entry's skipRange reaches them.
+# OLD_CSVS: entries of the catalogs' past, today named only in the 6.2.0-2025-05-26 entries' skips.
+HOMELAB_CSVS=(cluster-logging.v6.5.0-2026-06-04-101319 loki-operator.v6.5.0-2026-06-04-101319)
+OLD_CSVS=(cluster-logging.v6.2.0-2025-05-25-184240 loki-operator.v6.2.0-2025-05-25-184240)
+INSTALLED=("${HOMELAB_CSVS[@]}" "${OLD_CSVS[@]}")
 IMAGE_BRANCH=release-4.21
 # catalog.Containerfile builds FROM the mutable :latest; the test image pins it. v1.74.0 is the
 # opm build.sh installs, and :latest pointed at this same index on 2026-10-20. Digest only:
@@ -59,6 +70,7 @@ FAILS=0
 IMAGE_HEADS=()     # the new CSV names on IMAGE_BRANCH, per PACKAGES index
 OLD_HEAD=()        # per PACKAGES index, for the branch being edited
 NEW_CSV=()
+WANT_CSV=()        # per PACKAGES index: the bundle names bundle_versions read
 
 check() {  # check <name> PASS|FAIL <detail...>
   local name=$1 result=$2
@@ -127,6 +139,56 @@ validate_inputs() {
     [[ $CATALOG_IMAGE =~ $PUSH_RE ]] || die "CATALOG_IMAGE '${CATALOG_IMAGE}' is not a zot okd-test/ tag"
   fi
   echo "INFO tool python3 $(python3 --version 2>&1)"
+}
+
+# Once, before any clone or edit: what the bundles are. A wrong paste (a 6.5 bundle, two of
+# one package) stops here instead of producing and pushing a catalog.
+bundle_versions() {
+  local dir=${RUN_DIR}/bundles n=0 ref f name pkg version i failed=0
+  mkdir -p "$dir"
+  if [[ -n $TEST_BUNDLES ]]; then
+    for f in "$TEST_BUNDLES"/*.yaml; do
+      [[ -f $f ]] || continue
+      n=$((n + 1))
+      cp "$f" "${dir}/${n}.yaml"
+    done
+  else
+    for ref in $BUNDLES; do
+      n=$((n + 1))
+      if ! opm render "$(digest_ref "$ref")" -o yaml >"${dir}/${n}.yaml"; then
+        check "bundle-version-${n}" FAIL "opm render $(digest_ref "$ref") failed"
+        return 1
+      fi
+    done
+  fi
+  WANT_CSV=()
+  for f in "$dir"/*.yaml; do
+    [[ -f $f ]] || continue
+    name=$(bundle_field "$f" .name)
+    pkg=$(bundle_field "$f" .package)
+    version=$(bundle_field "$f" '.properties[] | select(.type == "olm.package") | .value.version')
+    i=$(pkg_index "$pkg")
+    if [[ -z $i ]]; then
+      check "bundle-version-${pkg}" FAIL "${name}: package ${pkg} is not one of ${PACKAGES[*]}"
+      failed=1
+    elif [[ -n ${WANT_CSV[$i]:-} ]]; then
+      check "bundle-version-${pkg}" FAIL "two bundles for ${pkg}: ${WANT_CSV[$i]} and ${name}"
+      failed=1
+    elif [[ $version != "${BUNDLE_MINOR}."* ]]; then
+      check "bundle-version-${pkg}" FAIL "${name} has version ${version}, want ${BUNDLE_MINOR}.*"
+      failed=1
+    else
+      WANT_CSV[$i]=$name
+      check "bundle-version-${pkg}" PASS "${name} ${version}"
+    fi
+  done
+  for i in "${!PACKAGES[@]}"; do
+    if [[ $failed == 0 && -z ${WANT_CSV[$i]:-} ]]; then
+      check "bundle-version-${PACKAGES[$i]}" FAIL "no bundle for ${PACKAGES[$i]}"
+      failed=1
+    fi
+  done
+  return "$failed"
 }
 
 # ---------------------------------------------------------------------------------------
@@ -219,6 +281,10 @@ new_bundles() {  # new_bundles <branch> <tree>: fill NEW_CSV from the files add_
     fi
     if [[ -n ${NEW_CSV[$i]:-} ]]; then
       check "bundles-${b}" FAIL "two bundles for package ${pkg}: ${NEW_CSV[$i]} and ${name}"
+      return 1
+    fi
+    if [[ $name != "${WANT_CSV[$i]}" ]]; then
+      check "bundles-${b}" FAIL "added ${name}, but the bundle checked up front is ${WANT_CSV[$i]}"
       return 1
     fi
     NEW_CSV[$i]=$name
@@ -326,6 +392,59 @@ negative_control() {  # negative_control <branch> <tree>
   fi
 }
 
+in_channel() {  # in_channel <render json> <CSV>: is the CSV a channel entry
+  jq -e --arg c "$CHANNEL" --arg n "$2" \
+    'select(.schema == "olm.channel" and .name == $c) | .entries[] | select(.name == $n)' "$1" >/dev/null
+}
+
+# The case the walker exists for: without the new skipRange, opm validate still passes, but a
+# cluster on the homelab's CSV (absent from this channel) has no edge to the head.
+negative_control_skiprange() {  # negative_control_skiprange <branch> <tree>
+  local b=$1 tree=$2 neg=${RUN_DIR}/${1}-negative-skiprange i pkg csv render out rc want=() stranded=() wrong=()
+  for i in "${!PACKAGES[@]}"; do
+    for csv in "${HOMELAB_CSVS[@]}"; do
+      if [[ $csv == "${PACKAGES[$i]}.v"* ]] && ! in_channel "${RUN_DIR}/render-${b}-${PACKAGES[$i]}-before.json" "$csv"; then
+        want+=("$i:$csv")
+      fi
+    done
+  done
+  if [[ ${#want[@]} == 0 ]]; then
+    echo "INFO negative-control-skiprange-${b} not run: the homelab's CSVs are channel entries here"
+    return 0
+  fi
+  mkdir -p "$neg"
+  cp -R "${tree}/catalog" "${neg}/catalog"
+  for i in "${!PACKAGES[@]}"; do
+    pkg=${PACKAGES[$i]}
+    NEW=${NEW_CSV[$i]} CH=$CHANNEL yq -i \
+      '(select(.schema == "olm.channel" and .name == strenv(CH)) | .entries[] | select(.name == strenv(NEW))) |= del(.skipRange)' \
+      "${neg}/catalog/${pkg}/${pkg}.yaml"
+  done
+  if ! out=$(opm validate "${neg}/catalog" 2>&1); then
+    check "negative-control-skiprange-${b}" FAIL "opm validate failed without the skipRange: $(echo "$out" | tail -n 2 | one_line)"
+    return 0
+  fi
+  for csv in "${want[@]}"; do
+    i=${csv%%:*}
+    csv=${csv#*:}
+    pkg=${PACKAGES[$i]}
+    render=${neg}/render-${pkg}.json
+    opm render "${neg}/catalog/${pkg}" -o json >"$render"
+    rc=0
+    out=$(walk_out "$render" "$i" "${NEW_CSV[$i]}") || rc=$?
+    if [[ $rc != 0 ]] && echo "$out" | grep -qF "INFO stranded ${csv} "; then
+      stranded+=("$csv")
+    else
+      wrong+=("${pkg}: $(echo "$out" | tail -n 1)")
+    fi
+  done
+  if [[ ${#wrong[@]} == 0 ]]; then
+    check "negative-control-skiprange-${b}" PASS "without the new skipRange opm validate passes and the walker strands ${stranded[*]}"
+  else
+    check "negative-control-skiprange-${b}" FAIL "walker did not strand the homelab CSV: ${wrong[*]}"
+  fi
+}
+
 do_branch() {  # do_branch <branch>
   local b=$1 tree=${RUN_DIR}/${1} i pkg render
   [[ ! -e $tree ]] || die "${tree} exists: catalog-edit.sh runs once per RUN_DIR"
@@ -354,6 +473,7 @@ do_branch() {  # do_branch <branch>
   done
 
   negative_control "$b" "$tree"
+  negative_control_skiprange "$b" "$tree"
 
   # The edit, for the log and for the catalog PRs later.
   git -C "$tree" add -A
@@ -448,6 +568,10 @@ do_image() {
 main() {
   local b
   validate_inputs
+  if ! bundle_versions; then
+    echo "INFO catalog-edit: stopped before any edit, ${FAILS} checks failed"
+    exit 1
+  fi
   for b in $CATALOG_BRANCHES; do
     do_branch "$b"
   done
