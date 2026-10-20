@@ -673,3 +673,117 @@ The PodDisruptionBudget "logging-loki-ingester" is invalid: spec: Invalid value:
 That fires `UserNamespaceJobFailed` (emailed). Retired the component: entry removed from `bootstrap/root-app/values.yaml`, chart deleted, so ArgoCD prunes the Application and its resources-finalizer removes the CronJob, RBAC and the failed Jobs. The README TODO "expose PDB tunables on LokiStack" went with it: its only motivation was the 0 disruption budget. The `network-change` skill text (pre-flight step 1 scaling the operator to 0, step 6 restoring it) is now stale; a proposed patch is kept locally since `.claude/skills/` is user-applied.
 
 Separately, 6.6 sets a new LokiStack condition `Warning=True`, reason `InsufficientIngesterReplicas`, message "The ingester replicas (2) are less than or equal to the replication factor (2). Which causes log ingestion to stop when ingester pods get restarted." The `1x.pico` shape is unchanged from 6.5 (2 ingesters, replication factor 2); 6.6 only reports it. Options: replication factor 1, or 3 ingesters. No change made.
+
+## 2026-10-20 — release-branch checks
+
+The 6.6 change has to reach the pipeline's per-release branches (`release-4.22`, `-4.21`, `-4.20`), not only `main` (see the 2026-09-09 note on which branch builds which catalog). Each got a fork branch cut from the upstream release branch, carrying the `cluster-logging/` tree and the `.gitmodules` stanzas from `cluster-logging-6.6` @ `628179e`. Per ruling P5 I did not pre-apply any `common.sh` backport: run `MODE=check` first and cherry-pick only if the check fails on `common.sh`.
+
+| fork branch | head |
+|---|---|
+| `cluster-logging-6.6` | `628179e` |
+| `cluster-logging-6.6-4.22` | `15ba530` |
+| `cluster-logging-6.6-4.21` | `e7222e4` |
+| `cluster-logging-6.6-4.20` | `50b2959` |
+
+### The runs
+
+Same Job template as the full build, one run per branch, sequentially (P23: all three share the Job name `build-check-2026-10-20-134619` and the PVC log files, appended in run order; the operator deleted each Job after its result was recorded):
+
+```
+oc process -f tests/okderators-logging-build/job-template.yaml \
+  -p MODE=check -p DATE=2026-10-20-134619 -p PIPELINE_BRANCH=cluster-logging-6.6-4.22 | oc create -f -
+# then ...-4.21, then ...-4.20
+```
+
+| branch | RESULT | init | build_bundle | CHECKs |
+|---|---|---|---|---|
+| 4.22 | PASS 15:50:58Z | 248 s | 42 s | 11 PASS (incl. branding at the 3/1 baseline) |
+| 4.21 | PASS 16:04:19Z | 265 s | 39 s | 11 PASS |
+| 4.20 | PASS 16:14:01Z | 255 s | 39 s | 11 PASS |
+
+4.22 also reports copy 17 s and verify 3 s; the other two ledger lines carry only init and build_bundle.
+
+### No `common.sh` backport needed
+
+Comparing each release branch's `common.sh` with `main` found two `main` fixes it lacks:
+
+| commit | what | on branch | why not reached |
+|---|---|---|---|
+| `8486ac2` | `foreach` change | 4.21, 4.20 | defect 1 needs nested submodules; neither operator has any |
+| `41b80e6` | `submodule_reset` fix | 4.20 | defect 2 is not reached from a committed checkout (gitlinks are already recorded) |
+
+I predicted this after review (before the runs) and the three checks confirmed it: none failed on `common.sh`, so P5's cherry-pick step never fired on any branch. The Job's `sh` is bash, which also avoids the bash-only pitfalls.
+
+### What stays in zot
+
+The checks push the two bundles per branch to `okd-test/check-*` (4.22: `operator-bundle@sha256:c9f2fdb8cd1d…`, `loki-operator-bundle@sha256:92061731e50d…`). Ruling P24: they are skopeo copies of the run-2 blobs, zot dedupes them, so they cost about nothing beyond six small bundle manifests. They stay until the final cleanup, which deletes all `okd-test/` images together.
+
+## 2026-10-20 — the live upgrade
+
+Two commits, one per half of the change, so each reverts alone. The loki half's consequences (PDBs, the retired `loki-pdb-override`) are in "loki-operator 6.6 live" above and not repeated here.
+
+### Commit A: the test catalog (`b0dd862`)
+
+Adds a chart and root-app entry for CatalogSource `okd-test-logging`, image `zot.apps.okd.sudops.pl/okd-test/logging-catalog:2026-10-20-153109`. No Subscription touched. Readonly diff was impossible (the `claude-reader` SA's `oc diff` answered NotFound), so the check was the zot manifest (200) and the result:
+
+```
+CatalogSource okd-test-logging READY 15:43:57Z on node4 (image pulled from zot in 3.0 s)
+packagemanifest cluster-logging  alpha = v6.6.0-2026-10-20-134619
+packagemanifest loki-operator    alpha = v6.6.0-2026-10-20-134619
+```
+
+An early TRANSIENT_FAILURE in my wait loop was pod startup, not a fault.
+
+### Commit B: Subscriptions to the test catalog (`29511d3`)
+
+Both Subscriptions (`cluster-logging`, `loki-operator`) change `source: okderators` -> `okd-test-logging`; `installPlanApproval: Manual` stays. Pushed, then at 15:50:37Z OLM created one pending InstallPlan per Subscription, both `UpgradePending`:
+
+| namespace | InstallPlan | CSV |
+|---|---|---|
+| `openshift-operators-redhat` | `install-g8hvd` | `loki-operator.v6.6.0-2026-10-20-134619` |
+| `openshift-logging` | `install-q6tmb` | `cluster-logging.v6.6.0-2026-10-20-134619` |
+
+The installed CSV is `v6.5.0-2026-06-04-101319`, which the test catalog does not contain. OLM still resolved the upgrade, so the `skipRange` edge from the catalog-graph edit works live, not just in the offline walker.
+
+### Approvals, in order
+
+loki-operator first (the CLF side depends on it), then cluster-logging once LokiStack was healthy:
+
+```
+oc -n openshift-operators-redhat patch installplan install-g8hvd --type merge -p '{"spec":{"approved":true}}'   # 15:51:50Z
+oc -n openshift-logging patch installplan install-q6tmb --type merge -p '{"spec":{"approved":true}}'            # 16:14:35Z
+```
+
+Run by the operator (my kubeconfig is readonly). Current state, readonly: both InstallPlans `approved=true`, `Complete`; both Subscriptions `okd-test-logging`, `AtLatestKnown`, installed CSV the 6.6.0 names; both CSVs `Succeeded`; LokiStack `Ready=True`, `Warning=True`, `Pending=False`, `Failed=False`; CLF `Authorized`/`Valid`/`Ready` all True; collector DaemonSet image `zot.apps.okd.sudops.pl/okd-test/cluster-logging/vector@sha256:3a8b699a7c29…` (3/3 updated and ready).
+
+### Before / after
+
+"Before" is the baseline taken 15:36Z to 15:38Z, "after" is 16:28Z to 16:30Z.
+
+| | before (6.5.0) | after (6.6.0) |
+|---|---|---|
+| CSVs | `cluster-logging` / `loki-operator` `v6.5.0-2026-06-04-101319` Succeeded | both `v6.6.0-2026-10-20-134619` Succeeded |
+| LokiStack | `Ready=True` | `Ready=True`, plus new `Warning=True` `InsufficientIngesterReplicas` (pico shape unchanged, 6.6 only reports it) |
+| CLF conditions | Authorized, Valid, Ready all True | same |
+| collector image | not recorded in the baseline | zot `okd-test/cluster-logging/vector@sha256:3a8b699a7c29…` |
+| PDBs | ingester `minAvailable: 1`, forced by the override CronJob | all six `maxUnavailable: 1`, `allowed=1` |
+| scrape targets | 20 up across 10 jobs, 0 down | 20 up, 0 down (6.6 metrics auth works) |
+| ingestion | not recorded in the baseline | distributor ~120 lines/s |
+| chunks flushed | 373 per 1 h | 201 per 30 min |
+| object-store uploads | 384 `PutObject` per 1 h, all 200 | 207 per 30 min, 0 failures |
+| last successful upload | not recorded | 27 s ago |
+
+The baseline windows are 1 h and the after windows 30 min, so compare rates, not counts: 373/h is about 187 per 30 min (after: 201), and 384/h is about 192 (after: 207). No step change.
+
+### The metric name changed
+
+6.6 swaps the AWS-SDK S3 client for the thanos objstore client. `loki_s3_request_duration_seconds_count` (the series in the baseline) is gone; its replacements are:
+
+```
+loki_objstore_bucket_operations_total
+loki_objstore_bucket_operation_failures_total
+```
+
+so the "after" row above comes from those (ruling P25; the plan's metric name no longer exists). This matters beyond dashboards: that client is the change that fixes LOG-9632, so zero failures on it over the soak is the actual evidence for the fix. Any alert or panel built on the old `loki_s3_*` name goes silent rather than red.
+
+Pending: the operator's check of recent logs in the console; the 24 h soak follows.
