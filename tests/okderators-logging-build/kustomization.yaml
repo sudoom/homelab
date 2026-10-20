@@ -1,0 +1,16 @@
+# oc apply -k tests/okderators-logging-build/   (README.md)
+# The ConfigMap is generated from the script files in this directory, so they exist once.
+# The per-run Job is not here: it comes from job-template.yaml via `oc process`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - manifests.yaml
+configMapGenerator:
+  - name: build-scripts
+    namespace: okd-build
+    files:
+      - build.sh
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/part-of: okderators-logging-build

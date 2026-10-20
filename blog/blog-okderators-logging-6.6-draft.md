@@ -102,3 +102,117 @@ work proceeds.
 I read `io.openshift.build.commit.id` from the Red Hat container catalog GraphQL API (`find_operator_bundles` for the 6.6.1 `cluster-logging` and `loki-operator` bundles on 4.21, then `get_image` labels per related image, with python urllib because curl is denied here). Every sha was proven with `gh api repos/<repo>/commits/<sha>` and `compare/<branch>...<sha>` (`behind` or `identical`).
 
 Three things differ from the obvious reading. The Loki operand commit is identical to `openshift/loki` `upstream-v3.7.3`. The gateway and OPA commits are on the ViaQ forks, not on the upstream `observatorium/*` main (diverged). Eventrouter is not in the 6.6.1 bundles, but Red Hat built an `eventrouter-rhel9` image with `version=6.6.1`, so that commit is pinned. The Red Hat Dockerfiles for each image were saved for comparison with the pipeline's Containerfiles.
+
+## 2026-10-20 — the in-cluster build Job
+
+The images have to be built on the cluster (amd64), not on the Mac (arm64), so I wrote a one-off Job that runs the
+pipeline's own `cluster-logging/build.sh` inside a privileged podman pod and pushes to zot under `okd-test/`. It lives
+in `tests/okderators-logging-build/` and is not ArgoCD-managed; the operator applies and deletes it. Nothing has run
+yet, so everything below is the design and the offline checks.
+
+Shape:
+
+- `manifests.yaml`: Namespace `okd-build` (PSA `privileged` on enforce/audit/warn,
+  `security.openshift.io/scc.podSecurityLabelSync: "false"`), ServiceAccount `builder` with
+  `automountServiceAccountToken: false` (the build needs no API), RoleBinding to `system:openshift:scc:privileged`,
+  PVC `build-storage` 100Gi `ceph-nvme-block` RWO.
+- `kustomization.yaml`: the above plus ConfigMap `build-scripts`, generated from `build.sh` with
+  `disableNameSuffixHash`, so the script is a plain file and exists once.
+- `job-template.yaml`: an OpenShift Template, one Job per run, `build-${MODE}-${DATE}`, `backoffLimit: 0`,
+  `activeDeadlineSeconds: 43200`, no `ttlSecondsAfterFinished`, requests 2 CPU / 8Gi, limits 14 / 48Gi,
+  `quay.io/podman/stable:v5.8.9@sha256:dc02649067d5…` (tag kept for readability, digest because quay re-pushes the
+  tag). `MODE` and `DATE` are required parameters with no default, so every full run is a
+  deliberate new tag.
+
+```bash
+oc apply -k tests/okderators-logging-build/
+DATE=$(date -u +%Y-%m-%d-%H%M%S)
+oc process --local -f tests/okderators-logging-build/job-template.yaml -p MODE=full -p DATE=$DATE \
+  | oc -n okd-build create -f -
+oc -n okd-build logs job/build-full-$DATE | grep -E '^(STEP|DISK|PUSHED|CHECK|RESULT) '
+oc -n okd-build delete job build-full-$DATE      # after saving the log
+oc delete -k tests/okderators-logging-build/     # when the build work is done
+```
+
+Modes: `full` runs `init`, `build_containers`, `push_containers`, `build_bundle` and `deinit` as separate
+`./build.sh <step>` calls, so each is timed, then a verify step. `check` builds no images: it copies a full run's
+images of the same `DATE` to `okd-test/check-<branch>/` with `skopeo copy --all` (zot dedupes the blobs) and runs
+`init build_bundle deinit` plus verify there, for the other pipeline branches. `catalog` runs a `catalog-edit.sh` that
+comes later and fails cleanly until it exists.
+
+The log contract, for reading results without scrolling through the pipeline's `set -x` trace:
+`STEP <name> START|END <epoch seconds>`, `DISK <bytes>` (du of `/var/lib/containers` + `/work` after each step),
+`PUSHED <ref>@<digest> <bytes>` (sha256 of the manifest bytes zot serves, and config + layer sizes from that manifest),
+`CHECK <name> PASS|FAIL <detail>`, and a final `RESULT PASS|FAIL <reason>`. An `EXIT` trap prints
+`RESULT FAIL <step>` on any error, and a `TERM` trap does the same when the deadline or a delete kills the pod; the
+long steps run in the background with `wait` so bash (PID 1) can take the signal.
+
+The pod log alone loses exactly the runs that matter (review finding): at `activeDeadlineSeconds` the Job controller
+deletes the pod and its log, and the kubelet rotates container logs at 50Mi while the pipeline's `set -x` traces the
+whole release-info JSON on every `./build.sh` call. So every contract line is also appended, before it is printed, to
+`/work/logs/build-<MODE>-<DATE>.contract` on the PVC, and the whole output is copied there by
+`exec > >(tee -a /work/logs/build-<MODE>-<DATE>.log) 2>&1` (a redirection, so exit statuses are unchanged; at exit
+the script closes its end and gives tee up to 5 s to drain). `log-reader.yaml` is a read-only pod for reading them
+afterwards: PVC attached and mounted read-only, `sleep 3600`, privileged like the build pod so CRI-O does not
+relabel and the SCC does not chown the volume.
+
+The same review found that nothing kept two runs off the PVC: RWO only blocks other nodes, and a second pod on the
+same node would have wiped `/work/run` under the first and shared its podman graph root. `build.sh` now takes
+`flock -n` on `/work/.lock` right after opening its log files and before anything touches `/work/run`, the caches or
+the graph root (`flock` is in `util-linux-core`; it is installed first if the image lacks it).
+
+Verify renders each bundle with `opm render <repo>@<digest>`, decodes the CSV from its `olm.bundle.object`, and
+checks `olm.maxOpenShiftVersion` 4.23, that every related image and every `RELATED_IMAGE_*`/`*_IMAGE` env value is a
+zot `okd-test` reference by digest that this run pushed, that the CSV has no `valid-subscription` or `Red Hat` line,
+that the provider is `OKD Community`, and, if the cloned `build.sh` builds passthrough-gateway, that the loki CSV
+carries `RELATED_IMAGE_PASSTHROUGH_GATEWAY`. The image list comes from sourcing the cloned `build.sh` and reading its
+`IMG_*` variables. The jq filters were tried against the published 6.3.0 loki-operator entry in the catalog repo
+(itself `opm render` output): it read `maxOpenShiftVersion` 4.20, provider `OKD Community`, and one
+`valid-subscription|Red Hat` line, so the branding check would have failed 6.3.0. One exception had to go in: the
+loki CSV's kube-rbac-proxy is the OKD payload image (`quay.io/okd/scos-content@sha256:…`) that `build.sh` resolves
+from the release, so verify accepts exactly that value, by digest, and nothing else from outside zot. It prints that
+reference on its own line, `CHECK kube-rbac-proxy-from-payload/<pkg> PASS <ref>`, so each run's log records which
+payload image the bundle carries (on `main` the pipeline targets OKD 5.0.0-okd-scos.0).
+
+Choices:
+
+- **PVC, not node disk.** One PVC mounted twice by `subPath`: `containers` → `/var/lib/containers`, `work` → `/work`
+  (clones, tools, Go caches, `TMPDIR`, podman's `image_copy_tmp_dir`). The image declares `/var/lib/containers` a
+  `VOLUME`, which would otherwise be a directory on the node's root disk, and node5's root disk carries a mon at the
+  `MON_DISK_LOW` line. No node pinning: RBD attaches anywhere.
+- **Privileged podman.** `quay.io/podman/stable` already runs nested containers in host namespaces with
+  `cgroups="disabled"` and cgroupfs, and sets `BUILDAH_ISOLATION=chroot`. I swap its fuse-overlayfs for the kernel
+  overlay driver, since the graph root is ext4 on RBD rather than the container's own overlay, and turn SELinux
+  relabelling off (`label = false`). The pod asks for the SCC with `openshift.io/required-scc: privileged`.
+- **zot `okd-test/` only.** zot mirrors quay.io, docker.io, ghcr.io and registry.k8s.io for the whole cluster in one
+  namespace, with no auth. The pod has no registry credentials at all, and `build.sh` refuses a `BASE_REGISTRY` that
+  does not match `^zot\.apps\.okd\.sudops\.pl/okd-test(/component)*$` and any `IMG_*` from the cloned `build.sh` that
+  points elsewhere. `full` also refuses to run if `operator:<MAJOR>.<MINOR>.0-<DATE>` already exists, so no tag is
+  pushed twice. The 5 GiB zot free-space check stays outside the Job, because the pod has no API rights.
+- **Pinned tools.** Go 1.26.10, operator-sdk v1.36.1 (what the pipeline's CI installs), opm v1.74.0, yq v4.54.1,
+  kustomize v5.8.1 (loki's own bingo pin; CLO's is v5.4.3) and oc 4.21.36 (`stable-4.21` today). Each has its
+  sha256 in the script, taken from the project's published checksums. I downloaded each artifact once here and all
+  six hashes matched; the oc tarball holds `oc`, `kubectl`, `README.md` and the kustomize tarball holds `kustomize`.
+  `quay.io/podman/stable:v5.8.9` exists; quay re-pushes it (last modified 2026-10-20 03:41), so the Job pins the
+  manifest list it pointed at then, `sha256:dc02649067d5f7afd93db0bf31fbc604b56811c64594178eae3a72bdbb555e2e`.
+
+Offline checks:
+
+```
+$ bash -n tests/okderators-logging-build/build.sh && echo "bash -n OK"
+bash -n OK
+$ oc kustomize tests/okderators-logging-build/ | kubeconform -strict -ignore-missing-schemas -summary …
+Summary: 5 resources found parsing stdin - Valid: 5, Invalid: 0, Errors: 0, Skipped: 0
+$ oc process --local -f tests/okderators-logging-build/job-template.yaml -p MODE=full \
+    -p DATE=2026-10-20-000000 -p PIPELINE_BRANCH=cluster-logging-6.6 | kubeconform -strict …
+stdin - Job build-full-2026-10-20-000000 is valid
+```
+
+`oc diff` cannot run with the read-only kubeconfig: it is a server-side dry run, which RBAC authorizes like a real
+create (`namespaces is forbidden: User "system:serviceaccount:automation:claude-reader" cannot create resource
+"namespaces"`). Read-only `oc get` shows that every object would be new (`namespaces "okd-build" not found`) and that
+what they depend on exists: ClusterRole `system:openshift:scc:privileged` (`use` on SCC `privileged`), SCC
+`privileged` (`allowPrivilegedContainer=true`, `RunAsAny`), StorageClass `ceph-nvme-block` (ext4, `Immediate`).
+The local bash is 3.2, so `bash -n` here does not exercise the bash 4+ parts (`local -n`, `declare -A`,
+`inherit_errexit`); those first run in the pod. If verify trips over a script bug at the end of a long build, `check`
+redoes the bundles and verify without rebuilding the images.

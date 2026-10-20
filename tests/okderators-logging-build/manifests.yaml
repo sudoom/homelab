@@ -1,0 +1,60 @@
+# Static part of the okderators-logging-build Job (README.md). Applied by the operator with
+#   oc apply -k tests/okderators-logging-build/
+# Not ArgoCD-managed; deleted with `oc delete -k` when the build work is done.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: okd-build
+  labels:
+    app.kubernetes.io/part-of: okderators-logging-build
+    # The build pod is privileged (nested podman). Pin PSA to privileged and stop the
+    # SCC label syncer from rewriting these labels.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+    security.openshift.io/scc.podSecurityLabelSync: "false"
+  annotations:
+    openshift.io/description: One-off okderators Logging 6.6 image builds (tests/okderators-logging-build/)
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: builder
+  namespace: okd-build
+  labels:
+    app.kubernetes.io/part-of: okderators-logging-build
+# The build needs no Kubernetes API access.
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: builder-scc-privileged
+  namespace: okd-build
+  labels:
+    app.kubernetes.io/part-of: okderators-logging-build
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - kind: ServiceAccount
+    name: builder
+    namespace: okd-build
+---
+# Podman's graph root and the work tree (clones, tools, Go caches). Mounted twice by
+# subPath (containers, work) so nothing large lands on a node's root disk.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: build-storage
+  namespace: okd-build
+  labels:
+    app.kubernetes.io/part-of: okderators-logging-build
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ceph-nvme-block
+  resources:
+    requests:
+      storage: 100Gi
