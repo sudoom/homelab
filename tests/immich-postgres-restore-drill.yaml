@@ -15,7 +15,7 @@
 #   oc -n immich logs -l cnpg.io/cluster=immich-postgres-drill,cnpg.io/jobRole=full-recovery -f
 #
 # VERIFY (row-count parity vs live):
-#   oc -n immich exec immich-postgres-drill-1 -c postgres -- psql -d immich -Atc \
+#   oc -n immich exec immich-postgres-drill-1 -c postgres -- psql -U postgres -d immich -Atc \
 #     "select (select count(*) from asset), (select count(*) from \"user\"), pg_database_size('immich')"
 #   ... compare against the same query on immich-postgres-1.
 #
