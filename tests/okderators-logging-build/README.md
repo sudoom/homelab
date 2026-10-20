@@ -9,7 +9,7 @@ here until upstream CI publishes its own.
 Not ArgoCD-managed. The operator applies, runs and deletes everything in this directory.
 Chronology and results: `blog/blog-okderators-logging-6.6-draft.md`.
 
-**Status 2026-10-20:** written and validated offline (`bash -n`, `kubeconform`); not run yet.
+**Status 2026-10-20:** the full build (`build-full-2026-10-20-000000` template run), the catalog build (`build-catalog-2026-10-20-153109`) and the three release-branch checks (`build-check-2026-10-20-134619`) all ran on 2026-10-20; results are in the blog draft.
 
 ## Files
 
