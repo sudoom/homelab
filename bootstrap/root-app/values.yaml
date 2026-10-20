@@ -130,6 +130,14 @@ applications:
     namespace: openshift-adp
     syncWave: "1"
 
+  # Temporary: zot test build of okderators Logging/Loki 6.6. Leaves when the
+  # logging Subscriptions move back to `okderators`.
+  logging-test-catalog:
+    enabled: true
+    path: components/operators/logging-test-catalog
+    namespace: openshift-marketplace
+    syncWave: "1"
+
   loki-operator:
     enabled: true
     path: components/operators/loki-operator

@@ -1,0 +1,6 @@
+# Test build of okderators Logging/Loki 6.6, built from Red Hat's 6.6.1 commits
+# and pushed to the cluster's zot (tag 2026-10-20-153109). Pinned by digest.
+# Temporary: this chart and its root-app entry leave again when the
+# cluster-logging and loki-operator Subscriptions move back to `okderators`
+# (once okderators publishes 6.6).
+image: zot.apps.okd.sudops.pl/okd-test/logging-catalog@sha256:bf21cf1baaa126b6d071e3bee6da11de41f2a93a69f871f65266ca658c4a5c86

@@ -1,0 +1,11 @@
+# No updateStrategy: the image is pinned by digest, so there is nothing to poll.
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: okd-test-logging
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: {{ .Values.image | quote }}
+  displayName: "OKD test — logging 6.6"
+  publisher: OKD Community
