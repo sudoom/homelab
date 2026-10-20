@@ -591,3 +591,71 @@ on. This has to be decided before the upstream PRs are filed: whether the upstre
 the CI question to the maintainer, or whether the build can be shrunk (`vector` is 42 min of the 82; I have not yet
 broken the 33.6 GB down by image). Wall time, 93 min on throttled cores, is
 not the concern.
+
+## 2026-10-20 — catalog graphs validated in the Job
+
+`MODE=catalog` run of the edit and walker from the two sections above, against the real 6.6 bundles of the full run.
+Job `build-catalog-2026-10-20-153109`, 15:32 to 15:35Z; the `catalog-edit` step took 102 s (tools 21 s, podman-setup
+4 s, tag-check 2 s before it).
+
+```bash
+DATE=$(date -u +%Y-%m-%d-%H%M%S)
+oc process --local -f tests/okderators-logging-build/job-template.yaml \
+  -p MODE=catalog -p DATE=$DATE \
+  -p CATALOG_BRANCHES='release-4.20 release-4.21 release-4.22' \
+  -p BUNDLES='zot.apps.okd.sudops.pl/okd-test/cluster-logging/loki-operator-bundle:6.6.0-2026-10-20-134619@sha256:2f191a1152c166e21fd40327b0f4764993ecb8871541b78fc0db6c9606bac90c zot.apps.okd.sudops.pl/okd-test/cluster-logging/operator-bundle:6.6.0-2026-10-20-134619@sha256:2567fa857acca7ebc7fa077498fce9c2f648bf4a9d444c82e3d0f23d3784311f' \
+  | oc -n okd-build create -f -
+oc -n okd-build logs job/build-catalog-$DATE | grep -E '^(STEP|PUSHED|CHECK|RESULT) '
+```
+
+`RESULT PASS catalog 2026-10-20-153109`, 27 `CHECK` lines, all PASS.
+
+Edits: on `release-4.20` the new entries replace the 6.5.0 head (`v6.5.0-2026-06-04-101319`); on `release-4.21` and
+`release-4.22` they replace the 6.3.0 head (`v6.3.0-2025-08-08-133408`), both with `skipRange: '>=6.2.0-0 <6.6.0'`.
+Both packages, same values.
+
+| check | release-4.20 | release-4.21 | release-4.22 |
+|---|---|---|---|
+| `bundle-version-loki-operator`, `-cluster-logging` (once, before any clone) | PASS, both `6.6.0-2026-10-20-134619` | | |
+| `bundles-<branch>` | PASS, both CSVs added via each branch's `hack/add-bundle.sh` | PASS, same | PASS, same |
+| `edit-<branch>-cluster-logging` | PASS, replaces `v6.5.0-…-101319` | PASS, replaces `v6.3.0-…-133408` | PASS, replaces `v6.3.0-…-133408` |
+| `edit-<branch>-loki-operator` | PASS, replaces `v6.5.0-…-101319` | PASS, replaces `v6.3.0-…-133408` | PASS, replaces `v6.3.0-…-133408` |
+| `opm-validate-<branch>` | PASS | PASS | PASS |
+| `walk-<branch>-cluster-logging` | PASS, 5 entries + 1 absent CSV reach the 6.6 head | PASS, 4 + 2 | PASS, 4 + 2 |
+| `walk-<branch>-loki-operator` | PASS, 5 + 1 | PASS, 4 + 2 | PASS, 4 + 2 |
+| `negative-control-<branch>` (edit without `replaces`) | PASS, `opm validate` fails: multiple channel heads (6.5.0 and 6.6.0, both packages) | PASS, fails: heads 6.3.0 and 6.6.0 | PASS, fails: heads 6.3.0 and 6.6.0 |
+| `negative-control-skiprange-<branch>` | skipped, 6.5.0 is a channel entry here | PASS, `opm validate` passes and the walker strands both 6.5.0 CSVs | PASS, same |
+| `opm-validate-image` (the built image, once) | PASS | | |
+| `catalog-image` (once) | PASS, see below | | |
+
+Count: 2 `bundle-version` + 7 on 4.20 + 8 each on 4.21 and 4.22 (the extra one is `negative-control-skiprange`) +
+`opm-validate-image` + `catalog-image` = 27 `CHECK` lines, all PASS (`grep -E '^CHECK '` on the pod log, 27 PASS).
+
+Branches where 6.5.0 is not a channel entry (4.21, 4.22) walk 4 channel entries plus 2 CSVs that exist only in `skips`
+(the 6.2.0-2025-05-25 pair, as started from in the review fixes) and the homelab's 6.5.0 pair is reached through the new
+skipRange; on 4.20 the walk is 5 entries + 1 absent CSV.
+
+### `hack/add-bundle.sh` worked in the Job
+
+The catalog repo's own script ran for both bundles on every branch, no fallback to my replacement path. The trace shows
+`podman create <bundle>@sha256:…` executing and the script writing `catalog/<package>/<CSV name>.yaml`; the
+`bundles-<branch>` detail names `hack/add-bundle.sh` for both bundles. I had expected the `podman create` step to fail
+on a `FROM scratch` bundle without a `CMD` (okderators-catalog-index PR #59), and it did not here. I have not looked at
+why; the bundles are the same ones the pipeline builds.
+
+### The test catalog image
+
+```
+CHECK catalog-image PASS zot.apps.okd.sudops.pl/okd-test/logging-catalog:2026-10-20-153109: packages cluster-logging loki-operator; heads cluster-logging.v6.6.0-2026-10-20-134619 loki-operator.v6.6.0-2026-10-20-134619; every entry and … reach
+PUSHED zot.apps.okd.sudops.pl/okd-test/logging-catalog:2026-10-20-153109@sha256:bf21cf1baaa126b6d071e3bee6da11de41f2a93a69f871f65266ca658c4a5c86 32372454
+```
+
+| | |
+|---|---|
+| ref | `zot.apps.okd.sudops.pl/okd-test/logging-catalog:2026-10-20-153109` |
+| digest | `sha256:bf21cf1baaa1…` (full digest above) |
+| size | 32,372,454 B (32.4 MB) |
+| source branch | `release-4.21` (the cluster is on 4.21) |
+| base | `quay.io/operator-framework/opm@sha256:b32d38916166…`, `ENTRYPOINT /bin/opm`, `serve /configs --cache-dir=/tmp/cache`, cache pre-built with `--cache-only` |
+
+Next step is the homelab `okd-test-logging` CatalogSource pointing at this image.
