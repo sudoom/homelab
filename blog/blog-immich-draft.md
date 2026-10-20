@@ -1328,3 +1328,46 @@ photos the `family` account already had (141 in `library/Family` before step 0 o
 where they meet their twins, if they are re-encodes.
 
 Source sha1s on the server (29,540) plus those 143 equal the server's 29,683 media files exactly.
+
+## 2026-10-20 — close-out, part 2: storage labels, the migration, and the eight files in `upload/`
+
+The operator set the second personal account's storage label and ran Administration → Jobs → Storage Template
+Migration. Its two files moved from `library/5693963b-…/` to the label's folder; the ID-named folder is gone. A fresh
+`family` index afterwards (`index after-migration-20261020`) read 36,575 files with 0 re-hashed, so the job moved
+nothing for `family`, and the eight files in `upload/` (six `.xmp`, two `*.xmp_exiftool_tmp`, all written 15:17–15:38
+on 2026-10-16 during step 7) stayed where they were.
+
+Whether those six `.xmp` are live sidecars in the wrong place or orphans is a database question. Reads, run by the
+operator (pods/exec is not open to the readonly SA). Two traps on the way, both mine:
+
+- `psql -d immich` alone fails `Peer authentication failed for user "1000980000"`: the pod runs under OpenShift's
+  random UID and CNPG maps that UID to `postgres`, so it needs `-U postgres`. Already written down in
+  `blog/blog-cnpg-draft.md`; I had not read it first.
+- The UUID in an upload filename is NOT the asset ID. Immich names the uploaded file with a fresh random UUID; a
+  query by those UUIDs as `asset.id` returned nothing because no such assets exist, not because the sidecars are
+  orphans.
+
+The query that answers it, plus a control to show the pattern can match:
+
+```
+oc -n immich exec immich-postgres-1 -c postgres -- psql -U postgres -d immich -At -F ' | ' -c \
+  "select a.id, a.\"originalPath\", f.path from asset a left join asset_file f on f.\"assetId\" = a.id
+   and f.type = 'sidecar' where a.\"originalPath\" ~ '/upload/' or f.path ~ '/upload/'"
+(no rows)
+
+... -c "select (select count(*) from asset), (select min(\"originalPath\") from asset),
+        (select count(*) from asset_file where type = 'sidecar'), (select min(path) from asset_file where type = 'sidecar')"
+29688 | /data/library/<label>/… | 6884 | /data/library/Family/…​.jpg.xmp
+```
+
+Paths are stored as `/data/library/…`, so anything left in `upload/` would read `/data/upload/…` and match. Nothing
+does. The counts close against TrueNAS exactly:
+
+| | database | TrueNAS |
+|---|---|---|
+| assets | 29,688 | 29,683 `family` media + 3 + 2 in the two personal accounts |
+| sidecars | 6,884 | 6,884 `.xmp` in `library/Family` (+ 6 in `upload/`) |
+
+So the six `.xmp` in `upload/` are orphans: Immich wrote them to the upload path while the storage template was
+moving the asset, then recorded the sidecar at the asset's new path. The two `_tmp` files are exiftool's temporary
+files from the same race and were never recorded at all. None of the eight is referenced.
