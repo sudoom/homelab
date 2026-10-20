@@ -37,6 +37,12 @@ BUNDLES=${BUNDLES:-}
 # one namespace: a push outside okd-test/ could shadow a real upstream image.
 REGISTRY_RE='^zot\.apps\.okd\.sudops\.pl/okd-test(/[a-z0-9]+([._-][a-z0-9]+)*)*$'
 
+# skopeo errors that mean "this tag or repository does not exist"; anything else fails closed.
+# zot answers NAME_UNKNOWN for a repository nobody has pushed yet, which skopeo prints as
+# "repository name not known to registry" (the first full run, 2026-10-20). 404 must stand
+# alone: every error quotes the ref, and a DATE like ...-140412 contains the digits 404.
+ABSENT_RE='manifest unknown|name unknown|repository name not known|not found|(^|[^0-9])404([^0-9]|$)'
+
 # olm.maxOpenShiftVersion every bundle must carry.
 MAX_OCP=4.23
 
@@ -432,7 +438,7 @@ tag_check() {  # P12: a full run never re-pushes a tag
   if err=$(skopeo inspect --raw "docker://${ref}" 2>&1 >/dev/null); then
     finish FAIL "tag exists ${ref}"
   fi
-  if ! grep -qiE 'manifest unknown|name unknown|not found|404' <<<"$err"; then
+  if ! grep -qiE "$ABSENT_RE" <<<"$err"; then
     echo "ERROR cannot tell whether ${ref} exists: ${err##*$'\n'}"
     finish FAIL "tag check failed"
   fi
