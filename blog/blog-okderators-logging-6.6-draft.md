@@ -826,3 +826,116 @@ Facts corrected while reviewing the drafts, before filing:
 - Toolchain: the diff moves `ubi9/go-toolset` from 1.25 to 1.26 in every Go Containerfile, not only Loki's. It contains no Rust version change.
 - The weekly `operator-updates.yaml` bot: `gh run list --workflow operator-updates.yaml --limit 100` returns 33 runs since 2026-03-09, none successful (latest 2026-10-19).
 - The backports build nothing on merge. `release-4.22`'s `cluster-logging-deploy.yaml` triggers on pushes to `main` only; `release-4.21` and `release-4.20` have no such workflow. The images for every catalog come from the `main` build, and the backports keep each release branch's `cluster-logging/` tree at the version its catalog will list.
+
+## 2026-10-21 — 24 h soak results
+
+The soak window is 2026-10-20T16:14:35Z (cluster-logging 6.6 approved) to 2026-10-21T16:14:35Z. Every Prometheus number below is an instant query at the fixed `time=2026-10-21T16:15:00Z` with `[24h]` ranges, so it can be rerun and give the same figure. Read path: the break-glass kubeconfig for Prometheus and Alertmanager only, the readonly kubeconfig for everything else, no exec into any Loki pod.
+
+```
+KUBECONFIG=$HOME/.kube/config-breakglass oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- \
+  wget -qO- 'http://localhost:9090/api/v1/query?query=<urlencoded>&time=2026-10-21T16:15:00Z'
+```
+
+### Verdict
+
+| check | result | number |
+|---|---|---|
+| object-store operations succeed | PASS | 0 failures in 24 h on every operation (below) |
+| chunks flushed > 0 | PASS | 8505 in 24 h (ingester-0 4257, ingester-1 4247) |
+| no `up == 0` in `openshift-logging` / `openshift-operators-redhat` | PASS | 20 up across 10 jobs, `== 0` returns nothing |
+| PDBs and ingester replicas vs baseline | PASS, as expected | all six `maxUnavailable: 1`, allowed 1; ingester STS 2/2 |
+| no new firing alerts | PASS, with two short transients | no new alert still firing; two that fired and cleared, neither logging (below) |
+| restarts of logging pods | PASS | current restartCount 0 on all 18 pods |
+| rest of the cluster unaffected | PASS | nodes, CVO, COs, 49 apps, CSVs, CNPG, Ceph as before |
+| LokiStack condition | known Warning | `Ready=True`, `Warning=True` `InsufficientIngesterReplicas` |
+
+No FAIL: the PRs stand as filed, and these results go to okd-project/okd-operator-pipeline#35 as a comment.
+
+### Object store (the LOG-9632 evidence)
+
+```
+sum by (operation) (increase(loki_objstore_bucket_operations_total{namespace="openshift-logging"}[24h]))
+sum by (operation) (increase(loki_objstore_bucket_operation_failures_total{namespace="openshift-logging"}[24h]))
+```
+
+| operation | count in 24 h | failures |
+|---|---|---|
+| upload | 8820 | 0 |
+| delete | 5923 | 0 |
+| get | 660 | 0 |
+| iter | 395 | 0 |
+| attributes / exists / get_range | 0 | 0 |
+
+Against the 6.5 baseline taken before the upgrade (1 h windows) the rates are flat: 8820 uploads per 24 h is 367 per hour (baseline 384 `S3.PutObject` per hour), and 8505 chunks per 24 h is 354 per hour (baseline 373). Time since the last successful upload, from `loki_objstore_bucket_last_successful_upload_time`, at 16:15:00Z: ingester-1 99.7 s, ingester-0 110.4 s (the other components never upload and report epoch 0, which I ignore). The distributor was taking 126 lines/s at 16:15Z.
+
+### Targets, PDBs, restarts
+
+`count by (job) (up{namespace=~"openshift-logging|openshift-operators-redhat"} == 0)` returns an empty result; `== 1` gives the same 20 targets over the same 10 jobs as the baseline, so 6.6's metrics authentication holds over the day. PDBs after 24 h: `distributor`, `gateway`, `index-gateway`, `ingester`, `querier`, `query-frontend`, each `maxUnavailable: 1`, `disruptionsAllowed: 1`. The baseline ingester PDB was `minAvailable: 1`, forced by the override CronJob retired the same day; the new shape is the operator's own. `logging-loki-ingester` is 2/2.
+
+Restarts: `sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=~"openshift-logging|openshift-operators-redhat"}[24h])) > 0` is empty, and the current `restartCount` is 0 on every pod: `cluster-logging-operator`, 3 collector pods `instance-*`, 2 gateway (both containers), 2 distributor, 2 querier, 2 query-frontend, 2 index-gateway, 2 ingester, the compactor, and `loki-operator-controller-manager`. The collector DaemonSet is 3/3 ready and updated.
+
+The ~3.6 restarts seen earlier in a 23 h query are from the retired `loki-pdb-override-29875205-*` CronJob pod (removed in `9c4de03`). The three last pods of that job, `29875195`, `29875200` and `29875205`, started at 15:55, 16:00 and 16:05Z on 10-20 and each reached restartCount 5 (`max_over_time(...{pod=~"loki-pdb.*"}[24h])` evaluated at 10-20T17:00Z). All of that is before the 16:14:35Z approval, so at the fixed time those series are outside the 24 h window and the query reads 0.
+
+### Alerts
+
+Alertmanager `localhost:9093/api/v2/alerts?active=true`, 9 firing, all on the pre-existing list and all started 10-16: `CephHealthWarning`, `CephMonDiskspaceLow`, `InsightsRecommendationActive`, `KubeCPUOvercommit`, `PodDisruptionBudgetAtLimit` (immich, media), `TargetDown` (nmstate), `UpdateAvailable`, `Watchdog`. Nothing new is firing.
+
+`count by (alertname,namespace) (max_over_time(ALERTS{alertstate="firing"}[24h]))` shows two alerts, besides the known list, that were firing at some point in the 24 h lookback and are gone:
+
+| alert | seen in the 24 h lookback | cause |
+|---|---|---|
+| `UserNamespaceJobFailed` (`okd-build`, job `build-full-2026-10-20-134619`) | 10-20 15:20Z to 16:34Z | the in-cluster build Job, not logging; it began at 15:20Z, before the window opened |
+| `CephNodeNetworkPacketDrops` (pod `node-exporter-4l2ks`, which runs on node6.okd.sudops.pl) | 10-21 11:06:14Z to 11:06:44Z | about 30 s, cleared on its own; I did not investigate the cause, and nothing in the logging checks points at it |
+
+### The two error-rate bumps (16:20–16:27Z, 16:50–16:57Z on 10-20)
+
+A per-namespace error breakdown is not available from any sanctioned read path, so I do not have one. What I checked:
+
+- `log_logged_bytes_total` (log-file-metric-exporter) does not exist in this Prometheus: `count(log_logged_bytes_total)` is empty and the metric is not among the series under `namespace="openshift-logging"` matching `log_.*`.
+- Vector's own error counters are zero over 24 h: `vector_component_errors_total` and `vector_component_discarded_events_total` return nothing above 0. I did not find a per-namespace error series among them.
+- The distributor exposes `tenant` but not namespace. Lines received per second, `rate(loki_distributor_lines_received_total[7m])` ending at the window versus `[30m]` ending at the window's start:
+
+| tenant | window 1 (16:27Z) | 30 min before | window 2 (16:57Z) | 30 min before |
+|---|---|---|---|---|
+| infrastructure | 159.8/s | 98.9/s | 261.9/s | 87.6/s |
+| audit | 77.5/s | 97.3/s | 75.3/s | 69.5/s |
+| application | 15.2/s | 18.4/s | 15.6/s | 15.3/s |
+
+  Infrastructure is the only tenant that rises: +62 % in window 1 and about 3x in window 2. The window-1 baseline (the 30 min ending 16:20Z) straddles the collector restart at 16:14:44Z, so it is not a clean pre-restart figure. That fits a Grafana panel that counts error lines in `openshift-*` namespaces and node logs, but it does not say which namespace.
+- Rollout alignment (from `kube_pod_start_time`): loki-operator 15:52:18Z, LokiStack pods 15:54:41Z to 15:57:06Z, `cluster-logging-operator` 16:14:34Z, collector pods 16:14:44Z to 16:14:46Z. Bump 1 starts 5.5 min after the collector restart and bump 2 about 36 min after it, so neither coincides with a pod start; I cannot say whether the new collector replaying files after its restart contributed.
+- Push 429s do follow the bumps. `sum by (status_code) (increase(loki_request_duration_seconds_count{namespace="openshift-logging",status_code=~"429|5.."}[7m]))`, each evaluated at the window's end (16:27Z, 16:57Z) and at its start (16:20Z, 16:50Z):
+
+| window | HTTP 429 in the 7 min | HTTP 500 | the 7 min before the window |
+|---|---|---|---|
+| 1 (16:20-16:27Z) | 24.8 | 0 | 0 (36.3 in the 30 min before, which also holds the collector restart) |
+| 2 (16:50-16:57Z) | 65.7 | 0 | 15.1 (43.7 in the 30 min before) |
+
+  So the distributor was rate-limiting pushes (all on `loki_api_v1_push`) while the infrastructure ingest rose, which fits the line-rate table above and suggests the bumps are a backlog or burst in infrastructure logs hitting the per-tenant limit; I did not check the limit value. The 30 min before window 1 also holds 258 HTTP 500s; that range covers the LokiStack pod restarts (15:54-15:57Z) and the collector restart, and I did not split the 500s by time. Over 24 h the distributor answered 2285 x 429 and 25 x 500 out of about 2.1 M requests, and vector reports 1902 of the 429s on the infrastructure output. The 24 h ending 15:30Z on 10-20 (6.5) had 1821 x 429 and 188 x 500, so 429s are 25 % higher over the soak day and 500s are lower (25 vs 188). A first attempt at these four windows used the wrong evaluation time and is not reported; the numbers above are rerun at the window times.
+
+The stream label that the existing dashboard uses, and that Grafana returned data for on 10-20, is `kubernetes_namespace_name` (`components/cluster-config/grafana-config/files/app-errors-by-namespace.json`). The ClusterLogForwarder sets no `dataModel`, so the default Viaq labels apply. I did not read the vector config (it is in a Secret), so `level` and `log_type` as stream labels are unverified and the queries below use only `kubernetes_namespace_name`. Paste into Grafana Explore, datasource `Loki (infrastructure)`, query type `Instant`, with the evaluation time set to the window's end (UTC) and the range matching the window length:
+
+```
+# window 1: evaluate at 2026-10-20 16:27:00Z
+topk(10, sum by (kubernetes_namespace_name) (count_over_time({kubernetes_namespace_name=~".+"} |~ "(?i)(error|warn|fail|fatal|panic)" [7m])))
+# window 2: evaluate at 2026-10-20 16:57:00Z, same query
+```
+
+For the baselines, evaluate the same instant query at 16:20:00Z and 16:50:00Z (the preceding 7 min). Lines of the node journal carry no namespace label and are excluded by `=~".+"`.
+
+### Rest of the sweep (readonly)
+
+| | result |
+|---|---|
+| nodes | node4, node5, node6 `Ready`, v1.34.6 |
+| ClusterVersion | 4.21.0-okd-scos.11, Available=True, Progressing=False, Failing=False |
+| ClusterOperators | 34, none unavailable, progressing or degraded |
+| ArgoCD applications | 49 Synced Healthy |
+| CSVs | none outside `Succeeded`; `cluster-logging` and `loki-operator` `v6.6.0-2026-10-20-134619` |
+| Subscriptions | both `okd-test-logging`, `Manual`, `AtLatestKnown` |
+| CNPG | `media-postgres` 2/2 and `immich-postgres` 2/2, `ContinuousArchiving=True`, both "Cluster in healthy state" |
+| Ceph | `HEALTH_WARN`: "2 OSD(s) experiencing slow operations in BlueStore" and "mon c is low on available space", both the known benign pair |
+| zot PVC `data-zot-0` | 48.91 GiB capacity, 31.77 GiB used, 17.13 GiB available (kubelet stats summary on node4); 16.6 GiB free on 10-20 17:20Z, so +0.5 GiB free, nothing was added |
+
+LokiStack right now: `Ready=True` (`ReadyComponents`), `Pending=False`, `Failed=False`, and `Warning=True` `InsufficientIngesterReplicas` ("The ingester replicas (2) are less than or equal to the replication factor (2)..."). It was kept on purpose through the soak; the choice afterwards is the operator's: keep it, replication factor 1, or 3 ingesters. Both ingesters kept restartCount 0 over the 24 h, so no restart-driven ingestion stop happened; I did not chart per-minute ingestion.
+
+Raw query outputs are saved locally, one JSON per query (plus `cluster-sweep.txt`, `alerts.json`, `zot-summary.json`, `lokistack-cond.txt`).
