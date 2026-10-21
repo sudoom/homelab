@@ -992,3 +992,12 @@ Fallback: read the live LokiStack (`oc -n openshift-logging get lokistack loggin
 - The `Warning` condition is gone from the LokiStack (`oc -n openshift-logging get lokistack logging-loki -o jsonpath='{.status.conditions}'`).
 - PDB `logging-loki-ingester` reports allowed disruptions 1 (3 pods, one may be down).
 - A new pair of PVCs (`wal-logging-loki-ingester-2`, `storage-logging-loki-ingester-2`) is Bound on `ceph-nvme-block`.
+
+Result, after ArgoCD synced `8adbb71` (watch loop on the readonly kubeconfig, 30 s polls):
+
+```
+16:36:40Z sts=3/2 p2=[Running ready=false node=node4.okd.sudops.pl] warn=[False/InsufficientIngesterReplicas] pdb=0 pvc=[storage-logging-loki-ingester-2:Bound wal-logging-loki-ingester-2:Bound ]
+16:37:11Z sts=3/3 p2=[Running ready=true node=node4.okd.sudops.pl] warn=[False/InsufficientIngesterReplicas] pdb=1
+```
+
+The third ingester landed on node4, the one node that had none, and was Ready about 30 s after it started. It did not sit Pending: node CPU requests were 62–75 % and memory requests 20–28 % before the change, so `KubeCPUOvercommit` (which is about surviving a node loss) did not stop the scheduler. LokiStack now reads `Ready=True`, `Warning=False`; the ingester PDB allows 1 disruption; all three ingesters have restartCount 0, and the other logging pods were not restarted. The Completed `loki-secret-translator` pod is the chart's ArgoCD `Sync` hook, which reruns on every sync.
