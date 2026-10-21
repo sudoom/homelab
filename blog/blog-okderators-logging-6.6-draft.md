@@ -939,3 +939,56 @@ For the baselines, evaluate the same instant query at 16:20:00Z and 16:50:00Z (t
 LokiStack right now: `Ready=True` (`ReadyComponents`), `Pending=False`, `Failed=False`, and `Warning=True` `InsufficientIngesterReplicas` ("The ingester replicas (2) are less than or equal to the replication factor (2)..."). It was kept on purpose through the soak; the choice afterwards is the operator's: keep it, replication factor 1, or 3 ingesters. Both ingesters kept restartCount 0 over the 24 h, so no restart-driven ingestion stop happened; I did not chart per-minute ingestion.
 
 Raw query outputs are saved locally, one JSON per query (plus `cluster-sweep.txt`, `alerts.json`, `zot-summary.json`, `lokistack-cond.txt`).
+
+## 2026-10-21 — three ingesters
+
+Decision: run the LokiStack with 3 ingesters instead of 2, so the loki-operator 6.6 warning `InsufficientIngesterReplicas` clears ("The ingester replicas (2) are less than or equal to the replication factor (2). Which causes log ingestion to stop when ingester pods get restarted.").
+
+### Options
+
+1. **Keep 2 ingesters.** Leaves the `Warning=True` condition permanently, and the warning is accurate: with replication factor 2 and 2 ingesters, any ingester restart (node drain, operator rollout, OOM) stops ingestion. Rejected.
+2. **Replication factor 1.** `1x.pico` sets `Replication.Factor: 2` in the operator's size table and I would have to override it. It silences the warning by giving up the second copy of every WAL write: losing one ingester loses the unflushed window. Rejected, it hides the problem instead of fixing it.
+3. **3 ingesters.** Chosen. One restart leaves 2 of 3 up, which is enough for RF 2, so ingestion continues while a pod rolls. It is also the tier's own default.
+
+### Facts behind it (measured 2026-10-21)
+
+- The WAL PVCs are thin RBD on `ceph-nvme-block`. Kubelet stats summary: `wal-logging-loki-ingester-0` 0.13 GiB used, `-1` 0.21 GiB, of 150Gi; the `storage-*` PVCs 0 GiB. The 2-replica choice (2026-05) saved *provisioned* space, not used space.
+- `nvme-replicated` MAX AVAIL is about 208 GiB, so one more pair of thin PVCs is not a capacity problem.
+- Each ingester requests 500m CPU / 3Gi memory. `KubeCPUOvercommit` is already firing, so this adds to that; it is the real cost of the change.
+- The earlier "50% capacity hit if one ingester is rolling" comment in `values.yaml` was wrong for RF 2 with 2 replicas: ingestion stops, it does not halve. Removed.
+- 1x.pico's default is 3 ingesters: in the 6.6 gitlink (`cluster-logging/loki` `678e5e8`), `operator/internal/manifests/internal/sizes.go` has `SizeOneXPico` with `Replication.Factor: 2` and `Ingester.Replicas: 3`; `status/lokistack.go` emits the warning text above when replicas <= RF. I kept the explicit `template.ingester.replicas` in the chart anyway: it documents the choice and does not depend on a future change to the size table.
+
+### Change
+
+`components/cluster-config/logging-stack/values.yaml`: `lokistack.ingesterReplicas: 2` -> `3`, comment block rewritten. `templates/lokistack.yaml` unchanged (the `if` branch renders `template.ingester.replicas: 3`).
+
+### Validation
+
+```
+helm lint components/cluster-config/logging-stack
+  1 chart(s) linted, 0 chart(s) failed
+helm template logging-stack components/cluster-config/logging-stack -n openshift-logging -f .../values.yaml | grep -B3 'replicas: 3'
+  template:
+    ingester:
+      replicas: 3
+helm template ... | kubeconform -strict -ignore-missing-schemas -summary -schema-location default -schema-location '<datreeio CRDs-catalog>'
+  Summary: 12 resources found parsing stdin - Valid: 10, Invalid: 0, Errors: 0, Skipped: 2
+```
+
+The kubeconform run needs the sandbox off here (the sandbox's TLS trust fails on raw.githubusercontent.com).
+
+`oc diff` is not possible with the readonly SA: it runs a server-side dry-run apply, and `claude-reader` cannot create anything:
+
+```
+KUBECONFIG=~/.kube/config-readonly oc diff -f rendered.yaml
+  Error from server (Forbidden): jobs.batch is forbidden: User "system:serviceaccount:automation:claude-reader" cannot create resource "jobs" in API group "batch" in the namespace "openshift-logging"
+```
+
+Fallback: read the live LokiStack (`oc -n openshift-logging get lokistack logging-loki -o json`) and compare its spec against the rendered one. `size`, `storage`, `storageClassName`, `tenants` and `limits` are identical; the only difference is `template.ingester.replicas` 2 (live) -> 3 (rendered).
+
+### What to check after ArgoCD syncs
+
+- A third pod `logging-loki-ingester-2` goes Running (it needs a node with 500m CPU / 3Gi free; `KubeCPUOvercommit` is firing, so watch for Pending).
+- The `Warning` condition is gone from the LokiStack (`oc -n openshift-logging get lokistack logging-loki -o jsonpath='{.status.conditions}'`).
+- PDB `logging-loki-ingester` reports allowed disruptions 1 (3 pods, one may be down).
+- A new pair of PVCs (`wal-logging-loki-ingester-2`, `storage-logging-loki-ingester-2`) is Bound on `ceph-nvme-block`.

@@ -70,18 +70,24 @@ lokistack:
   # 3 days is generous for a homelab; tune up if audit/debugging
   # needs the window.
   retentionDays: 3
-  # 1x.pico ships 3 ingester replicas with 150Gi WAL PVCs each
-  # (450Gi logical, 1.35 TiB raw replicated 3×) — way more than this
-  # homelab needs. The LokiStack CRD does NOT expose per-component
+  # 1x.pico ships 3 ingester replicas with 150Gi WAL PVCs each plus a
+  # 10Gi storage PVC (450Gi logical of WAL, ~1.35 TiB raw replicated 3x
+  # at provisioned size). The LokiStack CRD does NOT expose per-component
   # storage size overrides (spec.template.ingester only exposes
-  # replicas/nodeSelector/podAntiAffinity/tolerations), so the
-  # 150Gi WAL size is locked in until upstream loki-operator adds it
-  # or we move off LokiStack entirely. Reducing replicas to 2 is the
-  # one knob we have to cut WAL footprint: saves 1× 150Gi + 1× 10Gi
-  # storage PVC = ~480 GiB raw. Tradeoff: 50% capacity hit if one
-  # ingester is rolling vs 33% with 3 replicas; acceptable for
-  # homelab ingest rate (<100 KB/s vs 1x.pico's 4 MB/s target).
-  ingesterReplicas: 2
+  # replicas/nodeSelector/podAntiAffinity/tolerations), so the 150Gi WAL
+  # size is locked in until upstream loki-operator adds it or we move off
+  # LokiStack entirely.
+  # 3 since 2026-10-21 (2 before). 1x.pico runs replication factor 2; with
+  # 2 ingesters that is "replicas <= replication factor", so ANY ingester
+  # restart stops ingestion (not a 50% capacity dip) and loki-operator 6.6
+  # raises the InsufficientIngesterReplicas warning. With 3, one ingester
+  # can roll and ingestion continues. The 2-replica choice only saved
+  # PROVISIONED space: the WAL PVCs are thin RBD on ceph-nvme-block and
+  # measured 0.13 / 0.21 GiB used of 150Gi (2026-10-21), the storage-* PVCs
+  # 0 GiB, and nvme-replicated has ~208 GiB MAX AVAIL. The real cost of the
+  # third ingester is 500m CPU / 3Gi memory requested (KubeCPUOvercommit
+  # was already firing) plus one more pair of PVCs.
+  ingesterReplicas: 3
 
 # ClusterLogForwarder — Vector pipeline that picks up app + audit +
 # infra logs and pushes them to the LokiStack via its gateway.
