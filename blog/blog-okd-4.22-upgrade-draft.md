@@ -455,3 +455,47 @@ exactly the CSV installed here (`oc get subscription -A` → channel `alpha`, so
 
 Next: the maintainer reviews #60/#61. After #60 merges, the `okderators` CatalogSource picks up the rebuilt
 `catalog-index:4.21` within its 60-minute `registryPoll`, and a 1.20 InstallPlan appears for approval.
+
+## 2026-10-22 — hop 2 re-assessed
+
+The README said the hop "needs re-assessing against this list, not starting" once `catalog-index:4.22` existed
+(pushed 2026-10-15). Done today, against live state.
+
+**The platform side blocks nothing.**
+
+```
+oc get clusterversion version -o jsonpath='{.status.availableUpdates[*].version}'
+4.22.0-okd-scos.10 … 4.22.0-okd-scos.0          # 11 edges from 4.21.0-okd-scos.11, channel stable-scos-4
+```
+
+ClusterVersion carries no `Upgradeable` condition, no ClusterOperator reports `Upgradeable=False`, and
+`openshift-config-managed/admin-gates` is empty. No installed CSV declares an `olm.maxOpenShiftVersion` below 4.22:
+the two logging 6.6 test-build CSVs say `4.23`, and the others declare none (the okderators OADP 1.5.0 build
+included). So neither CVO nor OLM would refuse the hop; everything left is support-matrix work.
+
+**Gates, re-checked:**
+
+| Item | Now | For 4.22 (Kube 1.35) |
+|---|---|---|
+| cert-manager | 1.18.0, caps at Kube 1.33 | 1.20 supports 1.32-1.35. Catalog PRs #60 (4.21) / #61 (4.22) filed today. #61 must land before the `okderators` CatalogSource flips to `:4.22`, or the installed 1.20 CSV is missing from the new index. |
+| Rook | v1.19.5 | `prerequisites.md` per tag: v1.19.12 supports Kube **1.30-1.35** (zero headroom), v1.20.9 **1.31-1.37**, v1.21.0 1.32-1.37. The June v1.20.0 CSI break was our own chart incoherence (`Chart.yaml` bumped by Renovate, charts never re-vendored, and v1.20 renamed the CSI ServiceAccounts), not a Rook defect, so the fix is a supervised, coherent bump of both charts and the operator together. It rolls all three OSDs. |
+| OADP | 1.5.0 (okderators), daily Velero schedule to garage | Red Hat's 1.5 stops at 4.21; 4.22 needs 1.6. Both okderators catalogs (`release-4.21`, `release-4.22`) offer only 1.5.0. Needs a pipeline build, or accept running out of matrix. |
+| GitOps | 1.19.0, Argo CD 3.1.11 | Both catalogs offer only 1.19.0; the pipeline pins `MINOR=19`. Already outside Argo CD's tested table on 1.34; same "untested, not shown broken" status on 1.35. |
+| Logging / Loki | 6.6 test build from zot | Fine for the hop: `maxOpenShiftVersion` 4.23, and the test catalog does not depend on the OKD version. The okderators route is pipeline #35-#38. |
+| NVMe pool | was 81.5% full (2026-09-08) | `ceph_pool_stored` 242.2 GB vs `ceph_pool_max_avail` 246.1 GB, about 50%. Cleared. |
+| CNPG, subscriptions | both clusters 2 instances; okderators subs Manual | Cleared (2026-09-15 and 2026-09-08). |
+| descheduler, CNPG, nmstate, grafana-operator | v0.36.0, 1.30.1, 0.87.0 (community), 5.25.0 | No known issue at 1.35. |
+
+**Runbook-day items that are new or still open:**
+
+- Ceph sits at a permanent `HEALTH_WARN`: `MON_DISK_LOW` on mon c (node5's root disk) plus the BlueStore slow-op
+  warning. The runbook gates each node on `HEALTH_OK`, which cannot be met. Either fix node5's disk first (README
+  TODO "Stop the catalog image churn that fills node5": step 1 in git now, step 2 the KubeletConfig with the next
+  node roll, which this hop is) or restate the gate as "no warning beyond the known two".
+- SSH to the nodes still fails (README TODO). The hop is an MCO reroll anyway, so the `core` key MachineConfig
+  belongs in it; without it a node that does not come back has no host access.
+- Unchanged: the network pre-flight, `ethtool -i` NIC baseline, cgroup v2 re-check, restarting all three
+  `ovnkube-node` plus the repo-server afterwards, then the `okderators` CatalogSource flip `:4.21` → `:4.22`.
+
+Order: cert-manager 1.20 (#60, then approve the InstallPlan) → Rook coherent bump → the hop. OADP 1.6 and GitOps
+1.20+ are a choice between a pipeline contribution each and accepting the gap.
