@@ -15,7 +15,11 @@ spec:
   # Run: oc get packagemanifest gitops-operator -o jsonpath='{.status.channels[*].name}'
   # Replace channel below with the output
   channel: alpha
-  installPlanApproval: Automatic
+  # Manual: a catalog tag flip must not auto-upgrade the operator that runs ArgoCD.
+  # Live has been Manual since before the 4.21 catalog flip; this file had drifted.
+  # Approve each InstallPlan by hand. source stays okderators (cert-manager 1.19.0 recovery
+  # and the 1.22 upgrade both come from that catalog).
+  installPlanApproval: Manual
   name: gitops-operator 
   source: okderators
   sourceNamespace: openshift-marketplace

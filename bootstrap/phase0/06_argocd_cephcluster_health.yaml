@@ -1,0 +1,50 @@
+# Argo CD CephCluster health override (hand-applied, like the rest of phase0).
+#
+# Why: from Argo CD 3.3 a built-in Lua check maps CephCluster HEALTH_WARN to
+# Degraded. This cluster is permanently HEALTH_WARN (BLUESTORE_SLOW_OP_ALERT,
+# MON_DISK_LOW), and a Degraded resource fails a multi-wave sync before the
+# rook-ceph-cluster wave-10/11 bootstrap Jobs. This check reports HEALTH_WARN as
+# Healthy (warnings named in the message); only HEALTH_ERR is Degraded.
+#
+# Apply (YAML merge patch; the ArgoCD CR is operator-defaulted and not in git):
+#   oc patch argocd openshift-gitops -n openshift-gitops --type merge \
+#     --patch-file bootstrap/phase0/06_argocd_cephcluster_health.yaml
+#
+# A merge patch REPLACES the whole spec.resourceHealthChecks list. Checked
+# read-only on 2026-10-22: the live CR has none, so nothing is lost. Re-check
+# before re-applying. Re-apply after any GitOps operator reinstall.
+spec:
+  resourceHealthChecks:
+    - group: ceph.rook.io
+      kind: CephCluster
+      check: |
+        local hs = {status = "Progressing", message = "Waiting for status"}
+        if obj.status == nil then
+          return hs
+        end
+        local ceph = obj.status.ceph
+        if ceph ~= nil and ceph.health ~= nil then
+          local keys = {}
+          if ceph.details ~= nil then
+            for k, _ in pairs(ceph.details) do
+              table.insert(keys, k)
+            end
+            table.sort(keys)
+          end
+          local msg = ceph.health
+          if #keys > 0 then
+            msg = msg .. ": " .. table.concat(keys, ", ")
+          end
+          hs.message = msg
+          if ceph.health == "HEALTH_OK" or ceph.health == "HEALTH_WARN" then
+            hs.status = "Healthy"
+          elseif ceph.health == "HEALTH_ERR" then
+            hs.status = "Degraded"
+          end
+          return hs
+        end
+        if obj.status.phase == "Ready" then
+          hs.status = "Healthy"
+          hs.message = "Ready"
+        end
+        return hs

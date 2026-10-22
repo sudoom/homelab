@@ -145,3 +145,59 @@ Verify the repo is public, or add deploy keys:
 oc get route openshift-gitops-server -n openshift-gitops -o jsonpath='{.spec.host}'
 # → Settings → Repositories → Connect Repo
 ```
+
+## Step 8: ArgoCD CephCluster health override (`06_argocd_cephcluster_health.yaml`)
+
+Needed before the GitOps operator moves to Argo CD 3.3+ (the 1.22 upgrade); harmless on 3.1.
+
+Why: Argo CD 3.3 added a built-in health check that maps CephCluster `HEALTH_WARN` to Degraded. This cluster is
+permanently `HEALTH_WARN`, and a Degraded resource fails a multi-wave sync, so `rook-ceph-cluster`'s hourly sync would
+fail before its wave-10/11 bootstrap Jobs. The override reports `HEALTH_WARN` as Healthy (warning names in the
+message) and only `HEALTH_ERR` as Degraded. The ArgoCD CR is operator-defaulted and not in git, hence a hand-applied patch.
+
+```bash
+# The merge patch REPLACES the whole spec.resourceHealthChecks list: confirm the live CR has none first
+oc get argocd openshift-gitops -n openshift-gitops -o jsonpath='{.spec.resourceHealthChecks}{"\n"}'
+oc patch argocd openshift-gitops -n openshift-gitops --type merge \
+  --patch-file bootstrap/phase0/06_argocd_cephcluster_health.yaml
+
+# Verify: the operator renders it into argocd-cm
+oc get cm argocd-cm -n openshift-gitops \
+  -o jsonpath='{.data.resource\.customizations\.health\.ceph\.rook\.io_CephCluster}' | head -5
+```
+
+**Re-apply after any GitOps operator reinstall** (the CR is recreated without it).
+
+Offline test of the Lua with the local `argocd` CLI (v3.5.x): put the check under
+`data.resource.customizations.health.ceph.rook.io_CephCluster` in a copy of `argocd-cm` and run
+`argocd admin settings resource-overrides health <cephcluster.yaml> --argocd-cm-path <argocd-cm.yaml>`.
+
+## Recovering from a failed GitOps operator upgrade (UNTESTED)
+
+Written for the 1.19 to 1.22 upgrade; none of this has been run. Order of preference:
+
+1. **Fix forward.** Use the break-glass kubeconfig (`~/.kube/config-breakglass`, cluster-admin SA token) because
+   OAuth/console may be down. Read `oc get csv,installplan,subscription -n openshift-operators` and the operator pod
+   logs, and fix the cause.
+2. **Last resort: reinstall 1.19.0.** CRDs, the ArgoCD CR and every Application stay in place; only the operator
+   is replaced.
+
+```bash
+export KUBECONFIG=~/.kube/config-breakglass
+# a. remove the Subscription and the installed CSV (not the CRDs, not the ArgoCD CR)
+oc delete subscription gitops-operator -n openshift-operators
+oc get csv -n openshift-operators | grep gitops        # note the failing CSV name
+oc delete csv <gitops-operator.vX.Y.Z...> -n openshift-operators
+# b. re-create the Subscription: source okderators, installPlanApproval Manual
+oc apply -f bootstrap/phase0/02_gitops_operator.yaml
+# c. approve the 1.19.0 InstallPlan (check its clusterServiceVersionNames first; it must list v1.19.0)
+oc get installplan -n openshift-operators
+oc patch installplan <install-xxxxx> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'
+oc get csv -n openshift-operators -w | grep gitops     # wait for Succeeded
+# d. re-apply the CephCluster health override
+oc patch argocd openshift-gitops -n openshift-gitops --type merge \
+  --patch-file bootstrap/phase0/06_argocd_cephcluster_health.yaml
+```
+
+If the catalog offers a newer head than 1.19.0 first, the InstallPlan may not list v1.19.0; do not approve it,
+and pin the Subscription with `spec.startingCSV: gitops-operator.v1.19.0-2026-02-07-151505`.
