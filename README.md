@@ -382,9 +382,9 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   2026-10-06. Next: `homelab-wildcard` **2026-11-20**, `barman-cloud-*` 2026-11-24, `api-cert` + `okd-wildcard`
   2026-12-05.
   **Route status 2026-10-22:** okd-operator-pipeline #28/#29 (cert-manager 1.20) merged and the `release-4.21` build
-  published bundle `1.20.0-2026-10-22-132146`; `okderators-catalog-index` still heads at v1.18.0. Next: a catalog-index
-  PR (bundle file + channel entry replacing `v1.18.0-2025-12-25-214537`, not filed), a `catalog-index:4.21` rebuild,
-  then approve the Manual InstallPlan. The Helm fallback stays parked until then.
+  published bundle `1.20.0-2026-10-22-132146`; `okderators-catalog-index` still heads at v1.18.0. The catalog-index
+  PRs adding it are filed as drafts: #60 (`release-4.21`) and #61 (`release-4.22`, same bundle). Next: their merge,
+  which rebuilds `catalog-index:4.21`, then approve the Manual InstallPlan. The Helm fallback stays parked until then.
   **The 4.21 catalog flip delivered nothing else either:** zero InstallPlans generated; `gitops-operator` head is
   identical (v1.19.0) and `cluster-logging` head is **v6.3.0-2025-08-08, OLDER than the installed v6.5.0** — which
   is okderators issue **#44** (still open) as a fact rather than a caveat. Our 6.5.0 came from the 4.20 index: `okderators-catalog-index` `release-4.20` lists the 6.5.0-2026-06-04 bundles for both `cluster-logging` and `loki-operator`, `release-4.21` stops at 6.3.0 (checked 2026-10-20). Issue #48 reports an S3 bug in that same build (LOG-9632, logs not written to object storage); on garage it does not show here: no S3, flush or store errors in the ingester over six hours, ~5,000 flush and upload lines. Nothing downgrades (OLM only walks

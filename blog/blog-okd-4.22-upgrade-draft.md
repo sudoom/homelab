@@ -429,3 +429,29 @@ Next: a catalog-index PR adding the 1.20 bundle file and a channel entry
 `name: cert-manager-operator.v1.20.0-2026-10-22-132146`, `replaces: cert-manager-operator.v1.18.0-2025-12-25-214537`
 (not filed, no fork of the catalog repo yet). After it merges and `catalog-index:4.21` is rebuilt, the cluster gets a
 Manual InstallPlan for 1.20 (the subscription is `installPlanApproval: Manual`), which the operator approves.
+
+### Later the same day — the catalog-index PRs
+
+Forked `okderators-catalog-index` to `sudoom/` and filed two drafts:
+[#60](https://github.com/okd-project/okderators-catalog-index/pull/60) on `release-4.21` and
+[#61](https://github.com/okd-project/okderators-catalog-index/pull/61) on `release-4.22`. Each is one commit, 2 files,
++132/-1: the bundle file plus the `alpha` entry replacing `cert-manager-operator.v1.18.0-2025-12-25-214537`, which is
+exactly the CSV installed here (`oc get subscription -A` → channel `alpha`, source `okderators`, Manual).
+
+- The bundle file is `opm render quay.io/okderators/cert-manager/operator-bundle:1.20.0-2026-10-22-132146 -o yaml`
+  (opm v1.74.0, darwin-arm64 release binary), written as `hack/add-bundle.sh` does. The method reproduces the
+  committed `1.18.0-2025-12-25-214537` file byte for byte. The maintainer's open #59 changes how that script reads
+  the bundle name, not its output.
+- `opm validate catalog` passes on both branches; the `alpha` head moves from `v1.18.0-2025-12-25-214537` to
+  `v1.20.0-2026-10-22-132146` and every earlier entry reaches it. Negative control, bundle file without the
+  channel entry: `bundle "cert-manager-operator.v1.20.0-2026-10-22-132146" not found in any channel entries`.
+- One bundle for both catalogs: the pipeline's `release-4.22` branch never got the 1.20 bump, so 4.22 takes the
+  `release-4.21` build. I decoded the embedded manifests of that bundle and of the `main` build (`…132017`, which
+  targets OKD 5.0): identical apart from dates, digests and `relatedImages` order, same image set, no `okd-scos`
+  reference anywhere.
+- The catalog repo's only workflow, `deploy-catalog.yml`, runs on push to `release-*` (and by hand): it builds
+  `catalog.Containerfile` (`opm serve --cache-only`) and pushes `catalog-index:<branch minus release->`. Nothing
+  runs on a PR.
+
+Next: the maintainer reviews #60/#61. After #60 merges, the `okderators` CatalogSource picks up the rebuilt
+`catalog-index:4.21` within its 60-minute `registryPoll`, and a 1.20 InstallPlan appears for approval.

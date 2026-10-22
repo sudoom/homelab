@@ -126,9 +126,9 @@ The options when this is picked up: (1) the bump only, with the trigger and `cat
 PR body for the maintainers; (2) bump plus trigger with `update_catalog: false`; (3) bump plus trigger with
 `catalog_branch: release-4.22`, which fails until that catalog branch exists. Option 1 is the recommendation.
 
-**Still to do:** the companion `okderators-catalog-index` change adding the `olm.channel` entry. It cannot be
-written until this PR merges and a build is published, because the entry has to name the resulting
-`cert-manager-operator.v1.20.0-<date>` CSV.
+**Merged 2026-10-22** (#28 `main`, #29 `release-4.21`). The companion `okderators-catalog-index` change adding the
+`olm.channel` entry for the published `cert-manager-operator.v1.20.0-2026-10-22-132146` is filed as drafts:
+okderators-catalog-index#60 (`release-4.21`) and #61 (`release-4.22`).
 
 
 **Upstream:** https://github.com/okd-project/okd-operator-pipeline
