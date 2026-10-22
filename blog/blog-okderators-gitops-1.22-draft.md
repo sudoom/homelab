@@ -550,3 +550,11 @@ pipeline PRs waits on the operator's decision on the CI disk question.
 
 Not covered by this run: `operator-sdk bundle validate`. The tool is installed in the Job (v1.36.1), but the pod log has
 no validate output, so the plan's Step 3 item is still open.
+
+## 2026-10-22: CI disk decision
+
+The 41.2 GB peak is about three times what an `ubuntu-latest` runner has free. Logging hit the same limit at 37.0 GB, and
+its answer, an opt-in `free_disk_space` input, exists only in the unmerged #35 on `main`; nobody has measured whether it
+frees enough for 41 GB. Decision: file the GitOps pipeline PRs without a workflow change and without depending on #35.
+The PR body states the peak, the per-step figures and the runner limit, and the maintainers choose the remedy (larger
+runner, self-hosted runner, or a disk step).
