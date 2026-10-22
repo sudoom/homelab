@@ -405,9 +405,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   `Upgradeable=False`, and no installed CSV declares a max OpenShift version below 4.22. Before the hop:
   **(1) cert-manager 1.20** (catalog-index #60, then approve the InstallPlan; #61 before flipping `okderators` to
   `:4.22`); **(2) a supervised, coherent Rook bump to v1.20.9** (Kube 1.31-1.37; v1.19.x stops at 1.35; the June
-  v1.20.0 CSI break was our un-revendored charts, not Rook). Gaps with no okderators build, each a pipeline
-  contribution or an accepted risk: **(3) OADP** 1.5.0 (Red Hat's 1.5 stops at 4.21) and **(4) GitOps** 1.19.0 /
-  Argo CD 3.1. Logging is fine for the hop (6.6 test build, max 4.23). Cleared since September: NVMe pool ~50% full
+  v1.20.0 CSI break was our un-revendored charts, not Rook). **(3) OADP comes AFTER the hop:** Red Hat offers
+  1.5.8 on 4.20/4.21 and only 1.6.x on 4.22 (operator update checker), so the path is hop on 1.5, then 1.6 from
+  the 4.22 catalog; okderators needs `release-4.22` moved to `oadp-1.6` (all three pipeline branches pin
+  `oadp-1.5`, operator gitlink `5520b16`, 82 commits behind 1.5.8) plus a catalog-index PR. **(4) GitOps** 1.19.0 /
+  Argo CD 3.1 has no okderators 1.20+ build: a pipeline contribution or an accepted gap. Logging is fine for the hop (6.6 test build, max 4.23). Cleared since September: NVMe pool ~50% full
   (was 81.5%). On the day: Ceph is permanently `HEALTH_WARN` (mon c on node5 low space), so the per-node
   `HEALTH_OK` gate needs the node5 TODO first or a restated gate; bundle the SSH-key MachineConfig into the reroll.
 - [ ] **Service mesh evaluation(OKDerator)** — Istio (the old `istio-values.yaml` was removed with the legacy root-level configs on 2026-04-07; start from upstream) vs OpenShift Service Mesh vs nothing. Decide based on actual use cases: mTLS between namespaces, traffic shifting for app rollouts, request-level observability. Don't adopt without a workload that benefits.

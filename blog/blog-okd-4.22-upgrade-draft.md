@@ -479,7 +479,7 @@ included). So neither CVO nor OLM would refuse the hop; everything left is suppo
 |---|---|---|
 | cert-manager | 1.18.0, caps at Kube 1.33 | 1.20 supports 1.32-1.35. Catalog PRs #60 (4.21) / #61 (4.22) filed today. #61 must land before the `okderators` CatalogSource flips to `:4.22`, or the installed 1.20 CSV is missing from the new index. |
 | Rook | v1.19.5 | `prerequisites.md` per tag: v1.19.12 supports Kube **1.30-1.35** (zero headroom), v1.20.9 **1.31-1.37**, v1.21.0 1.32-1.37. The June v1.20.0 CSI break was our own chart incoherence (`Chart.yaml` bumped by Renovate, charts never re-vendored, and v1.20 renamed the CSI ServiceAccounts), not a Rook defect, so the fix is a supervised, coherent bump of both charts and the operator together. It rolls all three OSDs. |
-| OADP | 1.5.0 (okderators), daily Velero schedule to garage | Red Hat's 1.5 stops at 4.21; 4.22 needs 1.6. Both okderators catalogs (`release-4.21`, `release-4.22`) offer only 1.5.0. Needs a pipeline build, or accept running out of matrix. |
+| OADP | 1.5.0 (okderators), daily Velero schedule to garage | **Post-hop, not pre-hop** (see below). Red Hat offers 1.5.8 on 4.20/4.21 and only 1.6.x on 4.22. Both okderators catalogs offer only 1.5.0, and the 4.22 one needs 1.6. |
 | GitOps | 1.19.0, Argo CD 3.1.11 | Both catalogs offer only 1.19.0; the pipeline pins `MINOR=19`. Already outside Argo CD's tested table on 1.34; same "untested, not shown broken" status on 1.35. |
 | Logging / Loki | 6.6 test build from zot | Fine for the hop: `maxOpenShiftVersion` 4.23, and the test catalog does not depend on the OKD version. The okderators route is pipeline #35-#38. |
 | NVMe pool | was 81.5% full (2026-09-08) | `ceph_pool_stored` 242.2 GB vs `ceph_pool_max_avail` 246.1 GB, about 50%. Cleared. |
@@ -497,5 +497,35 @@ included). So neither CVO nor OLM would refuse the hop; everything left is suppo
 - Unchanged: the network pre-flight, `ethtool -i` NIC baseline, cgroup v2 re-check, restarting all three
   `ovnkube-node` plus the repo-server afterwards, then the `okderators` CatalogSource flip `:4.21` → `:4.22`.
 
-Order: cert-manager 1.20 (#60, then approve the InstallPlan) → Rook coherent bump → the hop. OADP 1.6 and GitOps
-1.20+ are a choice between a pipeline contribution each and accepting the gap.
+Order: cert-manager 1.20 (#60, then approve the InstallPlan) → Rook coherent bump → the hop → OADP 1.6 from the
+4.22 catalog. GitOps 1.20+ is a choice between a pipeline contribution and accepting the gap.
+
+### OADP: the order is the hop first, then 1.6
+
+The operator checked Red Hat's operator update checker (`access.redhat.com/labs/ocpouic/?operator=redhat-oadp-operator`,
+upgrade path 4.20 → 4.22), channel `stable`:
+
+```
+OCP 4.20   current 1.5.8   (1.5.0 … 1.5.7)
+OCP 4.21   current 1.5.8   (1.5.0 … 1.5.7)
+OCP 4.22   current 1.6.1   (1.6.0)
+```
+
+1.6 is not in the 4.21 index and 1.5 is not in the 4.22 index, so the only path is: hop on 1.5, then 1.6 from the 4.22
+catalog. The June matrix's "stable-1.6 channel on 4.21 first" was wrong. Upstream agrees on the edge:
+`openshift/oadp-operator` `oadp-1.6` head is CSV 1.6.2 with `olm.skipRange: '>=1.5.0 <1.6.2'`, so any 1.5.x moves
+straight to it. Neither branch's CSV sets `minKubeVersion` or `olm.maxOpenShiftVersion`; the OCP mapping lives only
+in Red Hat's index. 1.6 brings Velero 1.18.4 (`k8s.io/api` v0.33) over 1.5's Velero 1.16.2 (v0.31).
+
+okderators side: all three pipeline branches (`release-4.21`, `release-4.22`, `main`) pin every `oadp/*` submodule
+to `oadp-1.5`, and the operator gitlink is `5520b16` (2026-02-26) on all three, 82 commits behind `oadp-1.5` head
+(1.5.8):
+
+```
+gh api repos/openshift/oadp-operator/compare/oadp-1.5...5520b16ab3fc9f75280c729125ff39b2a97b8ba8
+  -> behind  behind_by=82  ahead_by=0
+```
+
+So the contribution is two-part, mirroring Red Hat: `release-4.22` moves OADP to `oadp-1.6` (12 submodules, plus
+whatever `oadp/build.sh` and `oadp/patches` need), and optionally `release-4.21` moves its gitlinks to `oadp-1.5`
+head for 1.5.8. Then a catalog-index PR on each branch, as with cert-manager.
