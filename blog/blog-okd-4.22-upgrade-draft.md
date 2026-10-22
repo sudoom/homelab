@@ -529,3 +529,27 @@ gh api repos/openshift/oadp-operator/compare/oadp-1.5...5520b16ab3fc9f75280c7291
 So the contribution is two-part, mirroring Red Hat: `release-4.22` moves OADP to `oadp-1.6` (12 submodules, plus
 whatever `oadp/build.sh` and `oadp/patches` need), and optionally `release-4.21` moves its gitlinks to `oadp-1.5`
 head for 1.5.8. Then a catalog-index PR on each branch, as with cert-manager.
+
+### GitOps: not a hop gate
+
+Same checker, `openshift-gitops-operator`, upgrade path 4.20 → 4.22: every OCP version carries channels `gitops-1.6`
+through `gitops-1.22` plus `latest` (default), and `latest` is **1.22.2 on 4.20, 4.21 and 4.22 alike**. The
+`gitops-1.19` channel is still in the 4.22 index. Unlike OADP, nothing ties a GitOps minor to an OCP minor here, so
+the 1.19 → 1.2x bump can land before or after the hop.
+
+What each GitOps release builds, from `rh-gitops-midstream/release` `config.yaml` and the `sources/argo-cd` gitlink
+resolved against `argoproj/argo-cd` `VERSION`:
+
+```
+release-1.19   Argo CD v3.1.16   (we run 1.19.0 = v3.1.11)
+release-1.20   Argo CD v3.3.17
+release-1.21   Argo CD v3.4.12
+release-1.22   Argo CD v3.5.6
+```
+
+The pipeline still sets `MINOR=19` in `gitops/build.sh` and tracks `gitops/release` → `release-1.19` on
+`release-4.21`, `release-4.22` and `main`. The target is a judgment call left open: 1.20 keeps the Argo CD jump to
+two minors (3.1 → 3.3) and is the oldest release in Argo CD's tested table; 1.22 is current but crosses four Argo CD
+minors' upgrade notes in one OLM step, on the operator that runs ArgoCD itself.
+
+Revised order: cert-manager 1.20 → Rook coherent bump → the hop → OADP 1.6. GitOps runs on its own track.
