@@ -642,3 +642,70 @@ renders 49 child Applications (48 before). `oc diff` cannot run: the readonly SA
 server-side dry run, and the object does not exist live (`NotFound`), so the diff is the whole object.
 
 Commit B: `bootstrap/phase0/02_gitops_operator.yaml` `source: okderators` → `okd-test-gitops` (comment says why and until when; the old comment's "cert-manager 1.19.0 recovery" meant the GitOps 1.19.0 recovery). `bootstrap/phase0/readme.md`: Step 3 and the recovery step now apply the file through `sed 's/source: okd-test-gitops/source: okderators/'`, because the test CatalogSource only exists once ArgoCD runs and the recovery target 1.19.0 belongs to `okderators`.
+
+## 2026-10-22: live upgrade of this cluster, 1.19.0 → 1.22
+
+Test CatalogSource first (`136820c`): app `gitops-test-catalog` Synced/Healthy, CatalogSource `okd-test-gitops` `READY`
+at 19:59Z, packagemanifest `gitops-operator` from it with `alpha=gitops-operator.v1.22.0-2026-10-22-173433`. The
+Subscription stayed `AtLatestKnown` on `okderators` with no new InstallPlan.
+
+Then the Subscription source (`24114e3`), applied by the operator:
+
+```
+oc apply -f bootstrap/phase0/02_gitops_operator.yaml
+subscription.operators.coreos.com/gitops-operator configured
+```
+
+OLM created one InstallPlan, which proves the edge from the installed 1.19.0:
+
+```
+install-2wsdj  approved=false  RequiresApproval  ["gitops-operator.v1.22.0-2026-10-22-173433"]
+bundle: zot.apps.okd.sudops.pl/okd-test/gitops/operator-bundle@sha256:bf349fbe… (catalog okd-test-gitops)
+```
+
+42 steps: 28 CRDs, the CSV, ClusterRole/ClusterRoleBinding, two Role/RoleBinding pairs, two Services, a
+ServiceAccount, a ServiceMonitor, two ConfigMaps and the bundle secret. No conditions, no failed bundle lookup. Against
+the 1.19.0 CSV's owned CRDs: all 14 updated in place, none dropped, 14 new `promoter.argoproj.io` CRDs (GitOps
+Promoter, unused here).
+
+Baseline before approval: 50 apps Synced/Healthy, 8 `openshift-gitops` pods Running, CephCluster override in the CR,
+server image `quay.io/okderators/gitops/argocd@sha256:f2ce883860c9…`.
+
+The operator approved through the console at 20:55Z. Timeline (readonly watcher, 30 s polls):
+
+```
+20:55:52 ip[true/Installing] csv[Pending/RequirementsNotMet] old[Replacing]
+20:56:15 csv Installing/InstallWaiting: waiting for deployment openshift-gitops-operator-controller-manager ... 1 outdated replica(s) to be terminated
+20:57:25 ip[true/Complete] csv[Succeeded/InstallSucceeded] old[] pods_notready=4
+20:58:27 csv[Succeeded/InstallSucceeded] pods_notready=0 containers_not_new_image=0
+```
+
+All eight `openshift-gitops` pods were recreated between 20:56:49Z and 20:56:55Z on the zot images; 0 restarts.
+
+Checks after the upgrade:
+
+| Check | Result |
+|---|---|
+| `GET /api/version` through the route | `v3.5.5+a5038b0` |
+| Applications | 50/50 Synced/Healthy; all 50 reconciled after 20:57Z, no conditions |
+| CephCluster override | in the ArgoCD CR and `argocd-cm` (30 lines); `rook-ceph-cluster` reports CephCluster `Healthy` "HEALTH_WARN: BLUESTORE_SLOW_OP_ALERT, MON_DISK_LOW" |
+| Logs, 10 min | server and application-controller: no `level=error`; Dex: one `failed to get signing algorithm: no signing key found` at 20:58:07Z, keys rotated at 20:58:08Z, nothing since |
+| NetworkPolicies (new in 1.20+) | seven, all `Ingress`-only (application-controller, applicationset-controller, dex, redis, redis-ha, repo-server, server); router → server works (the version call above), repo-server serves the controller, egress to github.com untouched |
+| Prometheus | `up{namespace="openshift-gitops"}` = 1 for server, repo-server and application-controller |
+| Alerts | 9 firing, the same set as since 10-16; none new |
+
+The repo-server logged three `level=error` lines right after start, one each for `immich`, `rook-ceph-operator` and
+`nfs-csi`, the three charts with external dependencies:
+
+```
+helm template . --name-template immich ... failed exit status 1: Error: an error occurred while checking for chart dependencies.
+You may need to run 'helm dependency build' to fetch missing dependencies: found in Chart.yaml, but missing in charts/ directory: immich
+```
+
+Each is followed by the repo-server's own fallback: `helm repo add https:--charts.rook.io-release https://charts.rook.io/release`,
+then `helm dependency build` (immich, OCI, 2.8 s; rook-ceph 1.5 s), then a successful render. All three apps are
+Synced/Healthy at `24114e3` with no conditions. The new repo-server started with an empty cache, so every chart
+rendered fresh under Helm 4.2.4, including the OCI dependency the design flagged.
+
+Still to do: an OpenShift login to the Argo CD UI and the console plugin (operator), the hourly `rook-ceph-cluster`
+multi-wave sync under 3.5, and the 24 h soak.
