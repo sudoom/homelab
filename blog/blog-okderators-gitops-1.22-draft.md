@@ -311,3 +311,172 @@ and catalog-edit test mode (0 checks failed on both branches).
 ## 2026-10-22: OKD_VERSION for the GitOps build Job
 
 `common.sh` on the pipeline's `main` defaults to `OKD_VERSION=5.0.0-okd-scos.0`, and the GitOps build takes the haproxy-router and must-gather images from that release payload. The test build runs from the `main`-based `gitops-1.22` branch but gets installed on this 4.21 cluster, so I added an optional `OKD_VERSION` template parameter to `tests/okderators-gitops-build/job-template.yaml`. It is always exported to the container, empty by default: `common.sh` uses `${OKD_VERSION:-"5.0.0-okd-scos.0"}`, and the colon form treats empty as unset. `build.sh` logs `INFO OKD_VERSION=<value or (pipeline default)>`; `load_vars` already prints the resolved `IMG_*` refs, haproxy-router included. The test build runs with `-p OKD_VERSION=4.21.0-okd-scos.10`, the value `release-4.21` uses.
+
+## 2026-10-22: the pipeline change on `main` (`[gitops] Update to 1.22`)
+
+I wrote the okd-operator-pipeline change on a local branch `gitops-1.22` cut from `origin/main` (`2598107`, the
+cert-manager 1.20 merge). One commit. Nothing is built or pushed yet; the build runs on the cluster in a later step.
+The checks below are static: the patch applies, the gitlink is the pin, every image has a build and a push line, no
+Containerfile the build uses pulls from `registry.redhat.io`, and every image variable the operator reads is set.
+
+### What failed first, on `origin/main`
+
+```
+$ git ls-tree origin/main gitops/release
+160000 commit 96727513ecb31ce9ce798f1814292528bfea67ad	gitops/release
+$ git show origin/main:gitops/build.sh | grep MINOR=
+MINOR=19
+$ git show origin/main:gitops/build.sh | grep -c manager_auth_proxy_patch
+1
+```
+
+The current patch against a clean checkout of the midstream pin `6c4a911`:
+
+```
+$ git apply --check release.patch      # main's gitops/patches/release.patch
+error: patch failed: clis/argocd-agentctl/Dockerfile:17
+...
+error: containers/argocd-rhel9/Dockerfile: No such file or directory
+error: patch failed: containers/argocd/Dockerfile:17
+...
+error: containers/gitops/Dockerfile: patch does not apply
+```
+
+Every hunk fails: 1.22 Containerfiles already use RHEL 9 bases, and `containers/argocd-rhel9/` no longer exists
+(the RHEL 9 Argo CD Containerfile is now `containers/argocd/`).
+
+`registry.redhat.io` lines in the unpatched Containerfiles the build uses (count, then `pnpm install --offline` count):
+
+```
+containers/argo-rollouts/Dockerfile 2 0
+containers/argocd/Dockerfile 2 1
+containers/argocd-agent/Dockerfile 1 0
+containers/argocd-image-updater/Dockerfile 2 0
+containers/console-plugin/Dockerfile 0 1
+containers/dex/Dockerfile 1 0
+containers/gitops/Dockerfile 1 0
+containers/gitops-operator/Dockerfile 2 0
+containers/gitops-promoter/Dockerfile 2 0
+containers/must-gather/Dockerfile 1 0
+```
+
+`main`'s `env-override.yaml` misses five variables the 1.22 operator reads, so the operator would fall back to its
+compiled-in images for them: `ARGOCD_AGENT_IMAGE`, `GITOPS_CONSOLE_PLUGIN_IMAGE_PF5`, `GITOPS_PROMOTER_IMAGE`,
+`PROMOTER_EXTENSION_IMAGE`, `ROLLOUTS_EXTENSION_IMAGE` (renamed from `ARGOCD_EXTENSION_IMAGE`; when it is unset,
+argocd-operator uses the upstream extension-installer image and downloads the Rollouts extension from GitHub).
+
+### Which variables the operator reads
+
+I listed the image variables from the source at the pinned commits, not from Red Hat's CSV: gitops-operator
+`cf32771` (`grep -rn 'os.Getenv('`), and the two modules it embeds, argocd-operator `a213c171` (`common/keys.go`, the
+agent, principal and promoter controllers) and argo-rollouts-manager `67002e569d7f`. Fifteen names: `ARGOCD_IMAGE`,
+`ARGOCD_DEX_IMAGE`, `ARGOCD_REDIS_IMAGE`, `ARGOCD_REDIS_HA_IMAGE`, `ARGOCD_REDIS_HA_PROXY_IMAGE`, `BACKEND_IMAGE`,
+`GITOPS_CONSOLE_PLUGIN_IMAGE`, `GITOPS_CONSOLE_PLUGIN_IMAGE_PF5`, `ROLLOUTS_EXTENSION_IMAGE`,
+`PROMOTER_EXTENSION_IMAGE`, `ARGO_ROLLOUTS_IMAGE`, `ARGOCD_PRINCIPAL_IMAGE`, `ARGOCD_AGENT_IMAGE`,
+`ARGOCD_IMAGE_UPDATER_IMAGE`, `GITOPS_PROMOTER_IMAGE`. The defaults behind them are `quay.io/redhat-user-workloads/...`
+(console plugin, backend) or upstream images.
+
+One non-image variable matters too. The operator only uses the OpenShift route plugin baked into the Rollouts image when
+`ARGO_ROLLOUTS_IMAGE` starts with `registry.redhat.io/openshift-gitops`; otherwise it points Rollouts at an amd64
+binary on GitHub (`DefaultOpenShiftRoutePluginURL` in argo-rollouts-manager). Our Rollouts image is built from the same
+Containerfile and carries `/plugins/rollouts-trafficrouter-openshift/openshift-route-plugin`, so I set
+`OPENSHIFT_ROUTE_PLUGIN_LOCATION=file:/plugins/rollouts-trafficrouter-openshift/openshift-route-plugin`.
+
+### The changes
+
+- `.gitmodules`: `gitops/release` `branch = release-1.22`; gitlink set with
+  `git update-index --cacheinfo 160000,6c4a911765610abf65a3344d16bafdeca0971e5a,gitops/release`.
+- `gitops/build.sh`: `MINOR=22`; Argo CD from `containers/argocd/Dockerfile`; new `IMG_PROMOTER`
+  (`containers/gitops-promoter`) and `IMG_PROMOTER_EXTENSION` (`containers/argocd-promoter-extension`), each with a build
+  and a push line; the `cli` and `agentctl` images dropped (the CSV never deploys them, so `gitops/cli` and `gitops/agentctl` are no longer published); kube-rbac-proxy
+  dropped (gitops-operator 1.22 has no `config/default/manager_auth_proxy_patch.yaml`, so the old `yq -i` on it would
+  abort the build under `set -e`); redis pinned by digest; the cert-manager graph fix on the base CSV before
+  `make bundle` (`olm.skipRange: >=1.0.0 <${OCP_DATE}`, `del(.spec.replaces)`, `del(.spec.skips)`); `make bundle` gets
+  `OPERATOR_SDK=$(command -v operator-sdk)`, because the 1.22 Makefile otherwise downloads operator-sdk v1.35.0 into
+  `bin/`. Three build args Red Hat's Konflux run passes and ours did not: `CI_ARGOCD_AGENT_COMMIT`,
+  `CI_ROLLOUT_EXTENSION_VERSION`, `CI_GITOPS_PROMOTER_VERSION`.
+- `gitops/env-override.yaml`: all fifteen variables above plus `ARGOCD_REPOSERVER_IMAGE` (Red Hat's CSV still sets it),
+  the `RELATED_IMAGE_*` twins that make operator-sdk list each image in `spec.relatedImages`, and the route plugin path.
+  `GITOPS_CONSOLE_PLUGIN_IMAGE_PF5` points at the PF6 plugin: the operator reads it only on a 4.18.x cluster, which no
+  catalog this targets serves, and the PF5 plugin is not built.
+- `gitops/patches/release.patch`, regenerated on a clean checkout of `6c4a911` with `git format-patch HEAD~1 --stdout`
+  (the pipeline applies it with `git am -3`, so it has to be a mail-format patch, not a bare `git diff`). 11 files,
+  19 insertions, 18 deletions:
+  - every `FROM registry.redhat.io/rhel9/go-toolset:1.26` → `registry.access.redhat.com/ubi9/go-toolset:1.26` (12 lines in
+    8 Containerfiles); that tag is Go 1.26.10 today (Red Hat catalog, 2026-10-22), above the 1.26.5 the operator and promoter
+    `go.mod` files need;
+  - the two `# TODO: switch to registry.redhat.io once the image is available` comments above those lines removed;
+  - `containers/must-gather`: `FROM quay.io/openshift/origin-must-gather:latest` instead of `ose-must-gather-rhel9:v4.16.0`;
+    `build.sh` still overrides it with `--from` the OKD payload's must-gather;
+  - the pnpm installs. Red Hat's Argo CD UI and console plugin stages run `pnpm install --frozen-lockfile --offline` against
+    a store Hermeto fills during Konflux prefetch; `containers/argocd/ui/.npmrc` is a placeholder
+    (`# Placeholder; Hermeto inject-files overwrites this during prefetch.`). Outside Konflux that store is empty. I dropped
+    `--offline` in both stages and made the `.npmrc` `registry=https://registry.npmjs.org/`. The lockfiles stay frozen:
+    the Argo CD overlay lockfile resolves everything by integrity from the registry except `argo-ui`, which is a directory
+    dependency on the `sources/argo-cd-ui-ref` submodule; the console plugin lockfile has no tarball or git sources at all.
+    Same packages as Red Hat's build, fetched from the public registry instead of a prefetched store. Whether that works
+    is proven only by the cluster build.
+
+Compared with the Containerfiles Red Hat built 1.22.2 from (fetched by image digest), the only differences are the
+lines above. The midstream Containerfiles at `6c4a911` are byte-identical to Red Hat's apart from a trailing newline, so
+no Konflux, Hermeto or ART step lives in them; prefetch lives in the Tekton pipeline, which we do not use.
+
+`sources/argo-cd-ui-ref`, which the Argo CD Containerfile copies, is not in the midstream `config.yaml`, but it is in its
+`.gitmodules` with a gitlink at `6c4a911` (`c089d1d2`). `submodule_initialize` runs
+`git submodule update --init --recursive release`, which initialises every submodule in `.gitmodules`, so it gets
+fetched without a change to `init`.
+
+### Redis and HAProxy, the two images we do not build
+
+Redis: `build.sh` used the tag `quay.io/sclorg/redis-7-c9s:latest`. I resolved it through the quay API on 2026-10-22
+17:04 UTC and pinned the digest:
+
+```
+latest sha256:d772acab11507231a2b152850f47c8b9b859dedb6652ca624949e97cb28c5e6f Wed, 08 Jan 2025 02:19:13 -0000 single
+```
+
+The same digest carries the tags `c9s` and `20250108`. The repository has not had a new image since 2025-01-08, and
+`latest` is a single-arch manifest, not a list.
+
+HAProxy: `build.sh` takes `haproxy-router` from the OKD release payload of the branch's `OKD_VERSION`, so it is always a
+`quay.io/okd/scos-content@sha256:` digest. `oc adm release info` was not available to me, so I read
+`release-manifests/image-references` from each payload through the registry API (layer digests verified). What each
+branch resolves today:
+
+| branch | OKD_VERSION | haproxy-router | must-gather (`--from`) |
+|---|---|---|---|
+| main | 5.0.0-okd-scos.0 | `sha256:3b780cf2f6350358655e1a9c5493d6c1f3f2ea806cc9af71d984b03abbabae6d` | `sha256:37760dbe598944231ad88bb9f6896e1d3e35ceb9949590758a61ef1ec1a2a252` |
+| release-4.22 | 4.22.0-okd-scos.2 | `sha256:abe64e81007a722ca397c69c806e4083b85f075f0e60c3ab8d7859fc542f7a73` | `sha256:0834efd548122c7e717d5950e3a9f04182a18c8aaf2c008d7b3c17678c1a0abc` |
+| release-4.21 | 4.21.0-okd-scos.10 | `sha256:51d9c27b00bc0a38d62ef1f0b0c187c64a704d4afd8bee0ff8526c425cbcff84` | `sha256:a743f7b460c92d4167293e1d53e593dd3ec5caed9dab6d362c66fab350a0afc0` |
+| release-4.20 | 4.20.0-okd-scos.6 | `sha256:aa2c8730d15b20297f71426ff7bc9a0eae0ce86b328961a178110cbd3f72fd82` | `sha256:e1bcd28cdeefcdd002d99a01e0ffaba0dfffa0c04da3fb5d044e8d61bc00c73a` |
+
+All four HAProxy digests answer `200` to an anonymous manifest `HEAD` on `quay.io/okd/scos-content`. A build from `main`
+gets the 5.0 payload's HAProxy and must-gather base unless `OKD_VERSION` is overridden.
+
+### The checks after the change
+
+A script runs every check against the committed branch and, as a control, against `origin/main`. On the branch:
+81 PASS, 0 FAIL. On `origin/main`: 37 FAIL (gitlink, branch, `MINOR`, patch apply, Red Hat FROM lines, `--offline`,
+kube-rbac-proxy, missing build lines for argocd/promoter/promoter-extension, five missing variables). The decisive lines:
+
+```
+PASS gitlink HEAD:gitops/release = 6c4a911765610abf65a3344d16bafdeca0971e5a
+PASS .gitmodules gitops/release branch = release-1.22
+PASS git apply --check on fresh 6c4a911765610abf65a3344d16bafdeca0971e5a
+PASS git am -3 on fresh 6c4a911765610abf65a3344d16bafdeca0971e5a
+PASS registry.redhat.io count 0: containers/<each of the 12 Containerfiles build.sh uses>
+PASS no 'pnpm install --offline' in argocd/console-plugin
+PASS grep -c manager_auth_proxy_patch gitops/build.sh = 0
+PASS build+push IMG_<each of the 12 images> <- containers/<dir>/Dockerfile
+PASS env-override sets <each of the 15 variables> / OPENSHIFT_ROUTE_PLUGIN_LOCATION
+PASS build_bundle yq edits run cleanly on gitops-operator cf32771
+INFO base CSV: replaces=null skipRange=>=1.0.0 <1.22.0-2026-10-22-000000 displayName=OKD GitOps (ArgoCD)
+```
+
+The last two run `build_bundle`'s `yq` and `sed` edits on a copy of gitops-operator `cf32771` with dummy image names:
+every target file exists, the manager env list grows from 5 to 36 entries with no empty value of ours and no duplicate name,
+and the base CSV has no `replaces`.
+
+Still unproven until the cluster build: that the UI stages install online, that `yum install -y cmake` works on the
+public go-toolset image (the 1.19 build did the same on UBI and passed), and that `make bundle` carries the skipRange and
+the missing `replaces` into the generated CSV (it does for cert-manager 1.20 with the same pattern).
