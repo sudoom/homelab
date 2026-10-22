@@ -196,3 +196,56 @@ means here:
    other `*_IMAGE` vars; otherwise the operator would fall back to a Red Hat tenant registry.
 
 So the direct jump is safe on code grounds. Items 2 and 8 are the ones to look at after the live upgrade.
+
+## 2026-10-22: pre-upgrade prep on GitOps 1.19, the CephCluster health override
+
+Argo CD 3.3 ships a built-in Lua health check for `ceph.rook.io/CephCluster` that maps `HEALTH_WARN` to Degraded. This Ceph is permanently `HEALTH_WARN` (`BLUESTORE_SLOW_OP_ALERT`, `MON_DISK_LOW`), and a Degraded resource fails a multi-wave sync, so after the 1.22 upgrade `rook-ceph-cluster`'s hourly sync would fail before its wave-10/11 bootstrap Jobs. I chose to override the check rather than silence the warnings. The ArgoCD CR is operator-defaulted and not in git, so the override is a hand-applied merge patch in `bootstrap/phase0/06_argocd_cephcluster_health.yaml`.
+
+### Failing test (RED)
+
+Live CephCluster dumped read-only, evaluated offline with the local v3.5.6 CLI against an empty `argocd-cm`:
+
+```
+oc -n rook-ceph get cephcluster -o yaml | yq e '.items[0]' - > cephcluster.yaml
+argocd admin settings resource-overrides health cephcluster.yaml --argocd-cm-path argocd-cm-empty.yaml
+STATUS: Degraded
+MESSAGE: Ceph health is HEALTH_WARN (2 OSD(s) experiencing slow operations in BlueStore; mon c is low on available space) - Cluster created successfully
+```
+
+I read upstream's `health.lua` (v3.5.6). It also folds in `status.state` and the detail messages; mine is deliberately smaller: no status -> Progressing; `HEALTH_OK`/`HEALTH_WARN` -> Healthy; `HEALTH_ERR` -> Degraded; message = health + sorted `status.ceph.details` keys; no health field -> `status.phase == Ready` -> Healthy else Progressing.
+
+### Passing test (GREEN)
+
+The Lua extracted from the patch file into `resource.customizations.health.ceph.rook.io_CephCluster` of a test `argocd-cm`:
+
+```
+argocd admin settings resource-overrides health cephcluster.yaml --argocd-cm-path argocd-cm-test.yaml
+STATUS: Healthy
+MESSAGE: HEALTH_WARN: BLUESTORE_SLOW_OP_ALERT, MON_DISK_LOW
+```
+
+Edited copies (yq): `HEALTH_ERR` -> `Degraded` ("HEALTH_ERR: BLUESTORE_SLOW_OP_ALERT, MON_DISK_LOW"); `del(.status)` -> `Progressing` ("Waiting for status"); `HEALTH_OK` without details -> `Healthy` ("HEALTH_OK"); health field removed + `phase: Ready` -> `Healthy`; health removed + `phase: Progressing` -> `Progressing`.
+
+Live CR check before writing the patch: `oc get argocd openshift-gitops -n openshift-gitops -o jsonpath='{.spec.resourceHealthChecks}'` printed nothing, so replacing the list loses nothing.
+
+### Drift fix
+
+`bootstrap/phase0/02_gitops_operator.yaml` said `installPlanApproval: Automatic`; live is `Manual` (since before the 4.21 catalog flip). The file now says `Manual`, `source` stays `okderators`.
+
+### Baseline before the upgrade (read-only, ConfigMaps only)
+
+- Subscription: `Manual okderators alpha gitops-operator.v1.19.0-2026-02-07-151505`.
+- 49 Applications: 49 Synced / Healthy.
+- `openshift-gitops` pods (8): `cluster`, `gitops-plugin`, application-controller-0, applicationset-controller, dex-server, redis, repo-server, server; all Running, 0 restarts.
+- ArgoCD CR spec top-level keys: applicationSet, controller, grafana, ha, imageUpdater, initialSSHKnownHosts, monitoring, notifications, prometheus, rbac, redis, repo, resourceExclusions, server, sso, tls. No `resourceHealthChecks`.
+- `argocd-cm` keys: admin.enabled, application.instanceLabelKey, application.resourceTrackingMethod, dex.config, ga.*, help.*, kustomize.buildOptions, oidc.config, resource.exclusions, resource.inclusions, server.rbac.disableApplicationFineGrainedRBACInheritance, statusbadge.enabled, url, users.anonymous.enabled. `argocd-cmd-params-cm`: `controller.resource.health.persist`. `argocd-rbac-cm`: policy.csv, policy.default, scopes.
+- Bindings carrying an Argo CD `tracking-id` annotation: 43 ClusterRoleBindings + 29 RoleBindings (72); none carry `installation-id`.
+
+### Operator steps
+
+```
+oc get argocd openshift-gitops -n openshift-gitops -o jsonpath='{.spec.resourceHealthChecks}{"\n"}'   # expect empty
+oc patch argocd openshift-gitops -n openshift-gitops --type merge --patch-file bootstrap/phase0/06_argocd_cephcluster_health.yaml
+```
+
+The recovery path for a failed operator upgrade (break-glass, then delete Subscription + CSV and reinstall 1.19.0 from `okderators` with Manual approval) is in `bootstrap/phase0/readme.md`, marked untested.
