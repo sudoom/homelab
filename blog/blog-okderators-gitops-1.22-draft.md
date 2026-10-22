@@ -720,3 +720,18 @@ it stays as it was.
 
 End to end: `516c730` (the docs commit) reached all 50 apps, Synced/Healthy, at 21:03:29Z, about a minute after the
 push.
+
+First multi-wave `rook-ceph-cluster` sync under Argo CD 3.5.5, triggered by the hourly TTL clean-up of its four
+bootstrap Jobs:
+
+```
+operationState: Succeeded 2026-10-22T21:20:51Z -> 2026-10-22T21:21:14Z "successfully synced (all tasks run)"
+rbd-trash-purge-schedule-bootstrap      completed 21:21:08Z
+mgr-pool-crush-rule-bootstrap           completed 21:21:12Z
+csi-rbd-provisioner-caps-fix-bootstrap  completed 21:21:13Z
+pg-num-floor-bootstrap                  completed 21:21:21Z
+CephCluster health: Healthy "HEALTH_WARN: BLUESTORE_SLOW_OP_ALERT, MON_DISK_LOW"
+```
+
+Without the override (Task 7) the CephCluster would have read Degraded and this sync would have stopped before the
+wave-10/11 Jobs. Task 8 is done; the 24 h soak runs from 20:57Z to 2026-10-23 20:57Z.
