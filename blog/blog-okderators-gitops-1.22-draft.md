@@ -587,3 +587,44 @@ level=info msg="All validation tests have completed successfully"
 operator-sdk v1.36.1 (the Job's version, darwin/arm64 release binary, checksum verified). 21 warnings: 20 "provided API
 should have an example annotation" (promoter and rollouts CRDs) and one "csv.Spec.minKubeVersion is not informed".
 None is an error.
+
+## 2026-10-22: catalog graphs validated and the test catalog image
+
+Before the edit, on all three upstream catalog branches the `alpha` channel is the chain
+`v1.13.0-2024-08-09-135916` → `v1.16.0-2025-06-04-121801` → `v1.19.0-2026-02-07-151505` (head), and the homelab
+Subscription is `AtLatestKnown` on that head.
+
+```bash
+DATE=$(date -u +%Y-%m-%d-%H%M%S); echo $DATE      # 2026-10-22-194508
+oc process --local -f tests/okderators-gitops-build/job-template.yaml \
+  -p MODE=catalog -p DATE=$DATE \
+  -p CATALOG_BRANCHES='release-4.20 release-4.21 release-4.22' \
+  -p BUNDLES='zot.apps.okd.sudops.pl/okd-test/gitops/operator-bundle:1.22.0-2026-10-22-173433@sha256:bf349fbe541d91ad55c9073c3fe16597b52679d121115a19c83049dc7bba973a' \
+  | oc -n okd-build create -f -
+```
+
+The pod sat in `CreateContainerError: context deadline exceeded` twice on node5 (19:47:13Z, then `RST_STREAM ... CANCEL`
+at 19:49:14Z) and started on kubelet's third attempt at 19:49:29Z, about four minutes after scheduling. The full-build
+pod at 17:35Z started in about a minute. I have no node-log access, so the cause is open. The run itself took 3 minutes.
+
+Result `RESULT PASS catalog 2026-10-22-194508`. Per branch (4.20 shown; 4.21 and 4.22 are identical):
+
+```
+CHECK edit-release-4.20 PASS gitops-operator.v1.22.0-2026-10-22-173433 replaces gitops-operator.v1.19.0-2026-02-07-151505, skipRange '>=1.19.0-0 <1.22.0-2026-10-22-173433' (+3 lines)
+CHECK opm-validate-release-4.20 PASS opm validate catalog
+CHECK walk-release-4.20 PASS 4 entries reach gitops-operator.v1.22.0-2026-10-22-173433; hops 1.13.0-2024-08-09-135916 -> 1.16.0-2025-06-04-121801 -> 1.19.0-2026-02-07-151505 -> 1.22.0-2026-10-22-173433
+CHECK negative-control-release-4.20 PASS opm validate failed as expected without the channel entry: ... bundle "gitops-operator.v1.22.0-2026-10-22-173433" not found in any channel entries
+CHECK negative-control-skiprange-release-4.20 PASS with skipRange '>=1.0.0 <1.22.0-2026-10-22-173433' opm validate passes and the walker fails: hop from gitops-operator.v1.13.0-2024-08-09-135916 goes to gitops-operator.v1.16.0-2025-06-04-121801, gitops-operator.v1.22.0-2026-10-22-173433, ...
+```
+
+The second negative control is the reason the catalog entry's skipRange starts at `1.19.0-0`: with the CSV's own
+`>=1.0.0` range in the channel entry, `opm validate` still passes but a 1.13 install would be offered a direct jump to
+1.22 (Argo CD 2.x to 3.5). The walker catches that; `opm validate` does not.
+
+Test catalog image, from the edited `release-4.21` tree with package `gitops-operator` only, rendered back from zot
+with the one head and the same walk:
+
+```
+CHECK catalog-image PASS zot.apps.okd.sudops.pl/okd-test/gitops-catalog:2026-10-22-194508: package gitops-operator; head gitops-operator.v1.22.0-2026-10-22-173433; every entry and gitops-operator.v1.19.0-2026-02-07-151505 reach the head
+PUSHED zot.apps.okd.sudops.pl/okd-test/gitops-catalog:2026-10-22-194508@sha256:695277834f9911e47d657c27e79bb022442677d8b391feaf1ceb9c720c1fcd7b 33587446
+```
