@@ -35,8 +35,8 @@ ConfigMap; deleting the namespace and PVC is `oc delete -k tests/okderators-logg
   `kubelet_volume_stats_available_bytes{namespace="zot",persistentvolumeclaim="data-zot-0"}`.
   A full zot breaks image pulls for the whole cluster.
 - **Copy anything you still need from `/work` first.** `MODE=full` and `MODE=catalog` wipe
-  `/work/run` (the logging catalog run's diffs and renders are there), and a full run prunes every
-  unused image from the podman graph root when the PVC has under 40 GiB free (Ruling P2). The
+  `/work/run` (the logging catalog run's diffs and renders are there), and a full run always prunes every
+  unused image from the podman graph root (Ruling P2). The
   `/work/logs` contract and log files are never touched.
 - **No other run is active** (the `flock` on `/work/.lock` is shared with the logging Job and makes
   a second run end `RESULT FAIL another run holds /work/.lock`).
@@ -60,7 +60,7 @@ oc -n okd-build logs job/gitops-build-full-$DATE | grep -E '^(STEP|DISK|ARGOCD_V
 oc -n okd-build logs job/gitops-build-full-$DATE | awk '$1=="STEP" && $3=="START" {s[$2]=$4} $1=="STEP" && $3=="END" {print $2, $4-s[$2] "s"}'
 ```
 
-`check` reuses the `DATE` of a full run: `-p MODE=check -p DATE=<that DATE> -p PIPELINE_BRANCH=<branch>`.
+`check` takes the `DATE` of the full run whose images it copies: `-p MODE=check -p DATE=<that DATE> -p PIPELINE_BRANCH=<branch>`. It pushes new tags under `check-<branch>/` and refuses to run if any exists, so it runs once per full-run `DATE` and branch; to redo, start a new full run with a new `DATE`.
 
 Cleanup:
 
@@ -109,20 +109,21 @@ are opened and is in the pod log only.
 | `MODE` | does |
 |---|---|
 | `full` | tools, podman setup, **prune**, clone `PIPELINE_BRANCH`, tag check of every image and the bundle, `init`, `build_containers`, `push_containers`, **argocd-version**, `build_bundle`, `deinit`, verify. Each pipeline step is a separate `./build.sh <step>` run of `gitops/build.sh`, the same functions its `main` runs, so each is timed. |
-| `check` | no image build. `skopeo copy --all` of every built `IMG_*` image of `DATE` from `${BASE_REGISTRY}/gitops/` to `${BASE_REGISTRY}/check-<branch>/gitops/`, then `init`, `build_bundle`, `deinit` against that registry, then verify. For the other pipeline branches, and to redo bundles and verify after a fix without rebuilding images. |
+| `check` | no image build. Tag check of every image and bundle tag under `check-<branch>/` (any existing tag ends the run before a push), then `skopeo copy --all` of every built `IMG_*` image of `DATE` from `${BASE_REGISTRY}/gitops/` to `${BASE_REGISTRY}/check-<branch>/gitops/`, then `init`, `build_bundle`, `deinit` against that registry, then verify. For the other pipeline branches. |
 | `catalog` | tools, podman setup, tag check of `${BASE_REGISTRY}/gitops-catalog:<DATE>`, `/scripts/catalog-edit.sh` in an empty `/work/run`: the 1.22 entry added to each okderators catalog branch in `CATALOG_BRANCHES`, `opm validate`, graph walk with first-hop assertions, two negative controls, then the test catalog image. Its `CHECK` lines go into the contract, a `CHECK ... FAIL` or a non-zero exit fails the run, and `build.sh` prints `PUSHED` for the catalog image. [Details below](#modecatalog). |
 
 `./build.sh update` never runs (it moves the gitlinks to branch tips).
 
-**prune (Ruling P2).** `MODE=full` first emits `DISK`, reads the free bytes of the PVC with `df`, and
-when under 40 GiB (or unreadable) runs `podman system prune -af` and emits `DISK` again. Nothing
-on the PVC needs keeping, and the command cannot be scoped to some images, so it removes every unused
-one (the logging run left about 37 GB of layers).
+**prune (Ruling P2, amended).** `MODE=full` always starts with `DISK`, `podman system prune -af`, `DISK`,
+whatever is free. Nothing on the PVC needs keeping, and the command cannot be scoped to some images,
+so it removes every unused one (the logging run left about 37 GB of layers). The hosted-runner
+comparison is `peak = max(DISK)` over the run's contract lines after that prune: it approximates a
+fresh runner because the base layers are pulled again. The stop rule is peak > 14 GB.
 
 **argocd-version (Ruling P4).** After `push_containers`, the built Argo CD image runs
 `argocd version --client --short` (`podman run --rm --entrypoint argocd <IMG_ARGOCD>`; plain
 `--client` is the fallback). The first `vX.Y.Z` in the output becomes the contract line
-`ARGOCD_VERSION <version>` and `CHECK argocd-version PASS`; no version found is a `FAIL` that ends the
+`ARGOCD_VERSION <version>`; `CHECK argocd-version` passes only for exactly `v3.5.5` (`EXPECTED_ARGOCD_VERSION` at the top of `build.sh`), and a different or missing version is a `FAIL` that ends the
 run `RESULT FAIL` after verify. Only `full` has the image locally, so `check` does not report it.
 
 ## Parameters
@@ -145,7 +146,7 @@ the pod log and the `.log` file; the `.contract` file holds only these lines:
 | line | meaning |
 |---|---|
 | `STEP <name> START\|END <seconds>` | epoch seconds; the duration is END minus START |
-| `DISK <bytes>` | `du -sx` of `/var/lib/containers` + `/work`, after every step, and around the prune |
+| `DISK <bytes>` | `du -sx` of `/var/lib/containers` + `/work`, after every step, and around the prune; `max(DISK)` after the prune is the run's peak |
 | `ARGOCD_VERSION <version>` | `full` only, see above |
 | `PUSHED <ref>@<digest> <bytes>` | after `push_containers` / the `check` copy and after `build_bundle`; in `catalog`, for the catalog image. Digest = sha256 of the manifest bytes zot serves; bytes = config + layer sizes in that manifest |
 | `CHECK <name> PASS\|FAIL <detail>` | verify, below; in `catalog`, the checks of [MODE=catalog](#modecatalog) |
@@ -164,7 +165,10 @@ After the bundle is pushed, `opm render <bundle repo>@<digest>` for every `IMG_B
 | `external-images/<pkg>` | printed (PASS) when the bundle carries external images, with the exact references |
 | `branding/<pkg>` | no `valid-subscription` anywhere and no `support` annotation naming Red Hat. Other "Red Hat" text is counted and sampled in the detail but does not fail: there is no accepted baseline for the gitops CSV yet, so the first full run sets it (the logging Job keeps one in `BRANDING_BASELINE`) |
 | `provider/<pkg>` | `spec.provider.name` is `OKD Community` |
-| `argocd-version` | `full` only, see above |
+| `no-redhat-registry/<pkg>` | the whole serialised CSV has no match (any case) for `registry.redhat.io`, `registry-proxy.engineering.redhat.com` or `brew.registry` |
+| `skip-range/<pkg>` | CSV annotation `olm.skipRange` is exactly `>=1.0.0 <1.22.0-<DATE>` |
+| `no-replaces/<pkg>` | CSV `spec.replaces` is unset (the catalog entry carries `replaces`) |
+| `argocd-version` | `full` only, see above; exactly `v3.5.5` |
 
 The image list is never written down here: `build.sh` sources the cloned `gitops/build.sh` and reads
 every `IMG_*` variable, so it follows the pipeline when the list changes. Names matching
@@ -249,8 +253,8 @@ A test bundle needs `schema: olm.bundle`, `name: gitops-operator.v1.22.0-<DATE>`
 - Tools: the same pins and checksums as the logging Job (the `/work/tools` and `/work/cache` it
   filled are reused), plus the Fedora package `gettext` for `envsubst`, which `build_bundle` runs. No
   Node or pnpm on the host: the Argo CD and console-plugin UI stages build inside podman.
-- Added `prune` and `argocd-version` steps; the tag check covers every image and the bundle, not just
-  the operator image.
+- Added `prune` (unconditional) and `argocd-version` steps; the tag check covers every image and the bundle, not just
+  the operator image, and `check` has one too.
 - Verify: no `max-openshift-version` requirement and no Red Hat baseline (see above); `csv/<pkg>`
   and `external-images/<pkg>` are new; there is no loki or passthrough-gateway check.
 - `catalog-walk.py` gained `--hop`; `catalog-edit.sh` has one package, one entry, and a different

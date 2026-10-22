@@ -54,11 +54,10 @@ ABSENT_RE='manifest unknown|name unknown|repository name not known|not found|(^|
 EXTERNAL_VAR_RE='^IMG_(KUBE_RBAC_PROXY|HAPROXY_ROUTER|REDIS)$'
 EXTERNAL_REF_RE='^quay\.io/(okd/scos-content|sclorg/redis-[0-9a-z-]+)(@sha256:[0-9a-f]{64}|:[A-Za-z0-9._-]+)$'
 
-# The Argo CD image, whose client version MODE=full reports (ARGOCD_VERSION line).
+# The Argo CD image, whose client version MODE=full reports (ARGOCD_VERSION line) and must equal
+# EXPECTED_ARGOCD_VERSION, the version the pins file (Task 1) fixes for this build.
 ARGOCD_VAR=IMG_ARGOCD
-
-# MODE=full starts with `podman system prune -af` when the PVC has less free space than this.
-MIN_FREE_BYTES=$((40 * 1024 * 1024 * 1024))
+EXPECTED_ARGOCD_VERSION=v3.5.5
 
 # Pinned tools. Every sha256 is the one the project publishes (go.dev JSON, GitHub release
 # checksums files, mirror.openshift.com sha256sum.txt).
@@ -485,6 +484,7 @@ ref_repo() {  # repository of a ref with a digest and/or a tag
 # Argo CD's own version, read from the argocd image this run built: its CLI, which the image
 # ships at /usr/local/bin/argocd (BUILD_ALL_CLIS=false keeps the linux one). The first
 # vX.Y.Z[...] in the output is the version; `--short` is tried first, then plain `--client`.
+# The check passes only for EXACTLY EXPECTED_ARGOCD_VERSION.
 argocd_version() {  # argocd_version <array name>
   local -n arr=$1
   local img=${arr[$ARGOCD_VAR]:-} out v= args
@@ -500,7 +500,11 @@ argocd_version() {  # argocd_version <array name>
     done
     if [[ -n $v ]]; then
       contract "ARGOCD_VERSION ${v}"
-      check argocd-version PASS "${v} from ${img}"
+      if [[ $v == "$EXPECTED_ARGOCD_VERSION" ]]; then
+        check argocd-version PASS "${v} from ${img}"
+      else
+        check argocd-version FAIL "${v} from ${img}, want ${EXPECTED_ARGOCD_VERSION}"
+      fi
     else
       check argocd-version FAIL "no version in the output of argocd ${args} in ${img}"
     fi
@@ -568,6 +572,25 @@ verify() {  # verify <array name> <registry the bundles reference>
     else
       check "csv/${pkg}" FAIL "package ${pkg}, CSV '${n}', want gitops-operator '${want_name} ${want_version}'"
     fi
+    # Global constraints on the whole rendered CSV, each a FAIL.
+    n=$(jq -c . "$dir/csv.json" | grep -oiE 'registry\.redhat\.io|registry-proxy\.engineering\.redhat\.com|brew\.registry' | sort -u | paste -sd ' ' - || true)
+    if [[ -z $n ]]; then
+      check "no-redhat-registry/${pkg}" PASS "no registry.redhat.io, registry-proxy.engineering.redhat.com or brew.registry reference in the CSV"
+    else
+      check "no-redhat-registry/${pkg}" FAIL "CSV references: ${n}"
+    fi
+    n=$(jq -r '.metadata.annotations["olm.skipRange"] // "none"' "$dir/csv.json")
+    if [[ -n $want_version && $n == ">=1.0.0 <${want_version}" ]]; then
+      check "skip-range/${pkg}" PASS "$n"
+    else
+      check "skip-range/${pkg}" FAIL "olm.skipRange '${n}', want '>=1.0.0 <${want_version}'"
+    fi
+    n=$(jq -r '.spec.replaces // "null"' "$dir/csv.json")
+    if [[ $n == null ]]; then
+      check "no-replaces/${pkg}" PASS "spec.replaces is not set"
+    else
+      check "no-replaces/${pkg}" FAIL "spec.replaces is '${n}', want none (the catalog entry carries replaces)"
+    fi
     # What the CSV says about its own edges: catalog-edit.sh sets the real ones in the channel.
     echo "INFO csv ${pkg} replaces=$(jq -r '.spec.replaces // "none"' "$dir/csv.json") skips=$(jq -c '.spec.skips // "none"' "$dir/csv.json") olm.skipRange=$(jq -r '.metadata.annotations["olm.skipRange"] // "none"' "$dir/csv.json")"
 
@@ -631,21 +654,15 @@ verify() {  # verify <array name> <registry the bundles reference>
 # ---------------------------------------------------------------------------------------
 # modes
 
-# Start of MODE=full: the PVC still holds layers of earlier runs (the logging build left ~37 GB).
-# Nothing on it needs keeping, so below MIN_FREE_BYTES free everything unused is pruned.
+# Start of MODE=full: always prune. The PVC still holds layers of earlier runs (the logging build
+# left ~37 GB) and nothing on it needs keeping. After the prune the base layers are pulled again,
+# so peak = max(DISK) of the run approximates a fresh hosted runner (stop rule: peak > 14 GB).
 # `podman system prune -af` cannot be scoped to some images, and does not need to be.
 prune() {
-  local free
   step_start prune
   disk
-  free=$(df -B1 --output=avail /var/lib/containers | tail -n 1 | tr -d ' ')
-  echo "INFO free ${free} bytes on the build PVC; prune when below ${MIN_FREE_BYTES}"
-  if [[ $free =~ ^[0-9]+$ && $free -ge $MIN_FREE_BYTES ]]; then
-    echo "INFO enough free space, no prune"
-  else
-    run_bg podman system prune -af
-    disk
-  fi
+  run_bg podman system prune -af
+  disk
   step_end
 }
 
@@ -692,6 +709,14 @@ mode_check() {
   load_vars "$check_registry" V
   guard_images V "$check_registry"
   split_vars V
+  step_end
+
+  # P12: a run never re-pushes a tag. Every image and bundle tag this run pushes under
+  # check-<slug>/ must be absent, before anything is pushed.
+  step_start tag-check
+  for name in "${IMAGE_VARS[@]}" "${BUNDLE_VARS[@]}"; do
+    tag_check "${V[$name]}"
+  done
   step_end
 
   # Reuse the images a full run pushed for this DATE; zot dedupes the blobs.
