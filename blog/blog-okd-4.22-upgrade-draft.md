@@ -397,3 +397,35 @@ api-cert / okd-wildcard      renews 2026-10-06
 So the canary is the 09-10 internal-CA renewal, and the meaningful deadline is **2026-09-21**, the first
 Let's Encrypt DNS-01 renewal on an out-of-matrix cert-manager. It is running fine today; the risk is that renewal
 exercises code paths a steady-state pod does not.
+
+## 2026-10-22 — cert-manager 1.20 and the nmstate workflow merged upstream
+
+Maintainer SupremeMortal merged three okd-operator-pipeline PRs today: #33 `[nmstate] Add deploy workflow for
+release-4.21` (approved, 13:18Z), #28 `[cert-manager] Update to 1.20` on `main` (13:19Z) and #29 on `release-4.21`
+(13:20Z). The logging PRs #35-#38 are still open with no reviews.
+
+```
+gh pr list -R okd-project/okd-operator-pipeline --state all --author @me
+gh run list -R okd-project/okd-operator-pipeline
+gh run view <id> --log-failed
+```
+
+- "Deploy Cert-Manager" on `release-4.21` (run 39785980679): success. It pushed
+  `quay.io/okderators/cert-manager/operator-bundle:1.20.0-2026-10-22-132146`
+  (sha256:71a5c372b229da8195f50249f4a43f23711bf56f97d1c8b2651bc4f117ef6cc4). That workflow has no catalog job.
+- Bundle CSV `cert-manager-operator.v1.20.0-2026-10-22-132146`: `olm.skipRange: '>=1.0.0 <1.20.0-2026-10-22-132146'`,
+  no `replaces`, minKubeVersion 1.31.0. I read it from the image through the quay.io v2 registry API: anonymous
+  pull token, manifest, then the layer tar.
+- "Deploy Cert-Manager" on `main` (run 39785787379): build succeeded (bundle `1.20.0-2026-10-22-132017`), but its
+  "Catalog Index PR" job failed checking out okderators-catalog-index branch `release-5.0`, which does not exist.
+  Already known: `main` has built OKD 5.0 since 2026-09-23. `release-4.22` still sets `OKD_VERSION=4.22.0-okd-scos.2`.
+- nmstate: no "Deploy NMState" run. Its `release-4.21` workflow triggers only on a push touching `nmstate/**` or a
+  manual `workflow_dispatch`, and #33 only added the workflow file. A maintainer has to run it by hand.
+- `okderators-catalog-index` `release-4.21` and `release-4.22`: the `alpha` channel head in
+  `catalog/cert-manager-operator/cert-manager-operator.yaml` is still `cert-manager-operator.v1.18.0-2025-12-25-214537`
+  (identical files).
+
+Next: a catalog-index PR adding the 1.20 bundle file and a channel entry
+`name: cert-manager-operator.v1.20.0-2026-10-22-132146`, `replaces: cert-manager-operator.v1.18.0-2025-12-25-214537`
+(not filed, no fork of the catalog repo yet). After it merges and `catalog-index:4.21` is rebuilt, the cluster gets a
+Manual InstallPlan for 1.20 (the subscription is `installPlanApproval: Manual`), which the operator approves.
