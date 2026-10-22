@@ -480,7 +480,7 @@ included). So neither CVO nor OLM would refuse the hop; everything left is suppo
 | cert-manager | 1.18.0, caps at Kube 1.33 | 1.20 supports 1.32-1.35. Catalog PRs #60 (4.21) / #61 (4.22) filed today. #61 must land before the `okderators` CatalogSource flips to `:4.22`, or the installed 1.20 CSV is missing from the new index. |
 | Rook | v1.19.5 | `prerequisites.md` per tag: v1.19.12 supports Kube **1.30-1.35** (zero headroom), v1.20.9 **1.31-1.37**, v1.21.0 1.32-1.37. The June v1.20.0 CSI break was our own chart incoherence (`Chart.yaml` bumped by Renovate, charts never re-vendored, and v1.20 renamed the CSI ServiceAccounts), not a Rook defect, so the fix is a supervised, coherent bump of both charts and the operator together. It rolls all three OSDs. |
 | OADP | 1.5.0 (okderators), daily Velero schedule to garage | **Post-hop, not pre-hop** (see below). Red Hat offers 1.5.8 on 4.20/4.21 and only 1.6.x on 4.22. Both okderators catalogs offer only 1.5.0, and the 4.22 one needs 1.6. |
-| GitOps | 1.19.0, Argo CD 3.1.11 | Both catalogs offer only 1.19.0; the pipeline pins `MINOR=19`. Already outside Argo CD's tested table on 1.34; same "untested, not shown broken" status on 1.35. |
+| GitOps | 1.19.0, Argo CD 3.1.11 | Both catalogs offer only 1.19.0; the pipeline pins `MINOR=19`. (Corrected below: Argo CD 3.1 is tested up to 1.34, not on 1.35.) |
 | Logging / Loki | 6.6 test build from zot | Fine for the hop: `maxOpenShiftVersion` 4.23, and the test catalog does not depend on the OKD version. The okderators route is pipeline #35-#38. |
 | NVMe pool | was 81.5% full (2026-09-08) | `ceph_pool_stored` 242.2 GB vs `ceph_pool_max_avail` 246.1 GB, about 50%. Cleared. |
 | CNPG, subscriptions | both clusters 2 instances; okderators subs Manual | Cleared (2026-09-15 and 2026-09-08). |
@@ -553,3 +553,33 @@ two minors (3.1 → 3.3) and is the oldest release in Argo CD's tested table; 1.
 minors' upgrade notes in one OLM step, on the operator that runs ArgoCD itself.
 
 Revised order: cert-manager 1.20 → Rook coherent bump → the hop → OADP 1.6. GitOps runs on its own track.
+
+### Correction, same day: Argo CD's tested table makes GitOps a pre-hop item
+
+The two GitOps notes above lean on a claim carried since 2026-09-09, "Argo CD 3.1 is outside the tested matrix", read
+off the docs site. That page only shows the newest Argo CD minors (it says "use the version selector"); each tag
+carries its own `docs/operator-manual/tested-kubernetes-versions.md`:
+
+```
+gh api "repos/argoproj/argo-cd/contents/docs/operator-manual/tested-kubernetes-versions.md?ref=<tag>"
+v3.1.11 / v3.1.16   3.1  v1.34, v1.33, v1.32, v1.31
+v3.3.17             3.3  v1.35, v1.34, v1.33, v1.32
+v3.4.12             3.4  v1.35, v1.34, v1.33, v1.32
+v3.5.6              3.5  v1.36, v1.35, v1.34, v1.33
+```
+
+| GitOps | Argo CD | Kube 1.34 (4.21, now) | Kube 1.35 (4.22) | Kube 1.36 (4.23) |
+|---|---|---|---|---|
+| 1.19 (ours: 1.19.0) | 3.1.11 / 3.1.16 | tested | not tested | not tested |
+| 1.20 | 3.3.17 | tested | tested | not tested |
+| 1.21 | 3.4.12 | tested | tested | not tested |
+| 1.22 | 3.5.6 | tested | tested | tested |
+
+Two corrections follow. Today, on Kube 1.34, ArgoCD 3.1.11 is inside its tested matrix; the September finding was a
+misreading. And GitOps **is** a 4.22 prerequisite after all: 3.1 is untested on 1.35, and 1.20 or 1.21 is tested on
+both sides of the hop, so the bump belongs on 4.21 before it. Red Hat's index (1.22.2 on 4.20-4.22, `gitops-1.19`
+kept on 4.22) does not force the order; Argo CD's matrix does. Of the four, 1.22 is the only one that also covers 4.23,
+but it bundles Helm v4.2.4 (README re-check of 2026-10-20), a rendering change for every chart here, so 1.20 or 1.21 is
+the first target.
+
+Order, corrected: cert-manager 1.20 → GitOps 1.20/1.21 → Rook coherent bump → the hop → OADP 1.6.
