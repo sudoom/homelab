@@ -735,3 +735,31 @@ CephCluster health: Healthy "HEALTH_WARN: BLUESTORE_SLOW_OP_ALERT, MON_DISK_LOW"
 
 Without the override (Task 7) the CephCluster would have read Degraded and this sync would have stopped before the
 wave-10/11 Jobs. Task 8 is done; the 24 h soak runs from 20:57Z to 2026-10-23 20:57Z.
+
+## 2026-10-22: release-branch checks (MODE=check)
+
+One `check` run per backport branch, against the full run's images (`DATE=2026-10-22-173433`) and without
+`OKD_VERSION`, so each branch uses its own payload default. The three runs share the Job name
+`gitops-build-check-2026-10-22-173433` and the PVC lock, so they ran one after another with the Job deleted in between:
+
+```bash
+oc -n okd-build delete job gitops-build-check-2026-10-22-173433      # before the 2nd and 3rd run
+oc process --local -f tests/okderators-gitops-build/job-template.yaml \
+  -p MODE=check -p DATE=2026-10-22-173433 -p PIPELINE_BRANCH=gitops-1.22-4.22 \
+  | oc -n okd-build create -f -
+```
+
+| Branch | Result | Time | Bundle under `okd-test/check-<branch>/gitops/` | HAProxy (`quay.io/okd/scos-content`) |
+|---|---|---|---|---|
+| `gitops-1.22-4.22` | PASS, 10/10 CHECK | 7 min | `operator-bundle@sha256:47d8638e3725…` | `@sha256:abe64e81…` (4.22 payload) |
+| `gitops-1.22-4.21` | PASS, 10/10 CHECK | 8 min | `operator-bundle@sha256:180d3b355333…` | `@sha256:51d9c27b…` (4.21 payload, same as the full run) |
+| `gitops-1.22-4.20` | PASS, 10/10 CHECK | 7 min | `operator-bundle@sha256:703f2639f065…` | `@sha256:aa2c8730…` (4.20 payload) |
+
+The ten checks are the full run's verify set: CSV name, no Red Hat registry, exact skipRange, no `replaces`,
+`maxOpenShiftVersion` (none), images by digest, images built by this run, external images, branding, provider. The
+one per-branch difference is the HAProxy digest, which `build.sh` reads from each branch's OKD payload. The older
+`submodule_reset` on 4.20 and 4.21 made no difference, as expected from the committed gitlink.
+
+zot: 16.07 GiB free after the three runs, 0.77 GiB less than after the full build (that includes the catalog image and
+the pull-through cache). Each check run's 13 refs are `skopeo copy` of blobs already in zot, so the copies cost little.
+As with logging (ruling P24 there), the `check-*` repos stay until the final clean-up of all `okd-test/gitops*` images.
