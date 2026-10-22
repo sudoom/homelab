@@ -13,7 +13,7 @@ Everything in this directory is applied **once, by hand**. After this, ArgoCD ma
 ### Step 1: Install okderators catalog
 
 ```bash
-oc apply -f bootstrap/phase-0/01-catalog-source.yaml
+oc apply -f bootstrap/phase0/01_catalog_source.yaml
 
 # Wait for READY (takes 1-2 minutes for image pull)
 oc get catalogsource okderators -n openshift-marketplace -w
@@ -25,12 +25,12 @@ oc get packagemanifest | grep -E "gitops|nmstate|cert-manager"
 
 **Expected output** (operator names — record these):
 ```
-openshift-gitops-operator    OKDerators    <age>
+gitops-operator              OKDerators    <age>
 kubernetes-nmstate-operator  OKDerators    <age>
 cert-manager-operator        OKDerators    <age>
 ```
 
-If `openshift-gitops-operator` is not listed, check:
+If `gitops-operator` is not listed, check:
 ```bash
 oc get packagemanifest -o wide | grep okderators
 ```
@@ -38,16 +38,16 @@ oc get packagemanifest -o wide | grep okderators
 ### Step 2: Verify channel name
 
 ```bash
-oc get packagemanifest openshift-gitops-operator \
+oc get packagemanifest gitops-operator \
   -o jsonpath='{.status.channels[*].name}'
 ```
 
-If the output is NOT `latest`, edit `02-gitops-operator.yaml` and replace the `channel:` value.
+okderators publishes one channel, `alpha`. If the output differs, edit `02_gitops_operator.yaml` and replace the `channel:` value.
 
 ### Step 3: Install OpenShift GitOps operator
 
 ```bash
-oc apply -f bootstrap/phase-0/02-gitops-operator.yaml
+oc apply -f bootstrap/phase0/02_gitops_operator.yaml
 
 # Wait for CSV
 oc get csv -A -w | grep gitops
@@ -84,33 +84,27 @@ oc get clusterrolebinding | grep gitops | grep cluster-admin
 If no output (ArgoCD doesn't have cluster-admin), apply:
 
 ```bash
-oc apply -f bootstrap/phase-0/03-cluster-admin-rbac.yaml
+oc apply -f bootstrap/phase0/03_cluster_admin_rbac.yaml
 ```
 
-### Step 6: Push repo to GitHub
+### Step 6: Repo credentials
+
+The root Application pulls `git@github.com:sudoom/homelab.git` (branch `master`) over SSH. `04_credential_template.yaml`
+is a `repo-creds` Secret template with placeholders: fill in the base64 SSH private key and repo URL in a copy outside
+the repo, apply that copy, and never commit it.
 
 ```bash
-cd okd-homelab-gitops
-git init
-git remote add origin git@github.com:sudoom/homelab.git
-git add -A
-git commit -m "initial: bootstrap + gitops structure"
-git branch -M main
-git push -u origin main
+oc apply -f <filled copy of 04_credential_template.yaml>
 ```
 
 ### Step 7: Apply root Application
 
 ```bash
-oc apply -f bootstrap/phase-0/04-root-application.yaml
+oc apply -f bootstrap/phase0/05_root_application.yaml
 ```
 
-ArgoCD now takes over. Watch progress in the ArgoCD UI — Applications appear in sync wave order:
-1. CatalogSources (wave 0)
-2. Operators — NMState, Rook-Ceph (wave 1)
-3. Storage NNCPs (wave 2)
-4. CephCluster (wave 3)
-5. StorageClasses (wave 4)
+ArgoCD now takes over. Applications appear in sync-wave order; the waves are set per app in
+`bootstrap/root-app/values.yaml`.
 
 ## Troubleshooting
 
