@@ -14,6 +14,8 @@
 #   BASE_REGISTRY     must be zot.apps.okd.sudops.pl/okd-test or a path under it
 #   CATALOG_BRANCHES  MODE=catalog only, passed through to catalog-edit.sh
 #   BUNDLES           MODE=catalog only, passed through to catalog-edit.sh (one bundle ref)
+#   OKD_VERSION       optional; OKD release whose payload supplies the haproxy-router and must-gather
+#                     images. Empty = the pipeline's own default. Inherited by gitops/build.sh.
 # MODE=catalog pushes one image, ${BASE_REGISTRY}/gitops-catalog:${DATE}, chosen and guarded here.
 #
 # Machine-greppable output (everything else is free-form):
@@ -228,6 +230,7 @@ print_inputs() {
   echo "INFO MODE=${MODE} DATE=${DATE} BASE_REGISTRY=${BASE_REGISTRY}"
   echo "INFO PIPELINE_REPO=${PIPELINE_REPO} PIPELINE_BRANCH=${PIPELINE_BRANCH}"
   echo "INFO CATALOG_BRANCHES=${CATALOG_BRANCHES} BUNDLES=${BUNDLES}"
+  echo "INFO OKD_VERSION=${OKD_VERSION:-(pipeline default)}"
   echo "INFO node=${NODE_NAME:-unknown} nproc=$(nproc)"
 }
 

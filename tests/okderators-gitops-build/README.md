@@ -60,6 +60,13 @@ oc -n okd-build logs job/gitops-build-full-$DATE | grep -E '^(STEP|DISK|ARGOCD_V
 oc -n okd-build logs job/gitops-build-full-$DATE | awk '$1=="STEP" && $3=="START" {s[$2]=$4} $1=="STEP" && $3=="END" {print $2, $4-s[$2] "s"}'
 ```
 
+For the test build on this OKD 4.21 cluster, from the `main`-based `gitops-1.22` branch, pass the 4.21 payload (the value the pipeline's `release-4.21` branch uses); without it `main`'s default (`5.0.0-okd-scos.0`) applies:
+
+```bash
+oc process --local -f tests/okderators-gitops-build/job-template.yaml \
+  -p MODE=full -p DATE=$DATE -p OKD_VERSION=4.21.0-okd-scos.10 | oc -n okd-build create -f -
+```
+
 `check` takes the `DATE` of the full run whose images it copies: `-p MODE=check -p DATE=<that DATE> -p PIPELINE_BRANCH=<branch>`. It pushes new tags under `check-<branch>/` and refuses to run if any exists, so it runs once per full-run `DATE` and branch; to redo, start a new full run with a new `DATE`.
 
 Cleanup:
@@ -136,6 +143,7 @@ run `RESULT FAIL` after verify. Only `full` has the image locally, so `check` do
 | `PIPELINE_BRANCH` | `gitops-1.22` | |
 | `BASE_REGISTRY` | `zot.apps.okd.sudops.pl/okd-test` | anything outside `zot.apps.okd.sudops.pl/okd-test` is refused |
 | `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.21 release-4.22`; must include `release-4.21` (the test catalog's source) |
+| `OKD_VERSION` | empty (pipeline default) | which OKD release payload the haproxy-router and must-gather images come from; exported to `gitops/build.sh`, where `common.sh` reads `${OKD_VERSION:-...}` (empty counts as unset). Logged as `INFO OKD_VERSION=`; the resolved image refs show in the `INFO var IMG_...` lines |
 | `BUNDLES` | empty | `catalog` only: the one bundle ref, as the full run's `PUSHED` line prints it |
 
 ## Output contract

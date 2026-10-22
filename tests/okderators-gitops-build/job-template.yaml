@@ -55,6 +55,9 @@ objects:
                   value: ${CATALOG_BRANCHES}
                 - name: BUNDLES
                   value: ${BUNDLES}
+                # Empty is harmless: common.sh uses ${OKD_VERSION:-default}, which treats empty as unset.
+                - name: OKD_VERSION
+                  value: ${OKD_VERSION}
                 - name: BUILDAH_ISOLATION
                   value: chroot
                 - name: NODE_NAME
@@ -110,4 +113,7 @@ parameters:
     value: ""
   - name: BUNDLES
     description: MODE=catalog only; the one bundle image reference, passed to catalog-edit.sh
+    value: ""
+  - name: OKD_VERSION
+    description: OKD release the haproxy-router and must-gather images are taken from (common.sh OKD_VERSION); empty keeps the pipeline default of the branch
     value: ""
