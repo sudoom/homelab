@@ -709,3 +709,14 @@ rendered fresh under Helm 4.2.4, including the OCI dependency the design flagged
 
 Still to do: an OpenShift login to the Argo CD UI and the console plugin (operator), the hourly `rook-ceph-cluster`
 multi-wave sync under 3.5, and the 24 h soak.
+
+Login and console plugin, after the upgrade: the operator logged in to the Argo CD UI through "Log in via OpenShift"
+and reports it fine. Dex agrees: `{"level":"INFO","msg":"login successful","connector_id":"openshift",...}` at
+20:58:13Z, through the Dex image this build made. The GitOps console plugin cannot be exercised here: ConsolePlugin
+`gitops-plugin` exists and its pod runs the zot `console-plugin` image with 0 restarts, but the console operator's
+`spec.plugins` lists only `monitoring-plugin`, `networking-console-plugin` and `nmstate-console-plugin`, and the console
+already reported `gitops: disabled` at 20:35Z, before the upgrade. Enabling it is a cluster-wide console change, so
+it stays as it was.
+
+End to end: `516c730` (the docs commit) reached all 50 apps, Synced/Healthy, at 21:03:29Z, about a minute after the
+push.
