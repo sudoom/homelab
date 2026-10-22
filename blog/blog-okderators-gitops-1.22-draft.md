@@ -307,3 +307,7 @@ Checks, all before any cluster run:
 
 Re-run after the tightening commit: `bash -n` on both scripts, `py_compile`, kustomize | kubeconform (1 valid)
 and catalog-edit test mode (0 checks failed on both branches).
+
+## 2026-10-22: OKD_VERSION for the GitOps build Job
+
+`common.sh` on the pipeline's `main` defaults to `OKD_VERSION=5.0.0-okd-scos.0`, and the GitOps build takes the haproxy-router and must-gather images from that release payload. The test build runs from the `main`-based `gitops-1.22` branch but gets installed on this 4.21 cluster, so I added an optional `OKD_VERSION` template parameter to `tests/okderators-gitops-build/job-template.yaml`. It is always exported to the container, empty by default: `common.sh` uses `${OKD_VERSION:-"5.0.0-okd-scos.0"}`, and the colon form treats empty as unset. `build.sh` logs `INFO OKD_VERSION=<value or (pipeline default)>`; `load_vars` already prints the resolved `IMG_*` refs, haproxy-router included. The test build runs with `-p OKD_VERSION=4.21.0-okd-scos.10`, the value `release-4.21` uses.
