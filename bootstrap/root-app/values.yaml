@@ -138,6 +138,14 @@ applications:
     namespace: openshift-marketplace
     syncWave: "1"
 
+  # Temporary: zot test build of okderators OpenShift GitOps 1.22. Leaves when the
+  # gitops-operator Subscription (phase0 02) moves back to `okderators`.
+  gitops-test-catalog:
+    enabled: true
+    path: components/operators/gitops-test-catalog
+    namespace: openshift-marketplace
+    syncWave: "1"
+
   loki-operator:
     enabled: true
     path: components/operators/loki-operator

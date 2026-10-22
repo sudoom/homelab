@@ -628,3 +628,15 @@ with the one head and the same walk:
 CHECK catalog-image PASS zot.apps.okd.sudops.pl/okd-test/gitops-catalog:2026-10-22-194508: package gitops-operator; head gitops-operator.v1.22.0-2026-10-22-173433; every entry and gitops-operator.v1.19.0-2026-02-07-151505 reach the head
 PUSHED zot.apps.okd.sudops.pl/okd-test/gitops-catalog:2026-10-22-194508@sha256:695277834f9911e47d657c27e79bb022442677d8b391feaf1ceb9c720c1fcd7b 33587446
 ```
+
+## 2026-10-22: the GitOps 1.22 test CatalogSource
+
+`components/operators/gitops-test-catalog/` mirrors `logging-test-catalog`: one CatalogSource `okd-test-gitops` in
+`openshift-marketplace`, `sourceType: grpc`, image pinned by digest
+(`zot.apps.okd.sudops.pl/okd-test/gitops-catalog@sha256:695277834f9911e47d657c27e79bb022442677d8b391feaf1ceb9c720c1fcd7b`),
+no `updateStrategy`. Root-app entry `gitops-test-catalog`, wave 1. Nothing subscribes to it yet: the gitops-operator
+Subscription still points at `okderators` until the phase0 `02` change.
+
+Validation: `helm lint` clean; `helm template` renders the one CatalogSource; kubeconform `Valid: 1`; the root app
+renders 49 child Applications (48 before). `oc diff` cannot run: the readonly SA has no create permission for the
+server-side dry run, and the object does not exist live (`NotFound`), so the diff is the whole object.

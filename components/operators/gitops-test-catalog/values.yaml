@@ -1,0 +1,6 @@
+# Test build of okderators OpenShift GitOps 1.22, built from Red Hat's shipped 1.22.2
+# (Argo CD v3.5.5) and pushed to the cluster's zot (tag 2026-10-22-194508). Pinned by digest.
+# Temporary: this chart and its root-app entry leave again when the gitops-operator
+# Subscription (bootstrap/phase0/02_gitops_operator.yaml) moves back to `okderators`
+# (once okderators publishes 1.22).
+image: zot.apps.okd.sudops.pl/okd-test/gitops-catalog@sha256:695277834f9911e47d657c27e79bb022442677d8b391feaf1ceb9c720c1fcd7b

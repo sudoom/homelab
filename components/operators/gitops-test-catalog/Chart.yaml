@@ -1,0 +1,5 @@
+apiVersion: v2
+name: gitops-test-catalog
+description: Test CatalogSource for the okderators OpenShift GitOps 1.22 build in zot
+version: 0.1.0
+type: application
