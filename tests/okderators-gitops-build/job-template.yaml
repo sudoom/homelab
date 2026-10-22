@@ -1,0 +1,113 @@
+# One build run = one Job (README.md). Example:
+#   oc process -f tests/okderators-gitops-build/job-template.yaml \
+#     -p MODE=full -p DATE=$(date -u +%Y-%m-%d-%H%M%S) | oc -n okd-build create -f -
+# MODE is lowercase and DATE is digits and dashes, so gitops-build-${MODE}-${DATE} is a valid
+# DNS-1123 name; build.sh rejects anything else before doing work.
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: okderators-gitops-build
+  annotations:
+    description: One-off okderators GitOps 1.22 build run (tests/okderators-gitops-build/README.md)
+objects:
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: gitops-build-${MODE}-${DATE}
+      namespace: okd-build
+      labels:
+        app.kubernetes.io/part-of: okderators-gitops-build
+        okd-build/mode: ${MODE}
+        okd-build/date: ${DATE}
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 43200
+      # No ttlSecondsAfterFinished: the pod and its log stay until the operator reads them.
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: okderators-gitops-build
+            okd-build/mode: ${MODE}
+            okd-build/date: ${DATE}
+          annotations:
+            openshift.io/required-scc: privileged
+        spec:
+          serviceAccountName: builder
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          containers:
+            - name: build
+              # Pinned by digest: quay re-pushes the v5.8.9 tag (manifest list, resolved 2026-10-20).
+              image: quay.io/podman/stable:v5.8.9@sha256:dc02649067d5f7afd93db0bf31fbc604b56811c64594178eae3a72bdbb555e2e
+              command: ["/bin/bash", "/scripts/build.sh"]
+              env:
+                - name: MODE
+                  value: ${MODE}
+                - name: PIPELINE_REPO
+                  value: ${PIPELINE_REPO}
+                - name: PIPELINE_BRANCH
+                  value: ${PIPELINE_BRANCH}
+                - name: DATE
+                  value: ${DATE}
+                - name: BASE_REGISTRY
+                  value: ${BASE_REGISTRY}
+                - name: CATALOG_BRANCHES
+                  value: ${CATALOG_BRANCHES}
+                - name: BUNDLES
+                  value: ${BUNDLES}
+                - name: BUILDAH_ISOLATION
+                  value: chroot
+                - name: NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: 8Gi
+                limits:
+                  cpu: "14"
+                  memory: 48Gi
+              securityContext:
+                privileged: true
+                runAsUser: 0
+              volumeMounts:
+                - name: build-storage
+                  mountPath: /var/lib/containers
+                  subPath: containers
+                - name: build-storage
+                  mountPath: /work
+                  subPath: work
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: build-storage
+              persistentVolumeClaim:
+                claimName: build-storage
+            - name: scripts
+              configMap:
+                name: gitops-build-scripts
+                defaultMode: 365 # 0555
+parameters:
+  - name: MODE
+    description: full (build, push, bundle, verify), check (bundles only, from a full run's images) or catalog
+    required: true
+  - name: PIPELINE_REPO
+    description: okd-operator-pipeline repository to clone
+    value: https://github.com/sudoom/okd-operator-pipeline.git
+  - name: PIPELINE_BRANCH
+    description: Branch of PIPELINE_REPO to build
+    value: gitops-1.22
+  - name: DATE
+    description: YYYY-MM-DD-HHMMSS, new for every full run (the image tags end in it); check reuses a full run's DATE
+    required: true
+  - name: BASE_REGISTRY
+    description: Push target; build.sh refuses anything outside zot.apps.okd.sudops.pl/okd-test
+    value: zot.apps.okd.sudops.pl/okd-test
+  - name: CATALOG_BRANCHES
+    description: MODE=catalog only; okderators-catalog-index branches, passed to catalog-edit.sh
+    value: ""
+  - name: BUNDLES
+    description: MODE=catalog only; the one bundle image reference, passed to catalog-edit.sh
+    value: ""
