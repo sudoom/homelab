@@ -17,9 +17,12 @@ spec:
   channel: alpha
   # Manual: a catalog tag flip must not auto-upgrade the operator that runs ArgoCD.
   # Live has been Manual since before the 4.21 catalog flip; this file had drifted.
-  # Approve each InstallPlan by hand. source stays okderators (cert-manager 1.19.0 recovery
-  # and the 1.22 upgrade both come from that catalog).
+  # Approve each InstallPlan by hand.
   installPlanApproval: Manual
-  name: gitops-operator 
-  source: okderators
+  name: gitops-operator
+  # Temporary (2026-10-22): okd-test-gitops is the zot test build of okderators GitOps 1.22
+  # (components/operators/gitops-test-catalog/); it offers 1.22 as the upgrade from the
+  # installed 1.19.0. Back to `okderators` once okderators publishes 1.22. The recovery
+  # path to 1.19.0 (bootstrap/phase0/readme.md) switches this back to okderators first.
+  source: okd-test-gitops
   sourceNamespace: openshift-marketplace

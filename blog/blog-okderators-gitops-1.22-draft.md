@@ -640,3 +640,5 @@ Subscription still points at `okderators` until the phase0 `02` change.
 Validation: `helm lint` clean; `helm template` renders the one CatalogSource; kubeconform `Valid: 1`; the root app
 renders 49 child Applications (48 before). `oc diff` cannot run: the readonly SA has no create permission for the
 server-side dry run, and the object does not exist live (`NotFound`), so the diff is the whole object.
+
+Commit B: `bootstrap/phase0/02_gitops_operator.yaml` `source: okderators` → `okd-test-gitops` (comment says why and until when; the old comment's "cert-manager 1.19.0 recovery" meant the GitOps 1.19.0 recovery). `bootstrap/phase0/readme.md`: Step 3 and the recovery step now apply the file through `sed 's/source: okd-test-gitops/source: okderators/'`, because the test CatalogSource only exists once ArgoCD runs and the recovery target 1.19.0 belongs to `okderators`.

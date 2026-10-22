@@ -46,8 +46,12 @@ okderators publishes one channel, `alpha`. If the output differs, edit `02_gitop
 
 ### Step 3: Install OpenShift GitOps operator
 
+`02_gitops_operator.yaml` points at `okd-test-gitops` while the GitOps 1.22 test build is in use (since 2026-10-22).
+That CatalogSource is created by ArgoCD (`components/operators/gitops-test-catalog/`), so it does not exist on a fresh
+cluster: install from `okderators` here, and the switch happens after ArgoCD is up.
+
 ```bash
-oc apply -f bootstrap/phase0/02_gitops_operator.yaml
+sed 's/source: okd-test-gitops/source: okderators/' bootstrap/phase0/02_gitops_operator.yaml | oc apply -f -
 
 # Wait for CSV
 oc get csv -A -w | grep gitops
@@ -183,7 +187,8 @@ oc delete subscription gitops-operator -n openshift-operators
 oc get csv -n openshift-operators | grep gitops        # note the failing CSV name
 oc delete csv <gitops-operator.vX.Y.Z...> -n openshift-operators
 # b. re-create the Subscription: source okderators, installPlanApproval Manual
-oc apply -f bootstrap/phase0/02_gitops_operator.yaml
+#    (02 points at okd-test-gitops during the 1.22 test; override the source back)
+sed 's/source: okd-test-gitops/source: okderators/' bootstrap/phase0/02_gitops_operator.yaml | oc apply -f -
 # c. approve the 1.19.0 InstallPlan (check its clusterServiceVersionNames first; it must list v1.19.0)
 oc get installplan -n openshift-operators
 oc patch installplan <install-xxxxx> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'
