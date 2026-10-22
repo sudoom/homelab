@@ -480,3 +480,24 @@ and the base CSV has no `replaces`.
 Still unproven until the cluster build: that the UI stages install online, that `yum install -y cmake` works on the
 public go-toolset image (the 1.19 build did the same on UBI and passed), and that `make bundle` carries the skipRange and
 the missing `replaces` into the generated CSV (it does for cert-manager 1.20 with the same pattern).
+
+## 2026-10-22 - gitops 1.22 backport to the release branches
+
+Backported the reviewed `main` change (`gitops/` directory, the `gitops/release` gitlink at `6c4a911`, and the `.gitmodules` stanza moving `branch` to `release-1.22`) to three local branches cut from `origin/release-4.22`, `-4.21` and `-4.20`. I left out the `AGENTS.md` hunk because that file exists only on `main`.
+
+```
+git checkout -b gitops-1.22-4.21 origin/release-4.21
+git checkout gitops-1.22 -- gitops/
+git update-index --add --cacheinfo 160000,6c4a911765610abf65a3344d16bafdeca0971e5a,gitops/release
+sed -i '' '/path = gitops\/release/,/branch =/ s/branch = release-1.19/branch = release-1.22/' .gitmodules
+```
+
+Workflows: `release-4.22` already had `gitops-deploy.yaml` but triggered on `main`, so it never fired from that branch; changed to `release-4.22`. `release-4.21` and `release-4.20` had none, so I added one in the shape of the nmstate deploy workflow (push to own branch with `paths: gitops/**`, `workflow_dispatch`, `operator: gitops`, `secrets: inherit`).
+
+Per-branch checks: `git diff gitops-1.22 -- gitops/` empty, gitlink `6c4a911` on all three, `bash -n gitops/build.sh` ok, `yq e '.on, .jobs'` shows the right branch.
+
+common.sh: diffed each branch against `main`. The functions gitops/build.sh calls (`get_payload_component`, `submodule_initialize`, `submodule_update`) are byte-identical; only `submodule_reset` differs on 4.21 (older nested foreach with `local`/`$path`) and 4.20 (also returns 1 on an uncommitted gitlink). Our gitlink is committed, so I expect no effect; MODE=check decides.
+
+Found while reading `operator-deploy.yaml` on release-4.22: `catalog_branch` defaults to `release-4.21` and the deploy workflows do not override it.
+
+Fix: the release-4.22 call now passes `catalog_branch: release-4.22` (declared input, default `release-4.21`), so a deploy from that branch opens its catalog PR against the 4.22 catalog branch. The 4.21 and 4.20 workflows have no catalog job, so they are unchanged.
