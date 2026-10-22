@@ -249,3 +249,61 @@ oc patch argocd openshift-gitops -n openshift-gitops --type merge --patch-file b
 ```
 
 The recovery path for a failed operator upgrade (break-glass, then delete Subscription + CSV and reinstall 1.19.0 from `okderators` with Manual approval) is in `bootstrap/phase0/readme.md`, marked untested.
+
+## 2026-10-22: the build Job for the gitops 1.22 build
+
+The logging build ran as a Job in `okd-build`; the gitops build needs the same thing, so I copied
+`tests/okderators-logging-build/` to `tests/okderators-gitops-build/` and changed what had to change.
+Files: `README.md`, `kustomization.yaml`, `build.sh`, `catalog-edit.sh`, `catalog-walk.py`,
+`job-template.yaml`, `log-reader.yaml`.
+
+What stayed: the Job env contract (`MODE` full/check/catalog, `PIPELINE_REPO`, `PIPELINE_BRANCH`, `DATE`,
+`BASE_REGISTRY`, `CATALOG_BRANCHES`, `BUNDLES`), the contract lines (`STEP`, `DISK`, `PUSHED`, `CHECK`,
+`RESULT`), contract and log files on the PVC, the `flock`, the tool pins and checksums, the push guards
+(only under `okd-test/`, never re-push a tag).
+
+What changed:
+- `build.sh` sources `gitops/build.sh` (not `cluster-logging/build.sh`) and reads every `IMG_*` back
+  generically, so it follows the image list after the pipeline change. `IMG_KUBE_RBAC_PROXY`,
+  `IMG_HAPROXY_ROUTER` and `IMG_REDIS` are the three the pipeline takes from outside the registry; they are
+  allowed by name and shape, never pushed. `gettext` joins the dnf list because `build_bundle` runs `envsubst`.
+- The Job does not own the namespace. The kustomization generates only ConfigMap `gitops-build-scripts`;
+  namespace, SA `builder`, the privileged RoleBinding and PVC `build-storage` stay in the logging
+  directory. Job prefix `gitops-build-`, log files `gitops-build-<MODE>-<DATE>`, reader pod `gitops-log-reader`.
+- `MODE=full` always starts with a `prune` step: `DISK`, `podman system prune -af`, `DISK` (the logging run
+  left ~37 GB of layers; nothing there needs keeping). Base layers are then re-pulled, so `max(DISK)` of the
+  run approximates a fresh hosted runner; stop rule: peak > 14 GB.
+- `MODE=full` emits `ARGOCD_VERSION <v>` after the push, read with
+  `podman run --rm --entrypoint argocd <IMG_ARGOCD> version --client --short`; `CHECK argocd-version` passes
+  only for exactly `v3.5.5` (one variable at the top of `build.sh`).
+- Verify also fails on: any `registry.redhat.io` / `registry-proxy.engineering.redhat.com` / `brew.registry` string
+  anywhere in the rendered CSV, an `olm.skipRange` other than `>=1.0.0 <1.22.0-<DATE>`, and a set `spec.replaces`.
+- `MODE=check` tag-checks every tag it would push under `check-<branch>/` before pushing; a redo needs a new
+  full run with a new `DATE`.
+- `MODE=catalog` edits package `gitops-operator` only: `name: gitops-operator.v1.22.0-<DATE>`,
+  `replaces: gitops-operator.v1.19.0-2026-02-07-151505`, `skipRange: '>=1.19.0-0 <1.22.0-<DATE>'`; pushes
+  `${BASE_REGISTRY}/gitops-catalog:${DATE}`. The `-0` matters: the installed 1.19.0 is a prerelease.
+- The walker gained `--hop FROM TO`: the edges leaving FROM must lead to TO and nowhere else. Dead-end
+  checking cannot see a skipRange that is too wide, because every old entry still reaches the head.
+
+Checks, all before any cluster run:
+- `bash -n` on both shell scripts, `python3 -I -m py_compile catalog-walk.py`.
+- `kubectl kustomize tests/okderators-gitops-build/ | kubeconform -strict -ignore-missing-schemas`: 1 valid.
+  Same for the `oc process --local` Job and for `log-reader.yaml`.
+- `KUBECONFIG=~/.kube/config-readonly oc diff -k tests/okderators-gitops-build/` fails for the read-only SA:
+  `configmaps is forbidden: User "system:serviceaccount:automation:claude-reader" cannot create resource
+  "configmaps" in API group "" in the namespace "okd-build"` (server-side dry-run counts as create).
+  Instead, `oc -n okd-build get configmap gitops-build-scripts` returns NotFound; namespace, SA and PVC exist.
+- `catalog-edit.sh` in test mode against the real `release-4.21` and `release-4.22` `catalog/gitops-operator/`
+  files (okderators-catalog-index, upstream remote) plus a hand-written bundle
+  `gitops-operator.v1.22.0-2026-10-22-120000`: 0 failed checks on both branches. The walk shows
+  1.13 -(replaces)-> 1.16 -(replaces)-> 1.19.0 -(replaces+skipRange)-> 1.22. Negative control 1: the bundle
+  file without its channel entry fails `opm validate`
+  (`bundle "gitops-operator.v1.22.0-..." not found in any channel entries`). Negative control 2: with
+  `skipRange: '>=1.0.0 <1.22.0-...'` `opm validate` passes and the walker fails
+  (`hop from ...v1.13... goes to ...v1.16..., ...v1.22..., want only ...v1.16...`).
+- Not run locally: `build.sh` itself (bash 3.2 on the Mac, it needs bash 4.3 namerefs), `podman`, the push.
+  Those run on the cluster.
+
+Re-run after the tightening commit: `bash -n` on both scripts, `py_compile`, kustomize | kubeconform (1 valid)
+and catalog-edit test mode (0 checks failed on both branches).
