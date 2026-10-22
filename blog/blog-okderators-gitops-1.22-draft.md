@@ -558,3 +558,32 @@ its answer, an opt-in `free_disk_space` input, exists only in the unmerged #35 o
 frees enough for 41 GB. Decision: file the GitOps pipeline PRs without a workflow change and without depending on #35.
 The PR body states the peak, the per-step figures and the runner limit, and the maintainers choose the remedy (larger
 runner, self-hosted runner, or a disk step).
+
+## 2026-10-22: bundle content check and `operator-sdk bundle validate`
+
+The Job's `verify` did not run `operator-sdk bundle validate`, so I ran both remaining Task 4 checks from the Mac
+against the pushed bundle. opm v1.74.0 refuses a `repo:tag@sha256:` reference ("Docker references with both a tag and
+digest are currently not supported"), so the reference is digest-only.
+
+```
+opm render zot.apps.okd.sudops.pl/okd-test/gitops/operator-bundle@sha256:bf349fbe541d91ad55c9073c3fe16597b52679d121115a19c83049dc7bba973a -o json
+```
+
+| Check | Result |
+|---|---|
+| CSV name | `gitops-operator.v1.22.0-2026-10-22-173433` |
+| `olm.skipRange` | `>=1.0.0 <1.22.0-2026-10-22-173433` |
+| `spec.replaces` | unset |
+| `provider.name` | `OKD Community` |
+| image refs (`relatedImages`, container images, 29 `*_IMAGE`/`RELATED_IMAGE_*` env values) | 15 distinct, all by digest: 13 under `zot.apps.okd.sudops.pl/okd-test/gitops/`, plus `quay.io/okd/scos-content@sha256:51d9c27b…` (HAProxy from the OKD payload) and `quay.io/sclorg/redis-7-c9s@sha256:d772acab…` (Redis), both public, reasons above |
+| `kube-rbac-proxy` | none |
+| `registry.redhat.io` anywhere in the rendered bundle | 0 |
+
+```
+operator-sdk bundle validate zot.apps.okd.sudops.pl/okd-test/gitops/operator-bundle@sha256:bf349fbe… -b none
+level=info msg="All validation tests have completed successfully"
+```
+
+operator-sdk v1.36.1 (the Job's version, darwin/arm64 release binary, checksum verified). 21 warnings: 20 "provided API
+should have an example annotation" (promoter and rollouts CRDs) and one "csv.Spec.minKubeVersion is not informed".
+None is an error.
