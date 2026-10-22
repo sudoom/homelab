@@ -501,3 +501,52 @@ common.sh: diffed each branch against `main`. The functions gitops/build.sh call
 Found while reading `operator-deploy.yaml` on release-4.22: `catalog_branch` defaults to `release-4.21` and the deploy workflows do not override it.
 
 Fix: the release-4.22 call now passes `catalog_branch: release-4.22` (declared input, default `release-4.21`), so a deploy from that branch opens its catalog PR against the 4.22 catalog branch. The 4.21 and 4.20 workflows have no catalog job, so they are unchanged.
+
+## 2026-10-22: in-cluster full build results
+
+Job `okd-build/gitops-build-full-2026-10-22-173433`: MODE=full, DATE `2026-10-22-173433`, `OKD_VERSION=4.21.0-okd-scos.10`,
+fork branch `gitops-1.22` at `d4e1b0a`. Result: `RESULT PASS full 2026-10-22-173433`.
+
+| Step | Start (UTC) | Duration | DISK after (bytes) |
+|---|---|---|---|
+| tools, podman-setup | 17:36:10 | 1 min | 37,158,289,408 (logging layers left on the PVC) |
+| prune | 17:37:18 | 1 min | 7,532,003,328 |
+| clone, tag-check | 17:38:13 | 0.5 min | 4,440,375,296 |
+| init (submodules) | 17:38:42 | 3 min | 5,951,258,624 |
+| build_containers | 17:41:54 | 87 min | 39,266,689,024 |
+| push_containers, argocd-version, build_bundle, verify | 19:08:57 | 4 min | peak 41,159,110,656 |
+
+Wall time 97 minutes, end 19:13:06Z, under `powersave-experimental`. `build_containers` is one step, so there is no
+per-image time.
+
+Pushed 13 refs, 1.27 GiB in total, all under `zot.apps.okd.sudops.pl/okd-test/gitops/` with tag
+`1.22.0-2026-10-22-173433`: `agent`, `argocd`, `backend`, `console-plugin`, `dex`, `extensions`, `image-updater`,
+`must-gather`, `operator`, `promoter`, `promoter-extension`, `rollouts`, and the bundle
+`operator-bundle@sha256:bf349fbe541d91ad55c9073c3fe16597b52679d121115a19c83049dc7bba973a`.
+
+`verify` checks, all PASS:
+
+```
+CHECK argocd-version PASS v3.5.5 from zot.apps.okd.sudops.pl/okd-test/gitops/argocd:1.22.0-2026-10-22-173433
+CHECK csv/gitops-operator PASS gitops-operator.v1.22.0-2026-10-22-173433 1.22.0-2026-10-22-173433
+CHECK no-redhat-registry/gitops-operator PASS no registry.redhat.io, registry-proxy.engineering.redhat.com or brew.registry reference in the CSV
+CHECK skip-range/gitops-operator PASS >=1.0.0 <1.22.0-2026-10-22-173433
+CHECK no-replaces/gitops-operator PASS spec.replaces is not set
+CHECK max-openshift-version/gitops-operator PASS none (reported: the pipeline does not set it for gitops; the 1.19 bundle in the catalog has none)
+CHECK images/gitops-operator PASS 44 refs, all zot.apps.okd.sudops.pl/okd-test/...@sha256 or an external image of gitops/build.sh
+CHECK images-built/gitops-operator PASS every zot.apps.okd.sudops.pl/okd-test ref is a digest this run pushed
+CHECK external-images/gitops-operator PASS quay.io/okd/scos-content@sha256:51d9c27b… quay.io/sclorg/redis-7-c9s@sha256:d772acab…
+CHECK branding/gitops-operator PASS no valid-subscription, support not Red Hat; 0 text lines mention Red Hat (reported, not failed): none
+CHECK provider/gitops-operator PASS OKD Community
+```
+
+zot `data-zot-0`: 15.96 GiB free before the build, 16.84 GiB after (kubelet stats summary, read about 19:15Z). The
+pull-through cache moves more than the 1.27 GiB this build pushed, so the before/after pair does not isolate it.
+
+**Peak disk is over the hosted-runner line.** Peak `DISK` is 41.2 GB (38.3 GiB), measured after an unconditional
+prune, so it approximates a fresh runner; the design's stop rule is ~14 GB free on an `ubuntu-latest` runner.
+`build_containers` alone added 33.3 GB (5.95 → 39.27 GB) for twelve images. Per the plan I stopped here: filing the
+pipeline PRs waits on the operator's decision on the CI disk question.
+
+Not covered by this run: `operator-sdk bundle validate`. The tool is installed in the Job (v1.36.1), but the pod log has
+no validate output, so the plan's Step 3 item is still open.
