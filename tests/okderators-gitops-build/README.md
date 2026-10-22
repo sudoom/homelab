@@ -67,7 +67,7 @@ oc process --local -f tests/okderators-gitops-build/job-template.yaml \
   -p MODE=full -p DATE=$DATE -p OKD_VERSION=4.21.0-okd-scos.10 | oc -n okd-build create -f -
 ```
 
-`check` takes the `DATE` of the full run whose images it copies: `-p MODE=check -p DATE=<that DATE> -p PIPELINE_BRANCH=<branch>`. It pushes new tags under `check-<branch>/` and refuses to run if any exists, so it runs once per full-run `DATE` and branch; to redo, start a new full run with a new `DATE`.
+`check` takes the `DATE` of the full run whose images it copies: `-p MODE=check -p DATE=<that DATE> -p PIPELINE_BRANCH=<branch>`. It pushes new tags under `check-<branch>/` and refuses to run if any exists, so it runs once per full-run `DATE` and branch; to redo, start a new full run with a new `DATE`. All branches' check runs share the Job name `gitops-build-check-<DATE>`, so delete the finished Job (`oc -n okd-build delete job gitops-build-check-<DATE>`) before starting the next branch; the lock makes them sequential anyway.
 
 Cleanup:
 
