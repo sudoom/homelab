@@ -132,3 +132,32 @@ Passing:
     PASS
 
 `bash -n nmstate/build.sh` clean. Against release-4.20's build.sh (no removal line) the test fails with "no ImageStream removal line". Commit on pipeline branch `nmstate-bundle-fix`: a005aed `[nmstate] Remove the ImageStream from the bundle` (not pushed).
+
+## 2026-10-23 — release branches
+
+The ImageStream fix lives on `nmstate-bundle-fix` (a005aed, from `origin/main`). Each release branch gets the same `nmstate/build.sh`, release-matched submodule pins, and (4.22, 4.20) workflow/builder changes. Local branches in the pipeline clone, from `origin/release-4.N` after `git fetch origin`; not pushed yet.
+
+Heads were re-checked right before committing with `git ls-remote https://github.com/openshift/<repo>.git refs/heads/release-4.N` (the `gh api .../compare` call returned 404 with this token; ls-remote of the branch head is the same fact): all six equal the pins.md section 1 values, none moved.
+
+Commands per branch (v = 4.22, 4.21, 4.20):
+
+    git checkout -b nmstate-bundle-fix-$v origin/release-$v
+    git checkout nmstate-bundle-fix -- nmstate/build.sh
+    git config -f .gitmodules submodule.nmstate/operator.branch release-$v      # and console-plugin
+    git update-index --add --cacheinfo 160000,<sha>,nmstate/operator            # and console-plugin
+
+RED before (imagestream-test.sh on each branch's own build.sh): 4.22 and 4.21 `FAIL: image-references still present`; 4.20 `FAIL: no ImageStream removal line`. 4.22 `nmstate-deploy.yaml` pushed on `main`; gitlinks were the 4.20 commits (4.22) / 4.21 older commits.
+
+| branch | commits |
+|---|---|
+| nmstate-bundle-fix-4.22 | dc9c983 Remove the ImageStream from the bundle; ba19f6c Update submodules to release-4.22; 1a8d210 Build release-4.22 with Go 1.25 and npm; 06ea056 Deploy from release-4.22 to catalog release-4.22 |
+| nmstate-bundle-fix-4.21 | c3f65f4 Remove the ImageStream from the bundle; 4657706 Update submodules to release-4.21 |
+| nmstate-bundle-fix-4.20 | 51319a5 Remove the ImageStream from the bundle; e4ce05d Update submodules to release-4.20; 7da874a Add deploy workflow |
+
+Pins: 4.22 operator 1d6d332, plugin 25b8f81; 4.21 operator bc318d1, plugin f280b31; 4.20 operator 6ecae5d, plugin 29b58ce.
+
+4.22 Containerfiles: operator and handler go-toolset 1.24 -> 1.25; console-plugin takes main's build steps (`ENV CYPRESS_INSTALL_BINARY=0`, `npm ci && npm run build`, no yarn install); final FROM stays `scos-$OCP_SHORT`. 4.22 workflow: push branch `release-4.22`, `with: catalog_branch: release-4.22` (release-4.22's operator-deploy.yaml declares `catalog_branch`). 4.20 workflow is release-4.21's file with `release-4.20`; release-4.20's operator-deploy.yaml declares only `operator` and `base_registry`, so only `operator` is passed.
+
+GREEN after, per branch: `git diff nmstate-bundle-fix -- nmstate/build.sh` empty; gitlinks and `.gitmodules` branches as above; `imagestream-test.sh` PASS on all three.
+
+release-4.20 `build.sh` vs the fixed file: the only difference is the ImageStream removal (the 4 added lines: two comments, the `find ... -delete` line, a blank). No other line changes, so nothing depends on 4.20's `common.sh`. (release-4.20's old blob e2512c1 had no ImageStream line.)
