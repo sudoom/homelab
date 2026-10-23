@@ -4,7 +4,7 @@ image:
   # Rootless variant: USER nonroot (65532) in the image, but any UID works under
   # restricted-v2 as long as /data is writable (fsGroup is injected).
   repository: ghcr.io/sysadminsmedia/homebox
-  tag: 0.27.0-rootless
+  tag: 0.27.1-rootless
   digest: sha256:11ee1008150a7d51a7da6b05f5b3d0e5d4a22eacc39dfef2b9894873c46b4c86
 
 # Open registration was needed to create the first account; closed 2026-10-24 once
