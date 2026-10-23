@@ -130,6 +130,15 @@ applications:
     namespace: openshift-adp
     syncWave: "1"
 
+  # Kube Descheduler Operator from okderators. Runs in Predictive mode next to
+  # the vendored `descheduler` CronJob until the switch to Automatic, which also
+  # removes that chart (README TODO).
+  kube-descheduler-operator:
+    enabled: true
+    path: components/operators/kube-descheduler
+    namespace: openshift-kube-descheduler-operator
+    syncWave: "1"
+
   # Temporary: zot test build of okderators Logging/Loki 6.6. Leaves when the
   # logging Subscriptions move back to `okderators`.
   logging-test-catalog:

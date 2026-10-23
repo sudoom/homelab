@@ -1,0 +1,58 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  labels:
+    # The operator ships a ServiceMonitor for the descheduler's metrics; the
+    # platform Prometheus only reads ServiceMonitors in namespaces with this label.
+    openshift.io/cluster-monitoring: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: {{ .Values.namespace }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  # OwnNamespace: the CSV supports OwnNamespace/SingleNamespace only, not AllNamespaces.
+  targetNamespaces:
+    - {{ .Values.namespace }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cluster-kube-descheduler-operator
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  channel: {{ .Values.subscription.channel }}
+  # Manual for the same reason as the other okderators subscriptions: the
+  # CatalogSource tag moves with each OKD minor and nothing pins a startingCSV,
+  # so on Automatic a catalog flip upgrades every operator at once, unsupervised.
+  # Approve with `oc -n <ns> patch installplan <name> --type merge -p '{"spec":{"approved":true}}'`.
+  installPlanApproval: {{ .Values.subscription.installPlanApproval }}
+  name: cluster-kube-descheduler-operator
+  source: {{ .Values.subscription.source }}
+  sourceNamespace: {{ .Values.subscription.sourceNamespace }}
+---
+apiVersion: operator.openshift.io/v1
+kind: KubeDescheduler
+metadata:
+  # The operator only reconciles the CR named `cluster` in its own namespace.
+  name: cluster
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  managementState: Managed
+  mode: {{ .Values.kubeDescheduler.mode }}
+  deschedulingIntervalSeconds: {{ .Values.kubeDescheduler.deschedulingIntervalSeconds }}
+  profiles:
+{{ toYaml .Values.kubeDescheduler.profiles | indent 4 }}
+  profileCustomizations:
+    devLowNodeUtilizationThresholds: {{ .Values.kubeDescheduler.lowNodeUtilizationThresholds }}

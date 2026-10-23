@@ -1,0 +1,30 @@
+# The CSV suggests this namespace and runs its operand (the descheduler
+# Deployment, metrics Service, ServiceMonitor) in it.
+namespace: openshift-kube-descheduler-operator
+
+subscription:
+  channel: alpha
+  source: okderators
+  sourceNamespace: openshift-marketplace
+  # Manual like the other okderators subscriptions (see templates/operator.yaml).
+  installPlanApproval: Manual
+
+kubeDescheduler:
+  # Predictive = dry run: the descheduler logs and counts what it would evict
+  # and evicts nothing. The vendored CronJob (components/cluster-config/descheduler)
+  # keeps doing the real evictions until this flips to Automatic; that flip and
+  # the removal of the vendored chart are one commit (README TODO).
+  mode: Predictive
+  deschedulingIntervalSeconds: 3600
+  # AffinityAndTaints = the vendored chart's first profile, same three plugins.
+  # LongLifecycle = LowNodeUtilization + RemovePodsHavingTooManyRestarts (100),
+  # without the PodLifeTime eviction that LifecycleAndUtilization adds.
+  profiles:
+    - AffinityAndTaints
+    - LongLifecycle
+  # The vendored thresholds (under cpu 55 / mem 25 / pods 30, over 70 / 60 / 50)
+  # cannot be expressed here; the operator only has presets that apply one
+  # under/over pair to cpu, memory and pods alike: Low 10/30, Medium 20/50,
+  # High 40/70. High is the closest, and a node emptied by a reboot still falls
+  # under 40 on all three.
+  lowNodeUtilizationThresholds: High

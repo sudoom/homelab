@@ -1,0 +1,5 @@
+apiVersion: v2
+name: kube-descheduler-operator
+description: Kube Descheduler Operator via OLM (okderators) and its KubeDescheduler CR
+version: 1.0.0
+type: application
