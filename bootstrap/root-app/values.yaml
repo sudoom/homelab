@@ -419,3 +419,10 @@ applications:
     # templates/applications.yaml for what the blanket version cost twice.
     hpaDeployments:
       - immich-server
+
+  # Home inventory (Homebox) on its own CNPG Postgres (2 instances, snapshot + R2 WAL).
+  homebox:
+    enabled: true
+    path: components/apps/homebox
+    namespace: homebox
+    syncWave: "7"

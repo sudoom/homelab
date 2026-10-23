@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homebox
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Default wave 0: after the Cluster (-1) is Healthy and the PVC (-2) exists.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 1
+  # Recreate: the data PVC is RWO, a RollingUpdate surge pod would hang on the mount.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homebox
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: homebox
+    spec:
+      securityContext:
+        # restricted-v2 injects the UID and fsGroup; do not pin either.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: homebox
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}@{{ .Values.image.digest }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.route.targetPort }}
+          env:
+            # The image defaults already land files in /data (STORAGE_CONN_STRING
+            # file:///?no_tmp_dir=true + PREFIX_PATH data), so the PVC mounts there
+            # and no storage env is set.
+            - name: HBOX_DATABASE_DRIVER
+              value: postgres
+            - name: HBOX_DATABASE_HOST
+              value: homebox-postgres-rw
+            - name: HBOX_DATABASE_PORT
+              value: "5432"
+            - name: HBOX_DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: homebox-postgres-app
+                  key: username
+            - name: HBOX_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: homebox-postgres-app
+                  key: password
+            - name: HBOX_DATABASE_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: homebox-postgres-app
+                  key: dbname
+            # CNPG serves TLS with its own CA; `require` encrypts without verifying.
+            - name: HBOX_DATABASE_SSL_MODE
+              value: require
+            - name: HBOX_OPTIONS_ALLOW_REGISTRATION
+              value: {{ .Values.allowRegistration | quote }}
+          readinessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: homebox-data

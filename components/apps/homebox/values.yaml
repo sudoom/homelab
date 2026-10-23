@@ -1,0 +1,68 @@
+namespace: homebox
+
+image:
+  # Rootless variant: USER nonroot (65532) in the image, but any UID works under
+  # restricted-v2 as long as /data is writable (fsGroup is injected).
+  repository: ghcr.io/sysadminsmedia/homebox
+  tag: 0.27.0-rootless
+  digest: sha256:11ee1008150a7d51a7da6b05f5b3d0e5d4a22eacc39dfef2b9894873c46b4c86
+
+# Open registration is needed to create the first account. Flip to false in git
+# once that account exists, so nobody else on the LAN can sign up.
+allowRegistration: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+data:
+  # Attachments/photos only (the rootless image keeps them under /data). The
+  # inventory records live in Postgres, and attachments are rare, so this PVC is
+  # deliberately NOT backed up.
+  size: 1Gi
+  storageClass: ceph-nvme-block
+
+route:
+  host: homebox.apps.okd.sudops.pl
+  targetPort: 7745
+
+postgres:
+  # Two instances for the same reason as immich-postgres (2026-09-15): a
+  # 1-instance CNPG cluster carries a `minAvailable: 1` primary PDB that can never
+  # be satisfied, and it stalls every master-pool drain. With 2 instances CNPG
+  # switches over ahead of the drain and the old primary is evicted as a replica;
+  # the replica PDB only exists at >=3 instances. Recovery is covered by the daily
+  # snapshot + R2 WAL archive, not by the replica.
+  instances: 2
+  # Stock CNPG operand (same image as media-postgres), PostgreSQL minor pinned; the
+  # same 18.6 minor immich runs. Homebox needs no extensions.
+  image: ghcr.io/cloudnative-pg/postgresql:18.6
+  storage:
+    size: 2Gi
+    # DB on fast RBD block, NEVER CephFS/NFS (corruption risk).
+    storageClass: ceph-nvme-block
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  backup:
+    enabled: true
+    volumeSnapshotClassName: ceph-rbd-snapshot
+    retentionPolicy: "7d"
+    schedule: "0 0 5 * * *"   # 05:00 UTC daily (offset from media 04:00, immich 04:30)
+    # Offsite backup -> Cloudflare R2 via the barman-cloud plugin.
+    objectStore:
+      enabled: true
+      name: homebox-postgres-r2
+      bucket: "psql-backup"
+      endpointURL: "https://456a40c7992affd80bd4d4086456c48c.eu.r2.cloudflarestorage.com"
+      # Reference only; the SealedSecret is created out-of-band with kubeseal
+      # (keys ACCESS_KEY_ID / ACCESS_SECRET_KEY, same as immich's).
+      credentialsSecret: homebox-postgres-r2-creds
+      retentionPolicy: "30d"
+      schedule: "0 30 3 * * *"   # 03:30 UTC base backup (offset from the 05:00 snapshot)

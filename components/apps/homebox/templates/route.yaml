@@ -1,0 +1,17 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: homebox
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.route.host }}
+  port:
+    targetPort: http
+  tls:
+    # edge termination on the *.apps.okd.sudops.pl wildcard cert (IngressController
+    # default), same pattern as the immich/media/keepers Routes.
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: homebox

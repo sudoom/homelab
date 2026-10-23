@@ -114,6 +114,8 @@ components/
                            #   + transmission (master/slave); first 3 on Postgres via media-postgres
     keepers/               # Keepers stack: transmission (VPN) + webtlo (rutracker keeper).
                            #   Shipped enabled: false until vpn-creds is re-sealed for the ns.
+    homebox/               # Wave 7 — Homebox home inventory + its own CNPG cluster homebox-postgres
+                           #   (2 instances, daily snapshot + R2 WAL/base backups); attachments PVC not backed up
 ansible/                   # Non-OKD home infra managed by Ansible (outside ArgoCD)
   technitium/              # Technitium DNS Server (replaces pi-hole) — primary + future secondary
   truenas/                 # TrueNAS SCALE NAS config via midclt over SSH (replaces the Synology DS418)

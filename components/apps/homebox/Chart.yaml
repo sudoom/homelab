@@ -1,0 +1,9 @@
+apiVersion: v2
+name: homebox
+description: |
+  Homebox home inventory (sysadminsmedia/homebox, rootless image). Plain
+  manifests, no upstream chart: one Deployment on a small RBD data PVC, backed
+  by a DEDICATED CloudNativePG Postgres (2 instances, volumeSnapshot + barman-cloud
+  WAL archive to Cloudflare R2, same shape as immich-postgres).
+version: 1.0.0
+type: application

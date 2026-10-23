@@ -1,0 +1,135 @@
+{{- $pg := .Values.postgres }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: homebox-postgres
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Wave -1: the Cluster (and its auto-generated homebox-postgres-app secret) must
+    # exist + be Healthy BEFORE the Deployment at wave 0 — it references that
+    # secret for HBOX_DATABASE_PASSWORD. ArgoCD waits for the Cluster health gate.
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  instances: {{ $pg.instances }}
+  imageName: {{ $pg.image }}
+  storage:
+    size: {{ $pg.storage.size }}
+    storageClass: {{ $pg.storage.storageClass }}
+  monitoring:
+    enablePodMonitor: true
+  bootstrap:
+    initdb:
+      database: homebox
+      owner: homebox
+  resources:
+    {{- toYaml $pg.resources | nindent 4 }}
+  {{- if and $pg.backup $pg.backup.enabled }}
+  backup:
+    volumeSnapshot:
+      className: {{ $pg.backup.volumeSnapshotClassName }}
+      snapshotOwnerReference: cluster
+      {{- if and $pg.backup.objectStore $pg.backup.objectStore.enabled }}
+      # With the barman-cloud plugin as WAL archiver (→ R2), don't block the
+      # local snapshot on WAL archive — an R2 outage must not stall it too.
+      online: true
+      onlineConfiguration:
+        waitForArchive: false
+      {{- end }}
+    retentionPolicy: {{ $pg.backup.retentionPolicy | quote }}
+  {{- end }}
+  {{- if and $pg.backup $pg.backup.objectStore $pg.backup.objectStore.enabled }}
+  # WAL archiver → Cloudflare R2: the offsite copy (PITR), on top of the local
+  # volumeSnapshot. Doesn't gate startup — the wave -1 gate keys on Postgres
+  # being up, not WAL-archive success. ObjectStore CR below holds the R2 config.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      # Defaulted to true by the CNPG webhook. Set explicitly: `plugins` is a
+      # list, so SSA compares the whole array and a server-added field leaves
+      # the Application permanently OutOfSync.
+      enabled: true
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ $pg.backup.objectStore.name }}
+        serverName: homebox-postgres
+  {{- end }}
+{{- if and $pg.backup $pg.backup.enabled $pg.backup.schedule }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: homebox-postgres-daily
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # After the Cluster is up; not on the Deployments' critical path.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  schedule: {{ $pg.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: homebox-postgres
+  method: volumeSnapshot
+{{- end }}
+{{- if and $pg.backup $pg.backup.objectStore $pg.backup.objectStore.enabled }}
+{{- $os := $pg.backup.objectStore }}
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ $os.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # Wave -2: before the Cluster (wave -1) reconciles its plugins reference.
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  configuration:
+    destinationPath: s3://{{ $os.bucket }}/
+    endpointURL: {{ $os.endpointURL }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $os.credentialsSecret }}
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: {{ $os.credentialsSecret }}
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: gzip
+    # NO data.compression for R2: barman's gzip base backup uploads UNEQUAL-length
+    # multipart parts once the DB exceeds the ~5MB single-part threshold, which R2's
+    # CompleteMultipartUpload rejects — `InvalidPart: all non-trailing parts must have
+    # the same length` (EnterpriseDB/barman#954). Confirmed empirically 2026-07-05: a
+    # gzip base backup failed with InvalidPart in ~30s (egress was fine). Base backups
+    # SUCCEEDED 06-28..30 while the DB was small (single-part), then failed 07-01+ once
+    # the library import grew it past the multipart threshold. Uncompressed base parts
+    # are uniform → R2 accepts. WAL stays gzip (single-part PUT, unaffected). Trade-off:
+    # larger base objects on R2 (cheap, egress-free). Do NOT re-add data.compression.
+    # No `encryption:` — R2 encrypts at rest already and rejects barman's SSE header.
+  retentionPolicy: {{ $os.retentionPolicy | quote }}
+  instanceSidecarConfiguration:
+    env:
+      - name: AWS_REGION
+        value: "auto"
+      # R2's #1 gotcha: it rejects boto3 ≥1.36 default checksums
+      # (XAmzContentSHA256Mismatch). Required — don't remove; re-check on plugin bumps.
+      - name: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: "when_required"
+      - name: AWS_RESPONSE_CHECKSUM_VALIDATION
+        value: "when_required"
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: homebox-postgres-r2-daily
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  # 6-field cron (sec min hour dom mon dow). 03:30 UTC — offset from the
+  # volumeSnapshot -daily (05:00) so base backup + snapshot don't co-schedule.
+  schedule: {{ $os.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: homebox-postgres
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+{{- end }}

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  annotations:
+    # Namespace first — ahead of the data PVC (-2), the CNPG Cluster (-1) and the
+    # Deployment (default wave 0, which needs the Cluster's auto-generated
+    # homebox-postgres-app secret + the homebox-data PVC).
+    argocd.argoproj.io/sync-wave: "-3"
+  # The rootless image runs as any UID with restricted-v2 (no fixed user, no
+  # privileged); baseline matches the other app namespaces.
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline

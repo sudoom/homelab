@@ -155,8 +155,8 @@ Rules that hold even when the skill is not loaded:
 
 ### Node drain and unplanned rerolls
 
-- **Never run a 1-instance CNPG cluster on the master pool** — its primary PDB blocks every drain. Both clusters run
-  2 instances since 2026-09-15.
+- **Never run a 1-instance CNPG cluster on the master pool** — its primary PDB blocks every drain. media-postgres and
+  immich-postgres run 2 instances since 2026-09-15; homebox-postgres (added 2026-10-24) started with 2.
 - **Never delete the `powersave-experimental` Tuned CR by hand** — NTO drops `50-nto-master` and MCO rerolls a node.
   Change `bootArgs` in `components/cluster-config/power-tuning/values.yaml` instead.
   The way to take it off temporarily without the double reboot (done 2026-10-16, 10:36Z): switch off auto-sync on
