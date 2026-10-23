@@ -111,3 +111,24 @@ no `nmstate-deploy.yaml`. `deploy/handler/namespace.yaml` at the release-4.21 he
 annotation `openshift.io/node-selector: ""`; labels `name`, PSA `enforce`/`audit`/`warn` = `privileged`, and
 `openshift.io/cluster-monitoring: "true"` (annotation and monitoring label are under `IsOpenShift`, hardcoded true).
 Full table with every 40-character SHA: pins.md in the session scratchpad.
+
+## 2026-10-23 — the ImageStream fix
+
+`nmstate/build.sh` removes the ImageStream with `find manifests/stable -name '*.yaml' -exec grep -l 'kind: ImageStream' {} \; | xargs rm -f`. Upstream `hack/ocp-update-bundle-manifests.sh:63` writes it with `cat > ${BUNDLE_DIR}/manifests/image-references <<EOF` — no extension — so the find never matched. Wrote a fixture test (`imagestream-test.sh <build.sh>`) that builds `manifests/stable/manifests/{image-references, ...clusterserviceversion.yaml, nmstate.io_nmstates.yaml}`, extracts the removal line (between `# Remove ImageStream` and `podman build`), runs it, and asserts.
+
+Failing, against origin/main:
+
+    removal command under test: find manifests/stable -name '*.yaml' -exec grep -l 'kind: ImageStream' {} \; | xargs rm -f
+    FAIL: image-references still present
+
+New line (content match, `-delete` is in both GNU and BSD find, exits 0 on no match, no xargs):
+
+    find manifests/stable/manifests -type f -exec grep -q '^kind: ImageStream' {} \; -delete
+
+Passing:
+
+    case with-ImageStream: exit=0
+    case without-ImageStream: exit=0
+    PASS
+
+`bash -n nmstate/build.sh` clean. Against release-4.20's build.sh (no removal line) the test fails with "no ImageStream removal line". Commit on pipeline branch `nmstate-bundle-fix`: a005aed `[nmstate] Remove the ImageStream from the bundle` (not pushed).
