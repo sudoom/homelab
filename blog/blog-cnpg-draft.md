@@ -1343,3 +1343,19 @@ primary — `pg_extension` still says `vector=0.8.2` while the image's `vector.c
 Harmless as is; it only matters when something wants a 0.8.6 feature or the next vchord bump runs its
 `ALTER EXTENSION vchord UPDATE` + reindex against a mismatched catalog. Run the same evening (`ALTER EXTENSION`),
 `pg_extension` now reads `vector=0.8.6 vchord=1.1.1`.
+
+## 2026-10-24 — R2 base backups weekly
+
+Operator ask: every backup to R2 weekly instead of daily. R2 holds exactly one kind of backup here, the barman-cloud
+plugin's, for the three CNPG clusters (`grep -rl cloudflarestorage components` → `cnpg-clusters`, `immich`,
+`homebox` values). Each has two parts, and only one of them has a cadence to change:
+
+- **Base backups** (plugin `ScheduledBackup`, `method: plugin`): daily → weekly, all on Sunday and still staggered —
+  homebox `0 30 2 * * 0`, immich `0 0 3 * * 0`, media `0 30 3 * * 0` (6-field cron, seconds first, `0` = Sunday).
+- **WAL archiving**: continuous by nature, it is what makes point-in-time recovery possible. Unchanged. With weekly
+  bases and `retentionPolicy: "30d"` the recovery window stays 30 days; what changes is restore time, which now
+  replays up to 7 days of WAL on top of the newest base. For these database sizes that is minutes.
+
+The daily volumeSnapshot `ScheduledBackup`s stay daily: they are local Ceph snapshots, not R2. No alert depends on
+base-backup age (`grep` for `last_available_backup`, `lastSuccessfulBackup`, backup-age rules in `components/`
+found none), so nothing starts firing between Sundays.
