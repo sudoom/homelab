@@ -57,3 +57,18 @@ helm template homepage $C -n homepage -f $C/values.yaml | kubeconform -strict -i
 ```
 
 Per-app widgets need each app's API key as a SealedSecret and are left for later, one at a time.
+
+## 2026-10-24 — live
+
+Synced/Healthy at 23:26Z, both containers Ready with 0 restarts under restricted-v2. The only hiccup was the usual
+first-start race: `MountVolume.SetUp failed for volume "proxy-tls" : secret "homepage-tls" not found` one second
+before the service CA issued it; kubelet's retry mounted it. Logs:
+
+```
+homepage:    - Local: http://127.0.0.1:3000   ✓ Ready in 0ms
+oauth-proxy: OAuthProxy configured for  Client ID: system:serviceaccount:homepage:homepage
+oauth-proxy: Cookie settings: name:_oauth_proxy secure(https):true httponly:true expiry:168h0m0s
+oauth-proxy: HTTPS: listening on [::]:8443
+```
+
+Not yet checked: the browser login round-trip through the OpenShift OAuth server and the kubernetes widget's numbers.
