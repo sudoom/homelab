@@ -175,6 +175,21 @@ spec:
   json: |
 {{ .Files.Get "files/sata-wear.json" | indent 4 }}
 ---
+# Descheduler — node balance, evictions, reboots
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: descheduler
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: metrics
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  json: |
+{{ .Files.Get "files/descheduler.json" | indent 4 }}
+---
 # mktxp — MikroTik RouterOS exporter (akpw/mktxp)
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
