@@ -763,3 +763,51 @@ one per-branch difference is the HAProxy digest, which `build.sh` reads from eac
 zot: 16.07 GiB free after the three runs, 0.77 GiB less than after the full build (that includes the catalog image and
 the pull-through cache). Each check run's 13 refs are `skopeo copy` of blobs already in zot, so the copies cost little.
 As with logging (ruling P24 there), the `check-*` repos stay until the final clean-up of all `okd-test/gitops*` images.
+
+## 2026-10-23: 24 h soak — PASS
+
+Checked at 20:58Z, 24 h after the upgrade (20:57Z on 10-22). All reads were made with the readonly kubeconfig. The
+alert list came from Alertmanager through the break-glass kubeconfig.
+
+```bash
+oc -n openshift-gitops get pods -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase} r={.status.containerStatuses[*].restartCount}{"\n"}{end}'
+oc -n openshift-gitops get applications -o jsonpath='{range .items[*]}{.status.sync.status}/{.status.health.status} {.status.sync.revision}{"\n"}{end}'
+oc -n openshift-gitops logs openshift-gitops-application-controller-0 --since-time=2026-10-22T20:57:00Z \
+  | grep 'rook-ceph-cluster' | grep -oE '(Partial )?[Ss]ync operation to [0-9a-f]+ (succeeded|failed)'
+```
+
+| Check | Result |
+|---|---|
+| CSV / Subscription | `gitops-operator.v1.22.0-2026-10-22-173433` `Succeeded`; Subscription on `okd-test-gitops`, `Manual`, `AtLatestKnown` |
+| ArgoCD CR | `phase=Available`, server `Running`; server reports `version=v3.5.5+a5038b0` |
+| Restarts | 0 on all 8 `openshift-gitops` pods and the operator pod in `openshift-operators`, all started 20:56:39-20:56:55Z on 10-22 |
+| Applications | 50/50 Synced/Healthy, all at `047f1db` (pushed 10-23, so commits sync end to end) |
+| `rook-ceph-cluster` | 79 sync operations in 24 h, 79 `succeeded`, 0 `failed`; the history adds an entry only when the revision changes (2 since the upgrade), so the controller log is the count |
+| Controller log | 183,248 lines, 0 `level=error`, 0 failed syncs |
+| Other components | repo-server, applicationset-controller and redis: no error lines; server: 5 lines and Dex: 1, all at 20:58:03-20:58:07Z on 10-22 (a browser session token checked before Dex had a signing key; the startup transient already noted above), nothing since |
+| CephCluster override | still in the ArgoCD CR (`resourceHealthChecks` kind `CephCluster`) and in `argocd-cm` |
+| NetworkPolicies | the same seven |
+| Cluster sweep | 3/3 nodes Ready; CV 4.21.0-okd-scos.11 Available, not Progressing or Failing; no ClusterOperator off True/False/False; every CSV `Succeeded`; every Certificate Ready; no non-running or waiting pods; no container terminated since 16:00Z; CNPG 2/2 and archiving on both clusters; Ceph `HEALTH_WARN` with the standing `BLUESTORE_SLOW_OP_ALERT` + `MON_DISK_LOW`; LokiStack Ready |
+| Alerts | 10 firing: the 9 standing since 10-16, plus `TrueNASPoolScrubOverdue` from 19:40Z (below) |
+
+The only warning in the controller log repeats about once an hour: `DiffFromCache: cannot get managed resources for
+app oadp: cache: key is missing`, with `Failed to get cached managed resources for tree reconciliation, fall back to
+full reconciliation`. That is 17 in 24 h. `oadp` stays Synced/Healthy and reconciles as often as the other apps. The previous
+controller's logs went with its pod, so I checked Loki (`Loki (infrastructure)` datasource in Grafana, 3-day
+retention, range 2026-10-20 19:00Z to now; run by the operator):
+
+```
+{kubernetes_namespace_name="openshift-gitops"} |= "DiffFromCache"
+{kubernetes_namespace_name="openshift-gitops"} |= "DiffFromCache" != "oadp"
+```
+
+The first query shows the same hourly warning through 10-21 and 10-22, on Argo CD 3.1 before the upgrade. The
+second returns no lines (9.45 GB scanned), so every one of these warnings names `oadp`. It predates 1.22 and is not
+a soak finding. Why only `oadp` loses its cache key is still open.
+
+`TrueNASPoolScrubOverdue` is not related to GitOps. Pool `tank` was last scrubbed at 2026-09-08 18:41Z
+(`truenas_zpool_scrub_age_seconds` = 45.10 days), and the 2026-10-01 run was skipped by the 35-day threshold
+(`blog-truenas-migration-draft.md`, 2026-10-11). The next scheduled scrub is 2026-11-01, 54 days after the last, so the
+45-day alert was expected to fire in this gap.
+
+Soak passed; Task 10 (draft pipeline PRs) is unblocked.
