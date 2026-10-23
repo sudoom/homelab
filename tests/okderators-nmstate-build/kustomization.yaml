@@ -1,0 +1,20 @@
+# oc apply -k tests/okderators-nmstate-build/   (README.md)
+# Only the script ConfigMap: namespace okd-build, ServiceAccount builder, the privileged
+# RoleBinding and PVC build-storage belong to tests/okderators-logging-build/manifests.yaml and are
+# not repeated here (a second owner would make `oc delete -k` of this directory remove them).
+# The ConfigMap is generated from the files in this directory, so they exist once.
+# The per-run Job is not here: it comes from job-template.yaml via `oc process`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+configMapGenerator:
+  - name: nmstate-build-scripts
+    namespace: okd-build
+    files:
+      - build.sh
+      - catalog-edit.sh
+      - catalog-walk.py
+      - catalog-branches.tsv
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/part-of: okderators-nmstate-build

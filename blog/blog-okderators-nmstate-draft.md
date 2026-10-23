@@ -161,3 +161,177 @@ Pins: 4.22 operator 1d6d332, plugin 25b8f81; 4.21 operator bc318d1, plugin f280b
 GREEN after, per branch: `git diff nmstate-bundle-fix -- nmstate/build.sh` empty; gitlinks and `.gitmodules` branches as above; `imagestream-test.sh` PASS on all three.
 
 release-4.20 `build.sh` vs the fixed file: the only difference is the ImageStream removal (the 4 added lines: two comments, the `find ... -delete` line, a blank). No other line changes, so nothing depends on 4.20's `common.sh`. (release-4.20's old blob e2512c1 had no ImageStream line.)
+
+## 2026-10-23 — the nmstate build Job
+
+`tests/okderators-nmstate-build/` is the GitOps build Job (`tests/okderators-gitops-build/`) copied and
+pointed at the pipeline's `nmstate/build.sh`. The mechanics are unchanged and byte-compatible: the
+`STEP … START|END`, `DISK`, `PUSHED <ref>@<digest> <bytes>`, `CHECK <name> PASS|FAIL <detail>` and
+`RESULT PASS|FAIL` lines, the contract and log files on the PVC, the shared `flock` on `/work/.lock`,
+the registry guard (nothing pushed outside `zot.apps.okd.sudops.pl/okd-test`, no tag pushed twice), the
+unconditional `podman system prune -af` with `DISK` before and after at the start of a full run, and
+the tool pins. It reuses the `okd-build` namespace, the `builder` SA and PVC `build-storage` that the
+logging directory owns; its kustomization only generates ConfigMap `nmstate-build-scripts`. Job
+`nmstate-build-<MODE>-<DATE>`, log files `nmstate-build-<MODE>-<DATE>.{log,contract}`, reader pod
+`nmstate-log-reader`.
+
+What differs, and why:
+
+- Two modes, `full` and `catalog`. No `check`: every pipeline branch (`nmstate-bundle-fix` from
+  `main`, `nmstate-bundle-fix-4.22`, `-4.21`, `-4.20`) pins different operator code, so each gets its
+  own full run with its own `DATE`. `PIPELINE_BRANCH` has no default. Each branch builds with its own
+  `common.sh` `OKD_VERSION`, and `csv-name` takes `MAJOR.MINOR` from it (the `main` branch builds
+  `kubernetes-nmstate-operator.v5.0.0-<DATE>`). `OKD_VERSION` stays empty: an override that leaves the
+  branch's release ends the run at `gitmodules-branch`, before anything is built.
+- The only external image is `IMG_KUBE_RBAC_PROXY`, from the payload, by digest.
+- `gettext` is gone from the tool list: nothing in `nmstate/build.sh` or kubernetes-nmstate's Makefile
+  and `hack/` runs `envsubst`.
+- The checks are new (below). The GitOps `csv`, `skip-range`, `no-replaces`, `branding` and `provider`
+  checks are dropped; the upstream bundle script adds `operators.openshift.io/valid-subscription:
+  "false"`, which the GitOps branding check would have failed.
+- The bundle is checked twice: as `opm render` objects and as the pushed image's files. The bug is
+  `hack/ocp-update-bundle-manifests.sh` writing `manifests/image-references` (a `kind: ImageStream`
+  heredoc) without an extension, so `find manifests/stable -name '*.yaml'` never matched it. The Job
+  copies the pushed bundle with `skopeo copy docker://<repo>@<digest> dir:...`, unpacks the layers and
+  greps the files.
+- `catalog-edit.sh` takes one bundle per catalog branch (`BUNDLES='release-4.21=<ref@digest> …'`) and
+  reads the per-branch values from `catalog-branches.tsv` instead of constants: `REMOVE` (the channel
+  entries before the edit, whose entries and bundle files go), `SKIPS` (the new entry's skips) and
+  `INSTALLED` (CSVs the walker starts from; `{DATE-1d}` / `{DATE+1d}` are the new bundle's DATE shifted
+  by a day). `release-4.21` and `release-4.22` hold the plan's values; `release-4.20` holds that
+  branch's current head, `kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436`, its only entry, as
+  both `REMOVE` and `SKIPS`, with `INSTALLED` `kubernetes-nmstate-operator.v4.20.0-{DATE-1d}`. A row
+  holding `TO-FILL` (how the 4.20 row started, before that head was read) stops a catalog run before
+  any edit.
+  The edit replaces the broken entry instead of appending: the bundle file is written the way
+  `hack/add-bundle.sh` writes it (`echo "$(opm render <bundle>@<digest> -o yaml)"`, without running the
+  script, whose `podman create` fails on a `FROM scratch` bundle), the old bundle files are `git rm`ed,
+  and the `alpha` `entries:` block is replaced as text by one entry with `skips` and
+  `skipRange: '>=4.3.0 <4.N.0-<DATE>'`. `yq` then proves the entries are exactly that one and that the
+  rest of the package file is the same documents.
+- `catalog-walk.py` is byte-identical to the GitOps copy.
+
+MODE=full checks, in run order:
+
+| check | asserts |
+|---|---|
+| `gitmodules-branch` | right after the clone: `.gitmodules` declares `branch = release-<OCP_SHORT>` for both nmstate submodules, `OCP_SHORT` being `MAJOR.MINOR` of the `OKD_VERSION` in effect (`main`: `5.0` and `release-5.0`); a FAIL ends the run there |
+| `operator-commit` | after `build_containers`, `nmstate/operator` `HEAD` = the branch's recorded gitlink, clean tree, no patch. The operator Containerfile sets no commit label and the repository's `.dockerignore` drops `.git`, so the image cannot name its own commit; this proves the tree the pipeline's `init` checked out (a commit-like label appearing in the Containerfile fails the check until it compares that label) |
+| `nmstate-rpm` | `rpm -q nmstate` in the built handler image, recorded |
+| `bundle-objects` | exactly CRD `nmstates.nmstate.io` + one CSV, and two files in `manifests/` |
+| `no-imagestream` | no `ImageStream` object, no `kind: ImageStream` in any bundle file, no `image-references` file |
+| `no-redhat-registry` | no `registry.redhat.io` (or the engineering proxy, brew) in the CSV, the objects, the files or the labels |
+| `csv-name` | `kubernetes-nmstate-operator.v<MAJOR>.<MINOR>.0-<DATE>`, `spec.version` and the `olm.package` version |
+| `csv-code-release` | the release the operator code declares: `spec.labels.olm-status-descriptors` = `kubernetes-nmstate-operator.vX.Y.0` and the `olm.skipRange` upper bound `<X.Y.0`, X.Y from `OKD_VERSION`. Both come from kubernetes-nmstate's CSV base at the gitlink, untouched by the pipeline |
+| `images-by-digest` | every relatedImage, container image, `*_IMAGE`/`RELATED_IMAGE_*` env value and `containerImage` is `@sha256:`; the built ones are this run's digests under `<BASE_REGISTRY>/nmstate/` and all three are referenced; kube-rbac-proxy exactly |
+| `install-modes` | recorded; `AllNamespaces` required (the homelab OperatorGroup is `spec: {}`) except on a 4.20 build |
+| `operator-sdk-validate` | `operator-sdk bundle validate <unpacked dir> -o json-alpha1` passes |
+
+MODE=catalog checks per branch: `branch-data`, `bundle`, `no-imagestream` (all three before any clone),
+`negative-control-imagestream` (the unedited head bundle, through the same ImageStream count, must have
+one), `bundles`, `edit`, `opm-validate`, `walk`, `negative-control-skiprange` (the entry without
+`skipRange` still passes `opm validate`, and the walker must report exactly the `INSTALLED` CSVs that
+`SKIPS` does not name as stranded), then `opm-validate-image` and `catalog-image` for
+`<BASE_REGISTRY>/nmstate-catalog:<DATE>` from the edited `release-4.21` tree, package
+`kubernetes-nmstate-operator` only.
+
+Checks before any cluster run (all on the Mac):
+
+- `bash -n build.sh`, `bash -n catalog-edit.sh`: OK. `python3 -I -m py_compile catalog-walk.py`: OK.
+- `kubectl kustomize tests/okderators-nmstate-build/ | kubeconform -strict -ignore-missing-schemas`:
+  `Valid: 1` (ConfigMap `okd-build/nmstate-build-scripts`, keys `build.sh`, `catalog-branches.tsv`,
+  `catalog-edit.sh`, `catalog-walk.py`). The same for the `oc process --local` Job and for
+  `log-reader.yaml`. (kubeconform needed the sandbox off: its schema download failed TLS verification
+  through the sandbox proxy.)
+- `KUBECONFIG=~/.kube/config-readonly oc diff -k tests/okderators-nmstate-build/` fails as it did for
+  GitOps: `configmaps is forbidden: User "system:serviceaccount:automation:claude-reader" cannot create
+  resource "configmaps" in API group "" in the namespace "okd-build"` (the server-side dry-run counts as
+  create). Instead: `oc -n okd-build get configmap nmstate-build-scripts` returns NotFound; the namespace,
+  SA `builder`, RoleBinding `builder-scc-privileged` and PVC `build-storage` (Bound, 100Gi) exist; the
+  ConfigMaps there are `build-scripts` and `gitops-build-scripts`; no Jobs or pods.
+- Walker unit run on a hand-made two-entry FBC (old entry
+  `kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851`, head `v4.21.0-2026-10-23-120000` with `skips`
+  and `skipRange: '>=4.3.0 <4.21.0-2026-10-23-120000'`), installed `v4.21.0-2026-10-22-120000` and
+  `v4.20.0-2025-12-27-212436`:
+  `PASS 2 entries + 2 CSVs absent from the channel reach kubernetes-nmstate-operator.v4.21.0-2026-10-23-120000`.
+  The same file without `skipRange`: exit 1,
+  `FAIL stranded: kubernetes-nmstate-operator.v4.21.0-2026-10-22-120000 (absent from the channel) dead ends: kubernetes-nmstate-operator.v4.21.0-2026-10-22-120000`.
+- `catalog-edit.sh` in test mode against the real `release-4.20`/`-4.21`/`-4.22` catalog files
+  (okderators-catalog-index upstream, via a local bare mirror) and test bundles made from each branch's
+  broken head with the `ImageStream` object dropped and the CSV renamed to `…v4.N.0-2026-10-23-120000`:
+  `release-4.21 release-4.22` with the committed data file, 19 checks PASS, 0 FAIL. The package-file diff
+  is `+3 -1` per branch, for example on 4.21:
+
+  ```
+   entries:
+  -  - name: kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851
+  +  - name: kubernetes-nmstate-operator.v4.21.0-2026-10-23-120000
+       skips:
+  +      - kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851
+         - kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436
+  +    skipRange: '>=4.3.0 <4.21.0-2026-10-23-120000'
+  ```
+
+  Both negative controls pass on both branches:
+  `no-imagestream fails on the unedited head kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851: 1 ImageStream object(s)`
+  and `without skipRange opm validate passes and the walker reports stranded: kubernetes-nmstate-operator.v4.21.0-2026-10-22-120000`
+  (4.22: both `v4.21.0-2026-10-22-120000` and `v4.21.0-2026-10-24-120000`). After the `release-4.20`
+  row was filled, the committed data file on all three branches (`CATALOG_BRANCHES='release-4.21
+  release-4.22 release-4.20'`, upstream heads release-4.20 `bfbb297`, release-4.21 `6c737c9`,
+  release-4.22 `252d764`): exit 0, 28 PASS, 0 FAIL. On 4.20 the walk is
+  `1 entries + 1 CSV absent from the channel reach kubernetes-nmstate-operator.v4.20.0-2026-10-23-120000`,
+  the skipRange control reports `kubernetes-nmstate-operator.v4.20.0-2026-10-22-120000` stranded, and
+  the package-file diff is `+4 -1` (the old entry had no `skips:` line):
+
+  ```
+   entries:
+  -  - name: kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436
+  +  - name: kubernetes-nmstate-operator.v4.20.0-2026-10-23-120000
+  +    skips:
+  +      - kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436
+  +    skipRange: '>=4.3.0 <4.20.0-2026-10-23-120000'
+  ```
+- Failure paths: the data file while the `release-4.20` row was still `TO-FILL` →
+  `branch-data-release-4.20 FAIL row incomplete`, stopped before any clone; a bundle that keeps the `ImageStream` → `bundle-… FAIL` and
+  `no-imagestream-… FAIL`, stopped; a `REMOVE` that does not match the catalog → `edit-… FAIL channel alpha
+  entries before the edit are […]`; a `BUNDLES` ref without a digest, a missing branch in `BUNDLES` and a
+  push target outside zot `okd-test/` each stop the script with an `ERROR` line.
+- The file-level checks of `build.sh` (`bundle-objects`, `no-imagestream`, `no-redhat-registry`,
+  `operator-sdk-validate`; the functions sourced unchanged from `build.sh` under bash 3.2) on a directory
+  shaped like an unpacked bundle: the broken 4.21 catalog bundle (with an extensionless
+  `manifests/image-references`) fails three of them, and `operator-sdk` v1.36.1 itself rejects it with
+  `Error: Value image.openshift.io/v1, Kind=ImageStream: unsupported media type registry+v1 for bundle object`;
+  the fixed test bundle passes all four (operator-sdk: `passed: true`, one `minKubeVersion` warning).
+
+Not run before the cluster: `build.sh` itself (it needs bash 4.3 namerefs and associative arrays, podman
+and the registries), so `operator-commit`, `nmstate-rpm`, `csv-name`, `images-by-digest`,
+`install-modes` and the `skopeo copy … dir:` unpack are exercised only by their jq filters and by the
+first full run.
+
+Review fix, same day. The first version could not catch code from the wrong release: `csv-name` takes
+`MAJOR.MINOR`, `OCP_DATE` and the CSV name from the same sourced `common.sh`, and `operator-commit` only
+proves `HEAD` is the gitlink. The 2026-05-05 4.21 bundle, 4.20 code named `v4.21.0`, would have passed both,
+and only `install-modes` would have caught it, by accident. Two checks now close that.
+`csv-code-release` reads the release the code itself declares. kubernetes-nmstate's CSV base at each gitlink
+carries `spec.labels.olm-status-descriptors` and `olm.skipRange` for its own release, and the pipeline does not
+touch either. `gitmodules-branch` stops a run whose `OKD_VERSION` contradicts the branch before anything is
+built. Both were run under bash 3.2, sourced unchanged from `build.sh`:
+
+```
+nmstate-bundle-fix fffb76d: CHECK csv-code-release PASS release 5.0 code: olm-status-descriptors kubernetes-nmstate-operator.v5.0.0, olm.skipRange '>=4.3.0 <5.0.0'
+nmstate-bundle-fix-4.22 1d6d332: CHECK csv-code-release PASS release 4.22 code: ... v4.22.0, '>=4.3.0 <4.22.0'
+nmstate-bundle-fix-4.21 bc318d1: CHECK csv-code-release PASS release 4.21 code: ... v4.21.0, '>=4.3.0 <4.21.0'
+nmstate-bundle-fix-4.20 6ecae5d: CHECK csv-code-release PASS release 4.20 code: ... v4.20.0, '>=4.3.0 <4.20.0'
+release-4.21 head v4.21.0-2026-05-05-165851 as 4.21: CHECK csv-code-release FAIL olm-status-descriptors kubernetes-nmstate-operator.v4.20.0 (want kubernetes-nmstate-operator.v4.21.0), olm.skipRange '>=4.3.0 <4.20.0' upper bound '<4.20.0' (want <4.21.0)
+release-4.22 head v4.22.0-2025-12-14-152353 as 4.22: CHECK csv-code-release FAIL ... v4.20.0 (want ...v4.22.0) ... (want <4.22.0)
+4.21 code (bc318d1) as 4.22: CHECK csv-code-release FAIL ... v4.21.0 (want ...v4.22.0) ... (want <4.22.0)
+nmstate-bundle-fix: CHECK gitmodules-branch PASS nmstate/operator=release-5.0 nmstate/console-plugin=release-5.0, the release of OCP_SHORT 5.0
+nmstate-bundle-fix-4.22 / -4.21 / -4.20: CHECK gitmodules-branch PASS (release-4.22 / release-4.21 / release-4.20)
+nmstate-bundle-fix-4.21 with OKD_VERSION 4.22: CHECK gitmodules-branch FAIL nmstate/operator=release-4.21 nmstate/console-plugin=release-4.21 in .gitmodules, want release-4.22
+nmstate-bundle-fix (main) with OKD_VERSION 4.21: CHECK gitmodules-branch FAIL nmstate/operator=release-5.0 nmstate/console-plugin=release-5.0 in .gitmodules, want release-4.21
+origin/release-4.22 today (.gitmodules says release-4.21): CHECK gitmodules-branch FAIL ... want release-4.22
+```
+
+The three built okderators catalog bundles behave as expected. The 4.20 head is 4.20 code named `v4.20.0` and
+passes. The 4.21 head (2026-05-05) and the 4.22 head (2025-12-14) are both 4.20 code under a later name and
+both fail. The README no longer suggests overriding `OKD_VERSION`.

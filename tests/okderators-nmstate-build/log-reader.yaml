@@ -1,0 +1,56 @@
+# Reads the contract and log files a build left on build-storage, after its pod is gone
+# (deadline kill, deleted Job, rotated container log). README.md, "Reading the logs later".
+#   oc -n okd-build create -f tests/okderators-nmstate-build/log-reader.yaml
+# Read-only: the PVC is attached read-only and mounted read-only, the container only sleeps,
+# and it takes no part in the build lock. It ends by itself after an hour.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nmstate-log-reader
+  namespace: okd-build
+  labels:
+    app.kubernetes.io/part-of: okderators-nmstate-build
+  annotations:
+    openshift.io/required-scc: privileged
+spec:
+  serviceAccountName: builder
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  activeDeadlineSeconds: 3600
+  # RWO: if a build pod is running, the reader has to land on its node.
+  affinity:
+    podAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchExpressions:
+                - key: okd-build/mode
+                  operator: Exists
+  containers:
+    - name: reader
+      image: quay.io/podman/stable:v5.8.9@sha256:dc02649067d5f7afd93db0bf31fbc604b56811c64594178eae3a72bdbb555e2e
+      command: ["sleep", "3600"]
+      # Same security context as the build pod on purpose: CRI-O does not relabel the volume
+      # of a privileged container and the privileged SCC sets no fsGroup, so the PVC's tree is
+      # neither relabelled nor chowned when the reader mounts it.
+      securityContext:
+        privileged: true
+        runAsUser: 0
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+      volumeMounts:
+        - name: build-storage
+          mountPath: /work
+          subPath: work
+          readOnly: true
+  volumes:
+    - name: build-storage
+      persistentVolumeClaim:
+        claimName: build-storage
+        readOnly: true
