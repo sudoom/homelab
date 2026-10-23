@@ -335,3 +335,16 @@ origin/release-4.22 today (.gitmodules says release-4.21): CHECK gitmodules-bran
 The three built okderators catalog bundles behave as expected. The 4.20 head is 4.20 code named `v4.20.0` and
 passes. The 4.21 head (2026-05-05) and the 4.22 head (2025-12-14) are both 4.20 code under a later name and
 both fail. The README no longer suggests overriding `OKD_VERSION`.
+
+## 2026-10-23, 16:50Z — paused before the first build
+
+Tasks 1-4 are done and reviewed: the pins and recon, the ImageStream fix on `main`
+(`nmstate-bundle-fix` a005aed), the three release branches (4.22 06ea056, 4.21 4657706, 4.20 7da874a, all on the fork),
+and the build Job (`tests/okderators-nmstate-build/`, 6c4a41c). The Job's first review caught a gap: nothing proved
+the operator code came from the release the branch claims, which is exactly the bug the current 4.21 and 4.22
+catalog bundles have. Two checks close it: `csv-code-release` (the CSV base's `olm-status-descriptors` and
+`olm.skipRange` upper bound must name the branch's release) and `gitmodules-branch` (both nmstate submodules must
+declare `release-${OCP_SHORT}`, checked before anything builds).
+
+The first run waits for me. Starting the Job is an `oc apply -k` plus an `oc process | oc create`; both are on the
+repo's Claude deny list, and I was on a remote session with no shell to run them. Zot had 15.7 GiB free.
