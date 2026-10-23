@@ -51,7 +51,8 @@ postgres:
       endpointURL: "https://456a40c7992affd80bd4d4086456c48c.eu.r2.cloudflarestorage.com"
       credentialsSecret: immich-postgres-r2-creds
       retentionPolicy: "30d"
-      schedule: "0 0 3 * * *"   # 03:00 UTC base backup (offset from 04:30 snapshot)
+      # Weekly since 2026-10-24; WAL archiving stays continuous (see cnpg-clusters values).
+      schedule: "0 0 3 * * 0"   # Sundays 03:00 UTC base backup (offset from the 04:30 snapshot)
 
 library:
   # THE LIVE LIBRARY IS ON TRUENAS since 2026-10-11: immich-server mounts
