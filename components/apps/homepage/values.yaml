@@ -4,7 +4,7 @@ host: home.apps.okd.sudops.pl
 image:
   repository: ghcr.io/gethomepage/homepage
   # v2.7.0 was a day old when this shipped; the release before it.
-  tag: v2.6.0
+  tag: v2.7.0
 
 # OpenShift's oauth-proxy, from the release payload: the image behind the
 # `openshift/oauth-proxy:v4.4` ImageStream tag on OKD 4.21.0-okd-scos.11. Pinned by
