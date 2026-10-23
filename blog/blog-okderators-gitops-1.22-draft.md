@@ -852,3 +852,8 @@ ClusterOperator console: Available=True Progressing=False Degraded=False
 
 In the console, GitOps → Applications lists the Applications as Synced/Healthy, with ApplicationSets, AppProjects,
 ImageUpdaters and Rollouts alongside. So the 1.22 plugin image built here works on OKD 4.21.
+
+Disabled again after the test (operator, 21:41:21Z). `spec.plugins` is back to `monitoring-plugin`,
+`networking-console-plugin`, `nmstate-console-plugin`. The console rolled to 2/2 ready at 21:41:52Z, and ClusterOperator
+`console` reads Available=True, Progressing=False, Degraded=False. The `gitops-plugin` ConsolePlugin and its pod stay
+in place, so enabling it later is the same toggle. #39's verification list carries the result.
