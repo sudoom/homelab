@@ -348,3 +348,103 @@ declare `release-${OCP_SHORT}`, checked before anything builds).
 
 The first run waits for me. Starting the Job is an `oc apply -k` plus an `oc process | oc create`; both are on the
 repo's Claude deny list, and I was on a remote session with no shell to run them. Zot had 15.7 GiB free.
+
+## 2026-10-23 evening — full builds: 4.21 and 4.22 pass, 4.20 stopped by CentOS metadata
+
+Task 5 runs one `MODE=full` build per pipeline branch, 4.21 first, a new DATE each, deleting each finished Job before
+the next. The operator ran each Job from the Mac:
+
+```bash
+oc apply -k tests/okderators-nmstate-build/                   # ConfigMap nmstate-build-scripts, once
+oc -n okd-build delete job nmstate-build-full-<previous DATE> && {
+  DATE=$(date -u +%Y-%m-%d-%H%M%S)
+  oc process --local -f tests/okderators-nmstate-build/job-template.yaml \
+    -p MODE=full -p PIPELINE_BRANCH=nmstate-bundle-fix-4.21 -p DATE=$DATE \
+    | oc -n okd-build create -f - && echo DATE=$DATE; }
+```
+
+I followed each log read-only and collected the `STEP`/`CHECK`/`RESULT` lines.
+
+| Branch | DATE | Result | Wall time | `build_containers` |
+|---|---|---|---|---|
+| `nmstate-bundle-fix-4.21` | 2026-10-23-181845 | `RESULT PASS full`, 11/11 CHECK | 59 min | 47 min 40 s |
+| `nmstate-bundle-fix-4.22` | 2026-10-23-195655 | `RESULT PASS full`, 11/11 CHECK | 24 min | 14 min 24 s |
+| `nmstate-bundle-fix-4.20` | 2026-10-23-202635 | `RESULT FAIL build_containers (exit 1)` | 10 min | failed in the handler image |
+
+The 4.21 result is what the cluster will install:
+
+```
+CHECK gitmodules-branch PASS nmstate/operator=release-4.21 nmstate/console-plugin=release-4.21, the release of OCP_SHORT 4.21
+CHECK operator-commit PASS nmstate/operator built from bc318d1723e2977b55007d84f877f97b2960709d = the recorded gitlink (.gitmodules branch release-4.21), clean tree, no patch; the Containerfile sets no commit label
+CHECK nmstate-rpm PASS nmstate-2.2.62-3.el9.x86_64 in .../okd-test/nmstate/handler:4.21.0-2026-10-23-181845
+CHECK bundle-objects PASS objects CustomResourceDefinition/nmstates.nmstate.io ClusterServiceVersion/kubernetes-nmstate-operator.v4.21.0-2026-10-23-181845
+CHECK no-imagestream PASS no ImageStream object in opm render, no ImageStream in the bundle image's files, no image-references file
+CHECK no-redhat-registry PASS ...
+CHECK csv-name PASS kubernetes-nmstate-operator.v4.21.0-2026-10-23-181845 (OKD_VERSION 4.21.0-okd-scos.10)
+CHECK csv-code-release PASS release 4.21 code: olm-status-descriptors kubernetes-nmstate-operator.v4.21.0, olm.skipRange '>=4.3.0 <4.21.0'
+CHECK images-by-digest PASS 8 refs, all @sha256 ...
+CHECK install-modes PASS OwnNamespace=true SingleNamespace=true MultiNamespace=false AllNamespaces=true
+CHECK operator-sdk-validate PASS operator-sdk v1.36.1 bundle validate: passed, 1 warnings, 0 errors
+RESULT PASS full 2026-10-23-181845
+```
+
+`no-imagestream` is the fix itself: the bundle has two objects and no `image-references` file. The `operator-sdk`
+warning is `csv.Spec.minKubeVersion is not informed`. Bundles:
+
+- 4.21: `okd-test/nmstate/bundle:4.21.0-2026-10-23-181845@sha256:753da256c9a3b17d10ecd158d7cfec5d6d6bbde49af7610eeaf729c66fef43cc`
+- 4.22: `okd-test/nmstate/bundle:4.22.0-2026-10-23-195655@sha256:284ebfeaa858342c0768c850b84aee0c36adcfe3fa84560392af26882df8d724`
+
+The repository is `bundle`, not `operator-bundle`.
+
+4.22 is the retarget at work. Upstream `release-4.22` gitlinks are 4.20 commits; this build is
+`kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655` from `1d6d332`, with `csv-code-release` reading
+`v4.22.0` / `<4.22.0`. It has 7 image refs to 4.21's 8. The 4.22 CSV no longer sets `KUBE_RBAC_PROXY_IMAGE`; 4.21
+sets it to `quay.io/okd/scos-content@sha256:db030f09…`. That is upstream `release-4.22` commit `f1f0cda5`
+"OCPBUGS-127277: operator: remove unused kube-rbac-proxy image plumbing (#1543)". I checked it by pulling both
+bundle CSVs from zot. The 4.22 handler ships the same `nmstate-2.2.62-3.el9` as 4.21.
+
+One wording bug in my own check. The `images-by-digest` PASS line ends with "external <scos-content ref>". That is the
+external ref the check *allows* (from the payload), not one it found. On 4.22 the CSV has none. The verdict logic is
+right; the wording gets fixed with the next `build.sh` change.
+
+### 4.20: CentOS Stream 9 BaseOS metadata
+
+The handler image's `RUN dnf -y update && dnf -y install nmstate iputils iproute` failed:
+
+```
+CentOS Stream 9 - BaseOS                        139  B/s | 2.1 kB     00:15
+Errors during downloading metadata for repository 'baseos':
+  - Downloading successful, but checksum doesn't match. Calculated: 2e8b57757552f85c…(sha512)  Expected: 6ff5c00467839a…
+Error: Failed to download metadata for repo 'baseos': Cannot download repomd.xml: Cannot download repodata/repomd.xml: All mirrors were tried
+```
+
+The other repo error in that block, `rhel-9-server-ose` at `http://base-4-20-rhel9.ocp.svc/...`, is in all three
+builds. It is a CI-internal repo in the `scos-*:base-stream9` images, and dnf skips it each time (`Ignoring repositories:
+rhel-9-server-ose`). It is not the cause.
+
+From the Mac, with `python3 -I` and urllib (read-only):
+
+| Source | `repomd.xml` sha512 | Size |
+|---|---|---|
+| metalink `centos-baseos-9-stream` x86_64, timestamp 2026-10-23 17:48:56Z | expects `6ff5c00467839a…`, no alternates | 2142 |
+| five mirrors from that metalink (20:4xZ) | `2e8b57757552f8…`, newest data 2026-10-21 20:59Z | 2142 |
+| `mirror.stream.centos.org` (master), 20:4xZ | `2e8b57757552f8…` | 2142 |
+| `mirror.stream.centos.org`, 21:02Z | `346a4df8ef6e4a…` | — |
+
+The metalink expects a checksum that not even the master served. The master has since moved to another file, and the
+metalink is still the 17:48Z one. That is CentOS infrastructure, not the pipeline or the fix. The 4.21 run (about
+18:30Z) and the 4.22 run (about 20:05Z) passed the same `dnf` step. Building `main` now would hit the same step, so
+4.20 and `main` wait until the metalink matches the master. Nothing was pushed for 4.20; the failed Job is deleted.
+
+### Pod start on node5
+
+The 4.21 and 4.22 pods each sat about 4.5 min in `CreateContainerError` on node5. 4.21 logged `stream terminated by
+RST_STREAM with error code: CANCEL`, 4.22 `context deadline exceeded`. Each started on kubelet's retry. The GitOps
+catalog run on 10-22 did the same. The 4.20 pod, also on node5, started in about a minute. The pod is `privileged`
+SCC with no `seLinuxOptions`, so a volume relabel is unlikely. Without node-log access the cause stays open. It costs
+minutes, not runs.
+
+zot: 15.4 GiB free before, 16.1 GiB after both builds.
+
+Stopped here for the night (operator, 21:05Z). Next: re-run 4.20 and `main` once CentOS has fixed its metadata. Then
+one `MODE=catalog` run for release-4.20/4.21/4.22, Task 7, and the switch in a daytime window.
