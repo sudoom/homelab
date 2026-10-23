@@ -78,7 +78,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "The eviction panels come from the Kube Descheduler Operator's metrics (`descheduler_pods_evicted_total`). While its KubeDescheduler CR is in `Predictive` mode they count evictions it *would* make (dry run); nothing is evicted.\n\nThe vendored descheduler CronJob in namespace `kube-descheduler` does the real evictions until the switch; those appear only in its logs.\n\nBalance panels use pod requests against node allocatable, as the LowNodeUtilization profile (preset High) does: underutilized when CPU, memory and pods are all below 40 %, overutilized when any is above 70 %.\n\nThe two stats on the right show whether Prometheus collects the descheduler's metrics and how many runs it made in the last 2 hours. With both healthy, an empty eviction panel means nothing was evicted (or, in Predictive mode, would have been)."
+        "content": "Evictions come from the Kube Descheduler Operator's metrics (`descheduler_pods_evicted_total`; the evicted pod's namespace is the `pod_namespace` label). It runs hourly in `Automatic` mode since 2026-10-24 and never evicts pods in `openshift-*`, `kube-system` or `hypershift`, pods with a PVC or local storage, DaemonSet pods or system-critical pods.\n\nBalance panels use pod requests against node allocatable, as its LowNodeUtilization preset High does: underutilized when CPU, memory and pods are all below 40 %, overutilized when any is above 70 %. The stats on the right show that Prometheus collects its metrics and how many runs it made in the last 2 hours."
       }
     },
     {

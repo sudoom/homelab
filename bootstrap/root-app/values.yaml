@@ -130,9 +130,8 @@ applications:
     namespace: openshift-adp
     syncWave: "1"
 
-  # Kube Descheduler Operator from okderators. Runs in Predictive mode next to
-  # the vendored `descheduler` CronJob until the switch to Automatic, which also
-  # removes that chart (README TODO).
+  # Kube Descheduler Operator from okderators, Automatic since 2026-10-24.
+  # Replaced the vendored `descheduler` CronJob chart (blog/blog-descheduler-draft.md).
   kube-descheduler-operator:
     enabled: true
     path: components/operators/kube-descheduler
@@ -362,16 +361,6 @@ applications:
     enabled: true
     path: components/cluster-config/cnpg-snapshot-retention
     namespace: cnpg-snapshot-retention
-    syncWave: "6"
-
-  # Periodic CronJob that evicts pods violating node affinity / taints /
-  # inter-pod anti-affinity. Designed to unstick the post-MCO-reroll
-  # clustering pattern (routers and the like landing on suboptimal nodes).
-  # Excludes anything with a PVC (CNPG, Loki, Prometheus, …).
-  descheduler:
-    enabled: true
-    path: components/cluster-config/descheduler
-    namespace: kube-descheduler
     syncWave: "6"
 
   # Wave 5 — CNPG Cluster CRs (per-app Postgres instances; renders before

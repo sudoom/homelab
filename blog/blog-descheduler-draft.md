@@ -259,3 +259,26 @@ openshift-*, kube-system and hypershift namespaces". The reconciler (`release-4.
 `excludedNamespaces` from the protected list and appends `excluded` to it, and an `included` entry that is protected
 fails with "Protected namespace %v included. It is forbidden to include any of the protected namespaces". So under
 the operator, pods in `openshift-*` namespaces are never evicted, by design.
+
+## 2026-10-24 — switch to Automatic, vendored chart removed
+
+Gate before switching: the operator's metrics actually collected. The dashboard first read "not scraped", while
+every piece of plumbing checked out (namespace label, Service `app: descheduler` matching the ServiceMonitor,
+`role/prometheus-k8s` for services/endpoints/pods, Endpoints `10.129.1.156` port `https:10258`, both Prometheus
+replicas logging `config=serviceMonitor/openshift-kube-descheduler-operator/kube-descheduler/0` at 22:12:55Z,
+no `forbidden` in their logs, `serviceDiscoveryRole: Endpoints`). Observe → Targets showed
+`https://10.129.1.156:10258/metrics` **Up**, 15.6 ms, and a refresh turned the stat to "yes" — it had been timing.
+`Runs (last 2h)` reads 0 until the second loop: the first ran at pod start, before the first scrape.
+
+Decision: switch, accepting the operator's scope (11 evictable pods vs the vendored 31, never `openshift-*`), for
+the metrics, OLM-managed upgrades and the supported 4.22 path.
+
+One commit:
+
+- `components/operators/kube-descheduler/values.yaml`: `mode: Automatic`.
+- `components/cluster-config/descheduler/` deleted and its root-app entry removed. Child Applications carry
+  `resources-finalizer.argocd.argoproj.io` and root-app has `prune: true`, so the prune cascades: the CronJob, its
+  RBAC, the policy ConfigMap and the `kube-descheduler` namespace go with the Application, and the two descheduler
+  never run side by side.
+- README: layout line and the TODO removed (shipped); the two older TODO items that called the descheduler
+  "broken for 4.21" now say it was fixed upstream. CLAUDE.md and the dashboard text say `Automatic`.

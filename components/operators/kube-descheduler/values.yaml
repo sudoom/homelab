@@ -10,11 +10,11 @@ subscription:
   installPlanApproval: Manual
 
 kubeDescheduler:
-  # Predictive = dry run: the descheduler logs and counts what it would evict
-  # and evicts nothing. The vendored CronJob (components/cluster-config/descheduler)
-  # keeps doing the real evictions until this flips to Automatic; that flip and
-  # the removal of the vendored chart are one commit (README TODO).
-  mode: Predictive
+  # Automatic since 2026-10-24 (Predictive = dry run: logs and counts what it
+  # would evict, evicts nothing). The same commit removed the vendored CronJob
+  # chart it replaced. Pods in openshift-*, kube-system and hypershift are never
+  # evicted; the operator keeps that protection whatever the CR says.
+  mode: Automatic
   deschedulingIntervalSeconds: 3600
   # AffinityAndTaints = the vendored chart's first profile, same three plugins.
   # LongLifecycle = LowNodeUtilization + RemovePodsHavingTooManyRestarts (100),
