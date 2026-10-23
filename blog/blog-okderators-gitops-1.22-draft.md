@@ -835,3 +835,20 @@ open a catalog-index PR by itself: `operator-deploy.yaml` defaults to `update_ca
 only. So Task 11 becomes a follow-up on those bot PRs that adds `skipRange: '>=1.19.0-0 <…'` (the same "keep the bot"
 shape as NMState), plus catalog PRs by hand for `release-4.21` and `release-4.20`, whose `operator-deploy.yaml` has no
 catalog job. #39 says this under "Catalog".
+
+## 2026-10-23: GitOps console plugin enabled
+
+The operator enabled `gitops-plugin` in the console (Console plugins toggle; the Console operator CR's
+`spec.plugins` field manager reads `Mozilla`). It is the one Task 8 item left unexercised. Nothing in this repo manages
+`console.operator.openshift.io/cluster`, so ArgoCD does not revert it. Readonly, at 21:39Z:
+
+```
+spec.plugins: ["monitoring-plugin","networking-console-plugin","nmstate-console-plugin","gitops-plugin"]
+console pod log: Console plugins are enabled in following order: - gitops-plugin
+gitops-plugin endpoint 10.129.1.57 ready=true
+console Deployment 2/2 updated and ready at 21:39:44Z (one FailedScheduling on pod anti-affinity while the old pods drained)
+ClusterOperator console: Available=True Progressing=False Degraded=False
+```
+
+In the console, GitOps → Applications lists the Applications as Synced/Healthy, with ApplicationSets, AppProjects,
+ImageUpdaters and Rollouts alongside. So the 1.22 plugin image built here works on OKD 4.21.
