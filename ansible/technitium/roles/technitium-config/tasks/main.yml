@@ -405,6 +405,162 @@
     label: "{{ item.zone }} → {{ item.forwarder }} ({{ item.protocol | default('Udp') }})"
   tags: [config, forwarders]
 
+# ---- Read-only API user + token for the Prometheus exporter ----------------
+# Users and API tokens replicate across the Technitium cluster, so this runs on
+# the primary only. The user gets no permissions of its own: it is a member of
+# the built-in Everyone group, whose View on Dashboard and DnsClient is all the
+# exporter needs, and that is ASSERTED rather than set. No permission table is
+# ever written here, because /api/admin/permissions/set REPLACES a section's whole
+# user and group table; one wrong row would strip the Administrators group.
+# The password is random and discarded (password lookup on /dev/null): only the
+# API token is ever used, and Technitium returns a token exactly once, so it is
+# written to the control machine (0600, never logged) for the operator to seal.
+- name: Metrics API user and token (primary only)
+  when: inventory_hostname == technitium_cluster_primary_host
+  tags: [config, metrics]
+  block:
+    - name: List users
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/users/list"
+        method: GET
+        headers: "{{ technitium_auth_headers }}"
+        return_content: true
+      register: technitium_users
+      failed_when: (technitium_users.json.status | default('error')) != 'ok'
+
+    - name: Create the metrics user
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/users/create"
+        method: POST
+        headers: "{{ technitium_auth_headers }}"
+        body_format: form-urlencoded
+        body:
+          user: "{{ technitium_metrics_user }}"
+          pass: "{{ lookup('ansible.builtin.password', '/dev/null length=40 chars=ascii_letters,digits') }}"
+          displayName: "Prometheus exporter (read-only)"
+        return_content: true
+      register: technitium_metrics_user_create
+      failed_when: (technitium_metrics_user_create.json.status | default('error')) != 'ok'
+      changed_when: true
+      no_log: true
+      when: technitium_metrics_user not in (technitium_users.json.response.users | map(attribute='username') | list)
+
+    - name: Read the metrics user's groups
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/users/get?user={{ technitium_metrics_user }}&includeGroups=false"
+        method: GET
+        headers: "{{ technitium_auth_headers }}"
+        return_content: true
+      register: technitium_metrics_user_details
+      failed_when: (technitium_metrics_user_details.json.status | default('error')) != 'ok'
+
+    - name: Keep the metrics user in Everyone only
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/users/set"
+        method: POST
+        headers: "{{ technitium_auth_headers }}"
+        body_format: form-urlencoded
+        body:
+          user: "{{ technitium_metrics_user }}"
+          memberOfGroups: Everyone
+        return_content: true
+      register: technitium_metrics_user_set
+      failed_when: (technitium_metrics_user_set.json.status | default('error')) != 'ok'
+      changed_when: true
+      when: (technitium_metrics_user_details.json.response.memberOfGroups | default([]) | sort) != ['Everyone']
+
+    - name: Read Everyone's permissions on the sections the exporter reads
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/permissions/get?section={{ item }}"
+        method: GET
+        headers: "{{ technitium_auth_headers }}"
+        return_content: true
+      register: technitium_metrics_perms
+      failed_when: (technitium_metrics_perms.json.status | default('error')) != 'ok'
+      loop: [Dashboard, DnsClient]
+
+    - name: Assert Everyone can view Dashboard and DnsClient
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.json.response.groupPermissions
+            | selectattr('name', 'equalto', 'Everyone')
+            | selectattr('canView')
+            | list | length == 1
+        fail_msg: >-
+          The Everyone group cannot view {{ item.item }}, so the metrics user would get
+          403s. Grant it deliberately (this role does not write permission tables).
+        quiet: true
+      loop: "{{ technitium_metrics_perms.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: List sessions
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/sessions/list"
+        method: GET
+        headers: "{{ technitium_auth_headers }}"
+        return_content: true
+      register: technitium_sessions
+      failed_when: (technitium_sessions.json.status | default('error')) != 'ok'
+      no_log: true
+
+    - name: Find the exporter's existing API token sessions
+      ansible.builtin.set_fact:
+        technitium_metrics_token_sessions: >-
+          {{ technitium_sessions.json.response.sessions
+             | selectattr('username', 'equalto', technitium_metrics_user)
+             | selectattr('tokenName', 'equalto', technitium_metrics_token_name)
+             | map(attribute='partialToken') | list }}
+      no_log: true
+
+    - name: Delete the existing token (rotation only)
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/sessions/delete?partialToken={{ item }}"
+        method: POST
+        headers: "{{ technitium_auth_headers }}"
+        return_content: true
+      register: technitium_metrics_token_delete
+      failed_when: (technitium_metrics_token_delete.json.status | default('error')) != 'ok'
+      changed_when: true
+      loop: "{{ technitium_metrics_token_sessions }}"
+      no_log: true
+      when: technitium_metrics_token_rotate | bool
+
+    - name: Create the exporter API token
+      ansible.builtin.uri:
+        url: "{{ technitium_api_base }}/api/admin/sessions/createToken"
+        method: POST
+        headers: "{{ technitium_auth_headers }}"
+        body_format: form-urlencoded
+        body:
+          user: "{{ technitium_metrics_user }}"
+          tokenName: "{{ technitium_metrics_token_name }}"
+        return_content: true
+      register: technitium_metrics_token
+      failed_when: (technitium_metrics_token.json.status | default('error')) != 'ok'
+      changed_when: true
+      no_log: true
+      when: (technitium_metrics_token_sessions | length == 0) or (technitium_metrics_token_rotate | bool)
+
+    - name: Write the new token to the control machine for sealing
+      ansible.builtin.copy:
+        content: "{{ technitium_metrics_token.json.response.token }}"
+        dest: "{{ technitium_metrics_token_file }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      no_log: true
+      when: technitium_metrics_token is not skipped
+
+    - name: Say where the token went
+      ansible.builtin.debug:
+        msg: >-
+          New API token for '{{ technitium_metrics_user }}' written to
+          {{ technitium_metrics_token_file }}. Seal it as the technitium-exporter
+          SealedSecret (README), then delete the file: Technitium will not show it again.
+      when: technitium_metrics_token is not skipped
+
 # ---- Force-refresh block list cache now -----------------------------------
 - name: Force update of block list cache
   ansible.builtin.uri:

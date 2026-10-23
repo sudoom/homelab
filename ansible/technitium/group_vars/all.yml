@@ -183,6 +183,17 @@ technitium_cluster_domain: home
 # Which inventory host is the cluster Primary. Config flows FROM here.
 technitium_cluster_primary_host: dns-master
 
+# Read-only API user for the in-cluster Prometheus exporter
+# (components/cluster-config/technitium-exporter) and later Homepage's widget.
+# technitium-config creates it on the primary (users and tokens replicate), keeps
+# it in the built-in Everyone group only, and creates one API token, written once
+# to technitium_metrics_token_file on the control machine for the operator to seal.
+# Re-issue the token with -e technitium_metrics_token_rotate=true.
+technitium_metrics_user: metrics
+technitium_metrics_token_name: prometheus-exporter
+technitium_metrics_token_file: "{{ lookup('ansible.builtin.env', 'HOME') }}/.technitium-metrics-token"
+technitium_metrics_token_rotate: false
+
 # Node addresses advertised to the other cluster members. Comma separated —
 # the UI's cleanTextList() turns its newline textarea into exactly this.
 technitium_cluster_node_ipaddresses:

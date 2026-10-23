@@ -161,6 +161,41 @@ Common edits and the file they live in:
 | Narrow the rate-limit bypass | `technitium_qpm_bypass_list` (CIDR; default whole `192.168.1.0/24`) |
 | Add a new "block this zone" rule | `technitium_blocked_zones` list |
 
+## Day-2: metrics user and API token (Prometheus exporter)
+
+`technitium-config` keeps a read-only API user for the in-cluster exporter
+(`components/cluster-config/technitium-exporter/`), on the primary only, because users
+and tokens replicate across the Technitium cluster (tag `metrics`):
+
+- user `technitium_metrics_user` (`metrics`) with a random, discarded password, member of
+  the built-in **Everyone** group only;
+- an **assert** that Everyone can View `Dashboard` and `DnsClient`, which is all the
+  exporter needs. Nothing writes permission tables: `/api/admin/permissions/set`
+  replaces a section's whole table, so one wrong row would strip Administrators;
+- one API token named `technitium_metrics_token_name` (`prometheus-exporter`), created
+  only if absent. Technitium returns a token once, so the role writes it to
+  `technitium_metrics_token_file` (`~/.technitium-metrics-token`, mode 0600) on the
+  control machine and never logs it.
+
+```bash
+cd ansible/technitium
+ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --limit dns-master --tags metrics
+```
+
+Then seal it from the repo root and delete the file:
+
+```bash
+oc create secret generic technitium-exporter-token -n technitium-exporter \
+  --from-file=TECHNITIUM_TOKEN="$HOME/.technitium-metrics-token" --dry-run=client -o json \
+  | kubeseal --cert components/operators/sealed-secrets/sealed-secrets-pub.pem --format yaml \
+  > components/cluster-config/technitium-exporter/templates/sealed-technitium-exporter-token.yaml
+rm "$HOME/.technitium-metrics-token"
+```
+
+To re-issue the token (lost file, suspected leak), add `-e technitium_metrics_token_rotate=true`:
+the old token session is deleted first, so the exporter returns 401 until the new
+SealedSecret is pushed.
+
 ## What's NOT done yet
 
 - **Operator-manual bootstrap steps 1-5** above (SD flash + Technitium install + admin password) — playbook expects an already-installed Technitium and a populated `vars/vault.yml`.
