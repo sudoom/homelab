@@ -1353,9 +1353,25 @@ plugin's, for the three CNPG clusters (`grep -rl cloudflarestorage components` �
 - **Base backups** (plugin `ScheduledBackup`, `method: plugin`): daily → weekly, all on Sunday and still staggered —
   homebox `0 30 2 * * 0`, immich `0 0 3 * * 0`, media `0 30 3 * * 0` (6-field cron, seconds first, `0` = Sunday).
 - **WAL archiving**: continuous by nature, it is what makes point-in-time recovery possible. Unchanged. With weekly
-  bases and `retentionPolicy: "30d"` the recovery window stays 30 days; what changes is restore time, which now
+  bases and `retentionPolicy: "30d"` the recovery window stays 30 days (**superseded the same day: 23d, see next section**); what changes is restore time, which now
   replays up to 7 days of WAL on top of the newest base. For these database sizes that is minutes.
 
 The daily volumeSnapshot `ScheduledBackup`s stay daily: they are local Ceph snapshots, not R2. No alert depends on
 base-backup age (`grep` for `last_available_backup`, `lastSuccessfulBackup`, backup-age rules in `components/`
 found none), so nothing starts firing between Sundays.
+
+## 2026-10-24 — retention 30d → 23d to fit the R2 lifecycle rule
+
+The `psql-backup` bucket carries two R2 Object Lifecycle Rules, set in the Cloudflare dashboard (not in git; seen in
+a screenshot of the bucket settings): "Default Multipart Abort Rule" (abort uploads after 7 days) and
+"Delete more then 31 days" (prefix none → every object, delete after 31 days).
+
+With daily base backups that rule and `retentionPolicy: "30d"` agreed. With weekly ones they do not: a restore to time
+T needs the newest base taken before T plus the WAL since, and that base can be up to 7 days older than T. Restoring to
+29 days ago needs a base up to 36 days old, which R2 has deleted at 31. The real window would have been ~24 days while
+barman's catalog claimed 30.
+
+Two fixes: raise the R2 rule to ~40 days (30 + 7 + margin), or keep 31 and shrink barman's window. Operator chose the
+second: `retentionPolicy: "23d"` on `media-postgres-r2`, `immich-postgres-r2` and `homebox-postgres-r2`. A 23-day
+recovery window needs a base at most 23 + 7 = 30 days old and WAL from then on, all under the 31-day rule. The R2
+rule stays as the backstop if barman's own retention ever stops running.
