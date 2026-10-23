@@ -1,0 +1,151 @@
+namespace: homepage
+host: home.apps.okd.sudops.pl
+
+image:
+  repository: ghcr.io/gethomepage/homepage
+  # v2.7.0 was a day old when this shipped; the release before it.
+  tag: v2.6.0
+
+# OpenShift's oauth-proxy, from the release payload: the image behind the
+# `openshift/oauth-proxy:v4.4` ImageStream tag on OKD 4.21.0-okd-scos.11. Pinned by
+# digest so ArgoCD has a plain image to apply; refresh it after an OKD upgrade with
+#   oc -n openshift get is oauth-proxy -o jsonpath='{.status.tags[0].items[0].dockerImageReference}'
+oauthProxy:
+  image: quay.io/okd/scos-content@sha256:bd59d8b888c8a0c38f48ca78d8164b55833a333c6dfed81b731e07cd48ff0054
+  # Who may open the page: anyone allowed to `get services` in this namespace,
+  # i.e. cluster admins. oauth-proxy runs the check with the user's own token.
+  sar: '{"namespace":"homepage","resource":"services","verb":"get"}'
+
+# Homepage has no login of its own and shows cluster resource usage, so it only
+# listens on localhost; oauth-proxy is the only way in.
+# A literal block, not a map: Homepage orders groups by `layout`, and Helm's
+# toYaml would sort its keys alphabetically.
+settings: |
+  title: sudops lab
+  theme: dark
+  color: slate
+  headerStyle: clean
+  hideVersion: true
+  layout:
+    Media:
+      style: row
+      columns: 4
+    Keepers:
+      style: row
+      columns: 4
+    Photos & inventory:
+      style: row
+      columns: 4
+    Platform:
+      style: row
+      columns: 4
+    Network & NAS:
+      style: row
+      columns: 4
+
+# Links only for now. Per-app widgets need each app's API key as a SealedSecret
+# and can be added one at a time.
+services:
+  - Media:
+      - Jellyfin:
+          href: https://jellyfin.apps.okd.sudops.pl
+          icon: jellyfin.png
+      - Sonarr:
+          href: https://sonarr.apps.okd.sudops.pl
+          icon: sonarr.png
+      - Radarr:
+          href: https://radarr.apps.okd.sudops.pl
+          icon: radarr.png
+      - Prowlarr:
+          href: https://prowlarr.apps.okd.sudops.pl
+          icon: prowlarr.png
+      - Bazarr:
+          href: https://bazarr.apps.okd.sudops.pl
+          icon: bazarr.png
+      - Transmission:
+          href: https://media-download.apps.okd.sudops.pl
+          icon: transmission.png
+          description: master
+      - Transmission (slave):
+          href: https://media-download-slave.apps.okd.sudops.pl
+          icon: transmission.png
+  - Keepers:
+      - Transmission:
+          href: https://keepers-trans.apps.okd.sudops.pl
+          icon: transmission.png
+          description: VPN
+      - webtlo:
+          href: https://webtlo.apps.okd.sudops.pl
+          icon: mdi-download-network
+  - Photos & inventory:
+      - Immich:
+          href: https://immich.apps.okd.sudops.pl
+          icon: immich.png
+      - Homebox:
+          href: https://homebox.apps.okd.sudops.pl
+          icon: homebox.png
+  - Platform:
+      - OKD console:
+          href: https://console-openshift-console.apps.okd.sudops.pl
+          icon: openshift.png
+      - Argo CD:
+          href: https://openshift-gitops-server-openshift-gitops.apps.okd.sudops.pl
+          icon: argo-cd.png
+      - Grafana:
+          href: https://grafana.apps.okd.sudops.pl
+          icon: grafana.png
+      - Ceph:
+          href: https://ceph.apps.okd.sudops.pl
+          icon: ceph.png
+      - zot:
+          href: https://zot.apps.okd.sudops.pl
+          icon: mdi-docker
+      - Gatus:
+          href: https://gatus.apps.okd.sudops.pl
+          icon: gatus.png
+  - Network & NAS:
+      - TrueNAS:
+          href: https://192.168.1.25
+          icon: truenas.png
+      - Syncthing:
+          href: http://192.168.1.25:8384
+          icon: syncthing.png
+      - MikroTik router:
+          href: http://192.168.1.1
+          icon: mikrotik.png
+      - MikroTik switch:
+          href: http://192.168.1.220
+          icon: mikrotik.png
+      - Technitium (master):
+          href: http://192.168.1.12:5380
+          icon: technitium.png
+      - Technitium (slave):
+          href: http://192.168.1.13:5380
+          icon: technitium.png
+
+widgets:
+  - kubernetes:
+      cluster:
+        show: true
+        cpu: true
+        memory: true
+        showLabel: true
+        label: okd
+      nodes:
+        show: true
+        cpu: true
+        memory: true
+        showLabel: true
+  - datetime:
+      text_size: md
+      format:
+        dateStyle: long
+        timeStyle: short
+        hour12: false
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 128Mi
+  limits:
+    memory: 384Mi

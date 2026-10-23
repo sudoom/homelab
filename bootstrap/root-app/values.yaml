@@ -415,3 +415,10 @@ applications:
     path: components/apps/homebox
     namespace: homebox
     syncWave: "7"
+
+  # Lab start page (gethomepage.dev) behind oauth-proxy; links + kubernetes widget.
+  homepage:
+    enabled: true
+    path: components/apps/homepage
+    namespace: homepage
+    syncWave: "7"

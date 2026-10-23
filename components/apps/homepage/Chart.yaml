@@ -1,0 +1,5 @@
+apiVersion: v2
+name: homepage
+description: Homepage (gethomepage.dev) lab start page behind the OpenShift login
+version: 1.0.0
+type: application

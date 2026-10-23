@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage
+  namespace: {{ .Values.namespace }}
+data:
+  settings.yaml: |
+{{ .Values.settings | indent 4 }}
+  services.yaml: |
+{{ toYaml .Values.services | indent 4 }}
+  widgets.yaml: |
+{{ toYaml .Values.widgets | indent 4 }}
+  # In-cluster API access for the kubernetes widget. Discovery reads Ingress,
+  # Traefik and Gateway API objects only, never OpenShift Routes, so it is off and
+  # services are listed in services.yaml instead.
+  kubernetes.yaml: |
+    mode: cluster
+    ingress: false
+  bookmarks.yaml: |
+    []
+  docker.yaml: |
+    {}
+  custom.css: ""
+  custom.js: ""

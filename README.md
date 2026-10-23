@@ -115,6 +115,8 @@ components/
                            #   Shipped enabled: false until vpn-creds is re-sealed for the ns.
     homebox/               # Wave 7 — Homebox home inventory + its own CNPG cluster homebox-postgres
                            #   (2 instances, daily snapshot + R2 WAL, weekly R2 base); attachments PVC not backed up
+    homepage/              # Wave 7 — Homepage (gethomepage.dev) lab start page: links + kubernetes widget,
+                           #   behind oauth-proxy (OpenShift login, cluster admins only)
 ansible/                   # Non-OKD home infra managed by Ansible (outside ArgoCD)
   technitium/              # Technitium DNS Server (replaces pi-hole) — primary + future secondary
   truenas/                 # TrueNAS SCALE NAS config via midclt over SSH (replaces the Synology DS418)

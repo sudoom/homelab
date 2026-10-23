@@ -1,0 +1,15 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: homepage-proxy
+  namespace: homepage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  encryptedData:
+    session_secret: AgARZCJ4PNcHHJdZIjLq/cl9lBGEGg3TSFM53KBYmom6J+JCP/kq79NcH3QGAd4Y7yXWySX3/CB89bCupRmUVkQ71rZXGkjgclCh3Inyryqq4Mey1VF8FrJMM09Q1uB1eCDbz++0fbeltDifmWxw3ox6V2sVsjOfngYYpSfbu/JUPFkXe7WbZN9Zo5lG0LFoZDxZhwOKrwF0zNZg3XIBLOVoZq6Ojl3q3t9sX/TKuAFTGsV836htHjz3xG+7qT4HPTTnpppOCTU8yoPI08H9Uw41JUOV+lTbZ/hismUN0uAYcW/PpxUcUojAqlwEFQpTkv445BQ1s2qqu6XPbrbKciIkUmpaxKz7X2hShRI30ioNHFg2KWn6NqEZKPeWmuBs2+3c/NW0j55F3929WRci6YdMwthGq4iOFsSp2XS5MqerjTXZGq83dtQGJwUX4C42zZe0DdFhWE6IJ5fMkfdxC4UwNnFGY6CFqZktp0m3dVXzidBdLfi7Usp+A8D/6zpSsiTM1s/Xt8ACo0zYcmBeZhxQFwrvXWwryfX/sVVXp+bY/vxH2+PZI79knblqu3eEt0f9xI8eIwutXB1qPxKLkgkuEW3qYMj/WTUbZeA9d6kQfo5YlJxlXO9Z8tyNdqxbpdwSnfSbq5yHW1eTpf6XBEKM77ghuzDsGgSw/woqamow62Tuhszs2GNl3rHemjQEvBRB0pknZazI1oeNOwH466BLUvXuHuM6EBkYNRfTZndbDUzz7UoP8cufgO0ytA==
+  template:
+    metadata:
+      name: homepage-proxy
+      namespace: homepage

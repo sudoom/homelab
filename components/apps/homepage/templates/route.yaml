@@ -1,0 +1,16 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: homepage
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.host }}
+  to:
+    kind: Service
+    name: homepage
+  port:
+    targetPort: https
+  tls:
+    # reencrypt to oauth-proxy's service-CA cert; edge would send plain HTTP to 8443.
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: homepage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homepage
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: homepage
+      annotations:
+        # Config files are subPath mounts, which never see ConfigMap updates.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: homepage
+      securityContext:
+        # restricted-v2 injects the UID; the entrypoint's PUID defaults to 0, which
+        # skips its chown steps, so it runs as whatever UID it is given.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: homepage
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          env:
+            # Bind to localhost only: oauth-proxy in this pod is the only way in.
+            # Kubernetes sets HOSTNAME to the pod name, so it must be set explicitly.
+            - name: HOSTNAME
+              value: 127.0.0.1
+            - name: PORT
+              value: "3000"
+            # Requests arrive with the Route host (oauth-proxy passes the Host
+            # header); the probes below call 127.0.0.1:3000.
+            - name: HOMEPAGE_ALLOWED_HOSTS
+              value: "{{ .Values.host }},127.0.0.1:3000"
+          # exec, not httpGet: the kubelet probes the pod IP, and the app only
+          # listens on 127.0.0.1. Same command as the image's own HEALTHCHECK.
+          readinessProbe:
+            exec:
+              command: ["wget", "--no-verbose", "--tries=1", "--spider", "-Y", "off", "http://127.0.0.1:3000/api/healthcheck"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["wget", "--no-verbose", "--tries=1", "--spider", "-Y", "off", "http://127.0.0.1:3000/api/healthcheck"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Writable: Homepage writes logs/ and copies missing skeleton files here.
+            - name: config
+              mountPath: /app/config
+            {{- range $f := list "settings.yaml" "services.yaml" "widgets.yaml" "kubernetes.yaml" "bookmarks.yaml" "docker.yaml" "custom.css" "custom.js" }}
+            - name: homepage-config
+              mountPath: /app/config/{{ $f }}
+              subPath: {{ $f }}
+            {{- end }}
+            - name: next-cache
+              mountPath: /app/.next/cache
+        - name: oauth-proxy
+          image: {{ .Values.oauthProxy.image }}
+          args:
+            - --provider=openshift
+            - --https-address=:8443
+            - --http-address=
+            - --upstream=http://127.0.0.1:3000
+            - --openshift-service-account=homepage
+            - --openshift-sar={{ .Values.oauthProxy.sar }}
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --cookie-secret-file=/etc/proxy/secrets/session_secret
+            - --openshift-ca=/etc/pki/tls/cert.pem
+            - --openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: proxy-cookie
+              mountPath: /etc/proxy/secrets
+              readOnly: true
+      volumes:
+        - name: config
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
+        - name: homepage-config
+          configMap:
+            name: homepage
+        - name: proxy-tls
+          secret:
+            # Issued by the service CA from the Service annotation.
+            secretName: homepage-tls
+        - name: proxy-cookie
+          secret:
+            # Sealed in templates/sealed-homepage-proxy.yaml (key session_secret).
+            secretName: homepage-proxy

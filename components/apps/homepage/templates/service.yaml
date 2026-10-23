@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # The service CA issues oauth-proxy's serving cert into this Secret; the router
+    # trusts the same CA for the reencrypt Route.
+    service.beta.openshift.io/serving-cert-secret-name: homepage-tls
+spec:
+  selector:
+    app.kubernetes.io/name: homepage
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
