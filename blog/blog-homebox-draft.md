@@ -108,3 +108,15 @@ oc create secret generic homebox-auth -n homebox \
 
 Checked by metadata only (one key, encrypted length 792), given sync wave -2 like the R2 credential, and wired into
 the Deployment as `HBOX_AUTH_API_KEY_PEPPER` from `secretKeyRef homebox-auth`.
+
+## 2026-10-24 — running; registration closed
+
+After the pepper commit the first sync operation (pinned to its original revision `593864f`) had to exhaust its five
+retries before automated sync started a fresh one at the new revision: `op=Succeeded oprev=5060e22
+sync=Synced/Healthy` at 22:40:32Z. The pod ran its goose migrations against `homebox-postgres`
+(`successfully migrated database to version: 20260821000000`) and logged `Server is running on :7745`; the Route
+`homebox.apps.okd.sudops.pl` is admitted and both ScheduledBackups exist. The operator created the first account,
+then `allowRegistration: false` (`HBOX_OPTIONS_ALLOW_REGISTRATION=false`).
+
+Note for the next new app: a first sync whose wave-0 Deployment crashloops pins ArgoCD to that revision through all
+its retries (~17 min here), so a fix pushed in the meantime waits for the retries to run out.
