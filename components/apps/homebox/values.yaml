@@ -5,7 +5,10 @@ image:
   # restricted-v2 as long as /data is writable (fsGroup is injected).
   repository: ghcr.io/sysadminsmedia/homebox
   tag: 0.27.1-rootless
-  digest: sha256:11ee1008150a7d51a7da6b05f5b3d0e5d4a22eacc39dfef2b9894873c46b4c86
+  # Must match the tag: the runtime pulls by digest and ignores the tag. Renovate's
+  # #205 bumped only the tag (2026-10-24); look the digest up with
+  # GET https://ghcr.io/v2/sysadminsmedia/homebox/manifests/<tag> (Docker-Content-Digest).
+  digest: sha256:6bb4472e91d3084d292ce654772e26df765d01aa0d38aa7077a7bb07b7d44ac7
 
 # Open registration was needed to create the first account; closed 2026-10-24 once
 # it existed, so nobody else on the LAN can sign up. Set true only to add a user.
