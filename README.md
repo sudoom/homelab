@@ -108,18 +108,21 @@ components/
     ceph-object-store/     # CephObjectStore (RGW) + Route + PrometheusRule
     nfs-csi/               # NFS CSI driver for legacy/external mounts
   apps/
-    cnpg-clusters/         # Per-namespace CNPG Cluster CRs (currently: media-postgres,
-                           #   3-instance PG 18, 6 DBs for the .NET servarrs)
+    cnpg-clusters/         # Wave 5 — shared CNPG Cluster CRs (currently: media-postgres,
+                           #   2 instances since 2026-09-15, PG 18, 6 DBs for the .NET servarrs)
     media/                 # Media stack: 4 servarrs (sonarr/radarr/prowlarr/bazarr) + jellyfin
                            #   + transmission (master/slave); first 3 on Postgres via media-postgres
     keepers/               # Keepers stack: transmission (VPN) + webtlo (rutracker keeper).
-                           #   Shipped enabled: false until vpn-creds is re-sealed for the ns.
+                           #   Enabled; its vpn-creds SealedSecret is sealed for the keepers ns.
+    zot/                   # Wave 6 — zot registry: pull-through mirror for quay.io, docker.io, ghcr.io,
+                           #   registry.k8s.io, and okd-test/ for in-cluster builds
+    immich/                # Wave 7 — Immich (library on TrueNAS NFS) + its own CNPG cluster immich-postgres
     homebox/               # Wave 7 — Homebox home inventory + its own CNPG cluster homebox-postgres
                            #   (2 instances, daily snapshot + R2 WAL, weekly R2 base); attachments PVC not backed up
     homepage/              # Wave 7 — Homepage (gethomepage.dev) lab start page: links + kubernetes widget,
                            #   behind oauth-proxy (OpenShift login, cluster admins only)
 ansible/                   # Non-OKD home infra managed by Ansible (outside ArgoCD)
-  technitium/              # Technitium DNS Server (replaces pi-hole) — primary + future secondary
+  technitium/              # Technitium DNS Server (replaces pi-hole) — dns-master + dns-slave, native Cluster
   truenas/                 # TrueNAS SCALE NAS config via midclt over SSH (replaces the Synology DS418)
 ```
 

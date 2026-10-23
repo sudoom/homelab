@@ -199,8 +199,9 @@ SealedSecret is pushed.
 ## What's NOT done yet
 
 - **Operator-manual bootstrap steps 1-5** above (SD flash + Technitium install + admin password) — playbook expects an already-installed Technitium and a populated `vars/vault.yml`.
-- **End-to-end run against a live Technitium API** still needs to happen — the param names are pinned to the docs but haven't been validated against the running instance yet.
-- **Primary/slave replication** is implemented (`roles/technitium-replication`, 2026-08-25). The **primary half applies today**: it sets each replicated zone's transfer ACL and NOTIFY target to `technitium_slave_ip` (`192.168.1.13`). The **slave half is idle** until the RPi 3B+ arrives — uncomment the `dns-slave` block in `inventory.yml` and it runs.
+- **Done, kept for the record (updated 2026-10-24):** the end-to-end run against the live API (the playbook has run
+  against the real boxes since the 2026-05-12 cutover), and the slave half of `technitium-replication`: `dns-slave`
+  (192.168.1.13) is active in `inventory.yml` since 2026-08-26, so the role applies on both sides.
 
 ## Two mechanisms, one job each
 
