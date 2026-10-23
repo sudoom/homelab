@@ -402,8 +402,8 @@ Containerfile and carries `/plugins/rollouts-trafficrouter-openshift/openshift-r
 - `gitops/patches/release.patch`, regenerated on a clean checkout of `6c4a911` with `git format-patch HEAD~1 --stdout`
   (the pipeline applies it with `git am -3`, so it has to be a mail-format patch, not a bare `git diff`). 11 files,
   19 insertions, 18 deletions:
-  - every `FROM registry.redhat.io/rhel9/go-toolset:1.26` → `registry.access.redhat.com/ubi9/go-toolset:1.26` (12 lines in
-    8 Containerfiles); that tag is Go 1.26.10 today (Red Hat catalog, 2026-10-22), above the 1.26.5 the operator and promoter
+  - every `FROM registry.redhat.io/rhel9/go-toolset:1.26` → `registry.access.redhat.com/ubi9/go-toolset:1.26` (11 lines in
+    8 Containerfiles; corrected 2026-10-23, this said 12); that tag is Go 1.26.10 today (Red Hat catalog, 2026-10-22), above the 1.26.5 the operator and promoter
     `go.mod` files need;
   - the two `# TODO: switch to registry.redhat.io once the image is available` comments above those lines removed;
   - `containers/must-gather`: `FROM quay.io/openshift/origin-must-gather:latest` instead of `ose-must-gather-rhel9:v4.16.0`;
