@@ -5621,3 +5621,18 @@ nfs.get_nfs4_clients            192.168.10.2, .3, .4 — minor version 1, confir
   (`truenas_update_available{version="25.10.7"} 1`) until the 08:35:06Z run wrote `truenas_update_available 0`,
   unlabelled, and no `truenas_update_downloaded` line. UWM Prometheus read the same at 08:35:30Z, so
   `TrueNASUpdateAvailable` is resolved.
+
+## 2026-10-23 — `TrueNASPoolScrubOverdue` fires, as the 10-11 section predicted
+
+`TrueNASPoolScrubOverdue` (warning) has been firing since 19:40Z. The rule is `truenas_zpool_scrub_age_seconds >
+60 * 60 * 24 * 45` with `for: 1h`. UWM Prometheus at about 21:00Z:
+
+```
+truenas_zpool_scrub_age_seconds{pool="tank"}  ->  45.10 days; last scrub ended about 2026-09-08 18:41Z
+```
+
+This is the gap the 2026-10-11 section described. The 10-01 run was skipped by the old 35-day threshold, and the next
+scheduled run is 2026-11-01, 54 days after the last scrub. 54 days is past 45, so the alert fires until a scrub
+completes. The threshold fix (`truenas_scrub_threshold: 25`) prevents the next skip. It does not close this gap.
+To clear the alert before 11-01, the operator can start a manual scrub. With threshold 25 that would make the 11-01
+run skip, and 12-01 would run.
