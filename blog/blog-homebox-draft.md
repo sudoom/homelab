@@ -82,3 +82,29 @@ kubeconform -strict -ignore-missing-schemas -summary -schema-location default \
 
 The health sweep's CNPG archiving loop (cluster-health skill) needs `homebox:homebox-postgres` added; the skill
 file is operator-applied.
+
+## 2026-10-24 — first start: CrashLoopBackOff on a missing API-key pepper
+
+The database came up clean (`homebox-postgres` 2/2, primary `-1`, `ContinuousArchiving=True/ContinuousArchivingSuccess`,
+R2 credential unsealed), but the app pod went `CrashLoopBackOff` (exit 2, SCC `restricted-v2`, injected UID
+1001040000 — so the rootless image itself was fine):
+
+```
+oc -n homebox logs homebox-6b54cf4bb4-wbpst
+panic: auth.api_key_pepper must be set to at least 32 bytes; generate with `openssl rand -base64 48` and provide via HBOX_AUTH_API_KEY_PEPPER. Rotating it invalidates all issued API keys
+```
+
+v0.27.0 fails fast without it (`backend/app/api/main.go`, `run()`: "Without it, the HMAC keying for stored API key
+hashes would degrade to a constant key"). The configuration docs page I had read does not list it; the TrueNAS
+catalog app asks the user for it (`HBOX_AUTH_API_KEY_PEPPER` from `values.homebox.api_key_pepper`). It must stay
+constant, so it lives in git as a SealedSecret, generated on the operator's side so the value is never printed:
+
+```bash
+oc create secret generic homebox-auth -n homebox \
+  --from-literal=HBOX_AUTH_API_KEY_PEPPER="$(openssl rand -base64 48)" --dry-run=client -o json \
+  | kubeseal --cert components/operators/sealed-secrets/sealed-secrets-pub.pem --format yaml \
+  > components/apps/homebox/templates/sealed-homebox-auth.yaml
+```
+
+Checked by metadata only (one key, encrypted length 792), given sync wave -2 like the R2 credential, and wired into
+the Deployment as `HBOX_AUTH_API_KEY_PEPPER` from `secretKeyRef homebox-auth`.
