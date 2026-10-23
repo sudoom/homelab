@@ -309,6 +309,14 @@ applications:
     namespace: shelly-exporter
     syncWave: "5"
 
+  # Technitium DNS cluster metrics (dns-master + dns-slave), cluster mode via the primary.
+  # Disabled until its token SealedSecret exists (ansible/technitium README, metrics token).
+  technitium-exporter:
+    enabled: false
+    path: components/cluster-config/technitium-exporter
+    namespace: technitium-exporter
+    syncWave: "5"
+
   # Scrape PATH for the node_exporter that runs on the TrueNAS box itself (an
   # Ansible-managed custom app). This chart is a one-container socat forwarder
   # plus its Service + ServiceMonitor. A forwarder rather than the textbook

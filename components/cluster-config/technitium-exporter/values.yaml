@@ -1,0 +1,32 @@
+namespace: technitium-exporter
+
+image:
+  repository: ghcr.io/guycalledseven/technitium-dns-prometheus-exporter
+  tag: v2.2.0
+
+port: 9105
+
+# Cluster mode: the exporter talks to the Technitium cluster primary only and
+# asks it for each node's stats (`node=` on the API), labelling series
+# server=<node>. Node names exactly as Administration > Cluster shows them.
+# Plain HTTP on 5380: the cluster's own URLs are https://<node>.home:53443 with a
+# certificate for .home names this cluster does not trust, and the token is
+# read-only (Everyone-group View only; ansible/technitium technitium-config).
+technitium:
+  baseUrl: http://192.168.1.12:5380
+  nodes: dns-master.home,dns-slave.home
+  # Stats window and top-N lists fetched on every scrape (exporter defaults).
+  statsRange: LastHour
+  topLimit: "50"
+
+# Every scrape makes several API calls to a Raspberry Pi 3B+; once a minute is
+# plenty for DNS counters.
+scrapeInterval: 60s
+scrapeTimeout: 30s
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 192Mi

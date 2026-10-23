@@ -1,0 +1,80 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: technitium
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: technitium-exporter
+# Adapted from the exporter's prometheus/technitium-dns-alerts.yaml (v2.2.0):
+# selectors narrowed to job="technitium-exporter", severities matched to impact
+# here. `technitium_health` (DNS actually resolving) replaced Gatus's
+# technitium-dns UDP check.
+spec:
+  groups:
+    - name: technitium
+      rules:
+        - alert: TechnitiumResolutionFailing
+          expr: technitium_health{job="technitium-exporter"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: {{ `"DNS resolution failing on {{ $labels.server }}"` }}
+            description: |
+              Technitium's own resolution health check (/api/dnsClient/healthCheck)
+              fails on this node. Clients using it as their resolver get no answers.
+              Check the node's web UI (http://192.168.1.12:5380 or .13) and its
+              forwarders (technitium_forwarder_zones in ansible/technitium).
+        - alert: TechnitiumApiUnreachable
+          expr: technitium_up{job="technitium-exporter"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: {{ `"Technitium API not answering for {{ $labels.server }}"` }}
+            description: |
+              The exporter reaches the primary (192.168.1.12:5380) but gets no
+              answer for this node. Either the box or the Technitium service is
+              down, or the cluster link between the nodes is broken
+              (Administration > Cluster on the primary).
+        - alert: TechnitiumExporterDown
+          expr: up{job="technitium-exporter"} == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Technitium exporter not scrapeable for 10m"
+            description: |
+              Prometheus cannot scrape the exporter pod; DNS itself may be fine.
+              `oc -n {{ .Values.namespace }} get pods` and the pod log (a 401 means
+              the API token was revoked or rotated: README).
+        - alert: TechnitiumRealtimeMetricsMissingOnNode
+          expr: technitium_up{job="technitium-exporter"} == 1 unless on (job, server) technitium_dns_realtime_queries_total{category="all",job="technitium-exporter"}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `"Realtime query counters missing for {{ $labels.server }}"` }}
+            description: |
+              The node answers the API but returns no query counters; a per-node
+              failure in cluster mode that the fleet-wide checks cannot see.
+        - alert: TechnitiumHighServfailRate
+          expr: 100 * (sum by (job, server) (rate(technitium_dns_realtime_queries_total{category="servfail",job="technitium-exporter"}[5m])) / sum by (job, server) (rate(technitium_dns_realtime_queries_total{category="all",job="technitium-exporter"}[5m]))) > 3 and sum by (job, server) (rate(technitium_dns_realtime_queries_total{category="all",job="technitium-exporter"}[5m])) > 0.2 and on (job, server) (technitium_realtime_uptime_seconds{job="technitium-exporter"} > 600)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `"{{ $value | printf \"%.1f\" }}% SERVFAIL on {{ $labels.server }}"` }}
+            description: |
+              More than 3% of queries end in SERVFAIL: usually the upstream
+              forwarders or DNSSEC validation failing.
+        - alert: TechnitiumBlockListCollapsed
+          expr: technitium_dns_blocklist_zones{job="technitium-exporter"} < 0.5 * max_over_time(technitium_dns_blocklist_zones{job="technitium-exporter"}[1w]) and max_over_time(technitium_dns_blocklist_zones{job="technitium-exporter"}[1w]) > 100
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `"Block list on {{ $labels.server }} down to {{ $value }} zones"` }}
+            description: |
+              The block list shrank to under half its 7-day maximum, usually a
+              failed list download (files/blocked.urls in ansible/technitium).

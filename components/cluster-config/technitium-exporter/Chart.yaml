@@ -1,0 +1,5 @@
+apiVersion: v2
+name: technitium-exporter
+description: Prometheus exporter for the Technitium DNS cluster (dns-master + dns-slave)
+version: 1.0.0
+type: application

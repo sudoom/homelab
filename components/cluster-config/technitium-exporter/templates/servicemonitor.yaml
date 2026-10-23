@@ -1,0 +1,30 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: technitium-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: technitium-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: technitium-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.scrapeInterval }}
+      scrapeTimeout: {{ .Values.scrapeTimeout }}
+      scheme: http
+      # The DNS servers are the measured things, identified by the exporter's own
+      # `server` label; the pod IP in `instance` would fork every series on a
+      # reschedule. Same reasoning for dropping pod/container (shelly-exporter).
+      # `action: replace` is spelled out because Prometheus-operator stamps it
+      # on the live object and ArgoCD would otherwise report a diff.
+      relabelings:
+        - action: replace
+          sourceLabels: []
+          targetLabel: instance
+          replacement: technitium-cluster
+      metricRelabelings:
+        - action: labeldrop
+          regex: "pod|container"

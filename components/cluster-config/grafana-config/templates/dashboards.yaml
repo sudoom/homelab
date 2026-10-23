@@ -205,6 +205,23 @@ spec:
   grafanaCom:
     id: 13679
 ---
+# Technitium DNS — guycalledseven/technitium-dns-prometheus-exporter (components/cluster-config/technitium-exporter).
+# Revision 4 is the one published with exporter v2.2.0 (2026-09-13); bump both together.
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: technitium-dns
+  namespace: {{ .Values.namespace }}
+spec:
+  folder: metrics
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasources:{{ $bindings }}
+  grafanaCom:
+    id: 24555
+    revision: 4
+---
 # CloudNativePG — Postgres clusters managed by the CNPG operator
 # Stays empty until a Cluster CR with monitoring.enablePodMonitor: true exists.
 apiVersion: grafana.integreatly.org/v1beta1
