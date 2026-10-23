@@ -811,3 +811,27 @@ a soak finding. Why only `oadp` loses its cache key is still open.
 45-day alert was expected to fire in this gap.
 
 Soak passed; Task 10 (draft pipeline PRs) is unblocked.
+
+## 2026-10-23: pipeline PRs filed (drafts)
+
+| PR | Base ← head | Head |
+|---|---|---|
+| [#39](https://github.com/okd-project/okd-operator-pipeline/pull/39) `[gitops] Update to 1.22` | `main` ← `gitops-1.22` | `d4e1b0a` |
+| [#40](https://github.com/okd-project/okd-operator-pipeline/pull/40) `[gitops] Update to 1.22 (release-4.22)` | `release-4.22` ← `gitops-1.22-4.22` | `2662789` |
+| [#41](https://github.com/okd-project/okd-operator-pipeline/pull/41) `[gitops] Update to 1.22 (release-4.21)` | `release-4.21` ← `gitops-1.22-4.21` | `fa92259` |
+| [#42](https://github.com/okd-project/okd-operator-pipeline/pull/42) `[gitops] Update to 1.22 (release-4.20)` | `release-4.20` ← `gitops-1.22-4.20` | `90c088a` |
+
+#39 carries the argument: why 1.22 (Argo CD 3.1 is tested to Kube 1.34; OKD 4.22 is 1.35), the changes, five
+points for review (PF5 plugin variable, redis by digest, online pnpm, the Rollouts route plugin path, the weekly
+update moving the gitlink past 1.22.2), CI disk (41.2 GB peak against about 14 GB on `ubuntu-latest`; no workflow
+change, per the 10-22 decision), and the verification summary. The backports are three lines each.
+
+The first draft was about 1,400 words for `main`. The operator asked for it plainer, so it was rewritten to about 475
+words. The CHECK output, the disk table, the image list and diff-visible details were dropped.
+
+Checking the drafts turned up one thing the plan had not accounted for. Merging #39 or #40 makes the deploy workflow
+open a catalog-index PR by itself: `operator-deploy.yaml` defaults to `update_catalog: true`, `main` targets
+`release-5.0` and #40 targets `release-4.22`. `scripts/update-catalog-package.sh:81` writes that entry with `replaces`
+only. So Task 11 becomes a follow-up on those bot PRs that adds `skipRange: '>=1.19.0-0 <…'` (the same "keep the bot"
+shape as NMState), plus catalog PRs by hand for `release-4.21` and `release-4.20`, whose `operator-deploy.yaml` has no
+catalog job. #39 says this under "Catalog".
