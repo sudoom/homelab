@@ -209,3 +209,12 @@ Per-pod workaround until the global node-side search-list cleanup happens. Not a
 - **Auth on the dashboard**: also deferred. Gatus supports basic auth and OIDC out of the box. For now the Route is unauthenticated — homelab is internal-ish, but eventually OIDC against the cluster's identity provider would be cleaner than a shared password.
 - **Endpoint coverage**: today's list is the obvious stuff. As apps come online (Immich, media stack post-migration), each gets a line in `values.yaml` under the right group.
 - **Grafana panel/dashboard**: Gatus exposes `/metrics` in Prometheus format with `metrics: true` in the config. Could scrape it via a `ServiceMonitor` and have the same data as Grafana panels — useful if we want longer-term retention than Gatus's SQLite handles. Park until there's a clear use case beyond what the Gatus dashboard already shows.
+
+## 2026-10-24 — to be retired
+
+Decision with the operator: Gatus goes. It has no alerting configured (no `alerting` block in
+`components/cluster-config/gatus/values.yaml`), so its ten checks only ever fed a status page nobody is told about,
+and most of them duplicate the Prometheus/Alertmanager stack plus the healthchecks.io dead-man's switch. Two checks
+were covered nowhere else: `technitium-dns` (UDP 53 on 192.168.1.12) and `sudops-blog`. The first moves to the
+Technitium exporter's `TechnitiumResolutionFailing`; the second is dropped. Retirement waits until that exporter is
+live and its rules are loaded (README TODO, Technitium item).

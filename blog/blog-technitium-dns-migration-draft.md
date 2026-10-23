@@ -849,3 +849,33 @@ Three, all mine, all introduced while adding the adopt/cluster paths:
 Each was invisible to `--syntax-check` and to YAML validation. The pattern
 across all three: **role-to-role state coupling is where this breaks**, not
 inside any single role.
+
+## 2026-10-24 — metrics: exporter chosen, read-only user in the role (not yet live)
+
+Installed version 15.4 (About tab; 15.6.2 is offered), cluster nodes `dns-master.home` (primary, 192.168.1.12) and
+`dns-slave.home` (192.168.1.13). Technitium has had a native Prometheus endpoint since 15.0
+(`/api/dashboard/metrics/text`, experimental), but it only carries uptime and 11 lifetime counters: no query types,
+cache, latency or clients. Of the community exporters, `guycalledseven/technitium-dns-prometheus-exporter` (v2.2.0,
+2026-09-13, Apache-2.0, multi-arch on ghcr.io) is the most complete and the only one with a cluster mode: one pod
+asks the primary for each node's stats (`node=` on the API) and labels series `server=<node>`; it also reads the
+native counters on 15.0+ and runs `/api/dnsClient/healthCheck` (15.3+) as `technitium_health`. The others:
+`brioche-works/...` (TypeScript, GPL-3.0, last release 2024-03) and `sonirico/technitium-exporter` (Go, single server,
+no license). `dig version.bind chaos txt` gets no answer from either box, so the version came from the UI.
+
+Auth without touching permission tables: Technitium's built-in **Everyone** group has View on Dashboard and DnsClient
+(the APIDOCS example permissions), which is exactly what the exporter needs. `technitium-config` therefore creates
+user `metrics` (random discarded password), keeps it in Everyone only, **asserts** Everyone's two View rights instead
+of setting them — `/api/admin/permissions/set` replaces a section's whole table, so writing it risks dropping
+Administrators — and creates one API token (`prometheus-exporter`) only if absent, writing it once to
+`~/.technitium-metrics-token` (0600, `no_log`) for the operator to seal. Primary only: users and tokens replicate.
+Syntax-checked through a throwaway playbook (the real one loads the vault unconditionally):
+
+```bash
+ANSIBLE_ROLES_PATH=$PWD/ansible/technitium/roles ansible-playbook -i localhost, --syntax-check check.yml
+```
+
+The cluster side is `components/cluster-config/technitium-exporter/` (60 s scrape, `instance` pinned, six rules
+adapted from the exporter's own, `TechnitiumResolutionFailing` critical) plus dashboard grafana.com 24555 rev 4,
+committed with the root-app entry disabled until the token SealedSecret exists. Still to do: run the role
+(`--limit dns-master --tags metrics`), seal the token, enable, then retire Gatus (its `technitium-dns` UDP check is
+the one thing it covered that nothing else did).
