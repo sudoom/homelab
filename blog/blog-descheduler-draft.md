@@ -158,3 +158,49 @@ folder `metrics`):
 The PromQL was not run before commit: reading Prometheus through the break-glass kubeconfig was refused in this
 session. The check is the dashboard itself after sync — the balance panels should match the descheduler's own
 21:00Z figures above (node4 74/31/36, node5 69/21/32, node6 72/26/49) within a few points.
+
+## 2026-10-24 — phase 1 live: what the operator actually generated
+
+The InstallPlan was approved by hand (`install-nbl8w`, one CSV: `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655`).
+CSV `Succeeded`, app `kube-descheduler-operator` Synced/Healthy, `KubeDescheduler/cluster` at
+`mode=Predictive profiles=["AffinityAndTaints","LongLifecycle"]` with every `*Degraded=False`. The operator created
+`deployment/descheduler`, `deployment/descheduler-operator`, `service/metrics`, `servicemonitor/kube-descheduler`
+(port `https`, serverName `metrics.openshift-kube-descheduler-operator.svc`), `prometheusrule/descheduler-rules`
+and `configmap/cluster` (the policy). The PrometheusRule holds only recording rules (`descheduler:nodeutilization:*`,
+`descheduler:node:actuation_priority:*`, …) for the actual-utilization profile; no alerts.
+
+The generated policy, read instead of inferred:
+
+```bash
+oc -n openshift-kube-descheduler-operator get cm cluster -o jsonpath='{.data.policy\.yaml}' > kd-policy.yaml   # 477 lines
+yq '.profiles[] |= (.pluginConfig[] |= del(.args.namespaces) | .pluginConfig[] |= del(.args.evictableNamespaces))' kd-policy.yaml
+```
+
+- `AffinityAndTaints`: the same three plugins as the vendored profile (`RemovePodsViolatingInterPodAntiAffinity`,
+  `RemovePodsViolatingNodeTaints`, `RemovePodsViolatingNodeAffinity` with `requiredDuringSchedulingIgnoredDuringExecution`).
+- `LongLifecycle`: `RemovePodsHavingTooManyRestarts` (`podRestartThreshold: 100`, `includingInitContainers: true`) and
+  `LowNodeUtilization` with `thresholds` 40/40/40 and `targetThresholds` 70/70/70 (cpu/memory/pods).
+- `DefaultEvictor` in both: `ignorePvcPods: true`. **No `nodeFit`** — the vendored policy set `nodeFit: true`.
+- **Every one of the five plugins excludes 77 namespaces**: `kube-system`, `hypershift`, `openshift`, and every
+  `openshift-*` namespace that existed when the operator started — including `openshift-logging`, `openshift-gitops`,
+  `openshift-monitoring`, `openshift-adp`, `openshift-nmstate`. The list is built once at operator start
+  (`NewTargetConfigReconciler`), so an `openshift-*` namespace created later is not on it until the operator restarts.
+
+That last point is the main behavioural difference from the vendored job. The only eviction on record, 2026-09-25,
+was five logging pods in `openshift-logging`; under the operator's defaults those pods are protected and would stay
+on node4. What is left evictable is the non-`openshift-*` workloads without PVCs. The CR's `profileCustomizations.namespaces`
+(`excluded`/`included`) replaces that list, which is a decision for the switch, not for now.
+
+First Predictive run, 0 errors in 51 log lines:
+
+```
+"Total number of evictions/requests" extension point="Deschedule" evictedPods=0 evictionRequests=0   (x4)
+"Node has been classified" ... category="overutilized" node="node6.okd.sudops.pl" usagePercentage={"cpu":72,"memory":26,"pods":50}
+"Node has been classified" ... category="overutilized" node="node4.okd.sudops.pl" usagePercentage={"cpu":74,"memory":31,"pods":36}
+"Node is appropriately utilized" ... node="node5.okd.sudops.pl" usagePercentage={"cpu":70,"memory":22,"pods":32}
+"Number of underutilized nodes" ... totalNumber=0
+"Number of evictions/requests" totalEvicted=0 evictionRequests=0
+```
+
+Same classification as the vendored job's 21:00Z run within a point, and `RemovePodsHavingTooManyRestarts` would
+evict nothing today.
