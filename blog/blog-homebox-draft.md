@@ -119,4 +119,4 @@ sync=Synced/Healthy` at 22:40:32Z. The pod ran its goose migrations against `hom
 then `allowRegistration: false` (`HBOX_OPTIONS_ALLOW_REGISTRATION=false`).
 
 Note for the next new app: a first sync whose wave-0 Deployment crashloops pins ArgoCD to that revision through all
-its retries (~17 min here), so a fix pushed in the meantime waits for the retries to run out.
+its retries (22:21:10Z → 22:40:32Z, ~19 min here), so a fix pushed in the meantime waits for the retries to run out.
