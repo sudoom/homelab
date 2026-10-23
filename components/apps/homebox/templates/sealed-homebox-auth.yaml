@@ -1,0 +1,15 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: homebox-auth
+  namespace: homebox
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  encryptedData:
+    HBOX_AUTH_API_KEY_PEPPER: AgDJwS8yZRSfM432SbSkxtrG2u4gVlP0pGksu8cF4ZZx0CrGdMySYFEGsNKsd4uMryL2C2hA1TbYGrkuZ6wFvqHw+Pz48AJXMTdDLAkKnP0Ef4/AD8BYxHhU8ok6F10y1BMEzYltzAgWC3i6jHBjKJoK7tTIT9i1704JhESN9w7aKcvf1ORV1JZbNriW9mN0DBsJwGicSqO+gm8PPWP/noueG9rx9L8B6MJNXiWKBj9IjKFqiHupwpKLss8vSw9QM8S3vktWvyPQrYZXtWgZ2FL83t3DcuU8XjIIr+UfmYoHwMeYKrrF8MfMpIUT3sSnrrj38h2nH5Cs25St0qRznHL8T4ZC8Ujy4kblLqCy+u0BKB7m1uS01IIrMuCCcuJBTMichev5LYWX4/fGwXZMU6FZNCux1L7ipvEbSlwn3iPc6r6LCue+3W+u0QUuQHUprEwr8USNT5Do+5lA0FAPHBsXlbRNq0wNcf85i94fCbKoQw96E4ErlJ112H7DvScSOHwKkKc/7Tstne36/fXK88UgVgraN/Oedy+HVxx8Bb7ZMgWOEHR8s7j9TRZ4Z5hu/Oe064d5AHFpHJfBA3yt4NrFSxTmAv7uAne4CSn8EzgAdw2sfiw8emUCn1Bn+Q2m8WuuSfNWzFJxPOdKRiehlrm8qp0BYvJxllsAY9LAau8DuYHhtm7mwRM9hqQMz2DtLswyr7LmOzgBGqTefkciHVQb8gv7D63Fp6MQu1bEgXD0LCBdVwXl+CoGZPDF1UKwpe/wzWGEX1SUgynwpxhbeYbN
+  template:
+    metadata:
+      name: homebox-auth
+      namespace: homebox

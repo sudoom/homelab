@@ -60,6 +60,15 @@ spec:
               value: require
             - name: HBOX_OPTIONS_ALLOW_REGISTRATION
               value: {{ .Values.allowRegistration | quote }}
+            # Required since v0.27: the app panics at start without a pepper of at
+            # least 32 bytes (backend/app/api/main.go). It keys the HMAC of stored
+            # API-key hashes, so it must stay constant: rotating it invalidates every
+            # issued API key. Sealed in templates/sealed-homebox-auth.yaml.
+            - name: HBOX_AUTH_API_KEY_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: homebox-auth
+                  key: HBOX_AUTH_API_KEY_PEPPER
           readinessProbe:
             httpGet:
               path: /api/v1/status
