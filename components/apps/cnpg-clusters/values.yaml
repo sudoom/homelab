@@ -98,14 +98,18 @@ clusters:
         # for the media stack; ahead of any morning use.
         schedule: "0 0 4 * * *"
       # Offsite backup → Cloudflare R2 via the barman-cloud plugin (continuous WAL
-      # + weekly base, 30d). Coexists with the volumeSnapshot above (fast local copy).
+      # + weekly base, 23d). Coexists with the volumeSnapshot above (fast local copy).
       objectStore:
         enabled: true
         name: media-postgres-r2
         bucket: "psql-backup"
         endpointURL: "https://456a40c7992affd80bd4d4086456c48c.eu.r2.cloudflarestorage.com"
         credentialsSecret: media-postgres-r2-creds
-        retentionPolicy: "30d"
+        # 23d, not 30d: the psql-backup bucket has an R2 lifecycle rule deleting every object
+        # after 31 days. With weekly bases a 23d recovery window needs a base up to 30 days old,
+        # so barman never counts on an object R2 has already removed (2026-10-24).
+        retentionPolicy: "23d"
         # Weekly since 2026-10-24 (operator ask): WAL still streams continuously, so PITR
-        # over 30d is unchanged; a restore replays up to 7 days of WAL on top of the base.
+        # covers the whole retention window; a restore replays up to 7 days of WAL on top
+        # of the base.
         schedule: "0 30 3 * * 0"   # Sundays 03:30 UTC base backup (offset from the 04:00 snapshot)

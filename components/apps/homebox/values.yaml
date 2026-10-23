@@ -65,6 +65,9 @@ postgres:
       # templates/sealed-homebox-postgres-r2-creds.yaml at sync wave -2 so it
       # exists before the Cluster starts archiving. Keys ACCESS_KEY_ID / ACCESS_SECRET_KEY.
       credentialsSecret: homebox-postgres-r2-creds
-      retentionPolicy: "30d"
+      # 23d, not 30d: the psql-backup bucket has an R2 lifecycle rule deleting every object
+      # after 31 days. With weekly bases a 23d recovery window needs a base up to 30 days old,
+      # so barman never counts on an object R2 has already removed (2026-10-24).
+      retentionPolicy: "23d"
       # Weekly since 2026-10-24; WAL archiving stays continuous (see cnpg-clusters values).
       schedule: "0 30 2 * * 0"   # Sundays 02:30 UTC base backup (before immich 03:00, media 03:30)
