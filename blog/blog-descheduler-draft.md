@@ -204,3 +204,32 @@ First Predictive run, 0 errors in 51 log lines:
 
 Same classification as the vendored job's 21:00Z run within a point, and `RemovePodsHavingTooManyRestarts` would
 evict nothing today.
+
+## 2026-10-24 — dashboard checked, one label fix
+
+The first look at the synced dashboard settled the untested PromQL: the right edge of the three balance panels reads
+node4 74/31/36, node5 70/22/32, node6 72/26/50 (cpu/memory/pods requested %), the same as the descheduler's own log.
+The 7-day view also shows the history the CronJob never kept: node6 near 87 % CPU requests and node5 near 55 % until
+10-20, all three between roughly 70 and 77 % since.
+
+The eviction panels read "No data", which is expected with no evictions so far but cannot be told apart from a
+broken scrape. The scrape plumbing is in place (`role/prometheus-k8s` + `rolebinding/prometheus-k8s` for
+`openshift-monitoring/prometheus-k8s`, endpoint ready on 10258, `service.beta.openshift.io/serving-cert-secret-name:
+kube-descheduler-serving-cert`), and the dashboard now says so itself: two stats at the top, `Metrics collected`
+(`max(up{namespace="openshift-kube-descheduler-operator", service="metrics"})`) and `Runs (last 2h)`
+(`sum(increase(descheduler_loop_duration_seconds_count[2h]))`); the eviction panels show "No evictions" when empty.
+
+Reading the operator's ServiceMonitor found a label trap:
+
+```yaml
+metricRelabelings:
+- action: replace
+  sourceLabels: [exported_namespace]
+  targetLabel: pod_namespace
+```
+
+`descheduler_pods_evicted_total` carries the evicted pod's namespace as `namespace`, which collides with the
+target's own `namespace` label; Prometheus keeps the target's (`openshift-kube-descheduler-operator`) and renames
+the metric's to `exported_namespace`, which the ServiceMonitor copies to `pod_namespace`. The table grouped
+`by (namespace, strategy)` would have put every eviction under the descheduler's own namespace; it now groups
+`by (pod_namespace, strategy)`.

@@ -73,13 +73,149 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 24,
-        "h": 5
+        "w": 16,
+        "h": 4
       },
       "options": {
         "mode": "markdown",
-        "content": "The eviction panels come from the Kube Descheduler Operator's metrics (`descheduler_pods_evicted_total`). While its KubeDescheduler CR is in `Predictive` mode they count evictions it *would* make (dry run); nothing is evicted.\n\nThe vendored descheduler CronJob in namespace `kube-descheduler` does the real evictions until the switch; those appear only in its logs.\n\nBalance panels use pod requests against node allocatable, as the LowNodeUtilization profile (preset High) does: underutilized when CPU, memory and pods are all below 40 %, overutilized when any is above 70 %."
+        "content": "The eviction panels come from the Kube Descheduler Operator's metrics (`descheduler_pods_evicted_total`). While its KubeDescheduler CR is in `Predictive` mode they count evictions it *would* make (dry run); nothing is evicted.\n\nThe vendored descheduler CronJob in namespace `kube-descheduler` does the real evictions until the switch; those appear only in its logs.\n\nBalance panels use pod requests against node allocatable, as the LowNodeUtilization profile (preset High) does: underutilized when CPU, memory and pods are all below 40 %, overutilized when any is above 70 %.\n\nThe two stats on the right show whether Prometheus collects the descheduler's metrics and how many runs it made in the last 2 hours. With both healthy, an empty eviction panel means nothing was evicted (or, in Predictive mode, would have been)."
       }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Metrics collected",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "not scraped",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "no"
+                },
+                "1": {
+                  "text": "yes"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max(up{namespace=\"openshift-kube-descheduler-operator\", service=\"metrics\"})",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Runs (last 2h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "none",
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(increase(descheduler_loop_duration_seconds_count[2h]))",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 2,
@@ -348,7 +484,8 @@
               "mode": "normal",
               "group": "A"
             }
-          }
+          },
+          "noValue": "No evictions"
         },
         "overrides": []
       },
@@ -403,7 +540,8 @@
               "mode": "normal",
               "group": "A"
             }
-          }
+          },
+          "noValue": "No evictions"
         },
         "overrides": []
       },
@@ -456,7 +594,7 @@
         "showHeader": true,
         "sortBy": [
           {
-            "displayName": "Value",
+            "displayName": "evictions",
             "desc": true
           }
         ]
@@ -469,7 +607,8 @@
               "Time": true
             },
             "renameByName": {
-              "Value": "evictions"
+              "Value": "evictions",
+              "pod_namespace": "namespace"
             }
           }
         }
@@ -480,7 +619,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (namespace, strategy) (increase(descheduler_pods_evicted_total{result=\"success\"}[$__range]))",
+          "expr": "sum by (pod_namespace, strategy) (increase(descheduler_pods_evicted_total{result=\"success\"}[$__range]))",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
