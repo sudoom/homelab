@@ -189,7 +189,7 @@ yq '.profiles[] |= (.pluginConfig[] |= del(.args.namespaces) | .pluginConfig[] |
 That last point is the main behavioural difference from the vendored job. The only eviction on record, 2026-09-25,
 was five logging pods in `openshift-logging`; under the operator's defaults those pods are protected and would stay
 on node4. What is left evictable is the non-`openshift-*` workloads without PVCs. The CR's `profileCustomizations.namespaces`
-(`excluded`/`included`) replaces that list, which is a decision for the switch, not for now.
+(`excluded`/`included`) replaces that list, which is a decision for the switch, not for now. **Wrong — corrected in the next-but-one section: the list cannot be lifted.**
 
 First Predictive run, 0 errors in 51 log lines:
 
@@ -233,3 +233,29 @@ target's own `namespace` label; Prometheus keeps the target's (`openshift-kube-d
 the metric's to `exported_namespace`, which the ServiceMonitor copies to `pod_namespace`. The table grouped
 `by (namespace, strategy)` would have put every eviction under the descheduler's own namespace; it now groups
 `by (pod_namespace, strategy)`.
+
+## 2026-10-24 — what each policy may actually move (and a correction)
+
+Asked whether to switch to `Automatic` now. Before answering, I counted what each policy is allowed to evict instead
+of waiting days in Predictive for a reboot nobody has scheduled. The script applies the `DefaultEvictor` rules both
+policies share — Running, controller-owned, not a DaemonSet, not static, priority below system-critical (2e9), no PVC
+(`ignorePvcPods`), no emptyDir/hostPath (`evictLocalStoragePods: false`) — then the operator's namespace protection on
+top (`scratchpad/evictable.py`, fed by `oc get pods -A -o json`):
+
+```
+pods: 355 blocked by: {'local-storage': 24, 'not-running': 58, 'pvc': 26, 'system-critical': 108, 'daemonset': 72, 'bare': 12, 'static': 24}
+vendored evictable per node: {'node4': 7, 'node5': 23, 'node6': 1} total 31
+operator evictable per node: {'node5': 11} total 11
+operator evictable by namespace: {'cert-manager': 3, 'cnpg-system': 1, 'grafana': 1, 'hcloud-exporter': 1, 'mikrotik-exporter': 1, 'nmstate': 1, 'rook-ceph': 1, 'shelly-exporter': 1, 'truenas-exporter': 1}
+evictable only under vendored (openshift-*): {'openshift-gitops': 3, 'openshift-logging': 9, 'openshift-marketplace': 4, 'openshift-network-diagnostics': 1, 'openshift-operators': 1, 'openshift-operators-redhat': 1, 'openshift-user-workload-monitoring': 1}
+```
+
+It is an estimate (PDBs and the balancer's own capacity checks cut further), but the shape is clear: the operator
+can touch about a third of what the vendored job can, and today none of it sits on the two overutilized nodes.
+
+**Correction.** The previous section said `profileCustomizations.namespaces` replaces the protected list. It does
+not. The CRD: "Namespaces overrides included and excluded namespaces while keeping the default exclusion of all
+openshift-*, kube-system and hypershift namespaces". The reconciler (`release-4.21`, around line 1319) starts
+`excludedNamespaces` from the protected list and appends `excluded` to it, and an `included` entry that is protected
+fails with "Protected namespace %v included. It is forbidden to include any of the protected namespaces". So under
+the operator, pods in `openshift-*` namespaces are never evicted, by design.
