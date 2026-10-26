@@ -448,3 +448,64 @@ zot: 15.4 GiB free before, 16.1 GiB after both builds.
 
 Stopped here for the night (operator, 21:05Z). Next: re-run 4.20 and `main` once CentOS has fixed its metadata. Then
 one `MODE=catalog` run for release-4.20/4.21/4.22, Task 7, and the switch in a daytime window.
+
+## 2026-10-26 — resuming 4.20: CentOS is fixed, the build image is gone
+
+The CentOS check from the pause now matches:
+
+```
+$ python3 -I check-centos-metalink.py
+MATCH master 346a4df8ef6e4a metalink expects ['346a4df8ef6e4a'] metalink timestamp 2026-10-23 20:06Z
+```
+
+`okd-build` was empty, the `nmstate-build-scripts` ConfigMap unchanged since it was applied, zot at 16.2 GiB free. The
+operator started the 4.20 run (`nmstate-build-full-2026-10-26-112744`, 11:27:44Z). Its pod never started:
+
+```
+ErrImagePull: ... reading manifest sha256:dc02649067d5... in zot.apps.okd.sudops.pl/podman/stable:
+  repository name not known to registry]): quay.io/podman/stable@sha256:dc02649067d5...:
+  reading manifest sha256:dc02649067d5... in quay.io/podman/stable: manifest unknown
+```
+
+Every build Job here (logging, gitops, nmstate) and its log reader pinned
+`quay.io/podman/stable:v5.8.9@sha256:dc02649067d5…`, the manifest list the tag pointed at on 2026-10-20. quay's tag
+history shows why that stopped working:
+
+```
+sha256:2a53680d80c9 from 2026-10-26 03:46Z to -
+sha256:55d98815a34b from 2026-10-23 03:43Z to 2026-10-26 03:46Z expired
+sha256:4ed083a7631a from 2026-10-22 03:43Z to 2026-10-23 03:43Z expired
+sha256:b1808d7a18da from 2026-10-21 03:41Z to 2026-10-22 03:43Z expired
+sha256:dc02649067d5 from 2026-10-20 03:41Z to 2026-10-21 03:41Z expired
+```
+
+podman rebuilds `v5.8.9` every morning and quay expires the old manifest. The digest was the tag for one day, and five
+days later quay no longer serves it. The 10-23 builds still ran because node5 had the image cached from the 10-20
+logging build. The node5 image prune at 11:09Z the same morning (`blog-olmv1-catalog-cache-leak-draft.md`) removed
+that cached copy, since no container was using it.
+
+zot did not have it either. Its catalog holds images pulled by tag (14 tags of `immich-app/immich-server`) but no
+repository that has only ever been pulled by digest: neither `podman/stable` nor `okd/scos-content` appears in it. So
+a digest pin of a quay image that gets re-tagged lasts only as long as quay keeps the old digest, and re-pinning
+to today's `2a53680d…` would have failed the same way within days.
+
+Before fixing it I checked the prune had not exposed anything else the same way. Only one CronJob on the cluster
+pins an image by digest, `openshift-image-registry/image-pruner` (`quay.io/okd/scos-content@sha256:24c90b37…`), and
+quay still answers 200 for it.
+
+The fix is our own copy in zot, which keeps what is pushed to it. linux/amd64 only, since all three nodes are amd64.
+Today's index `2a53680d…` lists amd64 as `sha256:68e44184…`. Run by the operator on the Mac (`brew install skopeo`,
+1.24.1):
+
+```bash
+skopeo copy --preserve-digests \
+  docker://quay.io/podman/stable@sha256:68e4418474c7362e53000e1c6163bb4441c0ab15cf65d880cd6ffd2768143500 \
+  docker://zot.apps.okd.sudops.pl/okd-test/podman/stable:v5.8.9-2026-10-26
+```
+
+`--preserve-digests` makes skopeo fail rather than rewrite the manifest. Read back from zot's registry API: the tag
+resolves to `sha256:68e4418474c7…` (MATCH), a HEAD by digest returns 200, and the config says `linux amd64`, with
+10 layers and 251 MB. All six manifests (`job-template.yaml` and `log-reader.yaml` in each of the three build directories)
+now pin `zot.apps.okd.sudops.pl/okd-test/podman/stable:v5.8.9-2026-10-26@sha256:68e44184…`. Each rendered template
+and each log reader passes `kubeconform -strict`. Cost: a build now needs zot up to start, which the push step
+needed anyway.

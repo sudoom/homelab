@@ -37,8 +37,8 @@ objects:
           restartPolicy: Never
           containers:
             - name: build
-              # Pinned by digest: quay re-pushes the v5.8.9 tag (manifest list, resolved 2026-10-20).
-              image: quay.io/podman/stable:v5.8.9@sha256:dc02649067d5f7afd93db0bf31fbc604b56811c64594178eae3a72bdbb555e2e
+              # Our copy in zot (amd64 only): quay re-pushes v5.8.9 daily and expires old digests within days.
+              image: zot.apps.okd.sudops.pl/okd-test/podman/stable:v5.8.9-2026-10-26@sha256:68e4418474c7362e53000e1c6163bb4441c0ab15cf65d880cd6ffd2768143500
               command: ["/bin/bash", "/scripts/build.sh"]
               env:
                 - name: MODE

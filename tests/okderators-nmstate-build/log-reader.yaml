@@ -30,7 +30,7 @@ spec:
                   operator: Exists
   containers:
     - name: reader
-      image: quay.io/podman/stable:v5.8.9@sha256:dc02649067d5f7afd93db0bf31fbc604b56811c64594178eae3a72bdbb555e2e
+      image: zot.apps.okd.sudops.pl/okd-test/podman/stable:v5.8.9-2026-10-26@sha256:68e4418474c7362e53000e1c6163bb4441c0ab15cf65d880cd6ffd2768143500
       command: ["sleep", "3600"]
       # Same security context as the build pod on purpose: CRI-O does not relabel the volume
       # of a privileged container and the privileged SCC sets no fsGroup, so the PVC's tree is

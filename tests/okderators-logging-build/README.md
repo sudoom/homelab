@@ -261,10 +261,16 @@ with `packageName` and `version` (for example `6.6.0-2026-10-20-000000`).
   `${BASE_REGISTRY}/cluster-logging/operator:<MAJOR>.<MINOR>.0-<DATE>` already exists.
 - **Job shape.** `backoffLimit: 0` (a failed build is read, not retried), 12 h
   `activeDeadlineSeconds`, no `ttlSecondsAfterFinished` (the log stays until read), requests
-  2 CPU / 8 Gi, limits 14 CPU / 48 Gi, no node pinning. The image is
-  `quay.io/podman/stable:v5.8.9@sha256:dc02649067d5…` (the manifest list the tag pointed at on
-  2026-10-20): quay re-pushes version tags, so the digest pins it. Expect about 3× longer builds while the
-  `powersave-experimental` Tuned profile pins cores at their minimum frequency.
+  2 CPU / 8 Gi, limits 14 CPU / 48 Gi, no node pinning. The image is our own copy,
+  `zot.apps.okd.sudops.pl/okd-test/podman/stable:v5.8.9-2026-10-26@sha256:68e4418474c7…` (the linux/amd64
+  image of quay.io's `v5.8.9` on 2026-10-26), used by the logging, gitops and nmstate Jobs and log readers.
+  quay re-pushes `v5.8.9` every day and expires the old digests within days, so the first pin, quay's
+  `dc02649067d5…` from 2026-10-20, stopped resolving and broke the next build on a node without a cached copy
+  (2026-10-26). zot keeps what is pushed to it and does not cache digest-only pulls from quay, hence the copy.
+  To move to a newer podman, copy it under a new dated tag and re-pin all six files (`grep -rn podman/stable tests/`):
+  `skopeo copy --preserve-digests docker://quay.io/podman/stable@<amd64 manifest digest> docker://zot.apps.okd.sudops.pl/okd-test/podman/stable:<version>-<date>`.
+  Expect about 3× longer builds while the `powersave-experimental` Tuned profile pins cores at their minimum
+  frequency.
 
 Tools, all pinned and checked against the sha256 their project publishes:
 
