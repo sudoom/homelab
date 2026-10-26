@@ -93,13 +93,14 @@ components/
     cert-manager/          # cert-manager operator (okderators catalog)
     kube-descheduler/      # Wave 1 — Kube Descheduler Operator (okderators) + KubeDescheduler CR (wave 5), Automatic since 2026-10-24
     rook-ceph/             # Rook-Ceph via upstream Helm chart
-    grafana/               # Grafana operator (operatorhubio-catalog)
+    grafana/               # Grafana operator (community-operators)
     sealed-secrets/        # Bitnami sealed-secrets controller
     cnpg/                  # CloudNativePG operator (operatorhubio-catalog)
     loki-operator/         # Loki operator (Red Hat)
     cluster-logging/       # Cluster Logging operator (Red Hat)
     logging-test-catalog/  # Wave 1 — temporary CatalogSource `okd-test-logging` (zot test build of Logging/Loki 6.6)
     nmstate-test-catalog/  # Wave 1 — temporary CatalogSource `okd-test-nmstate` (zot test build of the NMState 4.21 catalog)
+    gitops-test-catalog/   # Wave 1 — temporary CatalogSource `okd-test-gitops` (zot test build of OpenShift GitOps 1.22)
   storage/
     rook-ceph-cluster/     # CephCluster CR via upstream rook-ceph-cluster subchart + local extras
                            # (toolbox, dashboard Route, mgr ServiceMonitor, RBD trash purge,
