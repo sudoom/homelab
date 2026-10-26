@@ -1,0 +1,7 @@
+# Test build of the okderators NMState catalog: release-4.21 with the ImageStream-free bundle
+# kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722 in place of v4.21.0-2026-05-05-165851,
+# pushed to the cluster's zot (tag 2026-10-26-132334). Pinned by digest.
+# Temporary: this chart and its root-app entry leave again when the kubernetes-nmstate-operator
+# Subscription (components/operators/nmstate/) moves to `okderators` (once okderators publishes
+# the fixed bundle).
+image: zot.apps.okd.sudops.pl/okd-test/nmstate-catalog@sha256:4433daca7a0dccc36b21e4c3f135f088189fa49b4412daffa01486f849774698

@@ -154,6 +154,14 @@ applications:
     namespace: openshift-marketplace
     syncWave: "1"
 
+  # Temporary: zot test build of the okderators NMState catalog. Leaves when the
+  # nmstate Subscription moves to `okderators`.
+  nmstate-test-catalog:
+    enabled: true
+    path: components/operators/nmstate-test-catalog
+    namespace: openshift-marketplace
+    syncWave: "1"
+
   loki-operator:
     enabled: true
     path: components/operators/loki-operator
