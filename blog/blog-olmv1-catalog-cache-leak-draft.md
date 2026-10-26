@@ -340,3 +340,40 @@ Read back afterwards with the readonly SA: `operatorhubio-catalog` `poll=24h sta
 neither catalog pod restarted (`okderators-x5n5k` from 10-16, `operatorhubio-catalog-btkhs` from 10-25); the CNPG and
 NMState subscriptions `AtLatestKnown` with `CatalogSourcesUnhealthy=False`. The next poll should come about 24 h after
 10:52Z.
+
+**The prune**, run by the operator at 11:09Z:
+
+```bash
+oc debug node/node5.okd.sudops.pl -- chroot /host crictl rmi --prune
+```
+
+The output looked like a failure: 5 `Deleted:` lines (four `quay.io/okd/scos-content` digests and an old
+`csi-resizer`) and 753 of
+
+```
+E1026 11:09:04.342866 ... "RemoveImage from image service failed" err="rpc error: code = DeadlineExceeded desc = context deadline exceeded" image="58fcbfa2..."
+```
+
+all stamped the same second, 11:09:04. The disk says otherwise. Read back with the readonly SA a minute later:
+
+```
+node5 root fs used 13.3% avail 322.3 GiB          # was 80.1 % / 74.1 GiB at session start
+HEALTH_OK 2026-10-26T11:10:45Z                     # cephcluster .status.ceph.health
+```
+
+About 248 GiB came back, and Ceph read `HEALTH_OK` at its next status check, 11:10:45Z. The mon checks its own data directory's
+filesystem, so that is a second, independent reading of the same disk. My reading of the errors: `crictl` sends every
+`RemoveImage` at once and gives each call its default client timeout; CRI-O works through them one at a time under its
+storage lock, so the client stopped waiting on all 753 in the same second while the server went on deleting. Next
+time, pass `crictl --timeout 600s rmi --prune` and the output should match what happened.
+
+No pod on node5 went into `ImagePullBackOff` or `ErrImagePull` afterwards, as expected: `--prune` only removes images
+no container uses, and anything needed later comes back through zot. The `oc debug` pod removed itself and left no
+debug namespace.
+
+The node's `.status.images` still listed 31 `community-operator-index` digests right after the prune. That list is
+refreshed on the kubelet's own schedule and only holds the 50 largest images, so it is not the measure here; the
+filesystem numbers are.
+
+From here: the refill rate with the 24h poll in place, read from the same stats summary over the next weeks. Step 2
+(image GC thresholds in a KubeletConfig) goes into the next planned node roll.

@@ -297,8 +297,8 @@ other container images (okd-operator-pipeline `build.sh`, bundles, test catalogs
 cluster: the nodes are amd64 like upstream's CI runners, so the images can also be installed here, while the Mac is
 arm64 and emulating amd64 is far too slow (the cert-manager 1.20 build on 2026-09-08 was arm64-only and could not be
 installed). Shape: a throwaway namespace; podman in a pod, which needs the `privileged` SCC; build storage on a
-temporary `ceph-nvme-block` PVC, never node root disks (node5's root disk carries a mon and sits at the
-`MON_DISK_LOW` line); images pushed to zot under `okd-test/`, never under a path that matches a real upstream
+temporary `ceph-nvme-block` PVC, never node root disks (each carries a mon, and node5's has crossed the
+`MON_DISK_LOW` line twice); images pushed to zot under `okd-test/`, never under a path that matches a real upstream
 repository (zot is the cluster's pull-through mirror for quay.io, docker.io, ghcr.io and registry.k8s.io, so such a
 push would shadow the real image cluster-wide). zot's PVC is 48 GiB with ~18 GiB free on 2026-10-20: measure after
 a build and delete test images when done, because a full zot breaks image pulls for the whole cluster. The Job
