@@ -664,3 +664,9 @@ nmstate (ns nmstate) handler node4 restarts=20, node5 9, node6 12 (cumulative); 
        operator (ns openshift-nmstate) restarts=0; CSV kubernetes-nmstate-operator.v0.87.0 Succeeded
 admission  MWC nmstate, VAP nncp-validation-policy, ConsolePlugin nmstate-console-plugin
 ```
+
+Metrics, read by the operator in the console (Observe → Targets): the community build's only ServiceMonitor in
+`nmstate` is `controller-manager-metrics-monitor` (selector `prometheus.nmstate.io: "true"`, port `metrics`), target
+`https://10.130.0.47:8443/metrics` = pod `nmstate-metrics-5fc4f8b44b-jgjt9` on node4: **Down**, scrape 10000.6 ms, i.e.
+the 10 s timeout. That fits the NetworkPolicy finding (ingress to 8443 allowed only from a `monitoring` namespace).
+After the switch this target should be up from `openshift-nmstate`.
