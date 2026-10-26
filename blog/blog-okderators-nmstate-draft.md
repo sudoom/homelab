@@ -580,3 +580,40 @@ environment: `dnf` against CentOS mirrors (the 10-23 failure) and `:latest` base
 `ubi9/nodejs-22:latest`. A rebuild today would not prove those for the day upstream builds after a merge either.
 The one change that does touch the logging and GitOps Jobs is the podman image (`ae2fae9`), which only matters if we
 build them again.
+
+## 2026-10-26 — all four branches build
+
+With the zot podman copy and `npm ci` on 4.20/4.21, the remaining runs went through one at a time (the operator
+created and deleted each Job; I followed the logs read-only). 4.21 was rebuilt because its branch changed; the
+10-23 4.21 bundle is superseded. 4.22 is unchanged since 10-23.
+
+| Branch | Run (DATE) | Pipeline commit | Wall time | `build_containers` | Peak `DISK` after prune | Handler `nmstate` |
+|---|---|---|---|---|---|---|
+| release-4.21 | 2026-10-26-123722 | `6727222` | 17.5 min | 865 s | 12.2 GB | 2.2.62-3.el9 |
+| release-4.20 | 2026-10-26-121658 | `51ba5be` | 18.0 min | 906 s | 13.2 GB | 2.2.62-3.el9 |
+| main (OKD 5.0) | 2026-10-26-130048 | `a005aed` | 19.8 min | 991 s | 12.5 GB | 2.2.62-4.el10 |
+| release-4.22 | 2026-10-23-195655 | (10-23) | — | — | — | (10-23 run) |
+
+Every run ended `RESULT PASS` with all eleven checks PASS: gitmodules-branch, operator-commit, nmstate-rpm,
+bundle-objects, no-imagestream, no-redhat-registry, csv-name, csv-code-release, images-by-digest, install-modes,
+operator-sdk-validate. operator-sdk's one warning is the same on every branch and comes from upstream's CSV
+(`csv.Spec.minKubeVersion is not informed`). Install modes: AllNamespaces=true on 4.21 and main, false on 4.20
+(recorded; 4.20 does not need it). The handler `nmstate` RPM is 2.2.62 everywhere, newer than the 2.2.61 noted
+before the switch planning (switch.md unknown 2).
+
+The 10-23 runs took about an hour each; today's took 18-20 minutes. I did not measure why. One difference is that
+the 10-23 pods waited ~4.5 min in `CreateContainerError` before starting and today's started in 60-90 s; the rest is
+not explained by anything I checked.
+
+Bundles (all `zot.apps.okd.sudops.pl/okd-test/nmstate/bundle`):
+
+```
+4.21.0-2026-10-26-123722@sha256:20131681a8c80b45996e097d79809a15861a09d9d920b47b161f866889295ad7
+4.20.0-2026-10-26-121658@sha256:a3366cc773e41ee51f0e0df48c088b80d0f5b5af8e9db0e6878855d07c2e3023
+5.0.0-2026-10-26-130048@sha256:290e248287ef8a708143056dec2fca0b777ca7c0ada83db57c487db651e31804
+4.22.0-2026-10-23-195655@sha256:284ebfeaa858342c0768c850b84aee0c36adcfe3fa84560392af26882df8d724
+```
+
+CSV names: `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` (OKD 4.21.0-okd-scos.10, skipRange
+`>=4.3.0 <4.21.0`), `v4.20.0-2026-10-26-121658` (4.20.0-okd-scos.6), `v5.0.0-2026-10-26-130048` (5.0.0-okd-scos.0).
+zot: 16.2 GiB free before today's runs, 15.7 GiB after 4.20.
