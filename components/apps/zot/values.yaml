@@ -10,7 +10,7 @@ image:
   # hourly operatorhubio-catalog poll pod sat in ImagePullBackOff for three days.
   # Renovate will propose v2.1.22 again: NOT-APPROVE until the compat setting is
   # understood. See blog/blog-zot-pullthrough-draft.md, 2026-10-11.
-  tag: v2.1.21
+  tag: v2.1.22
 
 storage:
   storageClassName: ceph-nvme-block
