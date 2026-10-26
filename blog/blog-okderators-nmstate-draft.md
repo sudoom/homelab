@@ -509,3 +509,52 @@ resolves to `sha256:68e4418474c7…` (MATCH), a HEAD by digest returns 200, and 
 now pin `zot.apps.okd.sudops.pl/okd-test/podman/stable:v5.8.9-2026-10-26@sha256:68e44184…`. Each rendered template
 and each log reader passes `kubeconform -strict`. Cost: a build now needs zot up to start, which the push step
 needed anyway.
+
+## 2026-10-26 — 4.20 again: past CentOS, stopped by the console plugin's unlocked yarn install
+
+With the build image fixed, the operator re-created the 4.20 run (`nmstate-build-full-2026-10-26-113855`). The pod
+started 90 s after creation, with no `CreateContainerError` this time. The handler image's `dnf` step passed: the
+CentOS metadata is fixed, and the `rhel-9-server-ose` `*.ocp.svc` lines are the same harmless error 4.21 and 4.22
+print. The run then failed at 12:03:40Z in the console plugin image:
+
+```
+[1/2] STEP 4/4: RUN yarn install --frozen-lockfile && yarn build
+yarn install v1.22.22
+info No lockfile found.
+...
+/opt/app-root/src/node_modules/@openshift-console/dynamic-plugin-sdk-webpack/node_modules/webpack/lib/container/HoistContainerReferencesPlugin.js:224
+					if (connection.module.is("external")) {
+TypeError: connection.module.is is not a function
+    ...
+    at Compilation.seal (/opt/app-root/src/node_modules/webpack/lib/Compilation.js:3812:36)
+```
+
+Two webpacks in one process. The top-level copy (the one running `Compilation`) is pinned in the plugin's
+`package.json` to `5.111.1`; `@openshift-console/dynamic-plugin-sdk-webpack` 4.20.0 depends on `webpack ^5.75.0`,
+and yarn installed a newer copy under it. A plugin from that copy calls `Module.is()`, which `5.111.1` does not have.
+I checked `lib/container/HoistContainerReferencesPlugin.js` at `v5.111.1`: it does not call `.is("external")`.
+
+**Why yarn ran unlocked.** `info No lockfile found.` The pipeline's own `nmstate/images/console-plugin.Containerfile`
+on `release-4.20` and `release-4.21` installs yarn and runs `yarn install --frozen-lockfile`, but
+`openshift/nmstate-console-plugin` has no `yarn.lock` on those branches, only `package-lock.json`. Without a yarn
+lockfile, `--frozen-lockfile` does not stop the install, so every build resolves fresh. Upstream's own `Dockerfile` on
+the same commits runs `npm clean-install`. Upstream `main` of the pipeline already fixed this in `7c8e29f`
+("[nmstate] Target OKD 5.0": "Build console-plugin with npm ci; upstream dropped yarn.lock"), and our 4.22 branch got
+the same change on 10-23 (`1a8d210`), which is why 4.22 built. It never reached `release-4.20` or `release-4.21`.
+
+Not explained: 4.21 built with the same yarn setup on 10-23 and passed. Its plugin pins the same webpack `5.111.1`,
+and SDK 4.21.0 has the same `^5.75.0` range; webpack 5.112.2 was already published at 12:18Z that day. I have not
+reproduced the 4.21 install to see how yarn laid it out, so "it got lucky" is a guess.
+
+**Fix (operator's call: both branches).** Upstream's exact hunk from `7c8e29f`, applied in scratch worktrees
+because the main clone's checked-out branch has unrelated deletions I did not want to carry:
+
+```bash
+git -C pipeline diff 7c8e29f5c~1 7c8e29f5c -- nmstate/images/console-plugin.Containerfile > npm-ci.patch
+git -C wt/4.20 apply npm-ci.patch   # likewise wt/4.21
+```
+
+The resulting file is byte-identical to the 4.22 branch's. One commit per branch, `[nmstate] Build console-plugin
+with npm ci`: `nmstate-bundle-fix-4.20` `7da874a..51ba5be`, `nmstate-bundle-fix-4.21` `4657706..6727222`, pushed to the
+fork. The 4.20 and 4.21 PRs will each carry this commit. The 10-23 4.21 bundle came from the old Containerfile, so 4.21
+is rebuilt too and the catalog run will use the new bundle.
