@@ -24,3 +24,28 @@ spec:
   updateStrategy:
     registryPoll:
       interval: 60m
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: operatorhubio-catalog
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  # Source of the cloudnative-pg and kubernetes-nmstate-operator subscriptions
+  # (both installPlanApproval: Automatic). Created by hand before this file held
+  # it; brought under version control 2026-10-26 with the live spec unchanged
+  # apart from the poll interval. Applied by hand, like okderators above.
+  #
+  # 24h, not 60m: every poll that finds a new digest of :latest pulls a fresh
+  # copy of this index onto the catalog pod's node (node5), and the old copy
+  # stays until the kubelet's image GC, which only starts at 85 % disk use --
+  # past Ceph's 70 % mon warning (mon c runs on node5). The cost is that CNPG
+  # and NMState upgrades arrive up to a day later. See
+  # blog/blog-olmv1-catalog-cache-leak-draft.md, 2026-10-14 and 2026-10-26.
+  image: quay.io/operatorhubio/catalog:latest
+  displayName: OperatorHub.io Community Catalog
+  publisher: OperatorHub.io
+  updateStrategy:
+    registryPoll:
+      interval: 24h

@@ -269,3 +269,58 @@ Nothing has been run yet. Tracked as two README TODOs (Queued — platform plumb
 
 Lesson: this is the second time `CephMonDiskspaceLow` was a node-disk alert. Check `node_filesystem_avail_bytes` per
 node first, then `du`, then the image count, before touching Ceph.
+
+## 2026-10-26 — node5 at 80 %, and the operatorhubio poll goes to 24h
+
+Nothing had been pruned since 10-14. The session-start sweep showed Ceph `HEALTH_WARN` with only
+`mon c is low on available space`, so I measured node5 again through the kubelet stats summary (readonly SA, no exec):
+
+```bash
+KUBECONFIG=~/.kube/config-readonly oc get --raw /api/v1/nodes/node5.okd.sudops.pl/proxy/stats/summary \
+  | python3 -I -c 'import json,sys; fs=json.load(sys.stdin)["node"]["fs"]; print(100*fs["usedBytes"]/fs["capacityBytes"], fs["availableBytes"]/2**30)'
+```
+
+80.1 % used, 74.1 GiB free: 37 GiB in 12 days, about 3.1 GiB a day, faster than the 2.6 measured on 10-14. The
+largest pod held 0.3 GiB of ephemeral storage, so it is still the image store. The kubelet's image GC starts at 85 %,
+about six days out at this rate, and should then hold the disk between 80 and 85 %. That keeps the mon in warning and
+nowhere near its 5 % critical line, so there was no emergency, but nothing clears the warning except a prune.
+
+**How big a share is the operatorhubio catalog?** The node's `.status.images` only lists the 50 largest images. 31 of
+them are `community-operator-index` at about 1.09 GiB each (33.7 GiB nominal; layers are shared between digests, which
+is why 376 of them fit in 236 G of overlay). No `operatorhubio/catalog` image made the top 50, so each is smaller than
+that. Count and size both say `community-operators` is the bigger pile.
+
+**Does a longer poll help at all?** It only matters if `:latest` moves more often than the interval. The quay tag
+history answers that:
+
+```bash
+python3 -I - <<'EOF'
+import json, urllib.request, collections, datetime
+u = "https://quay.io/api/v1/repository/operatorhubio/catalog/tag/?specificTag=latest&onlyActiveTags=false&limit=100"
+c = collections.Counter(datetime.datetime.fromtimestamp(t["start_ts"], datetime.UTC).strftime("%Y-%m-%d")
+                        for t in json.load(urllib.request.urlopen(u))["tags"] if t.get("start_ts"))
+for k in sorted(c): print(k, c[k])
+EOF
+```
+
+47 moves from 10-12 to 10-25, between none (10-24) and eight a day, about 3.4 on average. With the 60m poll each move became one
+more image on node5. A 24h poll takes at most one a day, so this catalog's share drops by roughly 70 %.
+`community-operators` is untouched: the marketplace operator owns it and resets its 240m.
+
+**Step 1, done in git.** `operatorhubio-catalog` (the CNPG and NMState source, both `installPlanApproval: Automatic`)
+was created by hand and lived in no file. It now sits next to `okderators` in `bootstrap/phase0/01_catalog_source.yaml`
+with the live spec copied and only the interval changed. Checks, all read-only:
+
+```bash
+kubeconform -strict -summary -schema-location default \
+  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+  bootstrap/phase0/01_catalog_source.yaml          # Valid: 2, Invalid: 0
+```
+
+`oc diff` needs a dry-run patch, which the readonly SA is refused (`cannot patch resource "catalogsources"`), so I
+compared each spec in the file against `oc get catalogsource <name> -o jsonpath='{.spec}'` field by field: `okderators`
+identical; `operatorhubio-catalog` differs only in `updateStrategy.registryPoll.interval` (`24h` against `60m`).
+
+The cost: CNPG and NMState upgrades now show up to a day later. phase0 is not under ArgoCD, so the change reaches the
+cluster when the operator runs `oc apply -f bootstrap/phase0/01_catalog_source.yaml`. Step 2 (the KubeletConfig GC
+thresholds) is still the fix that ends this; step 1 only slows the refill after the prune.

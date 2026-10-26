@@ -10,14 +10,19 @@ Everything in this directory is applied **once, by hand**. After this, ArgoCD ma
 
 ## Execution
 
-### Step 1: Install okderators catalog
+### Step 1: Install the okderators and operatorhubio catalogs
+
+The file holds two CatalogSources: `okderators` (cert-manager, OADP, the descheduler, and GitOps on a fresh install)
+and `operatorhubio-catalog`
+(CNPG, NMState; polled every 24h, not 60m, so its index images do not pile up on the catalog pod's node).
 
 ```bash
 oc apply -f bootstrap/phase0/01_catalog_source.yaml
 
 # Wait for READY (takes 1-2 minutes for image pull)
-oc get catalogsource okderators -n openshift-marketplace -w
-# READY column should appear
+oc get catalogsource okderators operatorhubio-catalog -n openshift-marketplace \
+  -o jsonpath='{range .items[*]}{.metadata.name} {.status.connectionState.lastObservedState} poll={.spec.updateStrategy.registryPoll.interval}{"\n"}{end}'
+# both READY
 
 # Verify operators are available
 oc get packagemanifest | grep -E "gitops|nmstate|cert-manager"
