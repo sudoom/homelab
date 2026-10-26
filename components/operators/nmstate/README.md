@@ -31,6 +31,12 @@ ConsolePlugin `nmstate-console-plugin`, ServiceMonitor, NetworkPolicies) is rend
 ownerReference to the NMState CR. The CR has no finalizer: deleting it garbage-collects the whole operand and leaves
 the four CRDs, the NNCPs/NNCEs/NNSs and every node's NetworkManager state untouched (applies are persistent).
 
+No `nmstate-cert-manager` Deployment runs here, on either build. The okderators 4.21 code renders it only
+`if not .IsOpenShift` (`deploy/handler/operator.yaml`), its `IsOpenShift` always returns true, and
+`cleanupObsoleteResources` deletes a leftover one; the webhook's serving cert comes from the service CA
+(`service.beta.openshift.io/serving-cert-secret-name`, MWC `inject-cabundle`). v0.87.0 also deletes it on OpenShift.
+A `nmstate-cert-manager` pod after the switch is therefore unexpected.
+
 ## Two namespaces
 
 - **operatorhubio v0.87.0 (until the switch):** the operator runs in `openshift-nmstate`, but the CSV hardcodes
@@ -102,9 +108,9 @@ brex() {
   done
 }
 
-# Ceph: health, every OSD up, per pool active = clean = total
+# Ceph: health with the named checks, every OSD up, per pool active = clean = total
 cephchk() {
-  ocr -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}{"\n"}'
+  ocr -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health} {.status.ceph.details}{"\n"}'
   ocr get --raw "/api/v1/namespaces/rook-ceph/services/http:rook-ceph-mgr:9283/proxy/metrics" \
     | grep -E '^ceph_osd_up|^ceph_pg_(total|active|clean)\{'
 }
@@ -141,8 +147,10 @@ Target CSV: `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` from Catalog
 
 ```bash
 brex                                    # 1 on all three nodes
-cephchk                                 # HEALTH_OK, or HEALTH_WARN with only the known benign checks;
-                                        # osd.0-2 up; active = clean = total per pool; nothing OSD-affecting in flight
+cephchk                                 # HEALTH_OK, or HEALTH_WARN whose details name only the known benign checks
+                                        # (2026-10-26: BLUESTORE_SLOW_OP_ALERT "N OSD(s) experiencing slow operations
+                                        # in BlueStore"); osd.0-2 up; active = clean = total per pool;
+                                        # nothing OSD-affecting in flight
 ocr get cluster.postgresql.cnpg.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} ready={.status.readyInstances}/{.spec.instances} archiving={.status.conditions[?(@.type=="ContinuousArchiving")].status}{"\n"}{end}'
                                         # every cluster 2/2, archiving=True
 nnce                                    # 3 x Available=True at gen=3
@@ -156,16 +164,22 @@ The switch change is prepared and validated (lint, template, kubeconform, live c
 
 ### Step 2: auto-sync off (root-app first, or its selfHeal turns the others back on)
 
+`root-app` auto-sync is already off since 2026-10-26 13:03Z (the operator set `enabled: false` early and hand-syncs
+`root-app` once, without prune, after the test-catalog commit). Check that first: `apps` shows `root-app`
+`automated={"enabled":false,...}`. If it does not, turn it off before anything else:
+`oc -n openshift-gitops patch application root-app --type merge -p '{"spec":{"syncPolicy":{"automated":{"enabled":false,"prune":false,"selfHeal":false}}}}'`
+(# OPERATOR). Then:
+
 ```bash
 # OPERATOR
-for a in root-app nmstate-operator nmstate-nncp; do
+for a in nmstate-operator nmstate-nncp; do
   oc -n openshift-gitops patch application $a --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
 done
 ```
 
-Check: `apps` shows `automated=` (empty) for `root-app`, `nmstate-operator` and `nmstate-nncp`; `node-labels` keeps
-its own auto-sync (Step 6 relies on it). While `root-app` auto-sync is off, changes to `bootstrap/root-app/values.yaml`
-do not reach the cluster.
+Check: `apps` shows `automated=` (empty) for `nmstate-operator` and `nmstate-nncp`, `root-app` still
+`"enabled":false`; `node-labels` keeps its own auto-sync (Step 6 relies on it). While `root-app` auto-sync is off,
+changes to `bootstrap/root-app/values.yaml` do not reach the cluster.
 
 ### Step 3: delete the NMState CR (the old operand goes)
 
@@ -187,7 +201,7 @@ ocr get crd -o name | grep nmstate.io                              # 4 CRDs
 brex                                                               # unchanged (1 x3)
 ```
 
-**Abort point:** to go back here, turn auto-sync back on (Step 7 commands). selfHeal recreates the CR from the
+**Abort point:** to go back here, turn auto-sync back on (Step 7, gate included). selfHeal recreates the CR from the
 unchanged chart and v0.87.0 rolls its operand out again, on all three nodes at once, so run Step 6's per-node checks
 on all three.
 
@@ -202,6 +216,14 @@ oc -n openshift-nmstate delete csv kubernetes-nmstate-operator.v0.87.0
 Check: `ocr -n openshift-nmstate get csv kubernetes-nmstate-operator.v0.87.0` and
 `ocr -n openshift-nmstate get deploy nmstate-operator` both NotFound; `ocr get crd -o name | grep nmstate.io` still 4.
 (The OLM upgrade path cannot do this: the okderators skipRange `>=4.3.0 <4.21.0` does not cover v0.87.0.)
+
+**Abort between Step 4 and Step 5** (old Subscription and CSV gone, chart not switched yet): do **not** turn
+auto-sync back on. It would recreate the unpinned, Automatic operatorhubio Subscription and a CR without the
+`nodeSelector`, so v0.87.0, or whatever the catalog head is by then, would start a handler on all three nodes at
+once. Go to a pinned v0.87.0 install with the `nodeSelector` instead, the rollback path below: step 0, then a commit
+that changes the still-unswitched chart's `templates/operator.yaml` only (Subscription `installPlanApproval: Manual`
+plus `startingCSV: kubernetes-nmstate-operator.v0.87.0`; CR `spec.nodeSelector: {sudops.pl/nmstate-handler: "true"}`),
+then steps 6 and 7, labelling node4 first. Steps 1-4 do not apply: no CR and no operator exist in this window.
 
 ### Step 5: push the switch, install the okderators operator
 
@@ -220,11 +242,25 @@ git apply <dir>/switch.patch
 git add -A components/operators/nmstate/
 git commit -m 'nmstate: move to the okderators 4.21 test build'
 git push
-# OPERATOR: sync nmstate-operator by hand, with prune (UI: SYNC, tick PRUNE), or:
-oc -n openshift-gitops patch application nmstate-operator --type merge -p '{"operation":{"sync":{"prune":true,"syncOptions":["ServerSideApply=true","ServerSideDiff=true","RespectIgnoreDifferences=true","SkipDryRunOnMissingResource=true"]}}}'
+SHA=$(git rev-parse HEAD)                # the switch commit
+# OPERATOR: sync nmstate-operator by hand at that revision, with prune (UI: REFRESH until the app shows $SHA,
+# then SYNC with PRUNE ticked), or pin the revision in the operation:
+oc -n openshift-gitops patch application nmstate-operator --type merge \
+  -p '{"operation":{"sync":{"revision":"'"$SHA"'","prune":true,"syncOptions":["ServerSideApply=true","ServerSideDiff=true","RespectIgnoreDifferences=true","SkipDryRunOnMissingResource=true"]}}}'
 ```
 
-The sync stops at wave 1 with the Subscription `Progressing` (InstallPlan pending). Read the InstallPlan:
+The sync stops at wave 1 with the Subscription `Progressing` (InstallPlan pending). Before anything is approved,
+confirm the sync runs the switch commit. A sync at the old revision would recreate the Automatic operatorhubio
+Subscription and a CR without the `nodeSelector`.
+
+```bash
+ocr -n openshift-gitops get application nmstate-operator \
+  -o jsonpath='sync={.status.sync.revision} operation={.status.operationState.operation.sync.revision} result={.status.operationState.syncResult.revision} phase={.status.operationState.phase}{"\n"}'
+echo "$SHA"                             # sync= and result= equal it (operation= too when pinned; a UI sync may
+                                        # show the branch name there); phase=Running for this sync
+```
+
+Then read the InstallPlan:
 
 ```bash
 ocr -n openshift-nmstate get installplan \
@@ -234,7 +270,16 @@ ocr -n openshift-nmstate get installplan <install-xxxxx> \
 ```
 
 It must name only `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722`, and its steps only that CSV, CRD
-`nmstates.nmstate.io` and the CSV's RBAC/ServiceAccounts. Then:
+`nmstates.nmstate.io` and the CSV's RBAC/ServiceAccounts. **If it names anything else**, or a revision check above
+failed: do not approve, terminate the sync (operator-run; UI: TERMINATE, or the command below, which writes what
+`argocd app terminate-op` writes, Application having no status subresource), and go to Rollback.
+
+```bash
+# OPERATOR, only on that abort
+oc -n openshift-gitops patch application nmstate-operator --type merge -p '{"status":{"operationState":{"phase":"Terminating"}}}'
+```
+
+Otherwise:
 
 ```bash
 # OPERATOR
@@ -275,9 +320,10 @@ git add components/cluster-config/node-labels/values.yaml
 git commit -m 'nodes: label node4 for the nmstate handler' && git push
 ```
 
-`node-labels` syncs on its own. After the label is on the node, check (`N=node4`, then node5, node6):
+`node-labels` syncs on its own. After the label is on the node, run the checks with `N` set to that node:
 
 ```bash
+N=node4                                 # node5 for the second round, node6 for the third
 ocr get node $N.okd.sudops.pl -o jsonpath='{.metadata.labels.sudops\.pl/nmstate-handler}{"\n"}'       # true
 hpod=$(ocr -n openshift-nmstate get pods -l component=kubernetes-nmstate-handler \
   --field-selector spec.nodeName=$N.okd.sudops.pl -o jsonpath='{.items[0].metadata.name}')
@@ -297,6 +343,16 @@ restart, NetworkManager on that node); otherwise roll back (below).
 
 ### Step 7: auto-sync back on
 
+**Gate first** (read-only; either check failing = stop, read the diff in ArgoCD, do not enable auto-sync). The 4.21
+operator re-applied the NNCP/NNCE/NNS CRDs at Step 5; if the chart's NNCPs now differ from live, selfHeal on
+re-enable rewrites them, bumps their generation and re-enacts the backnet on all three nodes at once.
+
+```bash
+apps                                    # nmstate-nncp Synced
+ocr get nncp -o jsonpath='{range .items[*]}{.metadata.name} gen={.metadata.generation}{"\n"}{end}'
+                                        # storage-node4/5/6 at the baseline generation (gen=3 each on 2026-10-26)
+```
+
 ```bash
 # OPERATOR
 for a in nmstate-nncp nmstate-operator; do
@@ -305,7 +361,9 @@ done
 oc -n openshift-gitops patch application root-app --type merge -p '{"spec":{"syncPolicy":{"automated":{"enabled":true,"prune":true,"selfHeal":true}}}}'
 ```
 
-Check over at least three refreshes (about 10 min): `apps` all Synced/Healthy, and the Namespace stays put:
+Right after, re-read the NNCP generations (same command): still the baseline. A bump means NNCPs are re-enacting on
+every node; run `nnce` and `brex` at once. Then check over at least three refreshes (about 10 min): `apps` all
+Synced/Healthy, and the Namespace stays put:
 
 ```bash
 ocr get ns openshift-nmstate -o jsonpath='{.metadata.labels}{"\n"}{.metadata.annotations}{"\n"}'
@@ -345,7 +403,17 @@ The switch in reverse, every step operator-run, with the same read-only checks. 
 `operatorhubio-catalog` (2026-10-26). That catalog is a floating `:latest` (24 h poll), so the rollback pins
 `startingCSV` and keeps `Manual`; an unpinned Automatic Subscription would install whatever the head is by then.
 
-1. **Auto-sync off** on `root-app`, `nmstate-operator`, `nmstate-nncp` (Step 2 commands).
+0. **v0.87.0 still offered** (read-only, before anything is deleted):
+
+   ```bash
+   ocr get packagemanifest -n openshift-marketplace -l catalog=operatorhubio-catalog \
+     -o jsonpath='{range .items[?(@.metadata.name=="kubernetes-nmstate-operator")]}{range .status.channels[*]}{.name} {.entries[*].name}{"\n"}{end}{end}'
+                                        # alpha ... kubernetes-nmstate-operator.v0.87.0 ...
+   ```
+
+   If `kubernetes-nmstate-operator.v0.87.0` is missing: stop and decide another route first. A Subscription pinned to
+   a CSV the catalog no longer offers fails with `ResolutionFailed` and leaves the cluster with no NMState operator.
+1. **Auto-sync off** on `root-app`, `nmstate-operator`, `nmstate-nncp` (Step 2 commands, `root-app` first).
 2. **Delete the CR**, `oc delete nmstate nmstate` (# OPERATOR). Wait until the okderators operand is gone, the MWC
    with the `Fail` webhooks first of all:
 
@@ -387,9 +455,12 @@ The switch in reverse, every step operator-run, with the same read-only checks. 
    namespace was deleted after the soak, the operator recreates it. Labels and the annotation the okderators
    operator applied to `openshift-nmstate` may stay behind (it co-owns them in managedFields); they are harmless to
    v0.87.0.
-6. **Install v0.87.0:** sync `nmstate-operator` by hand with prune (Step 5 command); the InstallPlan must name only
-   `kubernetes-nmstate-operator.v0.87.0`; approve it (# OPERATOR). Check: CSV `Succeeded`, `HANDLER_NAMESPACE=nmstate`
-   in Deployment `nmstate-operator`, CR recreated at wave 5, MWC `nmstate` webhooks to namespace `nmstate`. Then
-   Step 6 per node with namespace `nmstate` in place of `openshift-nmstate`, re-adding each node's label in turn.
-   Leave any later upgrade InstallPlan unapproved.
-7. **Auto-sync back on** (Step 7 commands) and watch `apps` stay Synced.
+6. **Install v0.87.0:** sync `nmstate-operator` by hand with prune at the rollback commit (Step 5 commands, with
+   the revision check); the InstallPlan must name only `kubernetes-nmstate-operator.v0.87.0`; approve it
+   (# OPERATOR). If namespace `nmstate` was deleted after the soak, the sync can fail at wave 6 (the restored
+   Role/RoleBinding in `nmstate`) with namespace `nmstate` not found, before v0.87.0 has recreated it: re-sync once.
+   Check: CSV `Succeeded`, `HANDLER_NAMESPACE=nmstate` in Deployment `nmstate-operator`, CR recreated at wave 5, MWC
+   `nmstate` webhooks to namespace `nmstate`. Then Step 6 per node with namespace `nmstate` in place of
+   `openshift-nmstate`, re-adding each node's label in turn. Leave any later upgrade InstallPlan unapproved.
+7. **Auto-sync back on:** Step 7, gate included (`nmstate-nncp` Synced, NNCPs at their baseline generation), then
+   watch `apps` stay Synced.
