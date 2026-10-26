@@ -324,3 +324,19 @@ identical; `operatorhubio-catalog` differs only in `updateStrategy.registryPoll.
 The cost: CNPG and NMState upgrades now show up to a day later. phase0 is not under ArgoCD, so the change reaches the
 cluster when the operator runs `oc apply -f bootstrap/phase0/01_catalog_source.yaml`. Step 2 (the KubeletConfig GC
 thresholds) is still the fix that ends this; step 1 only slows the refill after the prune.
+
+**Applied** by the operator the same morning:
+
+```
+catalogsource.operators.coreos.com/okderators configured
+Warning: resource catalogsources/operatorhubio-catalog is missing the kubectl.kubernetes.io/last-applied-configuration annotation which is required by oc apply. ... The missing annotation will be patched automatically.
+catalogsource.operators.coreos.com/operatorhubio-catalog configured
+```
+
+`okderators configured` looked like a change I had not intended. It was the annotation: its
+`last-applied-configuration` still recorded `catalog-index:4.20`, so the 4.21 bump on 09-08 reached the live spec some
+other way than a client-side `oc apply` (which always rewrites that annotation). The spec stayed at `4.21` / `60m`; only the annotation moved to match the file.
+Read back afterwards with the readonly SA: `operatorhubio-catalog` `poll=24h state=READY`, last poll 10:52:44Z;
+neither catalog pod restarted (`okderators-x5n5k` from 10-16, `operatorhubio-catalog-btkhs` from 10-25); the CNPG and
+NMState subscriptions `AtLatestKnown` with `CatalogSourcesUnhealthy=False`. The next poll should come about 24 h after
+10:52Z.
