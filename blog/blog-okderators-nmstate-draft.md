@@ -617,3 +617,50 @@ Bundles (all `zot.apps.okd.sudops.pl/okd-test/nmstate/bundle`):
 CSV names: `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` (OKD 4.21.0-okd-scos.10, skipRange
 `>=4.3.0 <4.21.0`), `v4.20.0-2026-10-26-121658` (4.20.0-okd-scos.6), `v5.0.0-2026-10-26-130048` (5.0.0-okd-scos.0).
 zot: 16.2 GiB free before today's runs, 15.7 GiB after 4.20.
+
+## 2026-10-26 — test catalog live, pre-switch baseline
+
+**Catalog run (Task 6).** One `MODE=catalog` run (`nmstate-build-catalog-2026-10-26-132334`, 13:23-13:27Z) with the three
+bundles above. First I re-read the upstream catalog branches: `release-4.20/4.21/4.22` were last touched on 10-15 and
+each still lists exactly the one broken entry `catalog-branches.tsv` expects (`v4.20.0-2025-12-27-212436`,
+`v4.21.0-2026-05-05-165851`, `v4.22.0-2025-12-14-152353`). Per branch: branch-data, bundle, no-imagestream, edit,
+`opm validate` and the walker all PASS; the negative controls behaved as designed (no-imagestream fails on the unedited
+head with "1 ImageStream object(s)"; without `skipRange` `opm validate` still passes but the walker reports the
+test-shaped installs as stranded). Pushed
+`zot.apps.okd.sudops.pl/okd-test/nmstate-catalog:2026-10-26-132334@sha256:4433daca7a0dccc36b21e4c3f135f088189fa49b4412daffa01486f849774698`
+(head `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722`).
+
+**Test CatalogSource (Task 7 Step 1).** `components/operators/nmstate-test-catalog/` (CatalogSource `okd-test-nmstate`,
+pinned by digest, no poll), root-app entry wave 1, commit `3f4c11e`. The operator had already switched `root-app`
+auto-sync off (13:03Z, ahead of the runbook) and hand-synced it once without prune: `root-app` Synced at `e833596`,
+53 apps Synced/Healthy, CatalogSource `READY` at 13:29:30Z, packagemanifest
+`kubernetes-nmstate-operator alpha:kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722`. The live Subscription did
+not move: `operatorhubio-catalog`, `Automatic`, `AtLatestKnown`, `v0.87.0`.
+
+**Runbook (Task 7 Steps 2-3).** `components/operators/nmstate/README.md` (`12187a7`, `d12f4ed`, `07ee58d`): switch Steps
+1-8 and the rollback to v0.87.0, every mutation marked operator-run. Written by an implementer subagent, reviewed by a
+second one (approved; one Important finding, a gate on `nmstate-nncp` Synced and NNCP generation before auto-sync comes
+back on, because the 4.21 operator re-applies the NNCP CRDs and a selfHealed spec change would re-enact the backnet on
+all three nodes at once), fixed and re-reviewed. The rollback is written as explicit edits, not `git revert`: a revert
+would bring back `installPlanApproval: Automatic` and drop the `nodeSelector`, so v0.87.0 would start on all three
+nodes at once. The switch change itself is a validated patch, not committed until Step 5.
+
+**Baseline, 13:29:49Z (readonly SA; `br-ex.forwarding` read by the operator, since auto mode now refuses even a
+read-only `oc exec`):**
+
+```
+nncp   storage-node4/5/6 gen=3 Available=True
+nnce   node4.storage-node4 gen=3 Available since 2026-10-16T16:59:34Z
+       node5.storage-node5 gen=3 Available since 2026-10-16T17:11:53Z
+       node6.storage-node6 gen=3 Available since 2026-10-16T17:05:57Z
+nns    node4 enp1s0f0np0 up mtu=9000 192.168.10.2/24   ceph-shim up mtu=9000 192.168.10.16/24
+       node5 enp1s0f0np0 up mtu=9000 192.168.10.3/24   ceph-shim up mtu=9000 192.168.10.17/24
+       node6 enp1s0f0np0 up mtu=9000 192.168.10.4/24   ceph-shim up mtu=9000 192.168.10.18/24
+br-ex.forwarding  node4 1, node5 1, node6 1
+ceph   HEALTH_WARN BLUESTORE_SLOW_OP_ALERT "3 OSD(s) experiencing slow operations in BlueStore" (known benign);
+       osd.0-2 up; pool 1 128/128/128 and pool 3 1/1/1 total/active/clean
+cnpg   homebox, immich, media: 2/2, archiving=True
+nmstate (ns nmstate) handler node4 restarts=20, node5 9, node6 12 (cumulative); webhook, metrics, console-plugin 0
+       operator (ns openshift-nmstate) restarts=0; CSV kubernetes-nmstate-operator.v0.87.0 Succeeded
+admission  MWC nmstate, VAP nncp-validation-policy, ConsolePlugin nmstate-console-plugin
+```
