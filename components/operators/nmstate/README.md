@@ -5,8 +5,9 @@ Kubernetes NMState operator. Its handler applies the per-node NNCPs in
 Ceph storage backnet `192.168.10.0/24`). A handler that misbehaves on a node can take that node's storage network
 down, so every operator change here is gated per node.
 
-**Status 2026-10-26:** live on `kubernetes-nmstate-operator.v0.87.0` from `operatorhubio-catalog`. The switch to
-the okderators 4.21 test build (runbook below) is planned for 2026-10-26.
+**Status 2026-10-26:** switched. Live on `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` from the test catalog
+`okd-test-nmstate` (operand in `openshift-nmstate`, handler on node4/5/6 by label) since 13:55Z; 24 h soak until
+2026-10-27. v0.87.0 from `operatorhubio-catalog` is the rollback target (Rollback, below).
 
 ## What the chart installs
 
@@ -17,13 +18,14 @@ root-app entry `nmstate-operator`, wave 1, destination namespace `openshift-nmst
 | Namespace `openshift-nmstate` | 0 | PSA labels: see "Two namespaces" |
 | OperatorGroup `openshift-nmstate` | 0 | `spec: {}` = AllNamespaces |
 | Subscription `kubernetes-nmstate-operator` | 1 | channel `alpha`; source and approval in `values.yaml` |
-| NMState `nmstate` (cluster-scoped) | 5 | the operator renders the whole operand from it |
-| `templates/handler-scc-binding.yaml` | 1 | operatorhubio v0.87.0 only: `use` on the `privileged` SCC for the handler SA |
-| `templates/handler-apiserver-rbac.yaml` | 1 | operatorhubio v0.87.0 only: `get/list/watch apiservers.config.openshift.io` for the handler SA |
-| `templates/prometheus-metrics-rbac.yaml` | 6 | operatorhubio v0.87.0 only: lets `openshift-monitoring/prometheus-k8s` list pods/services/endpoints in `nmstate` |
+| NMState `nmstate` (cluster-scoped) | 5 | the operator renders the whole operand from it; `spec.nodeSelector` limits the handler to labelled nodes |
 
-The last three work around RBAC defects in the community CSV (README TODO). The okderators 4.21 build ships all
-three grants itself, so the switch deletes these templates.
+Until the switch (commit `c0252f5`) the chart also carried three templates that worked around RBAC defects in the
+community v0.87.0 CSV: `handler-scc-binding.yaml` (wave 1, `use` on the `privileged` SCC for the handler SA),
+`handler-apiserver-rbac.yaml` (wave 1, `get/list/watch apiservers.config.openshift.io`) and
+`prometheus-metrics-rbac.yaml` (wave 6, lets `openshift-monitoring/prometheus-k8s` list pods/services/endpoints in
+`nmstate`). The okderators 4.21 build ships all three grants itself, so the switch deleted them; the rollback restores
+them from `c0252f5^`.
 
 Everything else (handler DaemonSet, webhook, metrics and console-plugin Deployments, MutatingWebhookConfiguration
 `nmstate`, ValidatingAdmissionPolicy `nncp-validation-policy` + binding, ClusterRoles/CRB `nmstate-handler`,

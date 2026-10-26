@@ -670,3 +670,60 @@ Metrics, read by the operator in the console (Observe → Targets): the communit
 `https://10.130.0.47:8443/metrics` = pod `nmstate-metrics-5fc4f8b44b-jgjt9` on node4: **Down**, scrape 10000.6 ms, i.e.
 the 10 s timeout. That fits the NetworkPolicy finding (ingress to 8443 allowed only from a `monitoring` namespace).
 After the switch this target should be up from `openshift-nmstate`.
+
+## 2026-10-26 — the switch: operatorhubio v0.87.0 → okderators 4.21 test build, one node at a time
+
+Run from the chart runbook (`components/operators/nmstate/README.md`); every mutation by the operator, every check by
+me read-only (except `br-ex.forwarding`, which needs `exec` and which auto mode now refuses me even as a read).
+
+| Step | Time (UTC) | What | Result |
+|---|---|---|---|
+| 1 gates | 13:29-13:33 | baseline above; `br-ex.forwarding` 1×3 | all green |
+| 2 | ~13:33 | auto-sync off on `nmstate-operator`, `nmstate-nncp` (`root-app` already off since 13:03) | `root-app` OutOfSync on exactly those two Applications, as expected |
+| 3 | ~13:34 | `oc delete nmstate nmstate` | by 13:35:15 `nmstate` empty; MWC/VAP/ConsolePlugin/ClusterRole `nmstate-handler` NotFound; NNCP/NNCE/NNS and 4 CRDs unchanged; OSDs up; `br-ex.forwarding` 1×3 |
+| 4 | ~13:36 | delete Subscription + CSV `v0.87.0` | operator Deployment gone 13:36:37; CRDs stay, storedVersions v1/v1/v1beta1/v1beta1 |
+| 5 | 13:37-13:39 | switch commit `c0252f5`; hand sync pinned to it, with prune; approve `install-xcm7k` | CSV `Succeeded` 13:39:14; new CR 13:39:17 with `nodeSelector`; DS desired 0; webhook/metrics/console-plugin/operator 1/1 in `openshift-nmstate`; MWC → `openshift-nmstate`; workaround CRBs pruned |
+| 6 node4 | label 13:43:27 | `4dc6d04` | handler lock 13:43:35, NNCE Available 13:43:59, NNS = baseline, `br-ex.forwarding` 1 |
+| 6 node5 | label 13:50:25 | `da7878f` | lock 13:50:21, NNCE 13:50:45, NNS = baseline, 1 |
+| 6 node6 | label 13:54:46 | `93511d6` | lock 13:54:54, NNCE 13:55:38 (after ping, DNS, API-server and node-readiness probes), NNS = baseline, 1 |
+| 7 | gate 13:56:07, on ~13:56:30 | auto-sync back on (`nmstate-nncp`, `nmstate-operator`, `root-app`) | NNCP generations still 3, NNCE times unchanged: nothing re-enacted |
+
+The InstallPlan named only the 4.21 CSV, CRD `nmstates.nmstate.io`, the `nmstate-operator` ServiceAccount and one
+Role/RoleBinding/ClusterRole/ClusterRoleBinding each. The sync's `operationState` showed `operation` and `result` at
+`c0252f5` while `status.sync.revision` still read the previous commit (no refresh yet); the result revision is the one
+that counts.
+
+Things the runbook predicted, seen live:
+
+- **PSA labels.** Argo CD applied `enforce/audit/warn: privileged` at 13:37:35; one second later OpenShift's
+  `pod-security-admission-label-synchronization-controller` took `audit`/`warn` back to `restricted`
+  (`MinimallySufficientPodSecurityStandard=restricted`: no handler ServiceAccount yet). `enforce`, the one that admits
+  pods, stayed `privileged`. Once the operator created the handler SA the syncer computed `privileged` and all three
+  agreed.
+- **`nmstate-nncp` reads `Suspended` mid-switch.** The 4.21 controller counts only nodes running a handler, so the
+  NNCPs for unlabelled nodes reported `NoMatchingNode` / `Ignored=True` until their node was labelled. Nothing changes on
+  such a node; its old NNCE stays Available.
+- **The handlers run the probes.** node6's enactment took 44 s instead of ~24 s, the time of the ping, DNS,
+  API-server and node-readiness probes; the backnet itself never moved.
+
+One false alarm: the console showed "Failed to load scripts of plugin nmstate-console-plugin". The plugin was
+registered at 13:39:23, before its pod was Ready, and the open tab kept that state. The manifest and the entry script
+(`plugin-entry.e950befdc5fa13f0c22d.min.js`, 33 KB) were served correctly through the Service, the serving cert came
+from the service CA with the right SANs, and a browser refresh loaded it; its topology view shows all three nodes.
+
+**Pass criteria (Step 8):** all operand pods 0 restarts; the five workaround objects NotFound; namespace `nmstate`
+empty, and the old InstallPlans already gone with their Subscription; the metrics target
+`controller-manager-metrics-monitor` **Up in `openshift-nmstate`** (10.2 ms; it was Down on a 10 s timeout in
+`nmstate` this morning); `PrometheusKubernetesListWatchFailures` no datapoints in the last hour (both read by the
+operator in the console).
+
+**Stability, 13:57-14:07Z** (six samples, two minutes apart, readonly): every app Synced/Healthy except one sample at
+14:07:16 with `rook-ceph-cluster` OutOfSync, which was its four bootstrap Jobs being recreated after their 1 h TTL in
+that same second (Synced/Healthy again at 14:07:51); PSA `privileged/privileged/privileged` throughout; NNCP generations
+3/3/3; the `openshift-nmstate` managedFields times unchanged since 13:38:49 (argocd-controller 13:37:35, olm 13:37:53,
+the PSA syncer 13:38:49), so no manager is fighting another over the labels.
+
+Afterwards: the finished catalog Job deleted (operator), the scratch worktrees for the `npm ci` commits removed. Left
+for after the soak: namespace `nmstate` (only the old `nmstate-ca` secret in it). The superseded 10-23 4.21 images in zot
+(`4.21.0-2026-10-23-181845`) can go any time. The node label `sudops.pl/nmstate-handler` and the CR `nodeSelector` stay:
+the rollback needs them, and they are a per-node off switch for the handler.
