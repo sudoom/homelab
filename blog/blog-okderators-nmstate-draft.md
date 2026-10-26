@@ -558,3 +558,25 @@ The resulting file is byte-identical to the 4.22 branch's. One commit per branch
 with npm ci`: `nmstate-bundle-fix-4.20` `7da874a..51ba5be`, `nmstate-bundle-fix-4.21` `4657706..6727222`, pushed to the
 fork. The 4.20 and 4.21 PRs will each carry this commit. The 10-23 4.21 bundle came from the old Containerfile, so 4.21
 is rebuilt too and the catalog run will use the new bundle.
+
+### Do the logging and GitOps PRs have the same time bomb?
+
+Both of today's failures were drift: a pin that quay expired, and an install with no lockfile. Neither needs a
+rebuild to find, so instead of rebuilding eight branches I read the Containerfiles behind okd-operator-pipeline
+#35-#42 for dependency installs and checked what each one locks against. None of those PRs has upstream CI checks;
+upstream only builds after a merge.
+
+- **Logging (#35-#38):** nine Containerfiles, identical on all four branches (same blob set). Go builds against
+  `go.sum`; Vector runs upstream's `make build` with its committed `Cargo.lock` and a pinned Rust toolchain
+  (`--default-toolchain 1.92.0`). No npm or yarn anywhere.
+- **GitOps (#39-#42):** all four branches pin `rh-gitops-midstream/release` at `6c4a911`, whose Dockerfiles do the
+  building. Every frontend install is locked: the console plugin and the Argo CD UI run `pnpm install
+  --frozen-lockfile --offline` against committed `pnpm-lock.yaml`, and gitops-promoter's two UIs run `npm ci`.
+- **cert-manager 1.20:** already built by upstream's own CI from `release-4.21` on 10-22; the catalog PRs (#60/#61)
+  only add catalog entries.
+
+So nmstate's yarn step was the only unlocked frontend install among our open PRs. What none of them can lock is the
+environment: `dnf` against CentOS mirrors (the 10-23 failure) and `:latest` base images such as
+`ubi9/nodejs-22:latest`. A rebuild today would not prove those for the day upstream builds after a merge either.
+The one change that does touch the logging and GitOps Jobs is the podman image (`ae2fae9`), which only matters if we
+build them again.
