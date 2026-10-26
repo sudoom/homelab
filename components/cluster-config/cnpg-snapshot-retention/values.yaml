@@ -2,7 +2,7 @@
 # below, NOT cluster-wide -- there is no ClusterRole in this chart.
 namespace: cnpg-snapshot-retention
 
-image: quay.io/openshift/origin-cli:4.22
+image: quay.io/openshift/origin-cli:5.1
 
 # Offset from the ScheduledBackups (media 04:00, immich 04:30) so a prune never
 # races the backup it would otherwise be counting.
