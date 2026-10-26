@@ -1,14 +1,21 @@
 ---
+# The okderators operator applies this Namespace itself (its deploy/handler/namespace.yaml;
+# HANDLER_NAMESPACE = the Subscription's namespace), forcing these labels and this annotation.
+# They must stay identical here, or ArgoCD selfHeal and the operator ping-pong them, and a
+# `restricted` enforce label rejects the privileged handler pods.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Values.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
+    openshift.io/node-selector: ""
   labels:
-    pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/audit: restricted
-    pod-security.kubernetes.io/warn: restricted
+    name: {{ .Values.namespace }}
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+    openshift.io/cluster-monitoring: "true"
 ---
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
@@ -28,10 +35,13 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   channel: {{ .Values.channel }}
-  installPlanApproval: Automatic
+  installPlanApproval: {{ .Values.installPlanApproval }}
   name: kubernetes-nmstate-operator
   source: {{ .Values.source }}
   sourceNamespace: {{ .Values.sourceNamespace }}
+  {{- with .Values.startingCSV }}
+  startingCSV: {{ . }}
+  {{- end }}
 ---
 apiVersion: nmstate.io/v1
 kind: NMState
@@ -39,4 +49,10 @@ metadata:
   name: nmstate
   annotations:
     argocd.argoproj.io/sync-wave: "5"
-spec: {}
+spec:
+  # The handler DaemonSet runs only on nodes with this label (components/cluster-config/node-labels/).
+  # Every handler start re-applies all NNCPs on its node, the Ceph backnet included, so the label
+  # went on one node at a time at the switch and stays there. Webhook and metrics pods are not
+  # affected (they follow infraNodeSelector).
+  nodeSelector:
+    sudops.pl/nmstate-handler: "true"

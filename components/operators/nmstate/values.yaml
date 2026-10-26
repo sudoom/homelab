@@ -1,4 +1,14 @@
 namespace: openshift-nmstate
 channel: alpha
-source: operatorhubio-catalog
+# okderators NMState 4.21 test build in zot (CatalogSource okd-test-nmstate,
+# components/operators/nmstate-test-catalog/), until okderators publishes an installable
+# 4.21 bundle; then back to `okderators` with startingCSV removed. Switch and rollback
+# runbook: README.md.
+source: okd-test-nmstate
 sourceNamespace: openshift-marketplace
+# Manual, as every okderators Subscription here: an upgrade is approved by hand
+# (`oc -n openshift-nmstate get installplan`, then patch `spec.approved: true`), never
+# picked up by OLM on its own.
+installPlanApproval: Manual
+# Install exactly the tested build. Empty or unset renders no startingCSV.
+startingCSV: kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722
