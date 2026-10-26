@@ -223,7 +223,8 @@ auto-sync back on. It would recreate the unpinned, Automatic operatorhubio Subsc
 once. Go to a pinned v0.87.0 install with the `nodeSelector` instead, the rollback path below: step 0, then a commit
 that changes the still-unswitched chart's `templates/operator.yaml` only (Subscription `installPlanApproval: Manual`
 plus `startingCSV: kubernetes-nmstate-operator.v0.87.0`; CR `spec.nodeSelector: {sudops.pl/nmstate-handler: "true"}`),
-then steps 6 and 7, labelling node4 first. Steps 1-4 do not apply: no CR and no operator exist in this window.
+then rollback steps 6 and 7, labelling node4 first. Rollback steps 1-4 do not apply: no CR and no operator exist in
+this window.
 
 ### Step 5: push the switch, install the okderators operator
 
