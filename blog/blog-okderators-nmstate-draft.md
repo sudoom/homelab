@@ -727,3 +727,53 @@ Afterwards: the finished catalog Job deleted (operator), the scratch worktrees f
 for after the soak: namespace `nmstate` (only the old `nmstate-ca` secret in it). The superseded 10-23 4.21 images in zot
 (`4.21.0-2026-10-23-181845`) can go any time. The node label `sudops.pl/nmstate-handler` and the CR `nodeSelector` stay:
 the rollback needs them, and they are a per-node off switch for the handler.
+
+## 2026-10-27 — 24 h soak passed, namespace `nmstate` deleted
+
+The check started at 15:13Z, 25 h after the third node's handler. These are the Task 8 Step 8 checks plus the soak
+list, read under the readonly SA (`ocr`, the runbook's helper functions in `components/operators/nmstate/README.md`):
+
+```
+nnce   storage-node4 gen=3 Available=True since=2026-10-26T13:43:59Z
+       storage-node5 gen=3 Available=True since=2026-10-26T13:50:45Z
+       storage-node6 gen=3 Available=True since=2026-10-26T13:55:38Z
+nns    node4 enp1s0f0np0 up mtu=9000 192.168.10.2/24   ceph-shim up mtu=9000 192.168.10.16/24
+       node5 enp1s0f0np0 up mtu=9000 192.168.10.3/24   ceph-shim up mtu=9000 192.168.10.17/24
+       node6 enp1s0f0np0 up mtu=9000 192.168.10.4/24   ceph-shim up mtu=9000 192.168.10.18/24
+ceph   HEALTH_WARN BLUESTORE_SLOW_OP_ALERT only; osd.0-2 up; pool 1 128/128 and pool 3 1/1 active+clean
+cnpg   media-postgres, immich-postgres, homebox-postgres 2/2, ContinuousArchiving=True
+pods   7 operand pods in openshift-nmstate, 0 restarts each, all started 2026-10-26 13:38-13:54Z
+mwc    5 webhooks -> openshift-nmstate/nmstate-webhook (3 Ignore, 2 Fail), endpoint 10.129.0.92 ready
+ip     install-xcm7k (the 4.21 CSV) Complete; the two v0.86.0/v0.87.0 InstallPlans already gone
+apps   root-app, nmstate-operator, nmstate-nncp, node-labels, nmstate-test-catalog: Synced Healthy, auto-sync on
+```
+
+The five workaround objects were still NotFound, and the NNS backnet lines match the pre-switch baseline exactly. The
+checks that need `exec` were run by the operator:
+
+```
+br-ex.forwarding   node5 1, node4 1, node6 1
+up{service="nmstate-monitor"}   openshift-nmstate up=1
+alerts   CephHealthWarning, InsightsRecommendationActive, KubeCPUOvercommit, PodDisruptionBudgetAtLimit x3,
+         TrueNASPoolScrubOverdue, UpdateAvailable, Watchdog
+```
+
+Those are the nine alerts that were firing before the switch. `PrometheusKubernetesListWatchFailures` is not among
+them. The only container restarts on the cluster since the switch were the three `transmission` containers at
+03:00Z, which is their scheduled daily restart. **Task 9 PASS.**
+
+Then the operator deleted the old operand namespace, which held only the `nmstate-ca` secret and the two default
+ConfigMaps:
+
+```bash
+oc delete namespace nmstate          # OPERATOR
+ocr get namespace nmstate            # NotFound
+```
+
+Both nmstate apps stayed Synced/Healthy. If we ever roll back, v0.87.0 recreates this namespace (rollback step 5).
+
+The same morning the operator decided to drop the handler gating, overruling the 10-26 note above that the label and
+`nodeSelector` stay. The rollback does not need them in place: it deletes the CR first, so its own commit can put the
+`nodeSelector` back and label node4 alone without restarting a handler. Removing the gating does restart every
+handler once, in a DaemonSet rolling update with no pause between nodes, so it is done in two pushes. The next
+section records them.

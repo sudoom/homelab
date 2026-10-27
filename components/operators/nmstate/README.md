@@ -5,9 +5,9 @@ Kubernetes NMState operator. Its handler applies the per-node NNCPs in
 Ceph storage backnet `192.168.10.0/24`). A handler that misbehaves on a node can take that node's storage network
 down, so every operator change here is gated per node.
 
-**Status 2026-10-26:** switched. Live on `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` from the test catalog
-`okd-test-nmstate` (operand in `openshift-nmstate`, handler on node4/5/6 by label) since 13:55Z; 24 h soak until
-2026-10-27. v0.87.0 from `operatorhubio-catalog` is the rollback target (Rollback, below).
+**Status 2026-10-27:** switched. Live on `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` from the test catalog
+`okd-test-nmstate` (operand in `openshift-nmstate`, handler on node4/5/6 by label) since 2026-10-26 13:55Z; the 24 h
+soak passed and namespace `nmstate` is deleted. v0.87.0 from `operatorhubio-catalog` is the rollback target (Rollback, below).
 
 ## What the chart installs
 
@@ -62,8 +62,8 @@ A `nmstate-cert-manager` pod after the switch is therefore unexpected.
   ```
 
   The chart's Namespace must declare exactly these. Any difference ping-pongs under selfHeal, and while
-  `restricted` is enforced the handler pods are rejected. After the switch `nmstate` is left empty; it is deleted
-  after the 24 h soak.
+  `restricted` is enforced the handler pods are rejected. After the switch `nmstate` was left empty; it was deleted
+  after the 24 h soak (2026-10-27).
 
 The NMState CR carries `spec.nodeSelector: {sudops.pl/nmstate-handler: "true"}` from the switch on. The label is set
 per node in `components/cluster-config/node-labels/values.yaml` and stays permanently. It limits only the handler
