@@ -836,3 +836,26 @@ the NNS backnet lines matched the baseline, Ceph showed only `BLUESTORE_SLOW_OP_
 128/128 active+clean, no handler restarted, and the operator's `br-ex.forwarding` check read 1 on all three nodes.
 The chart README's Rules section now says it: a node label change re-applies that node's NNCPs, so labels change
 one node per push when that matters.
+
+## 2026-10-27 — pipeline PRs filed
+
+I filed four drafts against `okd-project/okd-operator-pipeline` from the fork branches, after checking that each was
+still `behind=0` against its base (`gh api repos/okd-project/okd-operator-pipeline/compare/<base>...sudoom:<branch>`):
+
+| PR | base ← head | commits |
+|---|---|---|
+| [#43](https://github.com/okd-project/okd-operator-pipeline/pull/43) | `main` ← `nmstate-bundle-fix` | `a005aed` ImageStream removal by content |
+| [#44](https://github.com/okd-project/okd-operator-pipeline/pull/44) | `release-4.22` ← `nmstate-bundle-fix-4.22` | removal, submodules to `release-4.22`, go-toolset 1.25 + `npm ci`, deploy workflow on `release-4.22` with `catalog_branch` |
+| [#45](https://github.com/okd-project/okd-operator-pipeline/pull/45) | `release-4.21` ← `nmstate-bundle-fix-4.21` | removal, submodules to the `release-4.21` heads, `npm ci` |
+| [#46](https://github.com/okd-project/okd-operator-pipeline/pull/46) | `release-4.20` ← `nmstate-bundle-fix-4.20` | removal (this branch had none), submodules to the `release-4.20` heads, deploy workflow, `npm ci` |
+
+`main` carries the argument: why #19's `-name '*.yaml'` never matched, the `operator-sdk` rejection of the current
+catalog bundle, and the build results. The backports are a few lines each and link #43. Two facts went in that I
+re-checked while writing. `go.mod` at the `release-4.22` operator head `1d6d332` says `go 1.25.0`, while `release-4.21`
+`bc318d1` says `go 1.24.0`; that is the reason for go-toolset 1.25 on 4.22 only. The last `Deploy NMState` run on
+`release-4.21` (39841564719) ended with `Error: writing blob: initiating layer upload to
+/v2/okderators/nmstate/console-plugin/blobs/uploads/ in quay.io: unauthorized`, so #45 says that the CI robot needs
+write access to `quay.io/okderators/nmstate/*` before a merge can publish anything.
+
+Next (Task 11): once the maintainers merge and CI publishes official bundles, the catalog PRs, then moving this
+cluster from `okd-test-nmstate` to `okderators`.
