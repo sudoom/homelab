@@ -625,3 +625,22 @@ pipeline build stamps no version into the binary. That is cosmetic, and possibly
 
 No renewal has run on 1.20 yet. The first is `homelab-wildcard` on 2026-11-20. The Helm fallback branch stays until
 that succeeds. With cert-manager done, the remaining hop-2 item before the hop is the coherent Rook bump to v1.20.9.
+
+## 2026-10-27 — hop 2 re-checked after cert-manager
+
+All read-only, under the readonly SA:
+
+```
+clusterversion   4.21.0-okd-scos.11, channel stable-scos-4, no Upgradeable condition; updates up to 4.22.0-okd-scos.10
+admin gates      openshift-config-managed/admin-gates empty, openshift-config/admin-acks empty
+removed APIs     no apirequestcount with status.removedInRelease set
+CSV caps         clusterkubedescheduleroperator.v5.3.0 max=4.22; no other CSV declares olm.maxOpenShiftVersion
+rook             docker.io/rook/ceph:v1.19.5, Ceph 19.2.4
+```
+
+Rook's `Documentation/Getting-Started/Prerequisites/prerequisites.md` reads "Kubernetes versions **v1.30** through
+**v1.35**" at both `v1.19.5` and `v1.19.12`, and "v1.31 through v1.37" at `v1.20.9`. So the running Rook is in matrix
+for 4.22 (Kube 1.35). The earlier "Rook coherent bump before the hop" was about headroom, not support: on 1.19 the
+cluster would sit at the top edge of Rook's matrix, with 4.23 (1.36) out of it. Nothing hard-blocks the hop now.
+The open decision is whether the Rook bump happens before the hop (one change at a time, headroom in hand) or after
+it (4.22 sooner, Rook at the edge until then).

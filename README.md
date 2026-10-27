@@ -412,8 +412,12 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   `oadp-1.5`, operator gitlink `5520b16`, 82 commits behind 1.5.8) plus a catalog-index PR. **(4) GitOps
   before the hop: done on this cluster 2026-10-22.** Argo CD 3.1 was tested on Kube 1.31-1.34 only; the cluster now runs
   our okderators 1.22 test build (Argo CD 3.5.5, tested on 1.33-1.36) from the zot catalog `okd-test-gitops`. Publishing
-  it through okderators is the GitOps TODO above. Logging is fine for the hop (6.6 test build, max 4.23). Cleared since September: NVMe pool ~50% full
-  (was 81.5%). On the day: Ceph is `HEALTH_OK` since node5's image prune on 2026-10-26; check node5's root disk
+  it through okderators is the GitOps TODO above. Logging is fine for the hop (6.6 test build, max 4.23). **Re-checked live 2026-10-27:** no `Upgradeable=False`, no
+  admin gates, no removed API in use (`apirequestcounts`), updates offered up to `4.22.0-okd-scos.10`; the only CSV
+  with an OpenShift cap is the descheduler (`max=4.22`). Rook v1.19.5's own matrix is Kube 1.30-1.35, which covers
+  4.22, so item (2) buys headroom for 4.23 (1.36) rather than unblocking 4.22. Cleared since September: NVMe pool ~50% full
+  (was 81.5%). On the day: node5's image prune on 2026-10-26 cleared `MON_DISK_LOW` (Ceph is back to the benign
+  `BLUESTORE_SLOW_OP_ALERT` only); check node5's root disk
   is still under 70 % before starting, or the per-node `HEALTH_OK` gate fails on mon c again; bundle the SSH-key
   MachineConfig and the image-GC KubeletConfig ("Stop the catalog image churn") into the reroll.
 - [ ] **Service mesh evaluation(OKDerator)** — Istio (the old `istio-values.yaml` was removed with the legacy root-level configs on 2026-04-07; start from upstream) vs OpenShift Service Mesh vs nothing. Decide based on actual use cases: mTLS between namespaces, traffic shifting for app rollouts, request-level observability. Don't adopt without a workload that benefits.
