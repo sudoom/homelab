@@ -285,7 +285,7 @@ applications:
     syncWave: "4"
 
   # Wave 5 — Monitoring + observability config. Each of these consumes
-  # ceph-nvme-block PVCs (Prometheus TSDB, Grafana, Loki, Gatus state), so
+  # ceph-nvme-block PVCs (Prometheus TSDB, Grafana, Loki), so
   # none of them can come up before storage.
   grafana-config:
     enabled: true
@@ -356,12 +356,6 @@ applications:
     enabled: true
     path: components/cluster-config/synology-cert-sync
     namespace: synology-cert-sync
-    syncWave: "5"
-
-  gatus:
-    enabled: true
-    path: components/cluster-config/gatus
-    namespace: gatus
     syncWave: "5"
 
   logging-stack:

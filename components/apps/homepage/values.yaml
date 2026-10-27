@@ -99,9 +99,6 @@ services:
       - zot:
           href: https://zot.apps.okd.sudops.pl
           icon: mdi-docker
-      - Gatus:
-          href: https://gatus.apps.okd.sudops.pl
-          icon: gatus.png
   - Network & NAS:
       - TrueNAS:
           href: https://192.168.1.25

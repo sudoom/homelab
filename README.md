@@ -24,7 +24,7 @@ Manual bootstrap (one-time, bootstrap/phase0/)
               │         monitoring-config (platform + UWM Prometheus),
               │         smartctl-exporter, mikrotik-exporter,
               │         shelly-exporter, truenas-exporter,
-              │         hcloud-exporter, gatus,
+              │         hcloud-exporter,
               │         synology-cert-sync, logging-stack,
               │         image-mirror-zot, oadp, cnpg-clusters
               └── Wave 6: Applications
@@ -87,7 +87,6 @@ components/
     image-mirror-zot/      # Wave 5 — IDMS + ITMS routing cluster image pulls through the Zot pull-through cache
     oadp/                  # Wave 5 — OADP DataProtectionApplication (garage S3 BSL) + daily Schedule
     synology-cert-sync/    # Wave 5 — daily CronJob mirroring the *.homelab.sudops.pl cert into Synology DSM
-    gatus/                 # Wave 5 — uptime dashboard
   operators/
     nmstate/               # NMState operator (okderators 4.21 test build from `okd-test-nmstate`, since 2026-10-26)
     cert-manager/          # cert-manager operator (okderators catalog)
@@ -355,15 +354,6 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Pi-hole → Technitium DNS migration — cutover + soak + purge SHIPPED; loose ends remaining** — `dns-master` (RPi 3B+ at `192.168.1.12`, same physical box, fresh SD card) serves DNS via Technitium DNS Server with an authoritative split-horizon zone for `okd.sudops.pl` (replaces pi-hole's old conditional-forwarder chain to gw.home.lab). `cluster.local` + `svc.cluster.local.okd.sudops.pl` ship as authoritative-empty NXDOMAIN zones; the StevenBlack/hosts blocklist (~82.6k domains) is wired in. Forwarder zones for `home.lab` + `homelab.net` delegate to MikroTik (192.168.1.1). Ansible playbook lives at `ansible/technitium/` (all `ansible.builtin.*`, vault-encrypted secrets, run manually from a workstation). 2026-05-13 soak check: 19h continuous uptime, 0 errors/warns in journal, 270MiB RSS, load avg 0.05, all four DNS-path tests pass (auth / forwarder / blocklist / recursive). Pi-hole purge codified in the `base` role's `pihole-cleanup` block (apt purge `pihole-meta` + file:state=absent across the installer-managed paths + daemon-reload); applied to `dns-master` and verified 0 pi-hole packages / 0 paths remaining. Full chronology + post-cutover bug log in `blog/blog-technitium-dns-migration-draft.md`. **Loose ends remaining:**
   - On MikroTik: delete the disabled static DNS entries for `api.okd.sudops.pl` / `api-int.okd.sudops.pl` / `apps.sno.home.lab` / `*.apps.okd.sudops.pl` regex (already X-disabled so functionally already cleaned up — just clutter); update DHCP lease record for `192.168.1.12` from `pi-hole-master` to `dns-master`. All cosmetic. Manual on the router — MikroTik is not Ansible-managed.
   - **`dns-slave` — SHIPPED 2026-08-26. DNS is no longer a single point of failure.** RPi 3B+ at `192.168.1.13` (chosen 2026-08-19 over the Zero 2W: no Ethernet, 512 MB, and a ~2026-12-04 ship date on what was then a SPOF). Debian 13 trixie / arm64, verified identical to `dns-master`. **Two mechanisms, one job each:** `roles/technitium-cluster` runs Technitium's **native Cluster** (v14) syncing settings/blocklists/apps/users/API-tokens; `roles/technitium-replication` does classic AXFR/IXFR for the two authoritative zones. They do not collide because zones only sync under clustering if added to the auto-created `cluster-catalog.home` zone, and they are not. Cluster domain `home` is **immutable** — `dns-master.home` / `dns-slave.home`. Both resolvers verified answering identically (`api.okd.sudops.pl → 192.168.1.240`); before this the slave recursed to **Cloudflare**. Both advertised in MikroTik DHCP. Full detail + the failure model in `ansible/technitium/README.md` and `blog/blog-technitium-dns-migration-draft.md`. **Residual work:** (a) **write-reduction on the SD cards** — `noatime`, zram/log2ram for `/var/log`, capped Technitium query-log retention, all in the `base` role so both boxes get them (nothing landed yet; at a few hundred MB/day these boxes are ~2 orders of magnitude from wearing out a legitimate card, so this is hygiene not urgency — **counterfeits are the real risk, not card grade**). USB-SSD boot on a 3B+ (~100 zł + a 2.5 A supply) removes the wear question entirely. (b) **The 7-day cliff:** a Secondary whose primary is unreachable for `expire` (604800 s, from the SOA) stops being authoritative and falls back to recursion — at which point `api.okd.sudops.pl` resolves to Cloudflare again. Recovery from a permanent primary loss is **Promote To Primary** (`api/admin/cluster/secondary/promote`), a deliberate manual action. (c) **Expectation-setting, unchanged:** two nameservers is *resilience, not HA* — stub resolvers try in order and fail over only after a timeout. A shared keepalived VIP is the only route to clean failover, if it ever matters.
-  - **Monitoring — exporter LIVE 2026-10-27.** Chart `components/cluster-config/technitium-exporter/` (guycalledseven
-    exporter v2.2.0, cluster mode via the primary) is enabled with its sealed token (the read-only `metrics` user,
-    `technitium-config` role, tag `metrics`) and scrapes both nodes; dashboard grafana.com 24555 rev 4. Seven rules:
-    six adapted from the exporter's own, including critical `TechnitiumResolutionFailing`, plus
-    `TechnitiumHostUpgradeDue`, which emails a monthly reminder to run `upgrade.yml` (OS packages + Technitium;
-    both nodes went 15.4 → 15.6.2 on 2026-10-27, so the first reminder is due around 2026-11-26). Verified 2026-10-27: `up{job="technitium-exporter"}` = 1
-    (`technitium-cluster`) in UWM Prometheus, and all seven rules `ok` in Thanos Ruler. **Next: retire Gatus** (agreed 2026-10-24: no alerting configured, its checks duplicate the
-    alert stack; the DNS check moves to `TechnitiumResolutionFailing`, the sudops.pl blog check is dropped) and remove
-    its link from Homepage.
 - [x] **`homelab.sudops.pl` zone + wildcard cert + Synology auto-import — SHIPPED 2026-05-24.** All three phases live: (a) cert-manager `Certificate` for `*.homelab.sudops.pl` (a49a8d2) — LE-prod wildcard in `homelab-wildcard-tls`, DNS-01 via Cloudflare on parent zone, valid until 2026-08-22; (b) Technitium zone via Ansible (4e20c77) — `nas → 192.168.1.2` + `dns → 192.168.1.12`, applied via `ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --tags zones`; (c) Synology cert-sync CronJob in `components/cluster-config/synology-cert-sync/` (47ecb54 + fixes) — daily 03:14 UTC, idempotent replace via `desc` lookup + `id=` reuse, end-to-end verified with `Fingerprints match; no upload needed` on second run. **Manual cleanup remaining**: one leftover unbound duplicate cert in DSM from the script-development phase (with `For: -`); user deletes via DSM UI once. Chronology in `blog/blog-homelab-sudops-zone-draft.md`.
 - [ ] **Benchmark corpus RECLAIMED 2026-09-08 — a re-run now needs a fresh layout pass first.** The two bench PVCs
   (`default/storage-bench-nfs-truenas-bench{,16}`) were deleted, their `Retain` PVs removed, and the ~1.15 TiB of
@@ -468,7 +458,7 @@ Legend: ✅ published · 📝 staged raw draft (not live) · ⬜ not started · 
 | 27 | Observability | Monitoring foundation (Prometheus / UWM) | monitoring-config | `blog-monitoring-foundation` | ⬜ | ~2026-05-01→08-06 |
 | 28 | Observability | Grafana instance + dashboards | grafana operator + grafana-config | — placeholder — | ⬜ | ~2026-05-01 |
 | 29 | Observability | smartctl_exporter SMART/wear metrics | smartctl-exporter DaemonSet | `blog-smartctl-exporter` | ⬜ | 2026-05-01 |
-| 30 | Observability | Gatus uptime dashboard | gatus | `blog-gatus` | ⬜ | 2026-05-01 |
+| 30 | Observability | Gatus uptime dashboard | gatus (retired 2026-10-27) | `blog-gatus` | ⬜ | 2026-05-01 |
 | 31 | Observability | Centralized logging: Loki + Vector | logging-stack + loki-operator + cluster-logging (+ loki-pdb-override) | `blog-loki-logging` | ⬜ | 2026-05-01→05-08 |
 | 32 | Observability | MikroTik metrics (mktxp) | mikrotik-exporter | `blog-mikrotik-exporter` | ⬜ | ~2026-05 |
 | 33 | Data operators | CloudNativePG + R2 barman backups | cnpg + barman-plugin + cnpg-clusters (incl. WAL-fill deadlock) | `blog-cnpg` | ⬜ | 2026-05-01→07-02 |

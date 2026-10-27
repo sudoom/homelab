@@ -218,3 +218,15 @@ and most of them duplicate the Prometheus/Alertmanager stack plus the healthchec
 were covered nowhere else: `technitium-dns` (UDP 53 on 192.168.1.12) and `sudops-blog`. The first moves to the
 Technitium exporter's `TechnitiumResolutionFailing`; the second is dropped. Retirement waits until that exporter is
 live and its rules are loaded (README TODO, Technitium item).
+
+## 2026-10-27 — retired
+
+Gatus was removed (agreed 2026-10-24). It never had alerting configured, so its checks only duplicated what the alert
+stack already covers, on a dashboard nobody watched. Its DNS check moved to `TechnitiumResolutionFailing` in
+`components/cluster-config/technitium-exporter/` (the exporter went live the same day, both nodes scraped, all seven
+rules loaded in Thanos Ruler), and the sudops.pl blog check was dropped.
+
+What went: the root-app entry and `components/cluster-config/gatus/` (Namespace, Deployment, Service, ServiceAccount,
+ConfigMap, Route, the 5 GiB `gatus-data` PVC on `ceph-nvme-block`), and the Gatus link on Homepage. root-app prunes,
+and the Application carries `resources-finalizer.argocd.argoproj.io`, so removing the entry deletes everything the
+chart owned, its state included.
