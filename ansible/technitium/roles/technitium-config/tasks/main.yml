@@ -549,7 +549,11 @@
         dest: "{{ technitium_metrics_token_file }}"
         mode: "0600"
       delegate_to: localhost
-      become: false
+      # The variable, not the keyword: inventory.yml sets ansible_become: true, and a connection
+      # variable beats the become keyword, so `become: false` alone still ran sudo on the
+      # control machine (2026-10-27).
+      vars:
+        ansible_become: false
       no_log: true
       when: technitium_metrics_token is not skipped
 

@@ -879,3 +879,23 @@ adapted from the exporter's own, `TechnitiumResolutionFailing` critical) plus da
 committed with the root-app entry disabled until the token SealedSecret exists. Still to do: run the role
 (`--limit dns-master --tags metrics`), seal the token, enable, then retire Gatus (its `technitium-dns` UDP check is
 the one thing it covered that nothing else did).
+
+## 2026-10-27 — metrics token: the delegated write ran sudo on the Mac
+
+First run of `ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --limit dns-master --tags metrics`: the
+role created the `prometheus-exporter` token on Technitium, then failed writing it to the control machine:
+
+```
+fatal: [dns-master -> localhost]: FAILED! ... Premature end of stream waiting for become success.
+sudo: a password is required
+```
+
+The task had `delegate_to: localhost` and `become: false`. `inventory.yml` sets `ansible_become: true` under `all:
+vars:`. The implicit localhost takes the `all` group's variables, and a connection variable beats the `become`
+keyword, so the delegated copy still ran through sudo on the Mac. I reproduced it with a two-line inventory: with
+`ansible_become` on the host itself, `become: false` works; under `all.vars` it fails exactly like this. The fix is
+`vars: {ansible_become: false}` on the task (passes the same reproduction).
+
+Technitium shows a token once, and the role creates one only when none exists. The token from the failed run is
+therefore orphaned: a plain re-run skipped creation (confirmed), and the next run has to use
+`-e technitium_metrics_token_rotate=true`, which deletes it first.
