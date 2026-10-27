@@ -859,3 +859,58 @@ write access to `quay.io/okderators/nmstate/*` before a merge can publish anythi
 
 Next (Task 11): once the maintainers merge and CI publishes official bundles, the catalog PRs, then moving this
 cluster from `okd-test-nmstate` to `okderators`.
+
+## 2026-10-27 — on the 4.22 build after the OKD 4.22 hop
+
+The cluster moved to OKD 4.22.0-okd-scos.10 at 18:10Z (`blog/blog-okd-4.22-upgrade-draft.md`). During the hop the 4.21
+test build kept running: each node reboot restarted its handler, every NNCE was Available again within seconds of its
+node's handler starting, and the backnet came back as the baseline each time. Then NMState moved to the
+`release-4.22` build from 10-23, `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655`.
+
+**Test catalog.** `catalog-edit.sh` built the test catalog image from `release-4.21` only, a hardcoded
+`IMAGE_BRANCH`. `d84d388` made that a Job parameter (default `release-4.21`), and added this cluster's installed CSV
+`v4.21.0-2026-10-26-123722` to the `release-4.22` INSTALLED list in `catalog-branches.tsv`, so the walk has to prove
+that this exact install reaches the new head. Run `nmstate-build-catalog-2026-10-27-181517` (operator-created, 3 min):
+
+```
+oc process --local -f tests/okderators-nmstate-build/job-template.yaml -p MODE=catalog -p DATE=$DATE \
+  -p CATALOG_BRANCHES=release-4.22 -p IMAGE_BRANCH=release-4.22 \
+  -p BUNDLES='release-4.22=zot.apps.okd.sudops.pl/okd-test/nmstate/bundle:4.22.0-2026-10-23-195655@sha256:284ebfea...'
+
+CHECK walk-release-4.22 PASS 1 entries + 3 CSVs absent from the channel reach kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655;
+      installed: ...v4.21.0-2026-10-22-195655, ...v4.21.0-2026-10-24-195655, ...v4.21.0-2026-10-26-123722
+CHECK catalog-image PASS zot.apps.okd.sudops.pl/okd-test/nmstate-catalog:2026-10-27-181517: ... head kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655
+PUSHED zot.apps.okd.sudops.pl/okd-test/nmstate-catalog:2026-10-27-181517@sha256:75417f715fd174c61c1ec545e3b5ad5fce3274c8c4b29fd9eb2876ade6c7cab7 31367190
+RESULT PASS catalog 2026-10-27-181517
+```
+
+All the other per-branch checks passed as well: branch data, bundle, no-imagestream with its negative control, edit,
+`opm validate`, and the skipRange negative control. The 4.22 bundle itself was checked on 10-23: `AllNamespaces=true`,
+CSV `olm.skipRange '>=4.3.0 <4.22.0'`, 7 image refs, all by digest in zot.
+
+**Upgrade.** `0f034bb` (18:19Z) pointed `nmstate-test-catalog` at the new digest and moved `startingCSV` to the 4.22 CSV.
+A reinstall from the new catalog would no longer find the 4.21 CSV; for the running Subscription `startingCSV` changes
+nothing. OLM produced `install-565gh` (4.21 → 4.22, `UpgradePending`). Its steps were the CSV, CRD `nmstates.nmstate.io`,
+the operator ServiceAccount and its RBAC. The operator approved it at 18:24Z:
+
+```
+18:24:32  4.21 Replacing, 4.22 Pending
+18:24:43  4.22 Installing; new operator pod; handler DaemonSet rolling (maxUnavailable 10% = one node)
+18:25:04  4.22 Succeeded; one operator pod (nmstate-operator-75678d849-kfqlx), 4.22 handler image
+18:25:38 / 18:26:08 / 18:26:27  NNCE node6 / node5 / node4 Available again (generation 3)
+18:26:29  handlers 3/3 updated and ready, 0 restarts
+```
+
+The console-plugin Deployment went through two new ReplicaSets two seconds apart (revisions 11 and 12). That was the
+new operator applying the Deployment twice, not two operators fighting: only one operator pod existed by then.
+node5's first new handler (`dh2x8`) was replaced by a second (`dnfvp`) before it became ready, for the same reason.
+Catalog-operator logged `ResolutionFailed ... constraints not satisfiable: @existing/...v4.21.0-2026-10-26-123722` events
+while both CSVs existed; the Subscription ended `AtLatestKnown` with no condition set.
+
+**Checks, 18:26-18:28Z:** CRD storedVersions unchanged (NMState `v1`, NNCP `v1`, NNCE and NNS `v1beta1`); NNS backnet =
+baseline on all three nodes; Ceph `BLUESTORE_SLOW_OP_ALERT` only, 3/3 OSDs up, 128/128 PGs clean; 53/53 apps
+Synced/Healthy; DaemonSet nodeSelector `kubernetes.io/os: linux` (no gate, as since this afternoon). The operator ran
+`br-ex.forwarding` (1 on all three nodes) and `up{service="nmstate-monitor"}`: `openshift-nmstate up=1`.
+
+This is the first install of the `release-4.22` pipeline build anywhere (draft PR #44), and it ran as an in-place
+upgrade from the `release-4.21` build (#45).
