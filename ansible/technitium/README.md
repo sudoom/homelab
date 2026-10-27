@@ -112,7 +112,7 @@ What it does:
 
 Expected DNS downtime: **~30 s if a reboot fires**, **~10 s if not** (the Technitium installer restarts the service). Once the secondary is in service (RPi 3B+, decided 2026-08-19 — see the README TODO), run `upgrade.yml` against the secondary first, verify it's healthy, then the primary — keeps the LAN's DNS answered throughout.
 
-Cadence suggestion: **monthly**, or on demand when a CVE for Technitium / glibc / kernel lands. Cron-it later if drift becomes a concern.
+Cadence: **monthly**, or on demand when a CVE for Technitium / glibc / kernel lands. The reminder is the `TechnitiumHostUpgradeDue` alert (`components/cluster-config/technitium-exporter/`): it is emailed once a node's Technitium has run 30 days without a restart, then weekly until this playbook has run. Last run: both nodes, 2026-10-27, 15.4 → 15.6.2 (dns-slave first; dns-master rebooted for its OS packages, 69 s out, then 11 s for the installer restart, while dns-slave answered throughout).
 
 ## What the playbook configures
 
