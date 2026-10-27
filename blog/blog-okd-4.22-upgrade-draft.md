@@ -691,3 +691,66 @@ domains' OSD PDB to 0, so the next node's drain waits until the PGs are clean.
 
 **Watcher:** a readonly loop (`scratchpad/hop2/watch.sh`, every 20 s) writes one line per change in CV, bad COs,
 MCP, nodes, Ceph, Rook PDBs, CNPG, NNCEs and stuck pods, and a Monitor follows that file.
+
+## HOP 2 EXECUTED 2026-10-27 — 4.21.0-okd-scos.11 → 4.22.0-okd-scos.10
+
+```
+started    16:47:03Z   oc adm upgrade --to=4.22.0-okd-scos.10 (operator)
+completed  18:10:17Z   history[0]: 4.22.0-okd-scos.10 Completed
+elapsed    83 min      (hop 1: ~95 min, of which ~20 was a CNPG drain block)
+result     34/34 COs on 4.22.0-okd-scos.10, none Degraded; 3/3 nodes Ready on kubelet v1.35.5 (Kube 1.35)
+```
+
+Timeline from the watcher (one line per change, readonly SA):
+
+| time (Z) | event |
+|---|---|
+| 16:47:24 | CV desired 4.22.0-okd-scos.10, Progressing |
+| 17:16 | 716 of 1019 done (70%), 14 of 34 COs on 4.22, none unavailable or degraded |
+| 17:39:49 | MCP updating; node4 cordoned |
+| 17:42:26 | osd.0 and mon a down: `OSD_DOWN`, `PG_DEGRADED` (129 PGs undersized, all active) |
+| 17:46:08 → 17:48:20 | node4 rebooting → back on v1.35.5 → Ready; pool 1/3 (8.5 min cordon to Ready) |
+| 17:48:45 | node5 cordoned while osd.0 was still recovering; Rook held node5's OSD |
+| 17:49:55 | Ceph clean, so Rook released node5's OSD; 17:51:03 osd.1 down |
+| 17:54:44 → 17:56:36 | node5 rebooting → Ready; pool 2/3; node6 cordoned |
+| 17:58:34 / 17:59:41 | osd.1 caught up / osd.2 down |
+| 18:03:40 | node6 drain complete after 430 s (stale VolumeAttachments, see below) |
+| 18:07:04 → 18:09:19 | node6 rebooting → Ready; pool 3/3 |
+| 18:10:17 | CV Completed |
+
+**Gating worked without a manual pause.** Rook's OSD PDBs kept every drain's OSD eviction waiting until the previous
+node's OSD had caught up, so only one OSD was ever down. The three CNPG clusters went 1/2 on each drain and back to
+2/2 within a few minutes; their primaries switched over ahead of each drain. The mgr and the mons failed over each time.
+
+**What slowed it down (nothing failed):**
+
+- **zot moved twice.** zot-0 was on node4, and the node4 drain stopped it at 17:39:51. It came back on node5, and the
+  node5 drain moved it to node4 (17:49:20 → Ready about 17:52). While zot was down, every pod that needs an
+  `okd-test/` image and was rescheduled onto a node without it cached sat in `ImagePullBackOff`: the Loki gateway, the
+  NMState and GitOps operators, and the Argo CD server, applicationset and dex pods. They had no fallback, because
+  those images exist only in zot. Argo CD's application-controller and repo-server stayed up on node6 throughout.
+  Pulls of mirrored images (docker.io, quay.io, ghcr.io) did not fail, but each took about 1m40s "including
+  waiting": CRI-O tried zot, got `503 Service Unavailable`, then fell back to the source. More pulls than usual were
+  needed because node5 (10-26) and node6 (today) had been pruned. **Next reroll: check which node zot is on, and
+  expect `okd-test/` consumers to wait for it.**
+- **Stale RBD VolumeAttachments cleared themselves after about 5 minutes.** zot's VA on node4 was deleting since
+  17:40:03 with `attached=true`, while node4's `volumesInUse`/`volumesAttached` no longer listed the PV. It was gone
+  by about 17:45 without a patch. The same happened on node6 with four media volumes (sonarr, bazarr, prowlarr,
+  keepers transmission; 17:57:35-47 → cleared 18:02:18-18:03:03, `Multi-Attach error` on the replacements in
+  between). node5's 14 VAs detached within a minute. The finalizer patch in the network pre-flight runbook was
+  offered twice and was not needed either time. **Wait about 6 minutes before force-clearing one.**
+- **OLM `ResolutionFailed` on 8 of 9 Subscriptions** right after completion: `error using catalogsource
+  openshift-marketplace/community-operators: failed to list bundles: ... dial tcp 172.30.105.130:50051: connect:
+  connection refused`. The marketplace catalog pod was being restarted, and OLM resolves against every global
+  catalog, so one catalog's outage blocks resolution for all. The seven OLM operator apps read Degraded in Argo CD.
+  All of it cleared by 18:11:55 with no action (0 `ResolutionFailed`, 53/53 Synced/Healthy).
+
+**After the hop.** The operator read `br-ex.forwarding`: 1 on all three nodes, matching hop 1 (a reboot restarts
+`ovnkube-node`, which re-asserts the sysctl). The runbook's restart of all three `ovnkube-node` pods, the repo-server
+and the cert-manager controller (network-change steps 4, 5, 5b) was **skipped on the operator's decision**, because
+the sysctl was 1 everywhere and every app was syncing. Ceph was back to `BLUESTORE_SLOW_OP_ALERT` only by 18:11:55.
+The backnet came up on each node with its addresses and MTU 9000 (NNS), and each NNCE was re-applied and Available
+within seconds of its node's handler starting.
+
+Predicted and did not fire: okd#2339 (grub, not applicable), a CNPG drain block (2 instances everywhere), the LokiStack
+PDB, a backnet NIC returning linkdown, and `MON_DOWN` from node6's disk (pruned beforehand).
