@@ -2,12 +2,9 @@ nodes:
   - hostname: node4.okd.sudops.pl
     labels:
       topology.kubernetes.io/zone: fd-a
-      sudops.pl/nmstate-handler: "true"
   - hostname: node5.okd.sudops.pl
     labels:
       topology.kubernetes.io/zone: fd-b
-      sudops.pl/nmstate-handler: "true"
   - hostname: node6.okd.sudops.pl
     labels:
       topology.kubernetes.io/zone: fd-c
-      sudops.pl/nmstate-handler: "true"

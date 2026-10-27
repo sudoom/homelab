@@ -777,3 +777,43 @@ The same morning the operator decided to drop the handler gating, overruling the
 `nodeSelector` back and label node4 alone without restarting a handler. Removing the gating does restart every
 handler once, in a DaemonSet rolling update with no pause between nodes, so it is done in two pushes. The next
 section records them.
+
+## 2026-10-27 — the handler gate removed
+
+There were two pushes, in this order. Removing the labels first would have stopped every handler: an NNCP on a
+node with no handler reads `NoMatchingNode`, and `nmstate-nncp` goes `Suspended`. Pushing both at once could have
+started all three handlers together, because `node-labels` and `nmstate-operator` are separate Applications that
+sync independently. Before the first push I checked who owns the fields:
+
+```
+NMState/nmstate spec.nodeSelector             argocd-controller/Apply only (nmstate-operator owns only status)
+Node node4/5/6 labels.sudops.pl/nmstate-handler   argocd-controller/Apply only
+```
+
+Each field had only Argo CD's server-side apply as its manager, so dropping a field from git removes it from the
+cluster. No other manager keeps it alive.
+
+**Push 1, `5ac9f46` `nmstate: drop the handler nodeSelector`** (15:17:14Z). The CR went back to `spec: {}`, its
+pre-switch form, and the chart README's rollback step 5 now re-adds the gate inside the rollback commit. Validation:
+`helm lint` clean and kubeconform 3 valid / 1 skipped (the NMState CR). `oc diff` is refused under the readonly SA,
+which cannot `patch` even in a dry-run. The handler DaemonSet's strategy is `maxUnavailable: 10%`, `maxSurge: 0`,
+which is one pod at a time on three nodes, with no pause between nodes. A background readonly watcher logged the
+rollout:
+
+```
+15:20:41Z  CR spec without nodeSelector; DS nodeSelector -> {"kubernetes.io/os":"linux"}; node6 4d8f6 terminating, 5hj8f creating
+15:20:52Z  node6 5hj8f ready; node5 b6nrn starting
+15:21:03Z  node5 b6nrn ready; node4 8qj2v starting; NNCE node5, node6 Progressing
+15:21:13Z  3/3 new handlers ready, 0 restarts; NNCE x3 Progressing (probes)
+15:21:14Z / 15:21:24Z / 15:21:30Z  NNCE node5 / node4 / node6 Available, generation 3
+```
+
+The rollout took 53 s from the first pod terminating to the last NNCE turning Available. The NNS backnet lines
+matched the baseline. Ceph showed only `BLUESTORE_SLOW_OP_ALERT`, with all three OSDs up and pool 1 at 128/128
+active+clean. The operator ran `br-ex.forwarding` and got 1 on all three nodes. That is now four handler starts
+per node since the switch without zeroing it.
+
+**Push 2, `nodes: drop the nmstate handler label`.** This removes the three `sudops.pl/nmstate-handler` lines from
+`components/cluster-config/node-labels/values.yaml`. The render still has three Node objects, each with its
+`topology.kubernetes.io/zone`, so Argo CD changes the labels and never prunes a Node. The label no longer selects
+anything, so removing it touches no pod.

@@ -6,7 +6,7 @@ Ceph storage backnet `192.168.10.0/24`). A handler that misbehaves on a node can
 down, so every operator change here is gated per node.
 
 **Status 2026-10-27:** switched. Live on `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` from the test catalog
-`okd-test-nmstate` (operand in `openshift-nmstate`, handler on node4/5/6 by label) since 2026-10-26 13:55Z; the 24 h
+`okd-test-nmstate` (operand in `openshift-nmstate`, handler on every node) since 2026-10-26 13:55Z; the 24 h
 soak passed and namespace `nmstate` is deleted. v0.87.0 from `operatorhubio-catalog` is the rollback target (Rollback, below).
 
 ## What the chart installs
