@@ -817,3 +817,22 @@ per node since the switch without zeroing it.
 `components/cluster-config/node-labels/values.yaml`. The render still has three Node objects, each with its
 `topology.kubernetes.io/zone`, so Argo CD changes the labels and never prunes a Node. The label no longer selects
 anything, so removing it touches no pod.
+
+**What push 2 actually did.** The prediction above was wrong. Pushing `af6aff7` at 15:56:54Z touched no pod, but it
+did re-apply every node's NNCP. Argo CD removed the label from all three nodes between 15:59:00 and 15:59:05Z, and
+each handler reacted to its own Node being updated. node4's log shows the chain:
+
+```
+15:59:05.178Z  controllers.Node                 Creating/updating NodeNetworkState
+15:59:05.693Z  enactmentconditions              NotifyProgressing   node4.okd.sudops.pl.storage-node4
+15:59:23.188Z  enactmentconditions              NotifySuccess       node4.okd.sudops.pl.storage-node4
+```
+
+The three enactments overlapped, and the NNCEs went Available again at 15:59:17 (node5), 15:59:23 (node4) and
+15:59:36Z (node6), all still at generation 3. That is the all-three-at-once re-apply the two-push order was meant to
+avoid. The order only accounted for handler starts, and a label update on the Node is a second trigger. It never
+showed during the switch, because adding the label is also what started each handler. The outcome was harmless:
+the NNS backnet lines matched the baseline, Ceph showed only `BLUESTORE_SLOW_OP_ALERT` with all three OSDs up and
+128/128 active+clean, no handler restarted, and the operator's `br-ex.forwarding` check read 1 on all three nodes.
+The chart README's Rules section now says it: a node label change re-applies that node's NNCPs, so labels change
+one node per push when that matters.

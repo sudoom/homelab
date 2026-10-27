@@ -81,6 +81,10 @@ node. The webhook and metrics Deployments follow `infraNodeSelector` (unset, so 
 - **A starting handler re-applies every NNCP**, `enp1s0f0np0` and `ceph-shim` included (NetworkManager `Reapply`).
   That can zero `net.ipv4.conf.br-ex.forwarding` on the node and break its pod egress; restarting that node's
   `ovnkube-node` fixes it (`network-change` skill).
+- **A label change on a node re-applies that node's NNCPs too**, even when no handler restarts. The handler re-runs
+  its enactment when its own Node object is updated. On 2026-10-27, removing `sudops.pl/nmstate-handler` from all
+  three nodes in one push re-applied the backnet on all three within 6 s. Change node labels one node per push
+  whenever losing the backnet on every node at once is not acceptable.
 - **The okderators MWC has two webhooks with `failurePolicy: Fail`** (default):
   `nodenetworkconfigurationpolicies-{create,update}-validate.nmstate.io`. With no webhook pod Ready, NNCP
   create/update fails, and so does ArgoCD's server-side diff of `nmstate-nncp`. v0.87.0's three webhooks are all
