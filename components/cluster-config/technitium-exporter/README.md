@@ -12,7 +12,7 @@ series `server=<node>`.
 | `templates/deployment.yaml` | ServiceAccount (no token mounted) + exporter Deployment, restricted-v2 |
 | `templates/service.yaml` | headless Service `technitium-exporter`; its name is the scrape `job` |
 | `templates/servicemonitor.yaml` | 60 s scrape, `instance` pinned, `pod`/`container` dropped |
-| `templates/prometheusrule.yaml` | six rules adapted from the exporter's own; `TechnitiumResolutionFailing` is the DNS-down alert |
+| `templates/prometheusrule.yaml` | six rules adapted from the exporter's own (`TechnitiumResolutionFailing` is the DNS-down alert), plus `TechnitiumHostUpgradeDue`: the monthly reminder to run `ansible/technitium/upgrade.yml` (OS packages + Technitium), emailed by a `monitoring-config` route, weekly until done |
 | `templates/sealed-technitium-exporter-token.yaml` | `TECHNITIUM_TOKEN`, sealed by the operator |
 
 The dashboard is grafana.com 24555 revision 4 in `grafana-config` (bump it together with

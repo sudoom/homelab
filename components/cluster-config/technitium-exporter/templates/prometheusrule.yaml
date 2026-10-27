@@ -78,3 +78,20 @@ spec:
             description: |
               The block list shrank to under half its 7-day maximum, usually a
               failed list download (files/blocked.urls in ansible/technitium).
+        # Monthly host maintenance reminder (2026-10-27): upgrade.yml upgrades the OS
+        # packages and Technitium in one run. The exporter has no "update available"
+        # series, but that run always re-runs the installer, which restarts the
+        # service, so uptime is the time since the last run (or any other restart).
+        - alert: TechnitiumHostUpgradeDue
+          expr: max by (server) (technitium_realtime_uptime_seconds{job="technitium-exporter"}) > 30 * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `"{{ $labels.server }}: OS packages and Technitium not upgraded for {{ $value | humanizeDuration }}"` }}
+            description: |
+              Monthly maintenance: OS packages and Technitium, slave first, then the
+              primary (ansible/technitium README, "Upgrading the host"):
+                cd ansible/technitium
+                ansible-playbook -i inventory.yml upgrade.yml --ask-vault-pass --limit dns-slave
+                ansible-playbook -i inventory.yml upgrade.yml --ask-vault-pass --limit dns-master

@@ -121,6 +121,12 @@ stringData:
         # TrueNASOffsiteReviewDue (2026-10-14).
         - receiver: "Critical"
           matchers: ["alertname =~ HetznerStorageBox(Filling|AccessClosed|SnapshotDirHidden|Unmonitored)"]
+        # Monthly DNS host maintenance reminder (technitium-exporter chart; upgrade.yml
+        # = OS packages + Technitium): one mail when a node passes 30 days since its
+        # last Technitium restart, then weekly, not every 12 h, until it has run.
+        - receiver: "Critical"
+          matchers: ["alertname = TechnitiumHostUpgradeDue"]
+          repeat_interval: 168h
     receivers:
       - name: "Default"
       - name: "Watchdog"
