@@ -360,7 +360,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
     `technitium-config` role, tag `metrics`) and scrapes both nodes; dashboard grafana.com 24555 rev 4. Seven rules:
     six adapted from the exporter's own, including critical `TechnitiumResolutionFailing`, plus
     `TechnitiumHostUpgradeDue`, which emails a monthly reminder to run `upgrade.yml` (OS packages + Technitium;
-    dns-slave went 15.4 → 15.6.2 on 2026-10-27, dns-master next). **Next:** confirm the scrape target is Up and the rules loaded in Thanos
+    both nodes went 15.4 → 15.6.2 on 2026-10-27, so the first reminder is due around 2026-11-26). **Next:** confirm the scrape target is Up and the rules loaded in Thanos
     Ruler (operator, exec). **Then retire Gatus** (agreed 2026-10-24: no alerting configured, its checks duplicate the
     alert stack; the DNS check moves to `TechnitiumResolutionFailing`, the sudops.pl blog check is dropped) and remove
     its link from Homepage.

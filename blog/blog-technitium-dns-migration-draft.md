@@ -899,3 +899,44 @@ keyword, so the delegated copy still ran through sudo on the Mac. I reproduced i
 Technitium shows a token once, and the role creates one only when none exists. The token from the failed run is
 therefore orphaned: a plain re-run skipped creation (confirmed), and the next run has to use
 `-e technitium_metrics_token_rotate=true`, which deletes it first.
+
+## 2026-10-27 — exporter live, both nodes 15.4 → 15.6.2, monthly reminder
+
+**Exporter.** The rotated token (`-e technitium_metrics_token_rotate=true`, after the sudo fix above) was sealed into
+`components/cluster-config/technitium-exporter/templates/sealed-technitium-exporter-token.yaml` and the root-app entry
+enabled (`2499bd4`). The pod logged `Starting Cluster Exporter v2.2.0 on port 9105. Monitoring nodes:
+['dns-master.home', 'dns-slave.home']`, with no 401s; `/metrics` (read through the apiserver service proxy) carries
+`technitium_dns_*` for both servers plus `technitium_server_info{cluster_domain="home",version="15.4"}` and
+`technitium_realtime_uptime_seconds` per node (about 62 days on both).
+
+**Upgrade 15.4 → 15.6.2.** The web UI offered 15.6.2. Read from `CHANGELOG.md` first: 15.5.1 and 15.6 fix a
+"session token prefix oracle" that let a low-privilege authenticated user recover other sessions' full tokens (the new
+`metrics` user is exactly such a user), and 15.6.2 fixes several Cluster config-sync issues. Nothing about API or
+cluster compatibility between versions. Order per the README: `upgrade.yml --limit dns-slave`, check, then
+`--limit dns-master` (operator-run, vault). The slave restarted at about 19:00:40Z; afterwards `.13` answered
+`api.okd.sudops.pl`, `zot.apps.okd.sudops.pl` and `github.com`, and the exporter showed its uptime reset (49 s), with
+only `Connection refused (dns-slave.home:53443)` during the restart.
+
+During the master's run a watcher probed both servers every 2 s for three things: `api.okd.sudops.pl` (192.168.1.240),
+`nas.homelab.sudops.pl` (192.168.1.2) and `github.com` (recursion):
+
+```
+19:11:41Z  .12 FAIL (all three time out)      reboot: the apt full-upgrade left /var/run/reboot-required
+19:12:41Z  .12 local zones answer, recursion still failing
+19:12:48Z  exporter: master uptime 17 s, still 15.4
+19:12:50Z  .12 OK                             69 s out in total
+19:14:10Z  .12 FAIL (all three)               the installer's restart into 15.6.2
+19:14:18Z  .12 local zones answer
+19:14:21Z  .12 OK                             11 s out
+19:14:47Z  exporter: version="15.6.2", master uptime 38 s
+.13        0 failures for the whole run
+```
+
+The playbook does what the README says, a reboot when the OS asks for one and then the installer restart, and the
+secondary covered both outages. Authoritative zones come back a few seconds before recursion after each start.
+
+**Monthly reminder.** The exporter has no "update available" series, and `upgrade.yml` always restarts Technitium, so
+uptime is the time since the last maintenance run (or any other restart). `TechnitiumHostUpgradeDue`
+(`max by (server) (technitium_realtime_uptime_seconds) > 30 * 86400`, for 1h, warning) carries the slave-first commands,
+and its own `monitoring-config` route emails it with `repeat_interval: 168h`: one mail, then weekly until done. With
+both nodes restarted today, the first is due around 2026-11-26.
