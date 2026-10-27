@@ -166,6 +166,24 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Replace sealed-secrets with External Secrets Operator + Bitwarden Secrets Manager (EU) — DESIGN WRITTEN 2026-09-24, awaiting spec review.** The design is a local draft awaiting the owner's review (`blog/blog-external-secrets-bitwarden-draft.md`). Decided: Bitwarden SM EU cloud (free tier, end-to-end encrypted), ESO from the `okderators` catalog (user's choice over the upstream Helm chart), scope = the 13 live SealedSecrets (20 keys) as of 2026-09-24 — 17 SealedSecret files on 2026-10-24 (`git ls-files | grep /sealed-`), including that day's `homebox-postgres-r2-creds`, `homebox-auth` and `homepage-proxy`, with `technitium-exporter-token` still to come; Ansible Vault stays. Verified the catalog build: operator 1.0.0 / ESO **0.19.0** / `bitwarden-sdk-server` 0.5.1, all built 2025-10-05 (upstream ESO is 2.11.0), config CR is the pre-rename `ExternalSecrets` kind, so the next catalog rebuild brings a breaking rename — `installPlanApproval: Manual` holds it. **Next:** user reviews the spec -> implementation plan -> user creates the Bitwarden org, project `okd` and read-only machine account `okd-eso` -> platform install -> one cutover per commit, `mktxp-config` first, Cloudflare token last -> decommission sealed-secrets after a quiet week. Research and decision record: `blog/blog-external-secrets-bitwarden-draft.md`.
 
 ### Queued — observability
+- [ ] **Remove the logging stack entirely (operator's intent 2026-10-27; timing not decided).** Why: logging holds
+  under 1 GiB of data, yet LokiStack `1x.pico` reserves 590 GiB of thin RBD on `ceph-nvme-block` (three 150 GiB WALs,
+  two 50 GiB index-gateways, four 10 GiB). The WAL size is fixed by the tier (the 6.6 CRD exposes only
+  `nodeSelector`/`podAntiAffinity`/`replicas`/`tolerations` for the ingester). The WALs' 450 GiB ceiling is above the
+  pool's 233 GiB MAX AVAIL, and a WAL that cannot flush grew to about 117 GiB each on 2026-06-08 (OSD_FULL followed on
+  07-05). **What goes:** root-app entries `logging-stack`, `cluster-logging-operator`, `loki-operator`,
+  `logging-test-catalog` and their charts; the ClusterLogForwarder and its Vector DaemonSet; the LokiStack and its nine
+  PVCs; the garage `loki` bucket on TrueNAS; and `grafana-config`'s Loki datasources and logs dashboards
+  (`templates/dashboards-logs.yaml`, `files/app-errors-by-namespace.json`). The two Loki items under this heading
+  (LOG-6894, the `infrastructure` rate limit) close with it. **What is lost:** logs of a container older than its
+  `--previous` instance or of a deleted pod, and audit and journal search (a node's journal stays readable through a
+  debug pod). **What it frees:** the Loki pods' CPU and memory requests (`KubeCPUOvercommit` fires today) and the
+  Ceph overcommit risk. **Order when doing it:** ClusterLogForwarder, then the LokiStack (wait until its PVCs and pods
+  are gone), then the two operators (Subscription, CSV), then the test catalog. Deleting the operators first leaves
+  the LokiStack with a finalizer nobody removes. Disabling the root-app entries cascades through the resources
+  finalizer, which is what is wanted here. The okderators logging PRs (#35-#38) stay unaffected; only this cluster
+  stops being their test bed. **Interim, if it waits long:** an alert on `kubelet_volume_stats_used_bytes` for the
+  `wal-*` PVCs (more than 10 GiB) gives warning before the pool fills.
 - [ ] **TrueNAS in Grafana — single pane SHIPPED 2026-09-08 (phases 1 and 2; dashboard `TrueNAS — single pane` live).** Kept open only for the last paragraph's question — a way to check the NAS that does not depend on the cluster, stated on the dashboard itself; remove this item once that is decided. Original framing (raised 2026-09-08, HIGH): The NAS now
   holds media, keepers, the pending Immich library, **Loki's chunks and Velero's backup target** (garage), and it is
   invisible in the cluster's Grafana. Every other subsystem — cluster, Ceph, switch, power — has a dashboard. This is
