@@ -644,3 +644,50 @@ for 4.22 (Kube 1.35). The earlier "Rook coherent bump before the hop" was about 
 cluster would sit at the top edge of Rook's matrix, with 4.23 (1.36) out of it. Nothing hard-blocks the hop now.
 The open decision is whether the Rook bump happens before the hop (one change at a time, headroom in hand) or after
 it (4.22 sooner, Rook at the edge until then).
+
+## 2026-10-27 — HOP 2: pre-flight (4.21.0-okd-scos.11 → 4.22.0-okd-scos.10)
+
+Decided today: the hop goes before the Rook bump (Rook v1.19.5 is in matrix for Kube 1.35), and the image-GC
+KubeletConfig stays out of the hop and gets its own reroll later. Target `4.22.0-okd-scos.10` is the last 4.22
+build (2026-09-09); OKD has released only 5.0 since then.
+
+**Open OKD issues read before starting.** [okd#2339](https://github.com/okd-project/okd/issues/2339): after a 4.22
+upgrade, a UEFI node stopped at `grub>` because `EFI/centos/grub.cfg` was missing. That reporter's nodes had been
+migrated from FCOS (`ostree=/ostree/boot.1/fedora-coreos/...`, an `EFI/fedora` directory). Our nodes have no BMC, so
+the operator checked each one (debug pod, ESP mounted read-only):
+
+```
+node4  ostree=/ostree/boot.0/scos/0498a9e7.../0  Boot0006 \EFI\centos\shimx64.efi  EFI/centos: grub.cfg bootuuid.cfg shimx64.efi grubx64.efi ...
+node5  same deployment                            Boot0004 \EFI\centos\shimx64.efi  same files
+node6  same deployment                            Boot0005 \EFI\centos\shimx64.efi  same files
+```
+
+All three are native SCOS installs, with no `EFI/fedora`, so this bug's precondition is absent here.
+[okd#2357](https://github.com/okd-project/okd/issues/2357) (an etcd-operator `currentRevision` deadlock on scos.10) was
+an install on AWS UPI where etcd could not reach its peers, stuck at revision 0; it does not match this cluster.
+
+**Read-only gates, 16:37Z:** 3/3 nodes Ready (v1.34.6); 34 COs clean; MCP master Updated, 3/3, not paused; no
+`Upgradeable=False`, no admin gates, no removed APIs in use; PDBs with 0 allowed are only the three CNPG primaries
+(homebox, immich, media; each cluster runs 2 instances); LokiStack PDBs all 1; Rook PDBs `mgr=1 mon=1 osd=1`; no
+pending InstallPlan; 33 VolumeAttachments; Ceph `HEALTH_WARN BLUESTORE_SLOW_OP_ALERT` only.
+
+**zot is not at risk.** zot had 14.7 GiB free of 48.9 GiB. Its `_catalog` (read through the apiserver service proxy
+under the readonly SA) has 162 repositories and no `okd/scos-content`: release images are pulled by digest, and zot
+keeps no digest-only pulls. The 34 GiB in use are mostly our own `okd-test/*` and `okd-test/check-*` images
+(cleanup later). `oc adm release info` was refused by the permission rules, so the payload size was not measured.
+
+**node6's root disk was 62.5% used** (232 of 371 GB, almost all of it images; ephemeral storage was a few GB). A hop
+pulls new images before the old ones are collected, and Ceph's mon warning starts at 70%. The operator pruned it:
+`oc debug node/node6.okd.sudops.pl -- chroot /host crictl --timeout=600s rmi --prune` deleted 235 images, and the disk
+went to 15% (55 GB). The deleted images included 4.21 `scos-content` digests and app images such as
+`jellyfin:10.11.11` and `immich-server:v3.3.5`. node4 was at 44% and node5 at 15%.
+
+**etcd backup** (operator): `oc debug -q node/node4.okd.sudops.pl -- chroot /host /usr/local/bin/cluster-backup.sh
+/home/core/assets/backup` wrote `snapshot_2026-10-27_164318.db` (148 MB, revision 167562324, 9109 keys) plus the
+static pod resources (kube-apiserver-pod-125, etcd-pod-11) on node4.
+
+**Gating between nodes** comes from Rook, not from a manual pause: with one OSD down, Rook sets the other failure
+domains' OSD PDB to 0, so the next node's drain waits until the PGs are clean.
+
+**Watcher:** a readonly loop (`scratchpad/hop2/watch.sh`, every 20 s) writes one line per change in CV, bad COs,
+MCP, nodes, Ceph, Rook PDBs, CNPG, NNCEs and stuck pods, and a Monitor follows that file.
