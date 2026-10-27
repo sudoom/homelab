@@ -360,8 +360,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
     `technitium-config` role, tag `metrics`) and scrapes both nodes; dashboard grafana.com 24555 rev 4. Seven rules:
     six adapted from the exporter's own, including critical `TechnitiumResolutionFailing`, plus
     `TechnitiumHostUpgradeDue`, which emails a monthly reminder to run `upgrade.yml` (OS packages + Technitium;
-    both nodes went 15.4 → 15.6.2 on 2026-10-27, so the first reminder is due around 2026-11-26). **Next:** confirm the scrape target is Up and the rules loaded in Thanos
-    Ruler (operator, exec). **Then retire Gatus** (agreed 2026-10-24: no alerting configured, its checks duplicate the
+    both nodes went 15.4 → 15.6.2 on 2026-10-27, so the first reminder is due around 2026-11-26). Verified 2026-10-27: `up{job="technitium-exporter"}` = 1
+    (`technitium-cluster`) in UWM Prometheus, and all seven rules `ok` in Thanos Ruler. **Next: retire Gatus** (agreed 2026-10-24: no alerting configured, its checks duplicate the
     alert stack; the DNS check moves to `TechnitiumResolutionFailing`, the sudops.pl blog check is dropped) and remove
     its link from Homepage.
 - [x] **`homelab.sudops.pl` zone + wildcard cert + Synology auto-import — SHIPPED 2026-05-24.** All three phases live: (a) cert-manager `Certificate` for `*.homelab.sudops.pl` (a49a8d2) — LE-prod wildcard in `homelab-wildcard-tls`, DNS-01 via Cloudflare on parent zone, valid until 2026-08-22; (b) Technitium zone via Ansible (4e20c77) — `nas → 192.168.1.2` + `dns → 192.168.1.12`, applied via `ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --tags zones`; (c) Synology cert-sync CronJob in `components/cluster-config/synology-cert-sync/` (47ecb54 + fixes) — daily 03:14 UTC, idempotent replace via `desc` lookup + `id=` reuse, end-to-end verified with `Fingerprints match; no upload needed` on second run. **Manual cleanup remaining**: one leftover unbound duplicate cert in DSM from the script-development phase (with `For: -`); user deletes via DSM UI once. Chronology in `blog/blog-homelab-sudops-zone-draft.md`.
