@@ -382,19 +382,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   the delete took >120 s so the drain controller had already backed off to a 5-min retry — the unblock is not
   instant. **Before hop 2: scale immich to 2 instances (needs NVMe headroom we lack) or make the pod deletion an
   explicit runbook step.**
-  **cert-manager: the planned fix is NOT REACHABLE from any catalog, and this is now the critical path.**
-  v1.18.0 is EOL and caps at Kube 1.33; we are on 1.34. After flipping okderators to `:4.21` the alpha head is
-  **still v1.18.0**, community-operators v4.21 offers **v1.16.5**, operatorhubio offers **v1.16.5** — all equal or
-  older. So the June draft's "durable de-risk" (**migrate cert-manager off okderators**) is the only route, and it
-  points at the **upstream Helm chart**, not another catalog. **Every renewal on the out-of-matrix version has
-  succeeded so far (checked 2026-10-08, all 5 certs Ready):** `barman-cloud-*` on 2026-09-10 (internal CA),
-  `homelab-wildcard` on 2026-09-21 (the first Let's Encrypt DNS-01 renewal) and `api-cert` + `okd-wildcard` on
-  2026-10-06. Next: `homelab-wildcard` **2026-11-20**, `barman-cloud-*` 2026-11-24, `api-cert` + `okd-wildcard`
-  2026-12-05.
-  **Route status 2026-10-22:** okd-operator-pipeline #28/#29 (cert-manager 1.20) merged and the `release-4.21` build
-  published bundle `1.20.0-2026-10-22-132146`; `okderators-catalog-index` still heads at v1.18.0. The catalog-index
-  PRs adding it are filed as drafts: #60 (`release-4.21`) and #61 (`release-4.22`, same bundle). Next: their merge,
-  which rebuilds `catalog-index:4.21`, then approve the Manual InstallPlan. The Helm fallback stays parked until then.
+  **cert-manager 1.20 INSTALLED 2026-10-27** (operand v1.20.4, CSV `cert-manager-operator.v1.20.0-2026-10-22-132146`
+  from `okderators` once okderators-catalog-index #60/#61 merged), so it no longer blocks hop 2. 1.18 had been EOL and
+  out of matrix since the 4.21 hop, and every renewal on it succeeded. The first renewal on 1.20 is `homelab-wildcard`
+  on **2026-11-20**, then `barman-cloud-*` on 2026-11-24 and `api-cert` + `okd-wildcard` on 2026-12-05. Keep the parked
+  Helm fallback branch until one of them has succeeded.
   **The 4.21 catalog flip delivered nothing else either:** zero InstallPlans generated; `gitops-operator` head is
   identical (v1.19.0) and `cluster-logging` head is **v6.3.0-2025-08-08, OLDER than the installed v6.5.0** — which
   is okderators issue **#44** (still open) as a fact rather than a caveat. Our 6.5.0 came from the 4.20 index: `okderators-catalog-index` `release-4.20` lists the 6.5.0-2026-06-04 bundles for both `cluster-logging` and `loki-operator`, `release-4.21` stops at 6.3.0 (checked 2026-10-20). Issue #48 reports an S3 bug in that same build (LOG-9632, logs not written to object storage); on garage it does not show here: no S3, flush or store errors in the ingester over six hours, ~5,000 flush and upload lines. Nothing downgrades (OLM only walks
@@ -413,8 +405,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   **HOP 2 RE-ASSESSED 2026-10-22 (`blog/blog-okd-4.22-upgrade-draft.md`): the platform blocks nothing; four
   support-matrix items remain.** `4.22.0-okd-scos.0`-`.10` are offered from scos.11, nothing reports
   `Upgradeable=False`, and no installed CSV declares a max OpenShift version below 4.22. Before the hop:
-  **(1) cert-manager 1.20** (catalog-index #60, then approve the InstallPlan; #61 before flipping `okderators` to
-  `:4.22`); **(2) a supervised, coherent Rook bump to v1.20.9** (Kube 1.31-1.37; v1.19.x stops at 1.35; the June
+  **(1) cert-manager 1.20 — DONE 2026-10-27** (#61 put the same bundle into the `:4.22` index); **(2) a supervised, coherent Rook bump to v1.20.9** (Kube 1.31-1.37; v1.19.x stops at 1.35; the June
   v1.20.0 CSI break was our un-revendored charts, not Rook). **(3) OADP comes AFTER the hop:** Red Hat offers
   1.5.8 on 4.20/4.21 and only 1.6.x on 4.22 (operator update checker), so the path is hop on 1.5, then 1.6 from
   the 4.22 catalog; okderators needs `release-4.22` moved to `oadp-1.6` (all three pipeline branches pin

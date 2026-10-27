@@ -583,3 +583,45 @@ but it bundles Helm v4.2.4 (README re-check of 2026-10-20), a rendering change f
 the first target.
 
 Order, corrected: cert-manager 1.20 → GitOps 1.20/1.21 → Rook coherent bump → the hop → OADP 1.6.
+
+## 2026-10-27 — cert-manager 1.20 installed
+
+The maintainer merged okderators-catalog-index #60 (`release-4.21`, 16:03:43Z) and #61 (`release-4.22`, 16:03:49Z).
+`deploy-catalog.yml` rebuilt both indexes (runs 40537179681 and 40537375524, success). The `okderators` CatalogSource
+polled at 16:08:36Z, and the Subscription went `UpgradePending` with InstallPlan `install-g5zzp`, which named only
+`cert-manager-operator.v1.20.0-2026-10-22-132146`.
+
+Read-only checks before approval:
+
+- InstallPlan steps: the new CSV and its RBAC, the 7 existing cert-manager CRDs updated, and three new CRDs
+  (`trustmanagers.operator.openshift.io`, `istiocsrs.operator.openshift.io`, `bundles.trust.cert-manager.io`).
+  Nothing is deleted.
+- The CSV, decoded from the unpack ConfigMap in `openshift-marketplace` (binaryData, `olm.contentEncoding:
+  gzip+base64`, base64 twice before gunzip): `minKubeVersion: 1.31.0`, `olm.skipRange: '>=1.0.0
+  <1.20.0-2026-10-22-132146'`. All five images are referenced by digest and exist on quay with an amd64 manifest
+  (`skopeo inspect --raw`): `okderators/cert-manager/{operator,cert-manager,acme-solver,istio-csr}` single-arch
+  amd64, and `jetstack/trust-manager` (0.20.3) multi-arch.
+- The CertManager CR `cluster` keeps `controllerConfig.overrideArgs` (the DNS-01 recursive nameservers) from git.
+  All five Certificates were Ready.
+
+The operator approved the InstallPlan in the console. The state at 16:18:58Z:
+
+```
+csv           cert-manager-operator.v1.20.0-2026-10-22-132146 Succeeded InstallSucceeded; Subscription AtLatestKnown
+installplan   install-g5zzp Complete
+operand       cert-manager, -cainjector, -webhook: cert-manager@sha256:56327631... (was 0077de5d...), 1/1, 0 restarts,
+              started 16:16:53Z; app.kubernetes.io/version v1.20.4
+args          --dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53 --dns01-recursive-nameservers-only (kept)
+certmanager   every controller/webhook/cainjector condition Available=True, Degraded=False
+clusterissuer letsencrypt-prod Ready=True ACMEAccountRegistered (unchanged since 2026-09-08)
+certificates  5/5 Ready
+apps          cert-manager-operator, cert-manager-config Synced Healthy
+```
+
+The controller logged three `"ACME client for issuer not initialised/available"` errors at 16:17:57, half a minute after
+it started, and no errors after that. That is the start-up order: the ClusterIssuer's ACME client is not set up yet
+when the first Certificates are queued. The controller reports `version="canary"` with an empty `git_commit`, so the
+pipeline build stamps no version into the binary. That is cosmetic, and possibly worth a pipeline issue.
+
+No renewal has run on 1.20 yet. The first is `homelab-wildcard` on 2026-11-20. The Helm fallback branch stays until
+that succeeds. With cert-manager done, the remaining hop-2 item before the hop is the coherent Rook bump to v1.20.9.
