@@ -49,10 +49,4 @@ metadata:
   name: nmstate
   annotations:
     argocd.argoproj.io/sync-wave: "5"
-spec:
-  # The handler DaemonSet runs only on nodes with this label (components/cluster-config/node-labels/).
-  # Every handler start re-applies all NNCPs on its node, the Ceph backnet included, so the label
-  # went on one node at a time at the switch and stays there. Webhook and metrics pods are not
-  # affected (they follow infraNodeSelector).
-  nodeSelector:
-    sudops.pl/nmstate-handler: "true"
+spec: {}

@@ -65,9 +65,10 @@ A `nmstate-cert-manager` pod after the switch is therefore unexpected.
   `restricted` is enforced the handler pods are rejected. After the switch `nmstate` was left empty; it was deleted
   after the 24 h soak (2026-10-27).
 
-The NMState CR carries `spec.nodeSelector: {sudops.pl/nmstate-handler: "true"}` from the switch on. The label is set
-per node in `components/cluster-config/node-labels/values.yaml` and stays permanently. It limits only the handler
-DaemonSet; the webhook and metrics Deployments use `infraNodeSelector` (unset, so any Linux node).
+From the switch until 2026-10-27 the NMState CR carried `spec.nodeSelector: {sudops.pl/nmstate-handler: "true"}`,
+with the label set per node in `components/cluster-config/node-labels/values.yaml`, so the handler could be started
+one node at a time. Both were removed after the soak: the CR is `spec: {}` again and the handler runs on every Linux
+node. The webhook and metrics Deployments follow `infraNodeSelector` (unset, so any Linux node).
 
 ## Rules
 
@@ -437,8 +438,9 @@ The switch in reverse, every step operator-run, with the same read-only checks. 
    Check: CSV and Deployment `nmstate-operator` NotFound, 4 CRDs present.
 4. **CRDs:** storedVersions must still be NMState `v1`, NNCP `v1`, NNCE `v1beta1`, NNS `v1beta1` (Step 5 command),
    all served by v0.87.0's CRDs.
-5. **Rollback commit** (# OPERATOR). Undo the switch commit `<SW>` except the CR's `spec.nodeSelector`, which stays
-   so the rollback is gated per node too (v0.87.0 honours `spec.nodeSelector`):
+5. **Rollback commit** (# OPERATOR). Undo the switch commit `<SW>`, but give the CR back the per-node gate the switch
+   used, `spec.nodeSelector: {sudops.pl/nmstate-handler: "true"}`, so the rollback is gated per node too (v0.87.0
+   honours `spec.nodeSelector`; the gate was removed after the soak on 2026-10-27):
 
    ```bash
    SW=<sha of 'nmstate: move to the okderators 4.21 test build'>
@@ -452,8 +454,9 @@ The switch in reverse, every step operator-run, with the same read-only checks. 
    - `templates/operator.yaml` Namespace: back to the three `pod-security.kubernetes.io/*: restricted` labels;
      drop `name`, `openshift.io/cluster-monitoring` and the `openshift.io/node-selector` annotation.
 
-   Before the push, leave the label on the first node only (revert the later nodes' label commits; with the CR
-   deleted no handler runs, so this changes nothing on the nodes). Then `helm lint` + `helm template` this chart,
+   Before the push, add `sudops.pl/nmstate-handler: "true"` to node4 only in
+   `components/cluster-config/node-labels/values.yaml` (with the CR deleted no handler runs, so this changes nothing
+   on the nodes). Then `helm lint` + `helm template` this chart,
    commit `nmstate: roll back to operatorhubio v0.87.0`, push. The operand returns to namespace `nmstate`; if that
    namespace was deleted after the soak, the operator recreates it. Labels and the annotation the okderators
    operator applied to `openshift-nmstate` may stay behind (it co-owns them in managedFields); they are harmless to
