@@ -1,0 +1,13 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: technitium-exporter-token
+  namespace: technitium-exporter
+spec:
+  encryptedData:
+    TECHNITIUM_TOKEN: AgAFSJLjcWkfDR2BnnTrUgp3CjnF8w1R/5LhNi8cS/f5K5pSvqkSORS/0SlhoUlgQDTC0xQRqtK5fvl/AHGYsIlGetGQVIi2G3ubCswnsgXUCHxK/leKZUsmVo4FJdgVUq0YfrT3kZ0kymh/AVRmh+l72QcnImsU6nPhEIMslB95G86knSJrBgjR6EiDA1kQyFFKwnhwB1r6auav5zakwEDrZUIGRCVr4eff+MAgy1I6gMS36SVUlpJLkDKcuRr2tplKdJlBXuS1FBiaaJLThoIvpAGzppT6UxYmTiRohmylmIaZDIJ1EmYvp5JeK9ey6CTCaF6lL5ZR4eycvD+5puArrzR0ha8vX2UjjJVPNIrjgH8dahsqXHyrYnC9oxXJEygsvHm1kmmJSFC2lpDO2hZBeBcnWI+jEIr+zIU78jmUILFO5EcXy9r2GqmiA+MTUe93WP5X2bT1BJM2wamqo1cBUJLdnlA95oqKIL1VGItz+bi+6+XS0525lx94P5GMqjC+Er4iQvDDI/y1BTehgsjVQ7X5cJXxnjll8Cq+DwumDv0HSQydrlhx6AR5fJVO9ikFBWOqG/9+41hCP9yJxmWFXvDUckNVWowOrWV9GApe6kLsUneVp8ZHjPs6eK3TISDNv8Jv2tCErBKR5xz3cO0Wfb8HzUnzkE2VDGtcmmPMhlPXDsg2HOGsDM/234v6bpjekGM8j6x6iQ4gZIULD+zQrPCbKAf1GfORTGQwSpLv985brrJ6UxdohNUO3/gxf21R17QJJtBLMixC/5RenNhA
+  template:
+    metadata:
+      name: technitium-exporter-token
+      namespace: technitium-exporter

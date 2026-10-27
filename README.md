@@ -82,7 +82,7 @@ components/
     mikrotik-exporter/     # Wave 5 — mktxp / RouterOS metrics for the router + switch
     shelly-exporter/       # Wave 5 — Shelly Gen3 plug power telemetry via json_exporter
     truenas-exporter/      # Wave 5 — socat forwarder + alerts for the node_exporter on the TrueNAS box
-    technitium-exporter/   # Wave 5 — Technitium DNS metrics + alerts (cluster mode); root-app entry disabled until its token is sealed
+    technitium-exporter/   # Wave 5 — Technitium DNS metrics + alerts (cluster mode)
     hcloud-exporter/       # Wave 5 — Hetzner Storage Box usage + access settings (promhippie/hcloud_exporter)
     image-mirror-zot/      # Wave 5 — IDMS + ITMS routing cluster image pulls through the Zot pull-through cache
     oadp/                  # Wave 5 — OADP DataProtectionApplication (garage S3 BSL) + daily Schedule

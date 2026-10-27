@@ -318,9 +318,9 @@ applications:
     syncWave: "5"
 
   # Technitium DNS cluster metrics (dns-master + dns-slave), cluster mode via the primary.
-  # Disabled until its token SealedSecret exists (ansible/technitium README, metrics token).
+  # Token: a SealedSecret of the read-only `metrics` user's API token (ansible/technitium README, metrics token).
   technitium-exporter:
-    enabled: false
+    enabled: true
     path: components/cluster-config/technitium-exporter
     namespace: technitium-exporter
     syncWave: "5"
