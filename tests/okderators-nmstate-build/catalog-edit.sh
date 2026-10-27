@@ -36,6 +36,8 @@
 # Env:
 #   CATALOG_BRANCHES     okderators-catalog-index branches, e.g. "release-4.21 release-4.22"
 #   BUNDLES              one bundle per branch: "<branch>=<ref@sha256:...> ..."; a ref may keep its tag
+#   IMAGE_BRANCH         optional, default release-4.21: the branch the test catalog image comes from;
+#                        must be one of CATALOG_BRANCHES
 #   RUN_DIR              empty working directory (build.sh: /work/run)
 #   CATALOG_IMAGE        push target, set and guarded by build.sh: ${BASE_REGISTRY}/nmstate-catalog:${DATE}
 #   CATALOG_REPO         optional, default the upstream GitHub repository
@@ -66,7 +68,8 @@ CHANNEL=alpha
 # the upstream CSV has carried since 4.3, so any earlier nmstate CSV upgrades to the new entry.
 SKIP_FROM='>=4.3.0'
 CSV_RE='^kubernetes-nmstate-operator\.v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-IMAGE_BRANCH=release-4.21
+# The branch the test catalog image is built from; release-4.22 for a cluster on OKD 4.22.
+IMAGE_BRANCH=${IMAGE_BRANCH:-release-4.21}
 # catalog.Containerfile builds FROM the mutable :latest; the test image pins it. v1.74.0 is the
 # opm build.sh installs (the GitOps Job's pin, 2026-10-20). Digest only: containers/image refuses
 # a reference with both a tag and a digest.

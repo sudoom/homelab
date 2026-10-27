@@ -56,6 +56,8 @@ objects:
                   value: ${CATALOG_BRANCHES}
                 - name: BUNDLES
                   value: ${BUNDLES}
+                - name: IMAGE_BRANCH
+                  value: ${IMAGE_BRANCH}
                 # Empty is harmless: common.sh uses ${OKD_VERSION:-default}, which treats empty as unset.
                 - name: OKD_VERSION
                   value: ${OKD_VERSION}
@@ -115,6 +117,9 @@ parameters:
   - name: BUNDLES
     description: MODE=catalog only; one bundle per catalog branch, "<branch>=<bundle ref@digest> ...", passed to catalog-edit.sh
     value: ""
+  - name: IMAGE_BRANCH
+    description: MODE=catalog only; the catalog branch the test catalog image is built from, one of CATALOG_BRANCHES
+    value: release-4.21
   - name: OKD_VERSION
     description: Leave empty (the branch's common.sh default). An override must keep the branch's MAJOR.MINOR, or gitmodules-branch ends the run before building
     value: ""

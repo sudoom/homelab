@@ -14,6 +14,7 @@
 #   BASE_REGISTRY     must be zot.apps.okd.sudops.pl/okd-test or a path under it
 #   CATALOG_BRANCHES  MODE=catalog only, passed through to catalog-edit.sh
 #   BUNDLES           MODE=catalog only, passed through to catalog-edit.sh
+#   IMAGE_BRANCH      MODE=catalog only, passed through to catalog-edit.sh (default release-4.21)
 #                     (<catalog-branch>=<bundle ref@digest>, space-separated)
 #   OKD_VERSION       optional; the OKD release whose payload supplies kube-rbac-proxy and whose
 #                     MAJOR.MINOR names the CSV, the image tags and the scos base image. Empty = the
@@ -244,7 +245,7 @@ validate() {
 print_inputs() {
   echo "INFO MODE=${MODE} DATE=${DATE} BASE_REGISTRY=${BASE_REGISTRY}"
   echo "INFO PIPELINE_REPO=${PIPELINE_REPO} PIPELINE_BRANCH=${PIPELINE_BRANCH}"
-  echo "INFO CATALOG_BRANCHES=${CATALOG_BRANCHES} BUNDLES=${BUNDLES}"
+  echo "INFO CATALOG_BRANCHES=${CATALOG_BRANCHES} BUNDLES=${BUNDLES} IMAGE_BRANCH=${IMAGE_BRANCH:-release-4.21}"
   echo "INFO OKD_VERSION=${OKD_VERSION:-(pipeline default)}"
   echo "INFO node=${NODE_NAME:-unknown} nproc=$(nproc)"
 }

@@ -139,8 +139,9 @@ prune: it approximates a fresh runner because the base layers are pulled again.
 | `PIPELINE_BRANCH` | empty | `full` only, required there: one of the four branches above |
 | `BASE_REGISTRY` | `zot.apps.okd.sudops.pl/okd-test` | anything outside `zot.apps.okd.sudops.pl/okd-test` is refused; images land in `<BASE_REGISTRY>/nmstate/{operator,handler,console-plugin,bundle}` |
 | `OKD_VERSION` | empty (branch default) | exported to `nmstate/build.sh`, where `common.sh` reads `${OKD_VERSION:-...}` (empty counts as unset): the payload `kube-rbac-proxy` comes from it, and its `MAJOR.MINOR` names the CSV, the tags and the `scos-<MAJOR>.<MINOR>:base-stream9` base. Must keep the branch's release (`gitmodules-branch`); leave it empty. Logged as `INFO OKD_VERSION=` and `INFO var OKD_VERSION=` |
-| `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.21 release-4.22`; must include `release-4.21` (the test catalog's source) |
+| `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.21 release-4.22`; must include `IMAGE_BRANCH` (the test catalog's source) |
 | `BUNDLES` | empty | `catalog` only: one bundle per catalog branch, `<branch>=<ref@sha256:...>` separated by spaces, each ref as the full run's `PUSHED` line prints it |
+| `IMAGE_BRANCH` | `release-4.21` | `catalog` only: the branch whose edited tree becomes the test catalog image; must be in `CATALOG_BRANCHES`. `release-4.22` for a cluster on OKD 4.22 (2026-10-27) |
 
 ## Output contract
 
