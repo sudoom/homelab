@@ -51,7 +51,7 @@ apps:
 
   webtlo:
     enabled: true
-    image: berkut174/webtlo:4.6.1
+    image: berkut174/webtlo:4.6.2
     port: 80
     dataSize: 1Gi
     host: webtlo
