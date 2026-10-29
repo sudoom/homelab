@@ -800,6 +800,6 @@ catalogsource.operators.coreos.com/operatorhubio-catalog unchanged
            no condition True
 ```
 
-Zero InstallPlans, as expected. The catalog pod moved from node5 to node6, so the index image no longer sits on
-node5's root disk, which carries mon c. One trap while checking: an `okderators-dhw67` pod in the events at 11:09Z
+Zero InstallPlans, as expected. The catalog pod moved from node5 to node6. The `:4.21` image (132 MB) stays cached on
+node5, which carries mon c, until image garbage collection removes it; not checked. One trap while checking: an `okderators-dhw67` pod in the events at 11:09Z
 pulling `:4.21` was the hourly `registryPoll` check pod (pull, compare digest, delete), not a second catalog.
