@@ -388,13 +388,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 ### Queued — platform expansion
 - [ ] **OKD 4.22 follow-ups — HOP 2 DONE 2026-10-27** (4.21.0-okd-scos.11 → 4.22.0-okd-scos.10 in 83 min, Kube 1.35,
   34/34 COs clean; `blog/blog-okd-4.22-upgrade-draft.md`). scos.10 (2026-09-09) is the last OKD 4.x build, so the next
-  hop is 5.0. Left over, in order: **(1) flip the `okderators` CatalogSource to `catalog-index:4.22`**
-  (`bootstrap/phase0/01_catalog_source.yaml`, operator-applied). Every okderators Subscription is Manual, so review each
-  InstallPlan the flip generates. cert-manager's 1.20 bundle is already in `:4.22` (catalog-index #61). **(2) OADP 1.5 →
-  1.6:** Red Hat ships 1.6 only in the 4.22 index. okderators needs `release-4.22` moved to `oadp-1.6` (all three
-  pipeline branches pin `oadp-1.5`, operator gitlink `5520b16`) plus a catalog-index PR. **(3) A supervised, coherent
+  hop is 5.0. The `okderators` CatalogSource is on `catalog-index:4.22` since 2026-10-29 (no InstallPlans). Left over,
+  in order: **(1) OADP 1.5 → 1.6:** Red Hat ships 1.6 only in the 4.22 index. okderators needs `release-4.22` moved
+  to `oadp-1.6` (all three pipeline branches pin `oadp-1.5`, operator gitlink `5520b16`) plus a catalog-index PR. **(2) A supervised, coherent
   Rook bump to v1.20.9.** v1.19.5 supports Kube 1.30-1.35, so the cluster sits at its top edge; v1.20.9 covers 1.31-1.37.
-  The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(4) Before 5.0:**
+  The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(3) Before 5.0:**
   `ClusterNotUpgradeable` fires because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
   `maxOpenShiftVersion` 4.22, and OLM blocks the next minor or major upgrade until a newer descheduler is installed.
   **For the next reroll:** check which node `zot-0` runs on. While zot is down, every `okd-test/` consumer rescheduled

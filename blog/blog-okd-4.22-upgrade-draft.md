@@ -754,3 +754,52 @@ within seconds of its node's handler starting.
 
 Predicted and did not fire: okd#2339 (grub, not applicable), a CNPG drain block (2 instances everywhere), the LokiStack
 PDB, a backnet NIC returning linkdown, and `MON_DOWN` from node6's disk (pruned beforehand).
+
+## 2026-10-29 — `okderators` CatalogSource flipped to `catalog-index:4.22`
+
+Follow-up (1) from the hop. Three Subscriptions still use `okderators`, all `installPlanApproval: Manual` and
+`AtLatestKnown` before the flip:
+
+| Namespace | Package | Installed CSV |
+|---|---|---|
+| `cert-manager-operator` | `cert-manager-operator` | `cert-manager-operator.v1.20.0-2026-10-22-132146` |
+| `openshift-adp` | `oadp-operator` | `oadp-operator.v1.5.0-2026-01-05-165341` |
+| `openshift-kube-descheduler-operator` | `cluster-kube-descheduler-operator` | `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` |
+
+**What `:4.22` would deliver, checked before the flip.** `okderators-catalog-index` `release-4.22` head is `98c6d9d`
+(#61, cert-manager 1.20, 2026-10-27 16:03Z), and its "Deploy Production Catalog" run for that commit succeeded at
+16:04:59Z, so the `:4.22` image carries it. For all three packages the `catalog/<pkg>/` directories on `release-4.21`
+and `release-4.22` hold the same files with the same git blob SHAs (6, 4 and 2 files):
+
+```
+GH_TOKEN=... gh api "repos/okd-project/okderators-catalog-index/contents/catalog/$pkg?ref=release-4.2{1,2}" \
+  --jq '[.[] | "\(.name) \(.sha)"] | sort'
+cert-manager-operator files=6 identical=yes
+oadp-operator files=4 identical=yes
+cluster-kube-descheduler-operator files=2 identical=yes
+```
+
+So the flip offers the same heads and was expected to generate no InstallPlans. It cannot move the descheduler past
+its `maxOpenShiftVersion` 4.22 (follow-up 3) or bring OADP 1.6 (follow-up 1): neither build exists in okderators yet.
+
+**Flip.** Commit `c8e3561` changed `bootstrap/phase0/01_catalog_source.yaml` to `quay.io/okderators/catalog-index:4.22`
+and rewrote its comment. The live `operatorhubio-catalog` already matched the file (image `:latest`, poll 24h), so the
+operator applied the whole file:
+
+```
+$ oc apply -f bootstrap/phase0/01_catalog_source.yaml
+catalogsource.operators.coreos.com/okderators configured
+catalogsource.operators.coreos.com/operatorhubio-catalog unchanged
+```
+
+```
+12:05:40Z  okderators-jdxcm (node5, :4.21) Killing
+12:05:41Z  okderators-kd8cr (node6) Pulling quay.io/okderators/catalog-index:4.22
+12:05:46Z  okderators-kd8cr Started; CatalogSource READY
+12:08:58Z  InstallPlans 22 before, 22 after, none new; all three Subscriptions AtLatestKnown on the same CSVs,
+           no condition True
+```
+
+Zero InstallPlans, as expected. The catalog pod moved from node5 to node6, so the index image no longer sits on
+node5's root disk, which carries mon c. One trap while checking: an `okderators-dhw67` pod in the events at 11:09Z
+pulling `:4.21` was the hourly `registryPoll` check pod (pull, compare digest, delete), not a second catalog.
