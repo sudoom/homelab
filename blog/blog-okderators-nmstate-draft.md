@@ -914,3 +914,23 @@ Synced/Healthy; DaemonSet nodeSelector `kubernetes.io/os: linux` (no gate, as si
 
 This is the first install of the `release-4.22` pipeline build anywhere (draft PR #44), and it ran as an in-place
 upgrade from the `release-4.21` build (#45).
+
+## 2026-10-29 — the 4.22 build passed its 24 h soak; #44 updated
+
+Checked at 11:55-12:00Z, 41 h after the in-place upgrade (the window opened 2026-10-28 18:26Z):
+
+- All seven `openshift-nmstate` pods have 0 restarts and are the same pods as at 18:24-18:25Z on 10-27; CSV
+  `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655` `Succeeded`.
+- NNCE ×3 `Available/SuccessfullyConfigured`, NNCP `storage-node4/5/6` generation 3, last transition still
+  2026-10-27 18:25:47-18:26:27Z, so nothing re-enacted after the upgrade.
+- The operator ran the exec checks: `br-ex.forwarding` 1 on node4, node5 and node6; `up{service="nmstate-monitor"}` = 1.
+- Alertmanager: nothing nmstate-related. The board was the standing set (`CephHealthWarning` slow-op,
+  `PodDisruptionBudgetAtLimit` ×3 CNPG primaries, `KubeCPUOvercommit`, `TrueNASPoolScrubOverdue`,
+  `ClusterNotUpgradeable`, `InsightsRecommendationActive`, `Watchdog`). The `CephNodeDiskspaceWarning` ×8 from the hop
+  had cleared.
+
+Then, as the operator approved on 10-27, the "Checked with a full `build.sh` run …" paragraph of
+okd-operator-pipeline#44 (`release-4.22`) was replaced by a body edit (`gh pr edit 44 --body-file`), not a comment.
+It now also says the bundle is installed on OKD 4.22.0-okd-scos.10 as an in-place OLM upgrade from the `release-4.21`
+build (#45), and that after 24 h there were 0 restarts and the NNCPs were unchanged. #40 and #36 were left alone. #43-#46
+are out of draft (the operator's step) with no review yet.

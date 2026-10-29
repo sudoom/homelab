@@ -5,11 +5,11 @@ Kubernetes NMState operator. Its handler applies the per-node NNCPs in
 Ceph storage backnet `192.168.10.0/24`). A handler that misbehaves on a node can take that node's storage network
 down, so every operator change here is gated per node.
 
-**Status 2026-10-27:** switched. The 4.21 test build `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` went live
+**Status 2026-10-29:** switched. The 4.21 test build `kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722` went live
 from the test catalog `okd-test-nmstate` on 2026-10-26 at 13:55Z (operand in `openshift-nmstate`, handler on every
 node); the 24 h soak passed and namespace `nmstate` is deleted. After the OKD 4.22 hop the same catalog moved to the
 4.22 build: `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655` since 2026-10-27 at 18:26Z (an in-place OLM
-upgrade, InstallPlan `install-565gh`). v0.87.0 from `operatorhubio-catalog` is the rollback target (Rollback, below).
+upgrade, InstallPlan `install-565gh`), whose 24 h soak passed on 2026-10-29. v0.87.0 from `operatorhubio-catalog` is the rollback target (Rollback, below).
 
 ## What the chart installs
 
