@@ -282,3 +282,37 @@ One commit:
   never run side by side.
 - README: layout line and the TODO removed (shipped); the two older TODO items that called the descheduler
   "broken for 4.21" now say it was fixed upstream. CLAUDE.md and the dashboard text say `Automatic`.
+
+## 2026-10-29 — why no evictions after the 4.22 hop
+
+The dashboard shows CPU requested at node4 88.7%, node5 89.2%, node6 38.9% since the hop on 10-27 (all three were
+about 70-75% before), and zero evictions. node6 was drained last in the hop (drain complete 18:03:40Z); its pods
+went to node4 and node5 and nothing moved back.
+
+The descheduler sees it. The 11:49:59Z run (`oc -n openshift-kube-descheduler-operator logs deploy/descheduler`):
+
+```
+"Node has been classified" category="underutilized" node="node6..." usagePercentage={"cpu":39,"memory":13,"pods":26}
+"Node has been classified" category="overutilized"  node="node4..." usagePercentage={"cpu":89,"memory":35,"pods":46}
+"Node has been classified" category="overutilized"  node="node5..." usagePercentage={"cpu":89,"memory":31,"pods":50}
+"Total number of evictions/requests" extension point="Balance" evictedPods=0 evictionRequests=0
+```
+
+It finds nothing it may evict. Every running pod on node4 and node5, classified with the policy's own rules (the
+`LowNodeUtilization` `evictableNamespaces.exclude` list from the `cluster` ConfigMap, then `DefaultEvictor` with
+`ignorePvcPods: true` and the default protections):
+
+| Blocked by | Pods | CPU requested |
+|---|---|---|
+| excluded namespace (`openshift-*`, kube-system) | 192 | 18.1 cores |
+| system-critical priority (Rook OSD/mon/mgr/CSI) | 9 | 5.65 |
+| PVC | 16 | 1.6 |
+| emptyDir/hostPath | 12 | 1.4 |
+| DaemonSet | 8 | 0.7 |
+| evictable | 0 | 0 |
+
+The same shape as the 10-24 estimate ("none of it sits on the two overutilized nodes"). The imbalance is the Loki
+stack: 3.4 cores of requests on node4 and 3.4 on node5, none on node6 (2.25 cores per node of that in the stateless
+querier, query-frontend, gateway and distributor). `openshift-logging` is protected by the operator, so the
+descheduler cannot move it whatever the profile. The planned logging removal (README TODO) takes those requests away
+altogether. Until then the only way to rebalance is deleting pods by hand.
