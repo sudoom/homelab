@@ -176,7 +176,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   (`templates/dashboards-logs.yaml`, `files/app-errors-by-namespace.json`). The two Loki items under this heading
   (LOG-6894, the `infrastructure` rate limit) close with it. **What is lost:** logs of a container older than its
   `--previous` instance or of a deleted pod, and audit and journal search (a node's journal stays readable through a
-  debug pod). **What it frees:** the Loki pods' CPU and memory requests (`KubeCPUOvercommit` fires today) and the
+  debug pod). **What it frees:** the Loki pods' CPU and memory requests (`KubeCPUOvercommit` fires today, and Loki's 3.4 cores each on
+  node4 and node5 are the 89/89/39% imbalance since the 4.22 hop, which the descheduler may not touch: `openshift-*`) and the
   Ceph overcommit risk. **Order when doing it:** ClusterLogForwarder, then the LokiStack (wait until its PVCs and pods
   are gone), then the two operators (Subscription, CSV), then the test catalog. Deleting the operators first leaves
   the LokiStack with a finalizer nobody removes. Disabling the root-app entries cascades through the resources
@@ -389,8 +390,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **OKD 4.22 follow-ups — HOP 2 DONE 2026-10-27** (4.21.0-okd-scos.11 → 4.22.0-okd-scos.10 in 83 min, Kube 1.35,
   34/34 COs clean; `blog/blog-okd-4.22-upgrade-draft.md`). scos.10 (2026-09-09) is the last OKD 4.x build, so the next
   hop is 5.0. The `okderators` CatalogSource is on `catalog-index:4.22` since 2026-10-29 (no InstallPlans). Left over,
-  in order: **(1) OADP 1.5 → 1.6:** Red Hat ships 1.6 only in the 4.22 index. okderators needs `release-4.22` moved
-  to `oadp-1.6` (all three pipeline branches pin `oadp-1.5`, operator gitlink `5520b16`) plus a catalog-index PR. **(2) A supervised, coherent
+  in order: **(1) OADP 1.5 → 1.6:** Red Hat ships 1.6 only in the 4.22 index. okderators needs `main` and `release-4.22`
+  moved to `oadp-1.6` (every pipeline branch pins `oadp-1.5`, operator gitlink `5520b16`) plus catalog-index PRs. Recon
+  done and a 13-task plan in the NMState shape drafted 2026-10-29, local, waiting on the operator's review; nothing
+  built (`blog/blog-okderators-oadp-1.6-draft.md`). The biggest open call: leave the seven new KubeVirt/VM images as
+  upstream konveyor builds, or build them too (six more submodules). **(2) A supervised, coherent
   Rook bump to v1.20.9.** v1.19.5 supports Kube 1.30-1.35, so the cluster sits at its top edge; v1.20.9 covers 1.31-1.37.
   The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(3) Before 5.0:**
   `ClusterNotUpgradeable` fires because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
