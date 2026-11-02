@@ -193,3 +193,47 @@ Subscription from git, then delete the 1.6 CSV. I took OLM's `startingCSV` behav
 
 Plan review, now mainly: which of the eight unbuilt images to build, and whether real scheduled backups are part of this
 work.
+
+## 2026-11-02 — the operator's decisions; all 18 images
+
+The operator's answers to the two open calls. Real scheduled backups: "no", so `daily` stays paused and that stays its own
+README TODO. Images: "1.6 should be covered not only for me, but for everyone who want to use oadp". So the pipeline
+builds all 18, and the bundle carries no konveyor image.
+
+I kept `main` and `release-4.22` only, because Red Hat ships 1.6 only for 4.22. And I am not installing KubeVirt here for
+one test, with two nodes at about 89% CPU requests, so the VM file restore and KubeVirt datamover images are built and
+smoke-run but not exercised. The PR says so.
+
+Where the eight images come from, read at their `oadp-1.6` heads (all `go 1.26.0`; compressed sizes of konveyor's builds,
+912 MiB in total):
+
+| `RELATED_IMAGE_*` | Source and build file | MiB |
+|---|---|---|
+| `VM_FILE_RESTORE_CONTROLLER` | `migtools/oadp-vm-file-restore` `Dockerfile` | 37 |
+| `VM_FILE_RESTORE_ACCESS` | same, `containers/oadp-vmfr-access/Dockerfile` | 315 |
+| `VM_FILE_RESTORE_SSH` | same, `containers/side-containers/sshd/Containerfile` | 67 |
+| `VM_FILE_RESTORE_BROWSER` | `migtools/filebrowser` `Containerfile` | 54 |
+| `CONSOLE_CLI_DOWNLOAD` | `migtools/oadp-cli` `Containerfile.download` | 152 |
+| `VMDP_CLI_DOWNLOAD` | `migtools/oadp-vmdp` `Containerfile.download` | 107 |
+| `KUBEVIRT_DATAMOVER_CONTROLLER` | `migtools/kubevirt-datamover-controller` `Dockerfile` | 95 |
+| `KUBEVIRT_DATAMOVER_PLUGIN` | `migtools/kubevirt-datamover-plugin` `Dockerfile` | 85 |
+
+A second Fable review read this scope against source. What it changed:
+
+- **filebrowser would have shipped broken to exactly the people it is for.** I had named `konflux.Dockerfile`. That image
+  puts the binary at `/filebrowser`, and the VM file restore controller runs the sidecar with `/bin/bash -c` and a script
+  that hard-codes `/usr/local/bin/filebrowser` (`internal/controller/container_scripts.go`). It would have passed a
+  `filebrowser version` check and failed at `config init` on every KubeVirt cluster. The public `Containerfile` has the
+  right layout, and my claim that the only source build needs `brew.registry.redhat.io` was wrong. The build also fails now
+  on a missing `frontend/dist/index.html`, because `dist/*` is embedded and a committed `.gitkeep` would otherwise build a
+  UI-less binary silently.
+- **Smoke tests that could not have worked.** Both download servers parse no flags and would block on `--help`, and
+  `oadp-sshd` is a forced-command shim that exits 1 by design. Each now has its own check.
+- **zot's budget is tighter than I had it.** GC runs every 24 h (`gcInterval`), so deleting a failed round frees nothing
+  until the next pass. At about 3.5 GiB a full build, 14.6 GiB free covers two full builds and no uncollected failures,
+  so the gates read measured free space.
+- **Smaller:** `go-toolset` is uid 1001, so the download images cannot write `/archives` as upstream does; upstream's
+  `fedora:42` is past Fedora's support window by its schedule (Task 1 confirms it); `relatedImages` has 19 entries, because
+  `--use-image-digests` adds the manager; the datamover is enabled by `defaultPlugins: [kubevirt-datamover]`.
+
+Rejected nothing. Still nothing built; waiting on plan approval.
