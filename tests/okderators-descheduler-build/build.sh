@@ -701,12 +701,16 @@ object_set() {  # the file's or objects' identity: Kind/name, one CSV whatever i
 }
 
 # bundle-objects: exactly what the pin's manifests/ lists, in the image's files and in what opm
-# renders. Anything outside FAILs, and so does anything missing: a pin that adds a manifest (RBAC for
-# the operand's NetworkPolicy, say) must reach the bundle, and a dropped one is a broken install.
+# renders. Anything outside FAILs, and so does anything missing: a dropped manifest is a broken install.
+# Both pins list only the CSV and the CRD, so the operator's RBAC is not a manifest: it is the CSV's
+# install.spec.clusterPermissions and, on release-5.0, install.spec.permissions, the networkpolicies
+# rule among them. build_bundle() leaves both alone, so they must equal the pin's: names alone would
+# pass a bundle without that rule, and it would only show when the operator runs.
 check_bundle_objects() {  # <dir>
   local dir=$1
-  local f extra missing n_crd n_csv roots
+  local f extra missing n_crd n_csv roots pin_csv rbac_diff
   local got_files=$dir/files.got want_files=$dir/files.want got_objs=$dir/objects.got want_objs=$dir/objects.want
+  local got_rbac=$dir/rbac.got want_rbac=$dir/rbac.want rbac_filter='.spec.install.spec | {clusterPermissions, permissions}'
   local -a bad=()
   if [[ ! -d $dir/fs/manifests ]]; then
     check bundle-objects FAIL "bundle image not extracted"
@@ -743,8 +747,23 @@ check_bundle_objects() {  # <dir>
     bad+=("image top level '${roots}', want manifests metadata")
   fi
 
+  pin_csv=
+  for f in "$dir/pin-manifests"/*; do
+    if [[ $(yq e '.kind' "$f") == ClusterServiceVersion ]]; then pin_csv=$f; fi
+  done
+  if [[ -z $pin_csv ]]; then
+    bad+=("no ClusterServiceVersion among the pin's manifests")
+  else
+    yq -o=json e '.' "$pin_csv" | jq -S "$rbac_filter" >"$want_rbac"
+    jq -S "$rbac_filter" "$dir/csv.json" >"$got_rbac"
+    if ! cmp -s "$got_rbac" "$want_rbac"; then
+      rbac_diff=$( { diff "$want_rbac" "$got_rbac" || true; } | grep '^[<>]' | head -n 6 | one_line || true)
+      bad+=("the CSV's clusterPermissions and permissions differ from the pin's (< pin, > bundle): ${rbac_diff}")
+    fi
+  fi
+
   if [[ ${#bad[@]} == 0 ]]; then
-    check bundle-objects PASS "the pin's list exactly: $(paste -sd ' ' "$got_files")"
+    check bundle-objects PASS "the pin's list exactly: $(paste -sd ' ' "$got_files"); RBAC as the pin's: $(jq '[.clusterPermissions[]?.rules[]?] | length' "$got_rbac") clusterPermissions rules, $(jq '[.permissions[]?.rules[]?] | length' "$got_rbac") permissions rules"
   else
     check bundle-objects FAIL "$(printf '%s; ' "${bad[@]}" | cut -c1-700)"
   fi
