@@ -316,3 +316,39 @@ stack: 3.4 cores of requests on node4 and 3.4 on node5, none on node6 (2.25 core
 querier, query-frontend, gateway and distributor). `openshift-logging` is protected by the operator, so the
 descheduler cannot move it whatever the profile. The planned logging removal (README TODO) takes those requests away
 altogether. Until then the only way to rebalance is deleting pods by hand.
+
+## 2026-11-02 — kube-apiserver restarts during a build; what system CPU really uses
+
+The console showed all three `kube-apiserver` pods created within seven minutes while the OADP 1.6 build ran on node6, which
+looked like starvation. It was not:
+
+```
+restartCount 0 on every container; created 21:02:45 (node5), 21:05:47 (node6), 21:09:44 (node4)
+revision-status-129 2026-11-02T20:56:36Z optional secret/encryption-config has changed
+revision-status-130 2026-11-02T21:06:24Z optional secret/encryption-config has changed
+encryption-key-openshift-kube-apiserver-21 2026-10-12T19:53:18Z
+                                        22 2026-10-19T20:14:20Z
+                                        23 2026-10-26T20:35:26Z
+                                        24 2026-11-02T20:56:30Z
+```
+
+`apiserver/cluster` uses `aescbc`, and the operator rotates the key every seven days, so a rolling restart lands on Monday
+evening each week. Two revisions mean up to six static pod restarts. It lined up with the build by chance.
+
+The question behind it was still fair, so I measured (`/stats/summary` per node, metrics API per pod, CPU in cores, at minimum
+clock):
+
+```
+        node cpu   pods   non-pod   non-pod mem GiB
+node4     6.74     4.45     2.29        1.9
+node5     6.65     4.96     1.69        0.9
+node6    14.58    12.96     1.62        3.0     okd-build 11.57 of its limit 14
+
+node4 requests 13.8: openshift+kube 8.9 (used 3.7), rook-ceph 3.4 (used 0.4), apps 1.4 (used 0.4)
+node5 requests 13.7: openshift+kube 9.2 (used 4.4), rook-ceph 3.5 (used 0.3), apps 1.0 (used 0.2)
+node6 requests  8.2: openshift+kube 3.5 (used 2.6), rook-ceph 2.3 (used 0.2), okd-build 2.0, apps 0.4
+```
+
+The 3 GiB memory reservation holds. CPU has only the 500m default against 1.6 to 2.3 cores of real use. Raising it costs real
+capacity on node4/5, which are nearly full by requests, and it means a reroll, so it is a README TODO to do with the image-GC
+KubeletConfig. I could not read CPU pressure or etcd latency myself: the classifier refuses `oc exec` reads.
