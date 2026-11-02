@@ -15,7 +15,7 @@ Chronology and results: `blog/blog-okderators-logging-6.6-draft.md`.
 
 | file | what |
 |---|---|
-| `manifests.yaml` | Namespace `okd-build` (PSA `privileged`, SCC label sync off), ServiceAccount `builder` (no token), RoleBinding to ClusterRole `system:openshift:scc:privileged`, PVC `build-storage` 100Gi `ceph-nvme-block` RWO |
+| `manifests.yaml` | Namespace `okd-build` (PSA `privileged`, SCC label sync off), ServiceAccount `builder` (no token), RoleBinding to ClusterRole `system:openshift:scc:privileged`, PVC `build-storage` 150Gi `ceph-nvme-block` RWO |
 | `kustomization.yaml` | `manifests.yaml` plus ConfigMap `build-scripts`, generated from `build.sh`, `catalog-edit.sh` and `catalog-walk.py` (no hash suffix), so each script exists once |
 | `build.sh` | the Job's entry point, mounted at `/scripts/build.sh` |
 | `catalog-edit.sh` | `MODE=catalog`: the okderators catalog edit, its checks and the test catalog image ([below](#modecatalog)) |
