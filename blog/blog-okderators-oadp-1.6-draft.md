@@ -282,3 +282,159 @@ Found at the pin:
 - `aws-plugin`'s head moved on 2026-10-30, after the recon; the pin uses the new one.
 
 Nothing built.
+
+## 2026-11-02: Task 2, the 1.6 change on the pipeline
+
+Fork branch `oadp-1.6` from `origin/main` (`2598107`), seven commits (the seventh came out of review, see below), local until the controller pushes. No image is built on the Mac; the first real build is Task 4, on the cluster. Because that build has never run, I wrote the test first and spent most of the time reading what each upstream file does at its pin.
+
+The test is a scratch `work/static-check.sh <pipeline-tree>`: seven checks from the plan plus four extras. Against the untouched tree:
+
+```
+$ git -C pipeline rev-parse --short HEAD origin/main
+2598107
+2598107
+$ ./static-check.sh pipeline
+[ 1] FAIL  gitlinks = pins.md (19 paths)
+[ 2] FAIL  .gitmodules: every oadp branch = oadp-1.6
+[ 3] FAIL  build.sh MINOR="6"
+[ 4] FAIL  every stage compiling Go uses go-toolset:1.26 (frontend-* on nodejs-24)
+[ 5] FAIL  every COPY source is initialised by init() and exists at its pin; deinit/update match
+       must-gather.Containerfile: COPY kopia, but kopia is not initialised by init()
+       must-gather.Containerfile: COPY restic, but restic is not initialised by init()
+       velero.Containerfile: COPY restic, but restic is not initialised by init()
+[ 6] FAIL  patches/operator.patch: git apply --check at the operator pin; OKD content present
+       git apply --check: error: patch failed: config/manifests/bases/oadp-operator.clusterserviceversion.yaml:4
+[ 7] FAIL  every RELATED_IMAGE_* in the pinned manager.yaml is mapped in build_bundle()
+[ 8] FAIL  (extra) yq dry run rewrites all 18 images, nothing else lost
+[ 9] PASS  (extra) no registry.redhat.io / brew.registry.redhat.io
+[10] FAIL  (extra) buildinfo.Version=v1.18.4-OADP in velero and must-gather
+[11] PASS  (extra) build_containers covers every Containerfile and exported image; bash -n
+static-check: FAIL (9 checks)
+```
+
+Check 8 runs the actual `yq` expression out of `build.sh` on a copy of the pinned `manager.yaml`. On `main` it left exactly the eight new images on `quay.io/konveyor`, which also showed the `map(select(...).value = ...)` style keeps the other env entries.
+
+Commits, in order:
+
+```
+5523061 [oadp] Update submodules to oadp-1.6
+f127a98 [oadp] Build 1.6 with Go 1.26
+7b72929 [oadp] Regenerate the OKDify patch for 1.6
+d669ac9 [oadp] Build must-gather from oadp-must-gather
+5d0b1d2 [oadp] Initialise every submodule the images copy
+928dacf [oadp] Build the VM file restore, KubeVirt datamover and download images
+cc968a9 [oadp] Use our VM file restore images at runtime
+```
+
+After them:
+
+```
+$ ./static-check.sh pipeline
+[ 1] PASS  gitlinks = pins.md (19 paths)
+[ 2] PASS  .gitmodules: every oadp branch = oadp-1.6
+[ 3] PASS  build.sh MINOR="6"
+[ 4] PASS  every stage compiling Go uses go-toolset:1.26 (frontend-* on nodejs-24)
+[ 5] PASS  every COPY source is initialised by init() and exists at its pin; deinit/update match
+[ 6] PASS  patches/operator.patch: git apply --check at the operator pin; OKD content present
+[ 7] PASS  every RELATED_IMAGE_* in the pinned manager.yaml is mapped in build_bundle()
+[ 8] PASS  (extra) yq dry run rewrites all 18 images, nothing else lost
+[ 9] PASS  (extra) no registry.redhat.io / brew.registry.redhat.io
+[10] PASS  (extra) buildinfo.Version=v1.18.4-OADP in velero and must-gather
+[11] PASS  (extra) build_containers covers every Containerfile and exported image; bash -n
+static-check: PASS
+$ bash -n oadp/build.sh && git submodule status oadp/ | wc -l
+19
+```
+
+A check that has only ever passed proves little, so I mutated a scratch worktree eleven ways (a COPY path missing at the pin, a submodule dropped from `init()` and from `deinit()`, a Go stage on 1.24, a frontend stage off nodejs-24, a typo in a `RELATED_IMAGE` name, two names mapped to one image, a `registry.redhat.io` base, a Containerfile not built, a branch off `oadp-1.6`, OKD content lost from the patch). All eleven were caught. One looked missed at first; that was my mutation not applying, because BSD `sed` rejects the `0,/re/` address.
+
+The real `init` path also ran, in a scratch worktree with `oc` stubbed so `common.sh` can be sourced: `submodule_initialize` on `kubevirt-datamover-plugin` and `operator`, `submodule_reset`, a second initialise, then the `yq` lines on the patched tree.
+
+```
+Applying: OKDify
+28cfb232 Owen Howard | OKDify
+483de5e0 openshift-merge-bot[bot] | Merge pull request #2507 ...
+HEAD~1 = recorded gitlink
+HEAD = recorded gitlink            (after submodule_reset)
+HEAD~1 = recorded gitlink          (second initialise)
+count=19 (19 expected: 18 related + the operator)   (what push_all_images walks)
+18 images under the registry, 0 konveyor
+```
+
+What the reading found:
+
+- **The old must-gather did not gather.** The Containerfile built `gather` from the operator's `cmd/main.go`, the same source `operator.Containerfile` builds as `manager`. It now builds from `oadp/must-gather` and ships the `deprecated/gather_*` scripts both upstream files ship. I first wrote that the repo is new in 1.6; `git ls-remote` shows branches back to `oadp-1.3`, so I reworded that commit.
+- **Velero is v1.18.4.** The pin is ahead of the `vmware-tanzu/velero` `v1.18.4` tag by 1307 and behind by 0, it is the newest v1.18 tag, it tops the changelog, and the operator, oadp-cli and must-gather `go.mod`s require it. The `v1.18.2-rc.2-OADP` in velero's `konflux.Dockerfile` and `v1.18.1-rc.1-OADP` in must-gather's are stale. So: `v1.18.4-OADP`, keeping the suffix the pipeline already used.
+- **Non-root `go-toolset` and upstream's root builders.** `rm -rf /root/.cache/go-build /tmp/*` and `go clean` in the download images would not just be pointless as uid 1001, the `rm` could fail the build, so they go; the cleanup only ever touched the builder stage. `/archives` and `/usr/local/bin/download-server` move under `/opt/app-root/src` and are copied into the runtime at the same paths, because the server defaults to `ARCHIVE_DIR=/archives`.
+- **`go-toolset` sets `ENV VERSION=1.26.10`.** Upstream's `ARG VERSION` in filebrowser and vmdp would have collided with it, so those stages use `CI_VERSION`.
+- **Upstream's download loops hide failures.** In both, a failed build for any platform but the last still exits 0 with a binary missing: oadp-cli's `set -e` does not stop on a failure inside an `&&` list, and oadp-vmdp's has none. Both loops now stop via `|| exit 1`. My first version of oadp-vmdp's added `set -e` instead, which did nothing: the loop is itself a non-final member of an `&&` list, the same trap I had just written down for oadp-cli. Review caught it. Running the real `RUN` under `bash --posix` with a stub `go` failing on the second of four platforms:
+
+  ```
+  vmdp, first version  fail=linux/arm64  exit=0 binaries=3 empty_sha=1 LICENSE=yes   green with a missing download
+  vmdp, now            fail=linux/arm64  exit=1 binaries=1 empty_sha=0 LICENSE=no    stopped
+  ```
+
+  Writing the checksums from inside `archives/` also makes them name the file as downloaded rather than an absolute build path; both servers only read the first field.
+- **Download servers get `USER 65532:65532`.** Upstream's `Containerfile.download` has no `USER`, but the operator's Deployment sets `runAsNonRoot` with no `runAsUser`. Red Hat's `konflux.Dockerfile`s run as 65532, so I followed them.
+- **The packages I queried exist on Fedora 44.** `mdapi.fedoraproject.org` has `fuse`, `fuse-libs`, `libguestfs-xfs`, `ntfs-3g`, `gdisk`, `kpartx`, `btrfs-progs` for f44. `libguestfs-tools` returned HTTP 400 on f44 because it is not a binary package: on f43 and f44 `virt-win-reg` provides that name and requires `perl(Sys::Guestfs)`, and `libguestfs`, which `libguestfs-xfs` brings in, ships `guestmount`. So `dnf` should resolve it, but to less than the name suggests: `guestfs-tools` (`virt-filesystems` and friends) is not pulled in. That does not matter here, since `detect-and-mount.sh` calls `guestmount`, `fusermount`, `qemu-img` and `python3` and no `virt-*`. I could not compare with f42, the release upstream builds on: mdapi answers 400 for `guestfs-tools` there too, so that release looks gone from the API. The rest of the list (`e2fsprogs`, `lvm2`, `parted` and so on) I did not query, and nothing has installed any of this, so Task 4 settles it.
+- **The filebrowser check tests the file the backend serves** (review ruling, overriding the plan's `frontend/dist/index.html`). `vite.config.ts` takes `public/index.html` as its Rollup input, so the processed page lands at `dist/public/index.html`, while `public/` is also Vite's `publicDir`, which puts a raw copy at `dist/index.html`. The backend does `fs.Sub(frontend.Assets(), "dist")` and serves `public/index.html` (`cmd/root.go:240`, `http/static.go:116`), so testing the raw copy could pass with the served file absent. A wrong path here fails the first real build, so I tried the real frontend build in a scratch directory. Auto mode refused it as running external code (`npx pnpm`, then an install), and I did not retry it. Instead I read konveyor's published image as data, executing nothing from it; its labels name exactly our pin:
+
+  ```
+  $ skopeo inspect ... docker://quay.io/konveyor/oadp-vmfr-access-filebrowser:oadp-1.6 | jq -r '.Labels["vcs-ref"]'
+  4cc1e14b67c93dc2c09b4dcf653c40bdbfec1cfa
+  $ tar -xzOf <layer> usr/local/bin/filebrowser | LC_ALL=C grep -a -o -E 'dist/(public/)?index\.html'
+  dist/index.html
+  dist/public/index.html
+  ```
+
+  So both files exist in a real build at this commit. That build is not ours, and `pnpm`'s switch to the `packageManager` version is still untested; Task 4 settles those.
+
+Two things I expected to break and did not:
+
+- A submodule's `.git` is a file pointing nowhere once it is COPYed into a builder, and `go build` stamps VCS info. Tried it with a dangling `.git` file: it builds and stamps nothing, while a real `.git` directory stamps `vcs.revision`. That is go1.27.3 on the Mac, so not the builder's toolchain, but `cert-manager/operator.Containerfile` does the same thing, `COPY --chown=default operator .` then `go build`, on `go-toolset:1.26`, and those images run on this cluster. The side effect is for Task 4: the commit cannot be read from the binary with `go version -m`.
+- `WORKDIR $HOME/velero` on a non-root builder, then writing `./bin/`. If the directory were root-owned that is EPERM on the first build. `imagebuilder` v1.2.19 (buildah's pin at v1.43.0, checked for that version and not for the exact one in our podman image) calls `EnsureContainerPathAs(b.RunConfig.WorkingDir, b.RunConfig.User, nil)`, so it is owned by uid 1001.
+
+**Finding for the PR: the VM file restore controller ignores its image env.** The operator passes `VMFR_ACCESS_IMAGE`, `VMFR_SSH_IMAGE` and `VMFR_BROWSER_IMAGE` (`internal/controller/vmfilerestore_controller.go`), but at the pin `git grep` finds no reader in `migtools/oadp-vm-file-restore`, and `fileserver_helpers.go` uses the constants `quay.io/konveyor/oadp-vmfr-access*:oadp-1.6`. So our three VMFR side images land in `relatedImages`, and a VM file restore would still pull konveyor's. It needs `vmFileRestore` on the DPA and KubeVirt, which this cluster does not run, so nothing here hits it. It cannot be fixed by mapping env in `build_bundle()`.
+
+**So we carry a patch.** Review confirmed the finding, and `oadp-dev` (`585c1c6`) has the same constants on the same lines and no `VMFR_` reader either. The operator's decision is that all 18 images are ours for every OADP user, and without this our three would never run. `oadp/patches/vm-file-restore.patch`, subject `Read the access and sidecar images from the environment`: one helper, `imageFromEnv(envVar, defaultImage)`, used at the three `Image:` lines; three `*EnvVar` constants next to `LogFormatEnvVar`, with the names the operator sets at `vmfilerestore_controller.go:188-196`; the image constants unchanged; two doc comments that named the constants corrected. `submodule_initialize` applies it by name like `operator.patch`, so `build.sh` does not change. `busybox:latest` stays, by ruling. `buildDefaultMainContainer` only runs when `MainContainer` is nil, and the one production `FileServerPodConfig` (`virtualmachinefilerestore_controller.go:3139-3146`) always sets it, so the controller does not reach that image at this pin.
+
+Go 1.26.10 came from a scratch module cache, with nothing installed system-wide, and a scratch test (not in the patch) used the literal env names so it compiles at the pin:
+
+```
+$ export GOTOOLCHAIN=go1.26.10 GOMODCACHE=<scratch>/gomod GOCACHE=<scratch>/gocache
+$ go test ./internal/controller/ -run '^TestScratchImagesFromEnv$'    # at the pin
+--- FAIL: TestScratchImagesFromEnv/set:_the_env_value_is_used
+    access image: got quay.io/konveyor/oadp-vmfr-access:oadp-1.6, want registry.test/oadp/vmfr-access@sha256:aa
+    ssh image: got quay.io/konveyor/oadp-vmfr-access-sshd:oadp-1.6, want registry.test/oadp/vmfr-sshd@sha256:bb
+    browser image: got quay.io/konveyor/oadp-vmfr-access-filebrowser:oadp-1.6, want registry.test/oadp/vmfr-filebrowser@sha256:cc
+$ go test ./internal/controller/ -run '^TestScratchImagesFromEnv$' -v # patched
+--- PASS: .../set:_the_env_value_is_used
+--- PASS: .../empty:_the_constants_are_used
+--- PASS: .../unset:_the_constants_are_used
+--- PASS: .../each_variable_only_moves_its_own_image
+--- PASS: .../busybox_stays,_whatever_the_env_says
+$ go build ./... && go vet ./internal/common/constant/ ./internal/controller/    # exit 0
+$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o manager cmd/main.go          # ELF x86-64, statically linked
+$ KUBEBUILDER_ASSETS=<scratch>/envtest/k8s/1.33.0-darwin-arm64 go test ./internal/common/... ./internal/controller/
+ok  .../internal/common/constant
+ok  .../internal/common/function
+ok  .../internal/controller
+```
+
+That last run includes the envtest suite, which also passes at the pin. Without the assets it fails the same way on both trees (`fork/exec /usr/local/kubebuilder/bin/etcd`), so that was a missing binary, not a result.
+
+`static-check.sh` gained check 12: the patch must pass `git apply --check` at the pin, read exactly the operator's env names, replace the three call sites with a fallback, and leave the constants and busybox alone. It failed before the patch (`patches/vm-file-restore.patch is missing`) and passes now, and eight more mutations were all caught. The real path ran too, in a scratch worktree:
+
+```
+Applying: Read the access and sidecar images from the environment
+HEAD~1 = recorded gitlink
+tree f4e6eb0dc3e6 = the tree I compiled and tested (154f64c)
+HEAD = recorded gitlink            (after submodule_reset)
+HEAD~1 = recorded gitlink          (second initialise)
+```
+
+Not proven: no pod has run it. The chain from the CSV's `RELATED_IMAGE_*` through the operator to the controller's env is read from the code, and a VM file restore needs KubeVirt. For Task 4, `vm-file-restore` now carries a patch commit like `operator`, so a gitlink comparison there has to use `HEAD~1` too.
+
+Also: must-gather's `pkg/cli.go` hard-codes `registry.redhat.io/oadp/oadp-mustgather-rhel9:v1.6`, used only in its help text, so that string stays in the binary.
+
+Nothing built, nothing pushed. Task 4 is the first time any of this runs in a container.
