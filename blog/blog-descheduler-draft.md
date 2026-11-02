@@ -520,3 +520,91 @@ skopeo inspect --no-tags docker://quay.io/okderators/catalog-index:5.0
 `release-5.0` last moved 2025-02-26 and holds 16 packages against 35 on `release-4.22`. Its `deploy-catalog.yml` runs on pushes to
 `main` and tags `latest`, so merging into that branch would publish nothing even if a catalog PR landed there. `latest` is no longer
 on quay either. No PR has ever targeted the branch.
+
+## 2026-11-02 — okderators descheduler 5.4: the build Job
+
+Nothing ran on the cluster for this; the Job exists and is proven against fixtures, Task 4 starts it. `tests/okderators-descheduler-build/` holds `build.sh`, `catalog-edit.sh`, `catalog-walk.py`, `catalog-branches.tsv`, `job-template.yaml`, `kustomization.yaml`, `log-reader.yaml` and the README.
+
+The shape is the other build Jobs': one Job per run, `descheduler-build-<MODE>-<DATE>`, `MODE` `full` or `catalog`, a privileged podman pod in `okd-build` on PVC `build-storage`, the shared `flock` on `/work/.lock`, the same contract lines (`STEP`, `DISK`, `PUSHED`, `CHECK`, `RESULT`), the registry guard, log files on the PVC, a new `DATE` per run. CPU limit 10. `PRUNE` as in OADP's Job, for a retry after a failed round. `MODE=full` runs:
+
+```
+tools podman-setup prune clone tag-check init pins build_containers image-smoke push_containers build_bundle verify deinit
+```
+
+A table in `build.sh` holds what differs by pipeline branch, and a branch with no row ends the run before anything starts:
+
+```
+descheduler-5.4-4.22 4.22 1eb4d75f... 076d0fc5... v20260219-v0.35.0 4.23 1.35.0
+descheduler-5.4      5.0  5c0659fc... ca28d9e9... v20260520-v0.36.0 5.1  -
+```
+
+The columns are OKD release, operator pin, descheduler pin, operand version, `olm.maxOpenShiftVersion`, `minKubeVersion` (`-`: recorded, nothing required). The operand version is what the descheduler's Makefile stamps at the pin through `GO_LD_EXTRAFLAGS`, which is what the binary reports; `go.mod` at the same pins says v0.35.1 and v0.36.1.
+
+The checks: `submodule-pins` right after `init`, read from `git submodule status` because its first column shows a submodule that never checked out. `image-smoke` and `operand-version` before the push, so a broken image takes no space in zot. After the bundle is pushed: `bundle-objects`, `no-redhat-registry`, `csv-name`, `images-by-digest`, `max-ocp`, `min-kube`, `operator-sdk-validate`. `RESULT PASS` needs a `PASS` line for each.
+
+`MODE=catalog` adds the entry on `release-4.22` (`replaces` the 5.3.0, `skipRange: '>=5.3.0-0 <5.4.0-<DATE>'`) and creates the package on `release-5.0`, the way the pipeline's `scripts/update-catalog-package.sh` creates one, with the same `skipRange` and no `replaces`. A `NONE` row that finds the package stops that branch. Both 5.4 bundles are named `5.4.0-<DATE>`, so `bundle-<branch>` tells them apart by the cap, and pasting them the wrong way round stops before any clone.
+
+Where I left the prior art, and why:
+
+- **OADP's skeleton, not NMState's.** The plan named NMState's `build.sh` as the base. Its associative arrays and namerefs do not run on the Mac's bash 3.2, and the fixtures have to source the file. OADP's `var`, `digest_of` and file-based `VARS` do. The contract, lock, guard and log code are the same in both.
+- **Walker `--hop` removed.** Nothing passes it. The walker's code is otherwise OADP's copy; the docstring also lost an OADP example.
+- **Go, kustomize and `make` dropped from the pod's tools.** The compilers run inside the Containerfiles, and `build_bundle()` edits the committed manifests with `yq`. I read `common.sh` and `kube-descheduler/build.sh` on both branches: neither calls them. The git committer identity went too, because there is no `kube-descheduler/patches` for `git am`.
+- **`catalog_required` added.** `MODE=catalog` cannot end `RESULT PASS` with a per-branch check skipped. It asks for `fresh-head-<branch>` on a `NONE` row and the two negative controls on the others.
+
+The first version of `bundle-objects` had a hole that review caught. The plan asks for the comparison with the pin to cover "anything new such as NetworkPolicy RBAC", and I read that as a new manifest file, and proved it with a `rbac.yaml` ClusterRole I invented. Neither pin has such a file. `manifests/` holds only the CSV and the CRD at both heads, and the rule is inside the CSV, in `spec.install.spec.clusterPermissions` (and `permissions` on `release-5.0`). So a CSV with the rule deleted passed every check. This matters most on `main`, whose bundle gets no live run in this plan. The check now compares both blocks with the pin's CSV (`yq -o=json`, both through `jq -S`), and the invented fixture is gone. Before the change, against the committed check:
+
+```
+WRONG 4.22: the networkpolicies rule deleted               want FAIL got [PASS]
+WRONG main: the networkpolicies rule deleted               want FAIL got [PASS]
+WRONG main: the permissions block deleted                  want FAIL got [PASS]
+units: 88 as expected, 10 wrong
+```
+
+After it, on the real `build_bundle()` output at both pins, and with the rule deleted. `build_bundle()` does not touch those blocks, so nothing had to be loosened:
+
+```
+descheduler-5.4-4.22: CHECK bundle-objects PASS the pin's list exactly: ...; RBAC as the pin's: 22 clusterPermissions rules, 0 permissions rules
+descheduler-5.4:      CHECK bundle-objects PASS the pin's list exactly: ...; RBAC as the pin's: 26 clusterPermissions rules, 3 permissions rules
+main, rule deleted:   CHECK bundle-objects FAIL the CSV's clusterPermissions and permissions differ from the pin's (< pin, > bundle): < }, < { < "apiGroups": [ < "networking.k8s.io" < ], < "resources": [;
+```
+
+The fixtures are scratch, outside the repo. `make-fixture.sh` runs the fork branch's real `kube-descheduler/build.sh build_bundle` (real yq v4.54.1, stubbed podman, skopeo and oc) over each operator pin's real `manifests/` and `metadata/`, and the real opm v1.74.0 renders the result. The end-to-end run is the real `main` of `build.sh` over both fork tips (5b6ca6b, 2b7c850), and its `submodule_status` comes from their real gitlinks, so a pass also shows the table's pins equal them. The catalog runs use the real upstream `release-4.22` (98c6d9d) and `release-5.0` (4daed51). Every check has a fixture that makes it fail.
+
+```
+./run-all.sh
+units:    units: 98 as expected, 0 wrong
+git:      git units: 10 as expected, 0 wrong
+e2e 4.22: e2e: 84 as expected, 0 wrong
+e2e main: e2e: 84 as expected, 0 wrong
+catalog:  catalog: 181 as expected, 0 wrong
+```
+
+From the catalog run, on the real trees:
+
+```
+CHECK negative-control-no-edge-release-4.22 PASS without replaces and skipRange: two heads [...v5.3.0-2026-10-12-113655 ...v5.4.0-2026-11-02-120000], ...v5.3.0-2026-10-12-113655 stranded with the rest [...]; opm validate refuses it
+CHECK negative-control-replaces-only-release-4.22 PASS with only replaces opm validate passes and the walker reports stranded: ...v5.4.0-2026-11-01-120000
+CHECK fresh-head-release-5.0 PASS ...v5.4.0-2026-11-02-120000 is the channel's one entry and single head, no replaces
+CHECK edit-release-4.22 FAIL d.tsv says release-4.22 has no package, but catalog/cluster-kube-descheduler-operator/ exists: read the branch again and fix the row
+4.22 entry reads back: clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655 >=5.3.0-0 <5.4.0-2026-11-02-120000
+5.0 entry reads back: none >=5.3.0-0 <5.4.0-2026-11-02-120000
+```
+
+A bare `>=5.3.0` strands the installed `5.3.0-2026-10-12-113655`, which sits below it in semver; the walker shows that on a hand-made catalog, and it is why the range starts at `-0`. The manifests validate locally, without touching the cluster:
+
+```
+kubectl kustomize tests/okderators-descheduler-build/ | kubeconform -strict -ignore-missing-schemas -summary
+Summary: 1 resource found parsing stdin - Valid: 1, Invalid: 0, Errors: 0, Skipped: 0
+KUBECONFIG=/dev/null oc process --local -f tests/okderators-descheduler-build/job-template.yaml -p MODE=full -p PIPELINE_BRANCH=descheduler-5.4-4.22 -p DATE=2026-11-02-120000 -o yaml
+(items[0], and the same for MODE=catalog) Summary: 2 resources found in 2 files - Valid: 2, Invalid: 0, Errors: 0, Skipped: 0
+```
+
+What stays stubbed until Task 4, so none of it is proven yet:
+
+- `operator-sdk-validate`: no darwin binary here, so its pass and its failures are stub output. The check itself is the code the other Jobs run.
+- Real `podman run` of both images: the stub's help text and version line are what I read in the sources at the pins (`cmd.Short`, the cobra `Long`, `fmt.Printf("Descheduler version %+v\n", version.Get())`). If the real binaries differ, the run fails before any push, which costs a build round and no bad image.
+- `oc adm release info`, which `common.sh` runs at source time.
+- The real skopeo layout: `bundle_extract`'s copy to a `dir:` layout and its layer unpacking, and digests from a real registry.
+- Real `init` and `deinit`: the submodule clones. `submodule-pins` itself ran against real git, on a small pipeline with real submodules.
+
+The zot check stays an operator step before each run, as in the other Jobs: the pod has no token to read the metric with.
