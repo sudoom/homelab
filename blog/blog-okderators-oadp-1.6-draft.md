@@ -438,3 +438,35 @@ Not proven: no pod has run it. The chain from the CSV's `RELATED_IMAGE_*` throug
 Also: must-gather's `pkg/cli.go` hard-codes `registry.redhat.io/oadp/oadp-mustgather-rhel9:v1.6`, used only in its help text, so that string stays in the binary.
 
 Nothing built, nothing pushed. Task 4 is the first time any of this runs in a container.
+
+## 2026-11-02: the release-4.22 branch (`oadp-1.6-4.22`)
+
+Our catalog is built from `release-4.22`, so the 1.6 change needs a branch off `origin/release-4.22` as well as the one off `main`. Seven commits cherry-picked in order from `oadp-1.6` (`5523061..cc968a9`), no conflicts, `.gitmodules` included, plus one workflow commit.
+
+Failing check on `origin/release-4.22` (before):
+
+```
+$ git show origin/release-4.22:.github/workflows/oadp-deploy.yaml | yq e '.on.push.branches' -
+- "main"
+$ ... | yq e '.jobs.deploy.with' -
+operator: oadp          # no catalog_branch
+```
+
+`operator-deploy.yaml` on that branch already declares the `catalog_branch` input, so the deploy workflow only needed `release-4.22` as push branch and `catalog_branch: release-4.22`. Commit `aca8130 [oadp] Deploy from release-4.22 to catalog release-4.22`.
+
+Passing (after):
+
+```
+$ git diff fork/oadp-1.6 oadp-1.6-4.22 -- oadp/ | wc -l          -> 0
+oadp gitlinks (19) identical via git ls-tree; oadp .gitmodules stanzas identical (path/url/branch hash equal)
+$ git diff origin/release-4.22 oadp-1.6-4.22 --name-only | grep -v '^oadp/'
+.github/workflows/oadp-deploy.yaml
+.gitmodules                      (only oadp stanzas changed)
+$ git show HEAD:.github/workflows/oadp-deploy.yaml | yq e '.on.push.branches, .jobs.deploy.with' -
+- "release-4.22"
+operator: oadp
+catalog_branch: release-4.22
+$ ./static-check.sh pipeline  -> static-check: PASS
+```
+
+Non-oadp gitlinks differ between `oadp-1.6` and this branch by design (the branches diverge). Local only; not pushed.
