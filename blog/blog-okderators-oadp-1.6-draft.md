@@ -237,3 +237,48 @@ A second Fable review read this scope against source. What it changed:
   `--use-image-digests` adds the manager; the datamover is enabled by `defaultPlugins: [kubevirt-datamover]`.
 
 Rejected nothing. Still nothing built; waiting on plan approval.
+
+## 2026-11-02: Task 1, pins and image sources
+
+Plan approved ("lgtm"). Task 1 fixes every input the later tasks use: the head of each `oadp-1.6` branch, `go.mod`, base images and what each of the eight new builds needs. Clones live under the gitignored `.superpowers/sdd/2026-10-29-okderators-oadp-1.6/work/` (`pipeline` with `origin` + `fork`, `catalog-index` with `upstream`, `bin/opm` v1.74.0); the full record is `work/pins.md`.
+
+```
+GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN" gh api repos/<repo>/branches/oadp-1.6 --jq .commit.sha
+gh api repos/<repo>/compare/oadp-1.6...<sha> --jq .status      # identical, all 19
+gh api "repos/<repo>/contents/go.mod?ref=<sha>" --jq .content | base64 -d | grep -E '^(go|toolchain) '
+```
+
+All 19 repos (12 submodules, `oadp-must-gather`, six new sources) are `go 1.26.0` with no `toolchain` line. Pins (head of `oadp-1.6`, commit date):
+
+| path | repo | sha | date |
+|---|---|---|---|
+| operator | openshift/oadp-operator | 483de5e05055352af7500c46bf40f5b9b447ddb8 | 2026-10-22 |
+| velero | openshift/velero | 6ec33ac9e956d7b0c40d31e8b0f488e3d8f195ed | 2026-10-23 |
+| non-admin | migtools/oadp-non-admin | 2367e0fd45af64340ae6ccf9178431f23c8cbec7 | 2026-10-19 |
+| microsoft-azure-plugin | openshift/velero-plugin-for-microsoft-azure | a86e14da028620ca75ee1f871cdd3e30e5be9e96 | 2026-10-21 |
+| openshift-plugin | openshift/openshift-velero-plugin | 20bdc74f99d2b51f90ae9adecf95b2dd26ba1379 | 2026-10-22 |
+| hypershift-plugin | openshift/hypershift-oadp-plugin | 72eda2d96f9ea1d2ac52c7b1ba1dddfe117ad7b5 | 2026-10-21 |
+| aws-plugin | openshift/velero-plugin-for-aws | 56b4e23f49da3c553068172554a0bbba9d7f92fc | 2026-10-30 |
+| gcp-plugin | openshift/velero-plugin-for-gcp | 2b5d9c2ea53f1108dbfb31799270822ff5780efb | 2026-10-21 |
+| kubevirt-plugin | migtools/kubevirt-velero-plugin | e645e0ee0dff181c0054d648e78bbbda2aca1aa6 | 2026-10-22 |
+| aws-legacy-plugin | openshift/velero-plugin-for-legacy-aws | 987244c299d11f15ad9e71d09af4490d7b375bc4 | 2026-10-22 |
+| kopia | migtools/kopia | f83e62070a5dc7db7b75aa0f571f29bf369012dc | 2026-10-21 |
+| restic | openshift/restic | e808d4d5a3b2033a4163cf7b9b97717fc61c0c2a | 2026-10-21 |
+| must-gather | openshift/oadp-must-gather | 0064b510b36d738a084ebd8a9b71f6716d544f7c | 2026-10-23 |
+| vm-file-restore | migtools/oadp-vm-file-restore | adb1fb33567403870c54442b8b01c726a74a7bde | 2026-10-22 |
+| filebrowser | migtools/filebrowser | 4cc1e14b67c93dc2c09b4dcf653c40bdbfec1cfa | 2026-10-22 |
+| oadp-cli | migtools/oadp-cli | d6d9554acb6d3bcca06d0a4bedeaf63e71ef281c | 2026-10-19 |
+| oadp-vmdp | migtools/oadp-vmdp | 9bd14fca9b7ec78e2bba3cf95cf5677c6860ed92 | 2026-10-13 |
+| kubevirt-datamover-controller | migtools/kubevirt-datamover-controller | 80e27eca886d28ba84f8a14aa91909b511b59c41 | 2026-10-14 |
+| kubevirt-datamover-plugin | migtools/kubevirt-datamover-plugin | 4f21f4d3f59ae48791964d27d4fdd65a5f2bd26e | 2026-10-14 |
+
+Found at the pin:
+
+- Velero: `buildinfo.go` has no default version and the pin has no tag. The top entry of `changelogs/CHANGELOG-1.18.md` is `v1.18.4`, so that is the version to stamp (`velero.Containerfile` hard-codes `v1.16.1-OADP`).
+- All 18 `RELATED_IMAGE_*` in the operator's `config/manager/manager.yaml` at `483de5e` have a source: 10 from the pipeline's existing builds (must-gather moves to `openshift/oadp-must-gather`), 8 from the new repos. `kopia` and `restic` feed the velero build and have no image of their own.
+- Base images: every one of the eight pulls anonymously (`skopeo inspect --override-os linux --override-arch amd64 docker://<ref>`); none uses `brew.registry.redhat.io` or `registry.redhat.io`. `quay.io/konveyor/builder:ubi9-latest` is pullable too but is replaced by `registry.access.redhat.com/ubi9/go-toolset:1.26` (`sha256:5f0dead6a152...`, same as `:latest` today).
+- `vmfr-access`: the F42 `fedora:42` image was last built 2026-05-28. Fedora's schedule page returned an Anubis access-denied, so the dates come from `endoflife.date` and are unconfirmed: F42 EOL 2026-05-27, F43 2026-12-09, F44 2027-06-02. `registry.fedoraproject.org/fedora` has tags 40 to 46 and rawhide. I use `fedora:44`. The `dnf install` list has no version pins; "42" appears only in comments, `FROM` and the `base-image=` label. Whether `fuse`/`fuse-libs` and `btrfs-progs` still install on F44 is unverified until the smoke test.
+- Catalog heads: `release-4.22` = `v1.5.0-2026-01-05-165341`, `release-5.0` = `v1.4.0-2025-01-23-195220`. `release-4.22:.github/workflows/operator-deploy.yaml` has the `catalog_branch` input (default `release-4.21`).
+- `aws-plugin`'s head moved on 2026-10-30, after the recon; the pin uses the new one.
+
+Nothing built.
