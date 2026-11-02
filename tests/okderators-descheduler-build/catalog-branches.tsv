@@ -1,0 +1,13 @@
+# Per okderators-catalog-index branch: what catalog-edit.sh (MODE=catalog) adds, and which installed
+# CSVs the graph walk starts from. Tab-separated, one row per branch; lists are comma-separated CSV
+# names.
+#   REPLACES   the new entry's replaces: the channel's single head before the edit, read 2026-11-02;
+#              any other head stops the branch. Nothing is removed. NONE: the branch has no package,
+#              catalog-edit.sh creates it, and an existing catalog/cluster-kube-descheduler-operator/
+#              stops the branch.
+#   INSTALLED  CSVs a cluster may run; {DATE-1d} is the new bundle's DATE a day earlier: the shape of
+#              our test CSV, for the later move of this cluster to the official build. NONE goes with
+#              REPLACES=NONE: a fresh package has no installed CSV to reach the head from.
+#branch	REPLACES	INSTALLED
+release-4.22	clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655	clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655,clusterkubedescheduleroperator.v5.4.0-{DATE-1d}
+release-5.0	NONE	NONE
