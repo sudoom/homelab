@@ -409,11 +409,12 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   Nothing has ever built from pipeline `release-4.22`: its deploy workflow triggers on `main` and would target catalog
   `release-4.21`. `main`'s 2026-09-23 failure was the catalog-PR job, not the build. A `release-4.22` build sets the cap to
   4.23, which clears OLM's check on 4.22 by source reading (`normalizeOCPVersion`), to be confirmed live. CRD and
-  profiles are unchanged from 5.3 to 5.4. A 12-task plan in the OADP shape is drafted, local, not approved or started; the
+  profiles are unchanged from 5.3 to 5.4. The 12-task plan was approved 2026-11-02 and is running; builds wait for OADP's, and the
   upgrade waits for the OADP soak (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
   February 2025 one, with five of our packages at ancient versions and no descheduler or NMState, and quay has no
   `catalog-index:5.0`, so no 5.0 entry reaches anyone until okderators rebuilds and publishes it. That affects every
-  operator here, OADP 1.6 included. Whether to raise it upstream now is open.
+  operator here, OADP 1.6 included. Raised upstream 2026-11-02:
+  [okderators-catalog-index #62](https://github.com/okd-project/okderators-catalog-index/issues/62).
   **For the next reroll:** check which node `zot-0` runs on. While zot is down, every `okd-test/` consumer rescheduled
   onto a node without its image cached waits (GitOps, NMState, logging), and each mirrored pull takes about 1m40s. Stale
   RBD VolumeAttachments cleared on their own after about 5 minutes, so wait about 6 minutes before force-clearing one.
