@@ -57,4 +57,5 @@ spec:
   storageClassName: ceph-nvme-block
   resources:
     requests:
-      storage: 100Gi
+      # 150Gi: the OADP 1.6 build makes 19 images, estimated peak 70-100 GB; the RBD image is thin.
+      storage: 150Gi

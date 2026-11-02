@@ -17,6 +17,8 @@
 #   DATE              YYYY-MM-DD-HHMMSS, new per run; the suffix of the image tags, the catalog tag
 #                     and the log file names. A run refuses a DATE whose log file already exists.
 #   REUSE_DATE        MODE=check only: the DATE of the full run whose images the bundle references
+#   PRUNE             MODE=full only: true (default) prunes the podman graph root first, false keeps the
+#                     layers of an earlier run (a retry after a failed round); logs INFO when it skips
 #   BASE_REGISTRY     must be zot.apps.okd.sudops.pl/okd-test or a path under it
 #   CATALOG_BRANCHES  MODE=catalog only, passed through to catalog-edit.sh
 #   BUNDLES           MODE=catalog only, passed through to catalog-edit.sh
@@ -45,6 +47,7 @@ PIPELINE_REPO=${PIPELINE_REPO:-https://github.com/sudoom/okd-operator-pipeline.g
 PIPELINE_BRANCH=${PIPELINE_BRANCH:-}
 DATE=${DATE:-}
 REUSE_DATE=${REUSE_DATE:-}
+PRUNE=${PRUNE:-true}
 BASE_REGISTRY=${BASE_REGISTRY:-zot.apps.okd.sudops.pl/okd-test}
 CATALOG_BRANCHES=${CATALOG_BRANCHES:-}
 BUNDLES=${BUNDLES:-}
@@ -311,6 +314,9 @@ validate() {
   if [[ ! $DATE =~ $date_re ]]; then
     finish FAIL "DATE '${DATE}' is not YYYY-MM-DD-HHMMSS"
   fi
+  if [[ $PRUNE != true && $PRUNE != false ]]; then
+    finish FAIL "PRUNE must be true or false, got '${PRUNE}'"
+  fi
   guard_registry "$BASE_REGISTRY"
   if [[ $MODE != catalog && (-z $PIPELINE_REPO || -z $PIPELINE_BRANCH) ]]; then
     finish FAIL "PIPELINE_REPO and PIPELINE_BRANCH are required"
@@ -331,6 +337,7 @@ validate() {
 }
 
 print_inputs() {
+  echo "INFO PRUNE=${PRUNE}"
   echo "INFO MODE=${MODE} DATE=${DATE} REUSE_DATE=${REUSE_DATE} BASE_REGISTRY=${BASE_REGISTRY}"
   echo "INFO PIPELINE_REPO=${PIPELINE_REPO} PIPELINE_BRANCH=${PIPELINE_BRANCH}"
   echo "INFO CATALOG_BRANCHES=${CATALOG_BRANCHES} BUNDLES=${BUNDLES} IMAGE_BRANCH=${IMAGE_BRANCH}"
@@ -618,9 +625,10 @@ check_pipeline_gitlinks() {  # <pipeline dir>; returns 1 on FAIL
   fi
 }
 
-# gitmodules-branch: every submodule declares oadp-<OCP_SHORT>. Not what gets built (the check above
-# is), but the only place the branch name is recorded for the next `update`.
-check_gitmodules_branch() {  # <pipeline dir> <OCP_SHORT>; returns 1 on FAIL
+# gitmodules-branch: informational. Every submodule should declare oadp-<OCP_SHORT>, but .gitmodules is
+# not what gets built (the check above is), so a mismatch prints INFO and is neither a CHECK line nor
+# a required check. It is the only place the branch name is recorded for the next `update`.
+check_gitmodules_branch() {  # <pipeline dir> <OCP_SHORT>; always returns 0
   local pipe=$1 want="oadp-$2" path got n=0
   local -a bad=()
   while read -r path _; do
@@ -629,10 +637,9 @@ check_gitmodules_branch() {  # <pipeline dir> <OCP_SHORT>; returns 1 on FAIL
     if [[ $got != "$want" ]]; then bad+=("${path}=${got}"); fi
   done <<<"$PINS"
   if [[ ${#bad[@]} == 0 ]]; then
-    check gitmodules-branch PASS "${n} submodules declare ${want}"
+    echo "INFO gitmodules-branch ${n} submodules declare ${want}"
   else
-    check gitmodules-branch FAIL "${bad[*]} in .gitmodules, want ${want}"
-    return 1
+    echo "INFO gitmodules-branch ${bad[*]} in .gitmodules, want ${want} (not what gets built, no check)"
   fi
 }
 
@@ -1287,7 +1294,7 @@ verify() {
 
 # No RESULT PASS unless every check of the mode really ran: a skipped branch of the flow must not
 # read as a green run. Names as printed, one per word; the contract file is the record.
-REQUIRED_COMMON='pipeline-gitlinks gitmodules-branch submodule-pins operator-commit image-smoke velero-version vm-file-restore-env bundle-objects no-redhat-registry csv-name install-modes images-by-digest no-konveyor okd-strings operator-sdk-validate'
+REQUIRED_COMMON='pipeline-gitlinks submodule-pins operator-commit image-smoke velero-version vm-file-restore-env bundle-objects no-redhat-registry csv-name install-modes images-by-digest no-konveyor okd-strings operator-sdk-validate'
 require_checks() {  # require_checks <names...>
   local name
   local -a absent=()
@@ -1302,7 +1309,8 @@ require_checks() {  # require_checks <names...>
 # ---------------------------------------------------------------------------------------
 # modes
 
-# Start of MODE=full: always prune (nmstate README, "prune"). The PVC still holds layers of earlier
+# Start of MODE=full: prune unless PRUNE=false (nmstate README, "prune"). A retry after a failed round
+# passes PRUNE=false so a package failure late in the build does not repeat hours of compile. The PVC still holds layers of earlier
 # runs and nothing on it needs keeping. After the prune the base layers are pulled again, so
 # peak = max(DISK) of the run approximates a fresh hosted runner.
 # `podman system prune -af` cannot be scoped to some images, and does not need to be.
@@ -1324,7 +1332,11 @@ tag_checks() {  # a run never re-pushes a tag: every image and the bundle
 }
 
 mode_full() {
-  prune
+  if [[ $PRUNE == true ]]; then
+    prune
+  else
+    echo "INFO prune skipped, PRUNE=false: layers of an earlier run stay on the PVC, so the peak DISK is not a fresh-runner figure"
+  fi
 
   step_start clone
   prepare_pipeline

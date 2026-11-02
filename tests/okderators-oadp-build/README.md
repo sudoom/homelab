@@ -41,21 +41,23 @@ deleting the namespace and PVC is `oc delete -k tests/okderators-logging-build/`
   the console (Observe, Metrics):
   `kubelet_volume_stats_available_bytes{namespace="zot",persistentvolumeclaim="data-zot-0"}`.
   A full zot breaks image pulls for the whole cluster.
-- **`build-storage` is big enough.** Measured on earlier builds: `build_containers` added 33.3 GB for
-  GitOps' twelve images and 29.5 GB for logging's nine, about 3 GB an image. This is nineteen, and two of
-  them cross-compile ten binaries, so the estimate, not a measurement, is a peak of 70 to 100 GB against
-  the PVC's 100 Gi (107 GB), and running out costs the whole build. Before the first full run, grow it
-  (expansion is allowed on `ceph-nvme-block`; check the `nvme-replicated` pool's `MAX AVAIL` first, the
-  PVC is replicated 3x as it fills):
+- **`build-storage` goes to 150 Gi before the first full run (decided).** Measured on earlier builds:
+  `build_containers` added 33.3 GB for GitOps' twelve images and 29.5 GB for logging's nine, about 3 GB an
+  image. This is nineteen, and two of them cross-compile ten binaries, so the estimate, not a
+  measurement, is a peak of 70 to 100 GB against the old 100 Gi (107 GB); running out costs the whole
+  build. The StorageClass `ceph-nvme-block` has `allowVolumeExpansion: true`, and the RBD image is thin.
+  Pool `MAX AVAIL` read 252 GiB on 2026-11-02, so a real 100 GB peak leaves about 150 GiB until the PVC is
+  deleted. The operator runs a real patch of the live PVC:
 
   ```bash
-  oc -n okd-build patch pvc build-storage --type merge \
-    -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'
+  oc -n okd-build patch pvc build-storage --type=merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'
+  oc -n okd-build get pvc build-storage -o jsonpath='{.status.capacity.storage}'
   ```
 
-  `tests/okderators-logging-build/manifests.yaml` says `100Gi`; update it in the same change, or a later
-  `oc apply -k` of that directory fails trying to shrink the claim. `INFO free` after every step shows
-  what is left as the build goes.
+  The second command prints `150Gi` once the RBD image has grown. The filesystem grows the next time a
+  pod mounts the claim, so the Job's pod does it. `tests/okderators-logging-build/manifests.yaml` owns
+  the PVC and says `150Gi` too, so a later `oc apply -k` of that directory does not try to shrink it.
+  `INFO free` after every step shows what is left as the build goes.
 - **Copy anything you still need from `/work`.** All modes wipe `/work/run` (the previous run's diffs and
   renders are there), and a full run always prunes every unused image from the podman graph root. The
   `/work/logs` contract and log files are never touched.
@@ -153,7 +155,7 @@ used for this `MODE`) happens before the files are opened and is in the pod log 
 
 | `MODE` | does |
 |---|---|
-| `full` | tools, podman setup, **prune**, clone `PIPELINE_BRANCH` and **pipeline-gitlinks**, **gitmodules-branch**, tag check of all 20 refs, **base-images**, `init`, **submodule-pins**, **operator-commit**, `build_containers`, **image-smoke**, **velero-version**, **vm-file-restore-env**, then and only then `push_containers`, `build_bundle`, verify, `deinit`. Each pipeline step is a separate `./build.sh <step>` run of `oadp/build.sh`, the same functions its `main` runs, so each is timed. |
+| `full` | tools, podman setup, **prune** (skipped when `PRUNE=false`), clone `PIPELINE_BRANCH` and **pipeline-gitlinks**, an `INFO` line on `.gitmodules`, tag check of all 20 refs, **base-images**, `init`, **submodule-pins**, **operator-commit**, `build_containers`, **image-smoke**, **velero-version**, **vm-file-restore-env**, then and only then `push_containers`, `build_bundle`, verify, `deinit`. Each pipeline step is a separate `./build.sh <step>` run of `oadp/build.sh`, the same functions its `main` runs, so each is timed. |
 | `check` | no image build, no prune. The same gates up to `init`, then `skopeo copy --all --preserve-digests` of every image of `REUSE_DATE` to this run's tag in the same repository (**reuse-digests**), the same image checks on those images, `build_bundle`, verify, `deinit`. Every check of `full` runs except `base-images`. |
 | `catalog` | tools, podman setup, tag check of `${BASE_REGISTRY}/oadp-catalog:<DATE>`, `/scripts/catalog-edit.sh` in an empty `/work/run`: per branch in `CATALOG_BRANCHES` the new bundle is added, `opm validate`, graph walk, two negative controls, then the test catalog image. Its `CHECK` lines go into the contract, a `CHECK ... FAIL` or a non-zero exit fails the run, and `build.sh` prints `PUSHED` for the catalog image. [Details below](#modecatalog). |
 
@@ -173,6 +175,12 @@ fresh runner because the base layers are pulled again, which is the figure to co
 about 14 GB. A smoke failure stops before the push and the next full run prunes those images, so a fix
 to the images always costs a full rebuild.
 
+**`PRUNE`.** The default `true` keeps the above, and the first run keeps it so the peak-disk figure is
+real. A retry after a failed round passes `-p PRUNE=false`: `MODE=full` then skips the prune (an `INFO
+prune skipped` line says so), and the layers of the earlier run stay in the podman graph root. Only
+images whose Containerfile has no `ARG CI_VERSION` reuse layers (the code at the top of those
+Containerfiles shows it); the others rebuild as before. Nothing else changes.
+
 ## Parameters
 
 | parameter | default | meaning |
@@ -182,6 +190,7 @@ to the images always costs a full rebuild.
 | `REUSE_DATE` | empty | `check` only, required there: the `DATE` of the full run whose images the bundle references. Refused in the other modes, and when equal to `DATE` |
 | `PIPELINE_REPO` | `https://github.com/sudoom/okd-operator-pipeline.git` | |
 | `PIPELINE_BRANCH` | empty | `full` and `check`, required there: `oadp-1.6-4.22` or `oadp-1.6` |
+| `PRUNE` | `true` | `full` only: `false` skips the prune so a retry can reuse layers (see `prune` above) |
 | `BASE_REGISTRY` | `zot.apps.okd.sudops.pl/okd-test` | anything outside `zot.apps.okd.sudops.pl/okd-test` is refused; images land in `<BASE_REGISTRY>/oadp/<name>` and the catalog in `<BASE_REGISTRY>/oadp-catalog` |
 | `OKD_VERSION` | empty (branch default) | exported to `oadp/build.sh`, where `common.sh` reads `${OKD_VERSION:-...}` (empty counts as unset). Only the payload `cli` image comes from it. Logged as `INFO OKD_VERSION=` and `INFO var OKD_VERSION=` |
 | `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, `release-4.22 release-5.0`; must include `IMAGE_BRANCH` |
@@ -218,7 +227,7 @@ file counts as well as a rendered object.
 | check | when | passes when |
 |---|---|---|
 | `pipeline-gitlinks` | after the clone, a FAIL ends the run | the branch's `oadp/` gitlinks are exactly the 19 pins (`PINS` in `build.sh`, from `pins.md`). The gitlink is what gets built, not `.gitmodules` |
-| `gitmodules-branch` | after the clone, a FAIL ends the run | every one of the 19 declares `branch = oadp-1.6` |
+| (`gitmodules-branch`, not a check) | after the clone, `INFO` only | prints which of the 19 submodules do not declare `branch = oadp-<OCP_SHORT>`; no `CHECK` line and no effect on `RESULT`, because `.gitmodules` is not what gets built |
 | `base-images` | `full`, before `init`, a FAIL ends the run | every `FROM` ref resolves on its registry |
 | `submodule-pins` | after `init`, a FAIL ends the run | `git submodule status oadp/` lists exactly the 19; those without a patch show flag ` ` and `HEAD` = pin. A `-` (not initialised) fails although it prints the pin, because `submodule_initialize` hides a failed update behind `\|\| true`. Read from git, because a submodule's `.git` is a file and the binaries stamp no `vcs.revision` |
 | `operator-commit` | after `init`, a FAIL ends the run | for `oadp/operator` and `oadp/vm-file-restore`: `HEAD~1` = pin, `HEAD` subject `OKDify` and `Read the access and sidecar images from the environment`, clean tree |

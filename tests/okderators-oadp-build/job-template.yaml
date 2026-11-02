@@ -23,7 +23,7 @@ objects:
     spec:
       backoffLimit: 0
       # 24 h: GitOps took 97 min for twelve images under powersave-experimental; this is nineteen,
-      # ten of the builds cross-compiles, and a deadline kill loses the whole build.
+      # two of the builds cross-compile ten binaries, and a deadline kill loses the whole build.
       activeDeadlineSeconds: 86400
       # No ttlSecondsAfterFinished: the pod and its log stay until the operator reads them.
       template:
@@ -54,6 +54,8 @@ objects:
                   value: ${DATE}
                 - name: REUSE_DATE
                   value: ${REUSE_DATE}
+                - name: PRUNE
+                  value: ${PRUNE}
                 - name: BASE_REGISTRY
                   value: ${BASE_REGISTRY}
                 - name: CATALOG_BRANCHES
@@ -115,6 +117,9 @@ parameters:
   - name: REUSE_DATE
     description: MODE=check only; the DATE of the full run whose images the bundle references
     value: ""
+  - name: PRUNE
+    description: MODE=full only; true (default) runs podman system prune -af first, false keeps the layers of an earlier run so a retry does not recompile them
+    value: "true"
   - name: BASE_REGISTRY
     description: Push target; build.sh refuses anything outside zot.apps.okd.sudops.pl/okd-test
     value: zot.apps.okd.sudops.pl/okd-test
