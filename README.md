@@ -394,25 +394,26 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   34/34 COs clean; `blog/blog-okd-4.22-upgrade-draft.md`). scos.10 (2026-09-09) is the last OKD 4.x build, so the next
   hop is 5.0. The `okderators` CatalogSource is on `catalog-index:4.22` since 2026-10-29 (no InstallPlans). Left over,
   in order: **(1) OADP 1.5 → 1.6:** Red Hat ships 1.6 only in the 4.22 index. okderators needs `main` and `release-4.22`
-  moved to `oadp-1.6` (every pipeline branch pins `oadp-1.5`, operator gitlink `5520b16`) plus catalog-index PRs. Recon
-  done and a 13-task plan in the NMState shape drafted 2026-10-29, local, waiting on the operator's review; nothing
-  built (`blog/blog-okderators-oadp-1.6-draft.md`). Backup is verified by a restore drill before the upgrade, after it, at
-  the end of the soak and on the official build. Decided by the operator 2026-11-02: the pipeline builds all 18 images, so
-  1.6 is complete for every OADP user (eight new images, six more submodules, no konveyor image in the bundle), and real
-  scheduled backups are not part of this work. Reviewed; waiting on plan approval. **(2) A supervised, coherent
+  moved to `oadp-1.6` (every pipeline branch pins `oadp-1.5`, operator gitlink `5520b16`) plus catalog-index PRs. Plan approved 2026-11-02 and executing: all 18 images, so 1.6 is complete for every OADP user (eight new images, six
+  more submodules, no konveyor image in the bundle); real scheduled backups are not part of this work. Done: pins, both
+  fork branches (`oadp-1.6`, `oadp-1.6-4.22`), the build Job, drill manifests and runbook, and the drill on 1.5, which
+  passed, the first recorded data mover restore here. Running: the first full `release-4.22` build, Job
+  `oadp-build-full-2026-11-02-205027`. Next: the catalog image, then the upgrade, a drill at each stage, a 24 h soak and
+  draft PRs (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) A supervised, coherent
   Rook bump to v1.20.9.** v1.19.5 supports Kube 1.30-1.35, so the cluster sits at its top edge; v1.20.9 covers 1.31-1.37.
   The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(3) Before 5.0, a descheduler upgrade:**
   `ClusterNotUpgradeable` fires because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
   `maxOpenShiftVersion` 4.22, and OLM blocks the next minor or major upgrade until a newer descheduler is installed.
-  Harmless until a hop is planned. Read 2026-11-02: no okderators catalog offers a way out. `release-4.21` and `release-4.22`
-  head at that same 5.3.0, `release-5.0` has no descheduler at all, and only `release-4.20` has 5.4 (5.4.0-2026-07-13).
-  `kube-descheduler/build.sh` already sets 5.4 on pipeline `main` and `release-4.22`, but `main`'s last deploy failed
-  (2026-09-23, "Target OKD 5.0") and the recent runs show none from `release-4.22`. The cap is computed as `OKD_VERSION`
-  minor + 1, so a `release-4.22` build says 4.23 and a `main` build says 5.1; whether 4.23 clears OLM's check for a hop to
-  5.0 is not verified. Red Hat's `release-4.22` is v5.4.3 and `release-5.0` is v5.4.4, both with `olm.skipRange
-  >=5.3.0`. So this is contribution work in the same shape as OADP 1.6: fix `main`'s build, build `release-4.22`, catalog
-  entries on `release-4.22` and `release-5.0`, then this cluster through a test catalog and a soak. Check the
-  `AffinityAndTaints` profile and the CR against 5.4 first.
+  Harmless until a hop is planned. Read 2026-11-02: no okderators catalog a 4.22 cluster reaches offers anything newer.
+  `release-4.21` and `release-4.22` head at that same 5.3.0, and only `release-4.20` has a 5.4 (5.4.0-2026-07-13).
+  Nothing has ever built from pipeline `release-4.22`: its deploy workflow triggers on `main` and would target catalog
+  `release-4.21`. `main`'s 2026-09-23 failure was the catalog-PR job, not the build. A `release-4.22` build sets the cap to
+  4.23, which clears OLM's check on 4.22 by source reading (`normalizeOCPVersion`), to be confirmed live. CRD and
+  profiles are unchanged from 5.3 to 5.4. A 12-task plan in the OADP shape is drafted, local, not approved or started; the
+  upgrade waits for the OADP soak (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
+  February 2025 one, with five of our packages at ancient versions and no descheduler or NMState, and quay has no
+  `catalog-index:5.0`, so no 5.0 entry reaches anyone until okderators rebuilds and publishes it. That affects every
+  operator here, OADP 1.6 included. Whether to raise it upstream now is open.
   **For the next reroll:** check which node `zot-0` runs on. While zot is down, every `okd-test/` consumer rescheduled
   onto a node without its image cached waits (GitOps, NMState, logging), and each mirrored pull takes about 1m40s. Stale
   RBD VolumeAttachments cleared on their own after about 5 minutes, so wait about 6 minutes before force-clearing one.

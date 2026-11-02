@@ -366,3 +366,32 @@ etcd on the build's node is about ten times slower than on the other two, past e
 below `etcdHighFsyncDurations`, and no alert fired. The apiserver figures are muddied because every apiserver restarted inside
 that window. So the build has a visible cost on node6 and has done no harm so far. It keeps running; the next round, if there
 is one, gets a CPU limit of 10 instead of 14. This is a single reading.
+
+## 2026-11-02 — planning the operator upgrade to 5.4: recon, nothing built
+
+`ClusterVersion` reads `Upgradeable=False`, because the installed `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` caps
+at 4.22. The operator asked to start planning while the OADP 1.6 build runs. These are the findings; the design calls in the
+local spec and 12-task plan are mine and not approved. All read-only.
+
+- **No catalog a 4.22 cluster reaches offers anything newer.** `release-4.21` and `release-4.22` hold one entry, that 5.3.0.
+  `release-4.20` holds 5.4.0-2026-07-13. `release-5.0` has no descheduler.
+- **Nothing has ever built from pipeline `release-4.22`.** `kube-descheduler-deploy.yaml` there triggers on `main`, and without a
+  `catalog_branch` the deploy defaults to catalog `release-4.21`. All the runs: `main` success 07-13, `main` failure 09-23,
+  `release-4.21` success 10-12. The September failure was `Checkout catalog index` in the catalog-PR job; the build itself passed
+  and pushed `5.4.0-2026-09-23-131400`.
+- **The range does not reach our install.** `5.3.0-2026-10-12-113655` is a prerelease below `5.3.0`. Walker on a synthetic
+  head: Red Hat's `>=5.3.0 <5.4.3` alone, stranded; `>=5.3.0-0` alone, two heads; `replaces`, PASS.
+- **The cap.** `build.sh` sets it to the OKD minor + 1. In OLM's `release-4.22` code (`helpers.go:123-176`) the check compares against
+  the next minor and `normalizeOCPVersion` maps 4.23 to 5.0, so a 4.23 cap clears `Upgradeable` on 4.22. On a 5.0 cluster that
+  same cap would block 5.0 → 5.1. Source reading; the upgrade checks it live.
+- **Little changes for this cluster.** CRD and Go types are identical from the installed pin to both heads, the two profiles are
+  unchanged in code, `High` is still 40/70, and both dashboard metrics survive. Operand v0.34 → v0.35. `minKubeVersion` goes to
+  1.35.0. New: NetworkPolicy `descheduler-operand`, which admits monitoring on 10258. The operand restarts and runs a loop at once
+  on upgrade, so that loop's evictions get read.
+- **Proving eviction.** The operand evicted little lately (0 in the latest run, 9 since 10-27), so silence proves nothing. The plan
+  uses a scratch pair of Deployments: label the anchor pod so `victim` starts violating its required pod anti-affinity, and
+  `AffinityAndTaints` must evict it. On 5.3 first, then on 5.4. No node label changes, because those re-apply NNCPs.
+- **The 5.0 catalog is the bigger gap.** Catalog `release-5.0` is byte-identical to `main`, the February 2025 catalog: 16 packages,
+  five of ours at ancient versions (cert-manager v1.14, loki 5.9), no descheduler or NMState, an old workflow that tags `latest`,
+  and no `catalog-index:5.0` on quay. So no 5.0 entry reaches anyone until okderators rebuilds and publishes it, and that goes for
+  OADP 1.6 too.
