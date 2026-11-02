@@ -503,3 +503,20 @@ GREEN:
     bash -n kube-descheduler/build.sh: ok on both
 
 Diffstat against each base: `origin/main..descheduler-5.4` is `kube-descheduler/descheduler`, `kube-descheduler/operator` (2 files, 2+/2-); `origin/release-4.22..descheduler-5.4-4.22` is those two plus `.github/workflows/kube-descheduler-deploy.yaml` (3 files, 4+/3-).
+
+## 2026-11-02 — the 5.0 catalog raised upstream
+
+The operator decided the unpublished catalog gets its own issue rather than a line in a PR:
+[okderators-catalog-index #62](https://github.com/okd-project/okderators-catalog-index/issues/62). Rebuilding the catalog stays
+outside the descheduler work. Checked before filing:
+
+```
+gh api repos/okd-project/okderators-catalog-index/compare/main...release-5.0 --jq .status
+identical
+skopeo inspect --no-tags docker://quay.io/okderators/catalog-index:5.0
+... reading manifest 5.0 in quay.io/okderators/catalog-index: manifest unknown
+```
+
+`release-5.0` last moved 2025-02-26 and holds 16 packages against 35 on `release-4.22`. Its `deploy-catalog.yml` runs on pushes to
+`main` and tags `latest`, so merging into that branch would publish nothing even if a catalog PR landed there. `latest` is no longer
+on quay either. No PR has ever targeted the branch.
