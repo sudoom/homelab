@@ -444,3 +444,31 @@ klog.V(1).InfoS("Evicted pod", "pod", ..., "reason", ..., "strategy", opts.Strat
 `strategy="RemovePodsViolatingInterPodAntiAffinity"` passes; any other strategy on either pod invalidates the run. `anchor` is pinned
 to node6 by required node affinity on the hostname label that exists already, and `victim` sits beside it by preferred pod affinity
 only, with no volume that would block eviction.
+
+## 2026-11-02 — okderators descheduler 5.4: pins
+
+Task 1 of the Descheduler 5.4 build for okderators: record what the upstream release branches point at today, so the later pipeline submodule pins are not guesses. Nothing touched the cluster.
+
+Clones (partial, no checkout, no submodules), under the gitignored work dir:
+
+```
+git clone -q --filter=blob:none --no-checkout https://github.com/okd-project/okd-operator-pipeline pipeline
+git -C pipeline remote add fork https://github.com/sudoom/okd-operator-pipeline
+git clone -q --filter=blob:none --no-checkout https://github.com/sudoom/okderators-catalog-index catalog-index
+git -C catalog-index remote add upstream https://github.com/okd-project/okderators-catalog-index
+```
+
+Heads, via `gh api repos/openshift/<repo>/commits/<branch>` and proved with `gh api repos/openshift/<repo>/compare/<branch>...<sha> --jq .status` (all four `identical`); go lines from `contents/go.mod?ref=<sha>`:
+
+| repo | branch | sha | date | go |
+|---|---|---|---|---|
+| cluster-kube-descheduler-operator | release-4.22 | 1eb4d75fac7d2999e06792c3856bdccb272b1de3 | 2026-10-31 | 1.25.0 |
+| cluster-kube-descheduler-operator | release-5.0 | 5c0659fc46ba82ea3f3ab36acd95b19d3847a77e | 2026-10-31 | 1.26.3 |
+| descheduler | release-4.22 | 076d0fc5c3e74b76885c07a393f4085a6495da16 | 2026-10-31 | 1.25.0, toolchain go1.25.1 |
+| descheduler | release-5.0 | ca28d9e98897d401d38d0886a4341620fe838c4e | 2026-10-31 | 1.26.0 |
+
+CSV at the operator heads: 4.22 is `clusterkubedescheduleroperator.v5.4.3` (version 5.4.3, skipRange `>=5.3.0 <5.4.3`), 5.0 is `v5.4.4`; both have `minKubeVersion: 1.35.0` and `replaces: v5.3.0`. Cluster Kube is 1.35, so the floor is met.
+
+Image slots: `grep RELATED_IMAGE` on the CSV at both heads gives exactly two, `RELATED_IMAGE_OPERAND_IMAGE` and `RELATED_IMAGE_SOFTTAINTER_IMAGE`. `build_bundle()` in `kube-descheduler/build.sh` (identical on pipeline `main` and `release-4.22` apart from one comment) rewrites both, from `IMG_DESCHEDULER` and `IMG_OPERATOR`. No unmapped slot, so nothing blocks.
+
+Catalog (`okd-project/okderators-catalog-index`): `release-4.22` head 98c6d9d54411ed494a13e2a00fd5f76ffb4d82bc, package `cluster-kube-descheduler-operator`, `alpha` channel with one entry, `v5.3.0-2026-10-12-113655`. `release-5.0` head 4daed51b21a8693b3f44feef6eee74fb4bf1c04d has no descheduler package at all. The full table is in the scratch `pins.md`.
