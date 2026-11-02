@@ -129,3 +129,67 @@ The drill's backups are deleted from the bucket after the 24 h soak, and Schedul
 Review of the plan, mainly: the konveyor images above; branches `main` + `release-4.22` with catalogs 4.22 + 5.0; the drill
 writing to the garage bucket; `main` built in full only with ≥ 8 GiB free on zot after the `release-4.22` build (14 GiB free
 on 2026-10-29).
+
+## 2026-11-02 — verifying backup after installation; corrections from the first review
+
+The operator asked: "after installation, we should verify that backup is working". The plan already had a drill, so I
+checked what it would and would not prove, then had a Fable review agent read the plan cold. Still nothing built.
+
+### What changed in the drill
+
+- **It takes the path `daily` takes.** Drill Backups use the Schedule's template (`snapshotMoveData: true`,
+  `defaultVolumesToFsBackup: false`, BSL `truenas-garage`), scoped to `oadp-drill`. `includeClusterResources` stays unset
+  on purpose: `true` would make its Restores try to recreate every cluster-scoped object on the live cluster.
+- **The Schedule path.** A scoped `drill-schedule` with `skipImmediately: true` must produce a `Completed` Backup from a
+  cron tick on 1.6, then is deleted. `daily` stays paused.
+- **After a day of running.** At the end of the soak, once a maintenance Job has completed, one more backup and restore.
+- **On the official build.** The earlier drills ran on the test images, so the drill repeats after the move to
+  `okderators`, before the test catalog goes.
+- **Proof the bytes landed.** Garage's `velero` bucket has to grow (`GetBucketInfo`, operator-run), for backups of new
+  bytes only. My first version measured the `tank/s3/data` dataset, and the review caught two problems with it: Loki's
+  bucket lives in the same garage, so a broken backup could pass on Loki's growth, and Kopia dedups a repeat of the same
+  file, so the soak backup could fail for no reason.
+- **`ttl: 336h`**, not 72 h. If the upgrade slipped past 72 h, `drill-15` would expire, and 1.5 cannot be re-installed to
+  retake it.
+
+No `DataDownload` appears anywhere in this repo. The proven restores are a ConfigMap (2026-05-28) and file-system backup
+(2026-08-28), and `daily` uses neither path for volumes, so the drill on 1.5 is the first recorded data mover restore here.
+The chart's "the restore path itself is proven" means the file-system path.
+
+All of this proves the tool. `daily` stays paused (README TODO "Scope OADP backups before un-pausing"), so the cluster
+still backs nothing up when the plan ends.
+
+### Corrections to the 2026-10-29 section
+
+- **"The 1.5 bundle already leaves `oadp-cli-binaries` as a `quay.io/konveyor` image": wrong for what is published.** That
+  is what `build_bundle()` would do. The installed CSV has 21 `relatedImages`, all `quay.io/okderators`, and no CLI env:
+
+  ```
+  relatedImages 21 Counter({'quay.io/okderators': 21})
+  openshift-adp-controller-manager []
+  ```
+
+  So there is no published precedent for a konveyor image in an okderators OADP bundle.
+- **"They need KubeVirt, so here I could only prove that they build": wrong for two of them.** With the ConsoleCLIDownload
+  CRD present, the 1.6 operator creates two download servers at start, KubeVirt or not (`cmd/main.go`, `CLIDownloadSetup`
+  and `VMDPDownloadSetup`), each with a Deployment, Service, Route and a cluster-scoped `ConsoleCLIDownload`. Their images
+  are `console-cli-download` and `vmdp-cli-download`, built from `migtools/oadp-cli` and `migtools/oadp-vmdp`, both with
+  `oadp-1.6` branches. So the image call is now three options: keep all eight from konveyor, build the two that run, or
+  build all eight. I recommend building the two.
+- **"`ceph-rbd-snapshot` has no label, so the Backups name it by annotation": unnecessary.** Velero picks the only class
+  for a driver without a label or annotation (`GetVolumeSnapshotClassForStorageClass`, same on `oadp-1.5` and `oadp-1.6`).
+  The annotation only made the drill unlike `daily`, so it is gone.
+- **"Kopia goes 0.19 → 0.22": does not match `go.mod`.** Both Velero branches pin `kopia v0.16.0`, replaced by a
+  `migtools/kopia` fork (2026-09-04 on `oadp-1.5`, 2026-10-12 on `oadp-1.6`). The risk stands: no documented repository
+  migration, and restoring the 1.5 backup on 1.6 is the check.
+- **"The drill's backups are deleted from the bucket": not straight away.** `DeleteBackupRequest` tombstones them and Kopia
+  reclaims the blobs at its weekly full maintenance, which is the 2026-06-08 lesson in `blog-oadp-draft.md`.
+
+The review also changed the rollback order: commit the revert first, because ArgoCD selfHeal recreates a deleted
+Subscription from git, then delete the 1.6 CSV. I took OLM's `startingCSV` behaviour from the review and did not read
+`resolver.go` myself, so it gets confirmed when the runbook is written.
+
+### Waiting on the operator
+
+Plan review, now mainly: which of the eight unbuilt images to build, and whether real scheduled backups are part of this
+work.

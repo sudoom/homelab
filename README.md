@@ -393,8 +393,10 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   in order: **(1) OADP 1.5 → 1.6:** Red Hat ships 1.6 only in the 4.22 index. okderators needs `main` and `release-4.22`
   moved to `oadp-1.6` (every pipeline branch pins `oadp-1.5`, operator gitlink `5520b16`) plus catalog-index PRs. Recon
   done and a 13-task plan in the NMState shape drafted 2026-10-29, local, waiting on the operator's review; nothing
-  built (`blog/blog-okderators-oadp-1.6-draft.md`). The biggest open call: leave the seven new KubeVirt/VM images as
-  upstream konveyor builds, or build them too (six more submodules). **(2) A supervised, coherent
+  built (`blog/blog-okderators-oadp-1.6-draft.md`). Backup is verified by a restore drill before the upgrade, after it, at
+  the end of the soak and on the official build (added 2026-11-02). The biggest open call: of the eight images the
+  pipeline does not build, two run on every install (`console-cli-download`, `vmdp-cli-download`), so keep all eight from
+  konveyor, build those two, or build all eight. **(2) A supervised, coherent
   Rook bump to v1.20.9.** v1.19.5 supports Kube 1.30-1.35, so the cluster sits at its top edge; v1.20.9 covers 1.31-1.37.
   The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(3) Before 5.0:**
   `ClusterNotUpgradeable` fires because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
