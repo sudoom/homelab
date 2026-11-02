@@ -264,3 +264,46 @@ pod (`operatorhubio-catalog-ds67c` Running and ready, `4km9q` gone, CatalogSourc
 "skipping docker media type" line and a normal sync for that repository ("Copy layer" ×80), so
 v2.1.21 fetches the manifest v2.1.22 refused, and the half-stored index v2.1.22 left behind did
 not get in the way. No pod in the cluster was failing a pull afterwards. The tag stays held.
+
+## 2026-11-02 — first manual cleanup; zot has no retention policy
+
+Before the OADP 1.6 builds I checked what zot holds. It has 14.6 GiB free of 49, and `configmap.yaml` sets only `gc`, with
+no `storage.retention`, so every tagged image stays until someone deletes it. A manual delete only frees space at the next
+GC pass, up to 24 h later.
+
+The search extension gives a full inventory without touching upstream (`POST /v2/_zot/ext/search`, `GlobalSearch` then
+`ImageList` per repo): 160 repos, 239 images, 52.7 GiB nominal, which overcounts shared layers. I crossed that with every
+image the cluster references (pods, Deployments, StatefulSets, DaemonSets, CronJobs, Jobs, CSVs, CatalogSources) and with
+the tags git mentions, and kept all of those, plus the live logging, GitOps and NMState builds, their catalogs and
+`okd-test/podman`.
+
+That left 159 images, 35.2 GiB nominal. Mostly old Immich versions (24 images, 19.2 GiB), then `okd-test/check-*` bundle
+check builds (72 images, 6.4 GiB, sharing layers with the live builds), old NMState and cert-manager test builds, and old
+mirrored tags. The operator ran the delete:
+
+```
+while read -r ref; do skopeo delete "docker://$ref" || echo "FAILED $ref"; done < delete-list.txt
+```
+
+Afterwards, from a fresh inventory:
+
+```
+before 239 after 85 delete-list 159
+kept missing: []
+data-zot-0 free 15.4 GiB of 49
+```
+
+So 154 went, and all 80 kept images answer `HEAD` with 200. Five failed with "Image may not exist": `okd-test/cert-manager/`
+`acme-solver`, `cert-manager`, `istio-csr`, `operator`, `operator-bundle`. All five answer 404 on `tags/list` and were
+listed only by the search extension, so they appear to be stale metadata for images already gone. I read that from the 404s,
+not from zot's storage.
+
+Two things to remember:
+
+- **Check a deleted mirrored image through the inventory, not with a `HEAD` on the manifest.** My verify script did a `HEAD`
+  by digest on the deleted entries and timed out at 30 s, most likely because on-demand sync goes to upstream for a manifest
+  zot no longer holds. It stopped there. `CLAUDE.md` says digest-only pulls are not cached, but I did not confirm that none
+  of those probes put anything back; the fresh inventory shows nothing new.
+- **Free space lags.** 15.4 GiB is before the next GC pass; the real gain gets measured after it.
+
+Automating this is a README TODO now ("Automate zot image cleanup").
