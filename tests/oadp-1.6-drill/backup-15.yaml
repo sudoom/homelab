@@ -1,0 +1,19 @@
+# Backup of the drill namespace through the data mover, the path Schedule `daily` takes
+# (same spec as its template: BSL, snapshotMoveData, defaultVolumesToFsBackup, ttl),
+# scoped to oadp-drill. No csi-volumesnapshot-class annotation: Velero picks the only
+# class for the driver. includeClusterResources is deliberately unset (`daily` sets
+# true), so the drill neither backs up nor restores cluster-scoped objects.
+# ttl 336h: a delayed upgrade must not expire drill-15, 1.5 cannot be reinstalled.
+# Taken on OADP 1.5, before the upgrade.
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: drill-15
+  namespace: openshift-adp
+spec:
+  includedNamespaces:
+    - oadp-drill
+  storageLocation: truenas-garage
+  snapshotMoveData: true
+  defaultVolumesToFsBackup: false
+  ttl: 336h

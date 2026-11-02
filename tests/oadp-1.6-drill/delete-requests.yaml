@@ -1,0 +1,30 @@
+# Removes the drill Backups AND their object-store metadata. A plain `delete backup`
+# leaves the data in the bucket and the BSL sync recreates the CR (rehearsal, 2026-08-28).
+# Apply only after every drill restore has been verified.
+#
+# Task 9 Step 5 records, and the Step 6 commit adds, one DeleteBackupRequest per Backup that Schedule drill-schedule
+# produced, by name (its Backups are named drill-schedule-<timestamp>), before this
+# file is applied.
+apiVersion: velero.io/v1
+kind: DeleteBackupRequest
+metadata:
+  name: drill-15-purge
+  namespace: openshift-adp
+spec:
+  backupName: drill-15
+---
+apiVersion: velero.io/v1
+kind: DeleteBackupRequest
+metadata:
+  name: drill-16-purge
+  namespace: openshift-adp
+spec:
+  backupName: drill-16
+---
+apiVersion: velero.io/v1
+kind: DeleteBackupRequest
+metadata:
+  name: drill-16-soak-purge
+  namespace: openshift-adp
+spec:
+  backupName: drill-16-soak

@@ -1,0 +1,19 @@
+# On the official 1.6 build.
+# Restores backup drill-off into oadp-drill-roff. Data mover restore: the PVC stays Pending (it carries a
+# selector no provisioner satisfies) until the DataDownload has written the volume and
+# Velero rebinds the restored PV, so the pod cannot start on an empty volume; the writer
+# also refuses to create either file outside oadp-drill, see writer.yaml.
+# includeClusterResources: false keeps the Restore away from cluster-scoped objects.
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: drill-off-roff
+  namespace: openshift-adp
+spec:
+  backupName: drill-off
+  includedNamespaces:
+    - oadp-drill
+  namespaceMapping:
+    oadp-drill: oadp-drill-roff
+  includeClusterResources: false
+  restorePVs: true

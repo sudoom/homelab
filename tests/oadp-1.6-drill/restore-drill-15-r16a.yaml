@@ -1,0 +1,19 @@
+# On 1.6: a backup taken by 1.5 restored by 1.6.
+# Restores backup drill-15 into oadp-drill-r16a. Data mover restore: the PVC stays Pending (it carries a
+# selector no provisioner satisfies) until the DataDownload has written the volume and
+# Velero rebinds the restored PV, so the pod cannot start on an empty volume; the writer
+# also refuses to create either file outside oadp-drill, see writer.yaml.
+# includeClusterResources: false keeps the Restore away from cluster-scoped objects.
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: drill-15-r16a
+  namespace: openshift-adp
+spec:
+  backupName: drill-15
+  includedNamespaces:
+    - oadp-drill
+  namespaceMapping:
+    oadp-drill: oadp-drill-r16a
+  includeClusterResources: false
+  restorePVs: true

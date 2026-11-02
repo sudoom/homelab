@@ -1,0 +1,127 @@
+# The drill workload. One pod, two 64 MiB random files, checksum lines in its log.
+#
+#   /data/drill.bin  + drill.sha256   written ONCE, the first time the source pod starts (checksum <A>).
+#   /data/gen.bin    + gen.sha256     rewritten with fresh random bytes on EVERY start of the source pod
+#                                     (checksum <G>, "generation"). Without it the volume never changes after the
+#                                     first backup, Kopia finds the parent snapshot, reuses the cached entries and
+#                                     uploads nothing, so later backups could pass on a 1.6 that cannot read file
+#                                     data or write a blob. Before every backup after the first,
+#                                     `oc -n oadp-drill rollout restart deploy/drill-writer`, read the new <G>.
+#
+# Rules the script enforces (they are the point of the drill, do not simplify them):
+#   * Only a pod in namespace `oadp-drill` ever creates either file. In any other namespace the pod is a
+#     restored copy: it creates nothing, it waits for all four restored files and prints the checksums OF THEM.
+#     A restored volume that arrived empty shows "waiting", never a fresh file with a matching-looking sum.
+#   * Each marker (*.sha256) is written last (tmp file + mv). gen.sha256 is removed before gen.bin is rewritten,
+#     so a snapshot taken mid-rewrite has no marker and a restored copy waits instead of passing.
+#   * `DRILL sha256=<hex>` and `DRILL gen=<hex>` are the sums RECOMPUTED from the files on the volume, printed
+#     only if each equals the sum stored next to its file and the file is 64 MiB. Otherwise `DRILL MISMATCH ...`.
+# Runs under restricted-v2: no fixed UID or fsGroup; the namespace's assigned UID writes the volume (fsGroup is
+# applied by the platform on mount).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drill-writer
+  namespace: oadp-drill
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # RWO volume: never two pods
+  selector:
+    matchLabels:
+      app: drill-writer
+  template:
+    metadata:
+      labels:
+        app: drill-writer
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: writer
+          # ubi9/ubi-minimal, linux/amd64 manifest digest of :latest on 2026-11-02
+          # (image created 2026-11-02T00:24:07Z, version 9.8). coreutils-single in
+          # the image provides sha256sum, dd, head, sleep, mv, sync, cut, wc.
+          image: registry.access.redhat.com/ubi9/ubi-minimal@sha256:312b02a8f8ad5bdd219849c3e854cc5191c92fb7b8ce9b30fe2daed2de849094
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DRILL_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              D=/data
+              SOURCE_NS=oadp-drill
+              sum_of() { set -- $(sha256sum "$1"); echo "$1"; }
+
+              # write_file <name>: 64 MiB of random bytes to $D/<name>.bin, marker $D/<name>.sha256 last
+              write_file() {
+                rm -f "$D/$1.bin.tmp" "$D/$1.sha256.tmp"
+                dd if=/dev/urandom of="$D/$1.bin.tmp" bs=1M count=64 2>/dev/null
+                sync
+                mv "$D/$1.bin.tmp" "$D/$1.bin"
+                sum_of "$D/$1.bin" > "$D/$1.sha256.tmp"
+                sync
+                mv "$D/$1.sha256.tmp" "$D/$1.sha256"
+                sync
+              }
+
+              # report <name> <label>: verify the stored sum against the file and print the line
+              report() {
+                STORED="$(cat "$D/$1.sha256")"
+                ACTUAL="$(sum_of "$D/$1.bin")"
+                SIZE="$(wc -c < "$D/$1.bin")"
+                if [ "$STORED" = "$ACTUAL" ] && [ "$SIZE" -eq 67108864 ]; then
+                  echo "DRILL $2=$ACTUAL"
+                else
+                  echo "DRILL MISMATCH file=$1 stored=$STORED actual=$ACTUAL size=$SIZE"
+                fi
+              }
+
+              if [ "$DRILL_NAMESPACE" = "$SOURCE_NS" ]; then
+                if [ ! -f "$D/drill.sha256" ]; then
+                  rm -f "$D/drill.bin" "$D/drill.sha256"
+                  write_file drill
+                  echo "DRILL drill created $(date -u +%FT%TZ)"
+                fi
+                # new bytes on every start: invalidate the marker first, then rewrite
+                rm -f "$D/gen.sha256"
+                write_file gen
+                echo "DRILL gen written $(date -u +%FT%TZ)"
+              else
+                echo "DRILL restored copy in $DRILL_NAMESPACE: creates no file, waiting for the restored ones"
+                n=0
+                while [ ! -f "$D/drill.sha256" ] || [ ! -f "$D/drill.bin" ] \
+                   || [ ! -f "$D/gen.sha256" ] || [ ! -f "$D/gen.bin" ]; do
+                  n=$((n + 1))
+                  if [ $((n % 12)) -eq 1 ]; then echo "DRILL waiting for restored drill.bin, drill.sha256, gen.bin, gen.sha256"; fi
+                  sleep 5
+                done
+              fi
+
+              report drill sha256
+              report gen gen
+              exec sleep infinity
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: drill-data

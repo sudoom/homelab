@@ -1,0 +1,6 @@
+# Source namespace of the OADP drill. The restore targets (oadp-drill-r15, -r16a,
+# -r16b, -r16c, -roff) are created by the Restores themselves; do not create them.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: oadp-drill

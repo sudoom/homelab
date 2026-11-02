@@ -1,0 +1,25 @@
+# Proves a cron tick produces a Completed data mover Backup on 1.6. Same template as the
+# drill Backups (which are daily's template scoped to oadp-drill).
+# skipImmediately: no Backup at creation, so the first Backup labelled
+# velero.io/schedule-name=drill-schedule exists only because the cron fired.
+# Before applying: `oc -n oadp-drill rollout restart deploy/drill-writer`, wait for the new `DRILL gen=` line,
+# record the bucket size, and do not restart the pod again until the first Backup is Completed (a Backup
+# of unchanged bytes proves nothing on 1.6, see README.md).
+# Operator deletes this Schedule after the first Backup completes (every 15 minutes it
+# would take another). Schedule `daily` is not touched and stays paused.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: drill-schedule
+  namespace: openshift-adp
+spec:
+  schedule: "*/15 * * * *"
+  paused: false
+  skipImmediately: true
+  template:
+    includedNamespaces:
+      - oadp-drill
+    storageLocation: truenas-garage
+    snapshotMoveData: true
+    defaultVolumesToFsBackup: false
+    ttl: 336h

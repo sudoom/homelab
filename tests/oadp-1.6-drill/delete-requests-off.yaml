@@ -1,0 +1,8 @@
+# Same as delete-requests.yaml, for the drill taken on the official build.
+apiVersion: velero.io/v1
+kind: DeleteBackupRequest
+metadata:
+  name: drill-off-purge
+  namespace: openshift-adp
+spec:
+  backupName: drill-off
