@@ -395,3 +395,52 @@ local spec and 12-task plan are mine and not approved. All read-only.
   five of ours at ancient versions (cert-manager v1.14, loki 5.9), no descheduler or NMState, an old workflow that tags `latest`,
   and no `catalog-index:5.0` on quay. So no 5.0 entry reaches anyone until okderators rebuilds and publishes it, and that goes for
   OADP 1.6 too.
+
+## 2026-11-02 — the plan's review: the operand rolls every Monday, and the eviction check could pass by accident
+
+An independent review of the plan found two things worth keeping beyond the plan. Both read-only.
+
+**The operand rolled at 21:17:36Z with no change from anyone.** Counters reset (`descheduler_loop_duration_seconds_count 1`), new
+ReplicaSet `descheduler-54dc68f9d`, operator pod unchanged since 10-27. The ReplicaSet list gave the shape: the previous one was
+2026-10-26T20:56:01Z, also a Monday evening, which is when the `aescbc` key rotates.
+
+```
+oc get kubeapiserver cluster -o jsonpath='{range .status.conditions[*]}{.type} {.status} {.lastTransitionTime}{"\n"}{end}' | grep Encryption
+EncryptionMigrationControllerProgressing False 2026-11-02T21:17:46Z
+
+oc get cm -A -o jsonpath='{range .items[*]}{.metadata.resourceVersion} {.metadata.creationTimestamp} {.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+1169 ConfigMaps, 1169 of them with a resourceVersion in 172349427..172355628; 1108 of those created before 11-01
+```
+
+So the weekly key migration rewrites every ConfigMap in the cluster. The operator keeps `configmaps/cluster`'s resourceVersion in
+the operand's pod template, sees it move with identical content, and rolls the Deployment (`apps.go:155`, then a loop at once:
+21:18:34Z). Five things rolled in that window on both Mondays: console, oauth-openshift, controller-manager,
+route-controller-manager, descheduler. OADP did not. This explains nothing being wrong and the counters still looking odd: a
+"since 10-27" evictions number from this operand cannot span a Monday without Prometheus.
+
+For the 5.4 work: no eviction check and no soak window across Monday 19:00Z to 23:00Z, loops counted from log timestamps, counter
+deltas only within one pod.
+
+**The eviction check as first written could pass without the plugin doing anything.** The design labelled an anchor pod so that
+`victim` violates required anti-affinity, and passed on "an evicted line, the counter up, `victim` on another node".
+
+```
+descheduler_lownodeutilization_node_classification{node="node4.okd.sudops.pl"} 2
+descheduler_lownodeutilization_node_classification{node="node5.okd.sudops.pl"} 2
+descheduler_lownodeutilization_node_classification{node="node6.okd.sudops.pl"} 1
+lownodeutilization.go:308] "Number of underutilized nodes" ... totalNumber=0
+lownodeutilization.go:310] "Number of overutilized nodes" ... totalNumber=2
+```
+
+node4 and node5 are over the `High` threshold. Whenever node6 drops under 40%, LowNodeUtilization evicts what it can from them, and
+that meets all three criteria with no anti-affinity involved. A `victim` with an `emptyDir` would fail the other way:
+`evictLocalStoragePods := false` (`profiles.go:81`) makes it non-evictable. The fix: pass only on the line's strategy, which the
+log and the counter both carry (`evictions.go:615`, `metrics.go`):
+
+```
+klog.V(1).InfoS("Evicted pod", "pod", ..., "reason", ..., "strategy", opts.StrategyName, "node", ..., "profile", ...)
+```
+
+`strategy="RemovePodsViolatingInterPodAntiAffinity"` passes; any other strategy on either pod invalidates the run. `anchor` is pinned
+to node6 by required node affinity on the hostname label that exists already, and `victim` sits beside it by preferred pod affinity
+only, with no volume that would block eviction.
