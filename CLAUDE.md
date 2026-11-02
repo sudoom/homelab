@@ -228,7 +228,7 @@ and restarting its `ovnkube-node` fixes it.
 
 Claude should refuse these actions and explain why briefly:
 
-- **No mutating cluster commands.** No `oc apply/delete/patch/scale/replace`, `kubectl apply/delete/patch`, `helm install/upgrade/uninstall/rollback`. ArgoCD owns cluster state; direct edits cause drift and are reverted.
+- **Mutating cluster commands only with the operator's explicit approval (operator, 2026-11-02).** `oc`/`kubectl` `apply`, `create`, `delete`, `patch`, `replace`, `edit`, `scale`, `rollout`, `label`, `annotate` and `set` are `ask` rules in `.claude/settings.json`, so each one prompts, in auto mode too. I say what I am about to run and why, and the operator's answer to that prompt is the approval. It covers that command only: not a later one, and approving a plan approves no command in it. Subagents never run these. `oc adm`, `oc cp`, `helm install/upgrade/uninstall/rollback` stay denied. ArgoCD still owns cluster state, so a change that belongs in git goes in git; a direct edit to an ArgoCD-managed resource drifts and is reverted.
 - **No state mutation on external tools** (`terraform apply/destroy`, `terraform state mv/rm`, `argocd app sync --force` with prune).
 - **No committed secrets.** No Cloudflare tokens, kubeconfigs, TLS private keys, OLM pull secrets. Reference secrets by name and assume they exist out-of-band.
 - **No editing generated files**: `Chart.lock`, rendered manifest dumps, `*.orig`.
@@ -346,9 +346,9 @@ manifests live under `tests/`; the operator applies and deletes them. Expect rou
   turns it off; that command is not available over Remote Control.
 - **GitHub: use `gh`, not an MCP server.** `@modelcontextprotocol/server-github` was removed 2026-09-24 — npm marks it deprecated ("Package no longer supported"), last release 2025.4.8. `gh` is not logged in on this workstation, so pass the token inline: `GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN" gh …`. Upstream cross-referencing works the same way (`gh issue view -R <owner>/<repo> <n>`, `gh search issues …`).
 
-For mutations against the cluster (apply/delete/patch/scale, etc.), still go through the user.
+Mutations against the cluster need the operator's explicit approval (Guardrails); the MCP server's readonly SA cannot do them at all.
 
-Permissions: `.claude/settings.json` is tracked (since 2026-09-24) and holds the read-only allowlist plus the **guardrail deny list** — `oc`/`kubectl` mutating verbs in both `oc <verb>` and `oc -n <ns> <verb>` forms, `helm install/upgrade/uninstall/rollback`, `argocd app sync`, `gh pr merge/ready/review/close`, force-push/hard-reset, the token-printing `oc whoami -t` / `oc config view --raw`, and reads of kubeconfigs/`.env`/secrets. Deny beats allow, and a deny rule matches past a leading `KUBECONFIG=…` assignment. `.claude/settings.local.json` stays untracked (git, gh reads, ssh, WebFetch domains, MCP tool approvals). Editing either file from a session is blocked by auto mode as self-modification — the user applies settings changes.
+Permissions: `.claude/settings.json` is tracked (since 2026-09-24) and holds the read-only allowlist, the **`ask` list** (`oc`/`kubectl` create, apply, patch, delete and the other mutating verbs in both `oc <verb>` and `oc -n <ns> <verb>` forms; since 2026-11-02 they prompt instead of being denied) and the **guardrail deny list** — `oc adm`/`cp`/`port-forward`, `kubectl cordon/drain/debug/exec/cp/port-forward`, `helm install/upgrade/uninstall/rollback`, `argocd app sync`, `gh pr merge/ready/review/close`, force-push/hard-reset, the token-printing `oc whoami -t` / `oc config view --raw`, and reads of kubeconfigs/`.env`/secrets. Deny beats ask, ask beats allow, and deny and ask rules match past a leading `KUBECONFIG=…` assignment and on any part of a compound command. "Don't ask again" on a prompt cannot override a project `ask` rule, so each command keeps prompting. `.claude/settings.local.json` stays untracked (git, gh reads, ssh, WebFetch domains, MCP tool approvals). Editing either file from a session is blocked by auto mode as self-modification — the user applies settings changes.
 
 ## Reviewing open PRs (`sudoom/homelab`)
 
