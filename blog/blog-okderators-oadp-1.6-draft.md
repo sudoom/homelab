@@ -626,3 +626,43 @@ Written before anything is applied: `tests/oadp-1.6-drill/` (manifests and READM
 **What the OLM `startingCSV` read showed.** `pkg/controller/registry/resolver/resolver.go` (OLM master `861a2c9f` and `openshift/operator-framework-olm` `release-4.22`, same logic): the installed CSV is found by `status.installedCSV`; if one exists the channel is filtered by `skipRange`/`replaces` from it and `startingCSV` is ignored; only with no installed CSV is the channel filtered by the `startingCSV` name. So for the 1.5 to 1.6 upgrade the `replaces` edge does the work and `startingCSV` is inert; it matters for a fresh install, the rollback (after the 1.6 CSV is deleted) and the re-subscribe fallback. The rollback order follows from it: commit the revert first (selfHeal recreates a deleted Subscription), delete the 1.6 CSV, approve the 1.5 InstallPlan, delete the two `ConsoleCLIDownload`s. Read in source only; the live behaviour (CRDs surviving the CSV delete, the Subscription's condition in between) is marked to be confirmed in the runbook.
 
 Also noted: `oc get packagemanifest oadp-operator` returns the `community-operators` entry on this cluster, so the runbook selects `-l catalog=okd-test-oadp`.
+
+## 2026-11-02 — the drill on 1.5 passed: first recorded data mover restore here
+
+Run while the `release-4.22` build was going on node6. Installed: `oadp-operator.v1.5.0-2026-01-05-165341`. Alert board
+before starting: standing alerts only (`ClusterNotUpgradeable`, `InsightsRecommendationActive`, `KubeCPUOvercommit`,
+`PodDisruptionBudgetAtLimit` on the three CNPG primaries, `Watchdog`).
+
+```
+oc apply -f tests/oadp-1.6-drill/namespace.yaml -f tests/oadp-1.6-drill/pvc.yaml -f tests/oadp-1.6-drill/writer.yaml
+DRILL sha256=b29d2dc0f2ea165345a30936217c9cd382260fac1d1bc4a31ec36fef8e60d642
+DRILL gen=661294aa8eb49e836b7d5fc3012510e83cdd46c9cee97436e2adca212d9f57bc
+
+velero bucket bytes=0 objects=0                         # baseline
+
+oc apply -f tests/oadp-1.6-drill/backup-15.yaml
+Completed errors= warnings= items=33/33 start=2026-11-02T20:52:01Z end=2026-11-02T20:53:00Z expires=2026-11-16T20:52:01Z
+drill-15-vpv2f   Completed   134217858   134217858   node6.okd.sudops.pl
+oadp-drill-truenas-garage-kopia   Ready
+
+velero bucket bytes=134551109 objects=28                # read 26 s after the Backup ended
+
+oc apply -f tests/oadp-1.6-drill/restore-drill-15-r15.yaml
+Completed errors= warnings=2 items=20/20 start=2026-11-02T20:54:07Z end=2026-11-02T20:55:09Z
+drill-15-r15-s8wxd   Completed   134217858   134217858   node6.okd.sudops.pl
+DRILL restored copy in oadp-drill-r15: creates no file, waiting for the restored ones
+DRILL sha256=b29d2dc0f2ea165345a30936217c9cd382260fac1d1bc4a31ec36fef8e60d642
+DRILL gen=661294aa8eb49e836b7d5fc3012510e83cdd46c9cee97436e2adca212d9f57bc
+```
+
+Both restored checksums match the source's, read back from a volume filled by a `DataDownload` from garage, in a pod that
+creates no file. So the data mover path that `daily` uses works on 1.5, against the NAS, on the first try. The earlier
+proofs here were a ConfigMap and file-system backup. No `velero.io/csi-volumesnapshot-class` annotation or label was
+needed: Velero picked `ceph-rbd-snapshot` as the driver's only class.
+
+The Restore's two warnings are benign: `kube-root-ca.crt` and `openshift-service-ca.crt` already exist in the new
+namespace, because OpenShift creates them. That is lower than the file-system rehearsal's seven. No stray PVs or
+`Released` volumes afterwards.
+
+The restored pod and PVC ran on node6, as the source did, so the restore did not prove a pull from another node. It did
+not need to: the data came through the bucket either way.
