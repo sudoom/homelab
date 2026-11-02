@@ -351,4 +351,18 @@ node6 requests  8.2: openshift+kube 3.5 (used 2.6), rook-ceph 2.3 (used 0.2), ok
 
 The 3 GiB memory reservation holds. CPU has only the 500m default against 1.6 to 2.3 cores of real use. Raising it costs real
 capacity on node4/5, which are nearly full by requests, and it means a reroll, so it is a README TODO to do with the image-GC
-KubeletConfig. I could not read CPU pressure or etcd latency myself: the classifier refuses `oc exec` reads.
+KubeletConfig. I could not read CPU pressure or etcd latency myself, because the classifier refuses `oc exec` reads, so the
+operator ran the queries (21:14:45Z, 10 minute window, during the build and the apiserver rollout):
+
+```
+etcd WAL fsync p99 s       node6 0.049   node4 0.006   node5 0.004
+etcd backend commit p99 s  node6 0.043   node4 0.007   node5 0.003
+apiserver GET/LIST p99 s   node6 0.791   node4 0.191   node5 0.089
+CPU PSI: no series
+alerts other than the standing ones: none
+```
+
+etcd on the build's node is about ten times slower than on the other two, past etcd's usual 10 ms guidance for fsync but far
+below `etcdHighFsyncDurations`, and no alert fired. The apiserver figures are muddied because every apiserver restarted inside
+that window. So the build has a visible cost on node6 and has done no harm so far. It keeps running; the next round, if there
+is one, gets a CPU limit of 10 instead of 14. This is a single reading.
