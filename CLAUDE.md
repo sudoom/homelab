@@ -266,6 +266,11 @@ with a rule below, the repo rule wins and I say which one I am following and why
   Subagents work on `master` like I do, with no worktree and no branch (rule below), and never push. Every
   dispatch prompt repeats the rules its task touches: secrets, the commit message style, no `Co-Authored-By`
   trailer. The Workflow tool's multi-agent scripts are not covered by this and still need the operator's ask.
+- **Every proposed plan gets a Fable review (operator, 2026-11-02).** Once a plan is written, whatever it is for
+  (implementation, upgrade, migration, review), and whether it sits in a file or in chat, dispatch one read-only review
+  agent with `model: "fable"` before asking for approval or starting the work. Give it the plan, the spec and the facts
+  it needs, not my conclusions. Fix the findings that hold up, then present the plan with what the review found, what I
+  changed and what I rejected and why. A single-step suggestion is not a plan.
 
 **These conflict with existing rules — the repo rule wins:**
 
