@@ -78,7 +78,7 @@ objects:
                   cpu: "2"
                   memory: 8Gi
                 limits:
-                  cpu: "14"
+                  cpu: "10"
                   memory: 48Gi
               securityContext:
                 privileged: true

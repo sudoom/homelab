@@ -377,8 +377,9 @@ renamed, works: `opm` renders a bundle directory).
 Unchanged from the logging Job, which documents it in full: privileged podman in a pod (SCC
 `privileged` through the RoleBinding there), one PVC with two `subPath` mounts, pushes to zot
 `okd-test/` only with no registry credentials in the pod, one run at a time via `flock`, no tag
-pushed twice, `backoffLimit: 0`, requests 2 CPU / 8 Gi, limits 14 CPU / 48 Gi, podman image pinned by
-digest. The builds run one after another, so the limits that carried GitOps' twelve images carry these.
+pushed twice, `backoffLimit: 0`, requests 2 CPU / 8 Gi, limits 10 CPU / 48 Gi, podman image pinned by
+digest. The limit was 14 for the first full build (2 h 42 min), when etcd's WAL fsync p99 on the build's
+node read 49 ms, about ten times the other nodes, with no alert. The builds run one after another.
 What changes is the deadline: 24 h of `activeDeadlineSeconds` instead of 12. GitOps took 97 minutes for
 twelve images on throttled cores; this is nineteen, `go build -a` on most, and ten cross-compiled
 binaries, so expect several hours while the `powersave-experimental` Tuned profile pins cores at minimum
