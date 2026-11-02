@@ -400,9 +400,18 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   1.6 is complete for every OADP user (eight new images, six more submodules, no konveyor image in the bundle), and real
   scheduled backups are not part of this work. Reviewed; waiting on plan approval. **(2) A supervised, coherent
   Rook bump to v1.20.9.** v1.19.5 supports Kube 1.30-1.35, so the cluster sits at its top edge; v1.20.9 covers 1.31-1.37.
-  The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(3) Before 5.0:**
+  The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(3) Before 5.0, a descheduler upgrade:**
   `ClusterNotUpgradeable` fires because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
   `maxOpenShiftVersion` 4.22, and OLM blocks the next minor or major upgrade until a newer descheduler is installed.
+  Harmless until a hop is planned. Read 2026-11-02: no okderators catalog offers a way out. `release-4.21` and `release-4.22`
+  head at that same 5.3.0, `release-5.0` has no descheduler at all, and only `release-4.20` has 5.4 (5.4.0-2026-07-13).
+  `kube-descheduler/build.sh` already sets 5.4 on pipeline `main` and `release-4.22`, but `main`'s last deploy failed
+  (2026-09-23, "Target OKD 5.0") and the recent runs show none from `release-4.22`. The cap is computed as `OKD_VERSION`
+  minor + 1, so a `release-4.22` build says 4.23 and a `main` build says 5.1; whether 4.23 clears OLM's check for a hop to
+  5.0 is not verified. Red Hat's `release-4.22` is v5.4.3 and `release-5.0` is v5.4.4, both with `olm.skipRange
+  >=5.3.0`. So this is contribution work in the same shape as OADP 1.6: fix `main`'s build, build `release-4.22`, catalog
+  entries on `release-4.22` and `release-5.0`, then this cluster through a test catalog and a soak. Check the
+  `AffinityAndTaints` profile and the CR against 5.4 first.
   **For the next reroll:** check which node `zot-0` runs on. While zot is down, every `okd-test/` consumer rescheduled
   onto a node without its image cached waits (GitOps, NMState, logging), and each mirrored pull takes about 1m40s. Stale
   RBD VolumeAttachments cleared on their own after about 5 minutes, so wait about 6 minutes before force-clearing one.
