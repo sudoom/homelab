@@ -1,0 +1,11 @@
+# Per okderators-catalog-index branch: what catalog-edit.sh (MODE=catalog) adds, and which installed
+# CSVs the graph walk starts from. Tab-separated, one row per branch; lists are comma-separated CSV
+# names. A row holding TO-FILL stops a catalog run before any edit.
+#   REPLACES   the new entry's replaces: the channel's single head before the edit, read 2026-11-02
+#              (pins.md, "Catalog heads"); any other head stops the branch. Nothing is removed.
+#   INSTALLED  CSVs a cluster may run; {DATE-1d} is the new bundle's DATE a day earlier: the shape of
+#              our test CSV, for the later move of this cluster to the official build
+# Plan Task 4 Step 2 and Global Constraints (2026-11-02).
+#branch	REPLACES	INSTALLED
+release-4.22	oadp-operator.v1.5.0-2026-01-05-165341	oadp-operator.v1.5.0-2026-01-05-165341,oadp-operator.v1.4.0-2025-01-23-195220,oadp-operator.v1.4.0-2024-09-04-143635,oadp-operator.v1.6.0-{DATE-1d}
+release-5.0	oadp-operator.v1.4.0-2025-01-23-195220	oadp-operator.v1.4.0-2025-01-23-195220,oadp-operator.v1.4.0-2024-09-04-143635

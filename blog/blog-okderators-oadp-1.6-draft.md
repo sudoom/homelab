@@ -470,3 +470,134 @@ $ ./static-check.sh pipeline  -> static-check: PASS
 ```
 
 Non-oadp gitlinks differ between `oadp-1.6` and this branch by design (the branches diverge). Local only; not pushed.
+
+## 2026-11-02: Task 4, the build Job (`tests/okderators-oadp-build/`)
+
+The in-cluster Job that runs the pipeline's own `oadp/build.sh` from the fork branches, checks the result, and later builds the catalogs. Nothing here touched the cluster; the operator applies it in Task 5. Copied from `tests/okderators-nmstate-build/`: same contract lines (`STEP`, `DISK`, `PUSHED`, `CHECK`, `RESULT`), `flock` on `/work/.lock`, registry guard, prune, log persistence, Job shape, podman image. `MODE=check` comes from the logging Job. The README has the commands and every check.
+
+### What it checks, and when
+
+A build takes hours and zot's budget is about two of them, because a deleted failed round frees nothing until the next 24 h GC pass. So what can be known early is checked early, and the run stops there:
+
+| When | Check | Why it is there |
+|---|---|---|
+| after the clone | `pipeline-gitlinks`, `gitmodules-branch` | a wrong `PIPELINE_BRANCH` ends in seconds. The 19 pins are a table in `build.sh`, compared with the gitlinks, because a gitlink compared with itself proves nothing |
+| before `init` | `base-images` | every `FROM` resolves, and its digest goes in the log: `go-toolset:1.26` and the `:latest` UBI bases move |
+| after `init` | `submodule-pins`, `operator-commit` | from `git submodule status`, because a submodule's `.git` is a file and no `vcs.revision` is stamped. The flag column matters: `-` prints the pinned commit with nothing checked out, and `submodule_initialize` hides a failed update behind `\|\| true`. `oadp/operator` and `oadp/vm-file-restore` carry a patch commit, so for those two `HEAD~1` is the pin and `HEAD` has the right subject |
+| before the push | `image-smoke`, `velero-version`, `vm-file-restore-env` | a broken image costs no zot space. All eight run even after a failure, so one round shows every failure |
+| after the bundle | `bundle-objects`, `no-redhat-registry`, `csv-name`, `install-modes`, `images-by-digest`, `no-konveyor`, `okd-strings`, `operator-sdk-validate` | the images are pushed by then, so a failure here costs a `MODE=check` run, not a rebuild |
+
+Choices worth recording:
+
+- **`bundle-objects` compares with the operator pin's own `bundle/manifests`** (50: 10 + 13 CRDs, the CSV, 26 RBAC and Service manifests), read from git objects because `make bundle` rewrites the tree. Extra fails; missing fails too, because a dropped CRD or Role is a broken install.
+- **`images-by-digest` is a set, then a map.** operator-sdk lists some images twice under two names (the published 1.5.0 has `velero_plugin_for_aws` and `velero-plugin-for-aws`), so `relatedImages` compare as a set with the 19 digests this run recorded. But two env vars swapped would still pass as a set, so each `RELATED_IMAGE_*` is then checked by name against the same mapping as `build_bundle()`.
+- **`no-konveyor` scans the whole bundle**, wider than `relatedImages` and the env: at the pin the CSV names `quay.io/konveyor` only on the lines `build_bundle()` rewrites, so nothing may be left. `bundle/image-references` names it too, but it sits outside `manifests/` and the image does not copy it.
+- **The download servers must still be up when `timeout 10` ends them**, not only have logged `Found N binaries` and `Starting server`: `log.Fatal` after a failed bind logs both lines as well. One retry at 30 s, because a podman start on throttled cores can take seconds and a false FAIL here would throw away a whole build.
+- **`RESULT PASS` needs more than no failures.** `finish` counts `CHECK ... FAIL` in memory and in the contract file, and each mode requires a `PASS` line for every one of its checks by name, so a flow that skipped a check reads as `RESULT FAIL`. A `DATE` whose log file exists is refused.
+- **`MODE=check` copies to a new tag in the same repository**, not to the logging Job's `check-<branch>/` registry. `oadp/build.sh` derives every `IMG_*` from `DATE`, and `DATE` is new because a tag is never pushed twice. No repository to clean up, no new blobs in zot, and `relatedImages` stay under `okd-test/oadp/`. The catch, in the README: its 19 tags share digests with the full run, so deleting one by digest removes the full run's image.
+- **`deinit` runs after verify**, unlike NMState: its `submodule_reset` over `must-gather`'s nested submodules has never run, and a failure there must not hide the bundle's results.
+
+Fedora: nothing coded. If `fedora:44` does not resolve in the real build, that is decided then.
+
+### Resources
+
+Deadline 24 h instead of 12. GitOps took 97 minutes for twelve images under `powersave-experimental`; this is nineteen, `go build -a` on most, ten cross-compiled binaries, and a deadline kill loses all of it. Requests and limits stay (2 CPU / 8 Gi, 14 CPU / 48 Gi): builds run one after another, so what carried GitOps carries these, and the nodes have 128 GiB.
+
+The PVC is the tight one. Measured earlier: `build_containers` added 33.3 GB for GitOps' twelve images and 29.5 GB for logging's nine, about 3 GB an image. Nineteen plus the cross-compiles gives an estimated peak of 70 to 100 GB against 100 Gi (107 GB). An estimate, not a measurement, and running out costs the whole build, so the README asks the operator to grow it to 150 Gi first; `ceph-nvme-block` allows expansion. `INFO free` after every step shows what is left.
+
+### How it was tested without a build
+
+Bash on this Mac is 3.2 and `build.sh` needs to run here to be tested, so unlike the NMState Job it avoids associative arrays and namerefs, as `catalog-edit.sh` already did, and sourcing it does not run `main`. A newer bash was not an option: compiling one was refused by the auto-mode classifier, and I did not look for a way around that. The fixtures are real where they can be: the 50 manifests of the operator pin's `bundle/`, the CSV edited the way the patch, `build_bundle()` and `--use-image-digests` edit it, rendered by the real `opm`. `podman`, `skopeo` and `oc` are stubs. `git`, `jq`, `yq`, `opm` and `catalog-walk.py` are real, and so are the two catalog trees and the `oadp/build.sh` the variables are read from.
+
+The first run paid for this. A real bug, in two checks:
+
+```
+WRONG good fixture    want PASS got []
+      build.sh: line 1027: dir: unbound variable
+```
+
+`local dir=$1 got=$dir/files.got` reads the outer `dir`. Fixed by splitting the declarations; the Job would have died at its first verify, after the whole build.
+
+Results (scripts and full output kept in the gitignored work directory, `work/task4-tests/`):
+
+```
+$ SCR=... ./run-all.sh
+units:    96 as expected, 0 wrong     every check on a good fixture PASS, on each doctored one FAIL
+git:      24 as expected, 0 wrong     the pin checks against real submodules
+e2e 4.22: 109 as expected, 0 wrong    real main, control flow, branch oadp-1.6-4.22
+e2e main: 109 as expected, 0 wrong    the same on branch oadp-1.6
+catalog:  60 as expected, 0 wrong     walker, the real trees, MODE=catalog through build.sh
+```
+
+A sample of the failures it shows, one line each:
+
+```
+ok  ImageStream object in the render      FAIL objects not in the pin's list: ImageStream/oadp;
+ok  a CRD file missing                    FAIL files missing: velero.io_backups.yaml;
+ok  swap: two env vars on one image       FAIL RELATED_IMAGE_VELERO_PLUGIN_FOR_AWS=.../gcp-plugin@sha256:992d...
+ok  one image missing (17 + manager)      FAIL csv relatedImages missing: .../velero@sha256:01aa...
+ok  the operator env                      FAIL operator env: RELATED_IMAGE_VELERO=quay.io/konveyor/velero:oadp-1.6;
+ok  plain not initialised (status shows the pin)  FAIL 1 of 3: oadp/plain: not initialised;
+ok  operator: two commits on top          FAIL oadp/operator: HEAD~1 a9692eb... (pin cee5faa...), subject ...
+ok  cli logs both lines, then bind fails  FAIL tries 10s=exit1 30s=exit1; want it still serving (exit 124) ...
+ok  rsync in the chroot lacks a library   FAIL rsync in the chroot exit 127: rsync: error while loading shared libraries
+ok  access without guestmount             FAIL exit 1: MISSING: guestmount
+```
+
+The control flow, `real main` with a broken image: `RESULT FAIL the images are not pushed: ...`, no `STEP push_containers`, no `PUSHED`, and the other images still ran. With the wrong branch, `RESULT FAIL oadp/build.sh builds 1.5, want 1.6` before `init`. With a check silently skipped, `RESULT FAIL full: no PASS line for okd-strings`. With a failing `make bundle`, 19 `PUSHED` lines stay for `MODE=check`.
+
+`vm-file-restore-env` on two real linux/amd64 binaries, read as bytes and not run. Konveyor's published `oadp-vm-file-restore:oadp-1.6` is built from our pin (`io.openshift.build.commit.id` `adb1fb3`), so it is the unpatched control; our patch at the pin, compiled with Go 1.26.10, is the other:
+
+```
+--- konveyor                                  VMFR_ACCESS_IMAGE 0, VMFR_SSH_IMAGE 0, VMFR_BROWSER_IMAGE 0 (LOG_FORMAT 2)
+CHECK vm-file-restore-env FAIL /manager lacks VMFR_ACCESS_IMAGE VMFR_SSH_IMAGE VMFR_BROWSER_IMAGE: patches/vm-file-restore.patch did not reach the binary
+--- patched                                   1, 1, 1
+CHECK vm-file-restore-env PASS /manager contains VMFR_ACCESS_IMAGE VMFR_SSH_IMAGE VMFR_BROWSER_IMAGE
+```
+
+### The walker and the catalog edit
+
+`catalog-walk.py` is byte-identical to the NMState copy: it takes the package as an argument, so only `catalog-edit.sh` needed adapting. The edit adds an entry instead of replacing a broken one. Hand-made catalogs first, the failing test the brief asks for:
+
+```
+4.22 edge present, the four INSTALLED     exit 0 PASS 4 entries + 1 CSV absent from the channel reach oadp-operator.v1.6.0-2026-11-02-120000
+4.22 no edge: 1.5.0 stranded, two heads   exit 1 FAIL heads oadp-operator.v1.5.0-2026-01-05-165341, oadp-operator.v1.6.0-2026-11-02-120000, want ... | stranded: ...
+4.22 only replaces: the test CSV stranded exit 1 FAIL stranded: oadp-operator.v1.6.0-2026-11-01-120000 (absent from the channel) ...
+4.22 only skipRange: still two heads      exit 1 FAIL heads oadp-operator.v1.5.0-2026-01-05-165341, oadp-operator.v1.6.0-2026-11-02-120000, want ...
+5.0 edge present, the two 1.4.0           exit 0 PASS 3 entries reach oadp-operator.v1.6.0-2026-11-02-120000
+5.0 no edge: 1.4.0 stranded, two heads    exit 1 FAIL heads oadp-operator.v1.4.0-2025-01-23-195220, ...
+```
+
+Then `catalog-edit.sh` in test mode on the real `release-4.22` (`98c6d9d`) and `release-5.0` (`4daed51`), every check PASS, both negative controls as designed. The edit on 4.22:
+
+```diff
+   - name: oadp-operator.v1.5.0-2026-01-05-165341
+-    replaces: oadp-operator.v1.4.0-2025-01-23-195220
+\ No newline at end of file
++    replaces: oadp-operator.v1.4.0-2025-01-23-195220
++  - name: oadp-operator.v1.6.0-2026-11-02-120000
++    replaces: oadp-operator.v1.5.0-2026-01-05-165341
++    skipRange: '>=1.4.0-0 <1.6.0-2026-11-02-120000'
+```
+
+The one removed line is the missing final newline, on both branches; `yq` proves the entries are the old ones plus the new one, and no file goes. The first negative control also needs `opm validate` to refuse the two heads. On 5.0 no `INSTALLED` CSV is absent from the channel, so its second control instead asserts that `replaces` alone is enough.
+
+### Manifests
+
+```
+$ kubectl kustomize tests/okderators-oadp-build/ | kubeconform -strict -ignore-missing-schemas -summary
+Summary: 1 resource found parsing stdin - Valid: 1, Invalid: 0, Errors: 0, Skipped: 0
+$ oc process --local -f tests/okderators-oadp-build/job-template.yaml -p MODE=full -p PIPELINE_BRANCH=oadp-1.6-4.22 -p DATE=2026-11-02-130000 -o yaml
+Job oadp-build-full-2026-11-02-130000, activeDeadlineSeconds 86400, backoffLimit 0    (kubeconform: Valid: 1)
+the same for MODE=check with REUSE_DATE and MODE=catalog with CATALOG_BRANCHES and BUNDLES: Valid: 1
+$ bash -n build.sh; bash -n catalog-edit.sh; python3 -I -m py_compile catalog-walk.py    all OK
+```
+
+### Not tested before a real build
+
+- Bash 5 itself. The checks ran on 3.2; the pod has 5.x and `inherit_errexit`. I read through every command substitution for that difference, which is not the same as running it.
+- Anything inside a real container: every `podman run` is a stub, so whether each image behaves as the smoke test assumes comes from reading its source at the pin. The real `build_containers`, `push_containers`, `build_bundle` and `deinit` have not run, nor has `skopeo copy --preserve-digests`.
+- `operator-sdk bundle validate` on this bundle: running the release binary on the Mac was refused too. `make bundle` runs its own v1.35.0 first, so a failure there would surface as `RESULT FAIL build_bundle`.
+- That `make bundle` emits exactly the pin's file list. It should, since the list was generated by the same command at the same commit, and a surprise costs a `MODE=check` run.
+
+Next: Task 5, the operator applies it.
