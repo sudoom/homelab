@@ -472,3 +472,34 @@ CSV at the operator heads: 4.22 is `clusterkubedescheduleroperator.v5.4.3` (vers
 Image slots: `grep RELATED_IMAGE` on the CSV at both heads gives exactly two, `RELATED_IMAGE_OPERAND_IMAGE` and `RELATED_IMAGE_SOFTTAINTER_IMAGE`. `build_bundle()` in `kube-descheduler/build.sh` (identical on pipeline `main` and `release-4.22` apart from one comment) rewrites both, from `IMG_DESCHEDULER` and `IMG_OPERATOR`. No unmapped slot, so nothing blocks.
 
 Catalog (`okd-project/okderators-catalog-index`): `release-4.22` head 98c6d9d54411ed494a13e2a00fd5f76ffb4d82bc, package `cluster-kube-descheduler-operator`, `alpha` channel with one entry, `v5.3.0-2026-10-12-113655`. `release-5.0` head 4daed51b21a8693b3f44feef6eee74fb4bf1c04d has no descheduler package at all. The full table is in the scratch `pins.md`.
+
+## 2026-11-02 — okderators descheduler 5.4: pipeline change
+
+Task 2 of the 5.4 plan: two local branches in my `okd-operator-pipeline` clone, nothing pushed. The clone is blob-less and `--no-checkout`, so I built the commits with plumbing (temporary `GIT_INDEX_FILE`, `git read-tree <base>`, `git update-index --cacheinfo 160000,<sha>,<path>`, `write-tree`, `commit-tree`, `update-ref`) and never checked out a submodule. The pins are the Task 1 table in `work/pins.md`; the two submodule paths are `kube-descheduler/operator` and `kube-descheduler/descheduler` on both bases.
+
+Check first, `work/static-check.sh <tree> <4.22|main>`, reading committed content only. Five items: gitlinks equal the pins, `.gitmodules` `branch =` equals the pinned branch, the deploy workflow's push branch (and on 4.22 `catalog_branch: release-4.22`), `operator-deploy.yaml` declares and forwards `catalog_branch`, and each builder's Go (the `go-toolset:<major.minor>` tag in the Containerfile) is at least the pinned `go.mod` `go` line.
+
+RED, against the unchanged bases:
+
+    static-check origin/release-4.22 (4.22): FAIL (2 checks)
+      [1] operator tree=7e5dc356... pin=1eb4d75f...; descheduler tree=f4ce79db... pin=076d0fc5...
+      [3] push branches: [main], expected [release-4.22]; no 'catalog_branch: release-4.22'
+    static-check origin/main (main): FAIL (1 checks)
+      [1] operator tree=a24b583c... pin=5c0659fc...; descheduler tree=75b22cea... pin=ca28d9e9...
+
+The Go check passes on both bases (4.22 builds with go-toolset:1.25 against go 1.25.0 / go1.25.1, main with 1.26 against 1.26.3 / 1.26.0), so it had to be shown able to fail: with a copy of `pins.md` whose go lines are raised to 1.27.x (`PINS=... static-check.sh`) it reports `operator.Containerfile: builder Go 1.25 < pinned go.mod go 1.27.0` and, with only the descheduler row raised, `descheduler.Containerfile: builder Go 1.26 < pinned go.mod go 1.27.0`. It compares major.minor only, because the toolset tag floats; whether the 1.26 image has reached patch 1.26.3 shows only in the build.
+
+Edits and commits:
+
+- `descheduler-5.4` from `origin/main` (25981072): `[kube-descheduler] Update to the release-5.0 heads`, the two gitlinks to `5c0659fc` (operator) and `ca28d9e9` (descheduler).
+- `descheduler-5.4-4.22` from `origin/release-4.22` (8ab81e0): `[kube-descheduler] Update to the release-4.22 heads` (`1eb4d75f`, `076d0fc5`), then `[kube-descheduler] Deploy from release-4.22 to catalog release-4.22`: in `.github/workflows/kube-descheduler-deploy.yaml` the push branch `"main"` becomes `"release-4.22"` and `with:` gains `catalog_branch: release-4.22`. That is the shape release-4.21 already uses for the trigger; `operator-deploy.yaml` already has the `catalog_branch` input (default `release-4.21`), so it needs no change.
+
+`.gitmodules` needed nothing: both bases already say `branch = release-4.22` / `release-5.0` for the two stanzas, the same branch as the pin (and the build resets to the gitlink anyway). `build.sh` and the Containerfiles are untouched: `build.sh` has no builder image of its own, and the bundle mapping for the two RELATED_IMAGE slots was checked in Task 1.
+
+GREEN:
+
+    static-check descheduler-5.4-4.22 (4.22): PASS   (5 of 5)
+    static-check descheduler-5.4 (main): PASS        (5 of 5)
+    bash -n kube-descheduler/build.sh: ok on both
+
+Diffstat against each base: `origin/main..descheduler-5.4` is `kube-descheduler/descheduler`, `kube-descheduler/operator` (2 files, 2+/2-); `origin/release-4.22..descheduler-5.4-4.22` is those two plus `.github/workflows/kube-descheduler-deploy.yaml` (3 files, 4+/3-).
