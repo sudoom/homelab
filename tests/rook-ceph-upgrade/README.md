@@ -176,9 +176,9 @@ in the operator's window. Run the gates (list above) first.
 
 | # | Patch | Content |
 |---|---|---|
-| 1 | `s1-c1a-pins` | Ceph image pins (`quay.io/ceph/ceph:v20.2.5-20261028`, five places) |
-| 2 | `s1-c1b-driver-protect` | protect the Driver from pruning |
-| 3 | `s1-c1c-prunelast` | prune-last sync option |
+| 1 | `s1-c1a-pins` | explicit `cephClusterSpec.network.connections.requireMsgr2: false` and `upgradeOSDRequiresHealthyPGs: true` in the cluster `values.yaml`; expected to roll no daemon |
+| 2 | `s1-c1b-driver-protect` | `argocd.argoproj.io/sync-options: Delete=false,Prune=false` on the Driver in `csi-driver-config` |
+| 3 | `s1-c1c-prunelast` | root-app `extraSyncOptions: [PruneLast=true]` on `rook-ceph-operator` only |
 | 4 | `s1-c2-operator-hop` | operator chart to v1.20.9 (the hop) |
 | 5 | `s1-c3-cluster-chart` | cluster wrapper to v1.20.9 |
 | 6 | `s1-c4-legacy-cleanup` | remove the legacy CSI resources, only after c2 and c3 verify |
@@ -186,6 +186,16 @@ in the operator's window. Run the gates (list above) first.
 Before each push the controller runs `git apply --check` on the patch, re-renders the chart from the applied patch
 (`helm dependency build`, `helm template`, kubeconform) and runs `oc diff` against live; a diff that differs from the
 render evidence stops the push.
+
+**Window start.** At the start of every window (c2, c3 and each stage-2 commit) the controller records the UTC time
+before pushing, in the evidence tree (never committed), and every "newer than the window start" check below reads it:
+
+```bash
+# CONTROLLER, immediately before the push
+date -u +%Y-%m-%dT%H:%M:%SZ | tee .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/window-start.txt
+# in each later check:
+WINDOW_START="$(cat .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/window-start.txt)"
+```
 
 **Pre-hop state (c1a-c1c done).** Record before c2:
 
@@ -197,6 +207,7 @@ KUBECONFIG=~/.kube/config-readonly oc get pods -A -l cnpg.io/cluster -o custom-c
 ```
 
 Run the smoke sequence (above) once and the Events command below; keep both outputs as the baseline.
+(c1a should roll no daemon; if any mon, mgr or OSD pod restarts after it, stop and report before c2.)
 
 **Verify after c2 and again after c3** (every item must hold):
 
@@ -206,26 +217,40 @@ Run the smoke sequence (above) once and the Events command below; keep both outp
    generation means something keeps rewriting the Driver spec).
 3. Smoke sequence PASS (writer, reader recomputed and reader stored sums equal), then delete the namespace and
    confirm the PV and RBD image are gone.
-4. No new `FailedMount` or `FailedAttachVolume` event anywhere (nothing newer than the window start):
+4. No `FailedMount` or `FailedAttachVolume` event anywhere with a `lastTimestamp` at or after the window start.
+   Expected: both counts `0`.
 
 ```bash
-# CONTROLLER (readonly): FailedMount / FailedAttachVolume events, whole cluster, newest last
+# CONTROLLER (readonly)
+WINDOW_START="$(cat .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/window-start.txt)"
 for reason in FailedMount FailedAttachVolume; do
-  KUBECONFIG=~/.kube/config-readonly oc get events -A --field-selector reason=$reason --sort-by=.lastTimestamp \
-    -o custom-columns=LAST:.lastTimestamp,NS:.metadata.namespace,OBJ:.involvedObject.name,COUNT:.count | tail -5
+  echo "$reason since $WINDOW_START: $(KUBECONFIG=~/.kube/config-readonly oc get events -A --field-selector reason=$reason -o json \
+    | jq --arg s "$WINDOW_START" '[.items[] | select((.series.lastObservedTime // .lastTimestamp // .eventTime // .metadata.creationTimestamp) >= $s)] | length')"
 done
 ```
 
 5. CNPG pods not restarted by the hop: rerun the pre-hop CNPG command; `RESTARTS` equal to the saved values and no
    `START` after the window start.
-6. OSD prepare pods are `Completed` on node4, node5 and node6 (at v1.20.8+ they run on the host network):
-   `KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get pods -l app=rook-ceph-osd-prepare -o wide` -> three pods,
-   STATUS `Completed`, NODE node4, node5, node6.
+6. OSD prepare pods are `Completed` on node4, node5 and node6 and were started after the window start (at v1.20.8+
+   they run on the host network; a `Completed` pod from before the hop proves nothing):
+
+```bash
+# CONTROLLER (readonly)
+WINDOW_START="$(cat .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/window-start.txt)"
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get pods -l app=rook-ceph-osd-prepare \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.spec.nodeName}{"\t"}{.status.startTime}{"\n"}{end}' \
+  | awk -F'\t' -v s="$WINDOW_START" '{print $0 "\t" ($4 >= s ? "NEW" : "STALE")}'
+```
+
+   Expected: three rows, phase `Succeeded` (shown as `Completed`), nodes node4, node5, node6, last column `NEW` on all
+   three. Any `STALE` row means the prepare job has not re-run since the push: wait and re-read, and do not pass the
+   item until all three are `NEW`.
 7. Operator: `bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s1` (after c3). Expected: `0 reads failed`; in the
    `ceph auth get client.csi-rbd-provisioner.1` section the caps equal the caps-fix Job's set
    (`components/storage/rook-ceph-cluster/templates/csi-rbd-provisioner-caps-fix.yaml`): `mgr` = `allow rw`,
    `mon` = `profile rbd, allow command 'osd blocklist'`, `osd` = `profile rbd`. Compare:
-   `grep -A12 'ceph auth get client.csi-rbd-provisioner.1' .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/ceph-reads-s1-*.txt`.
+   `grep -A12 'ceph auth get client.csi-rbd-provisioner.1' "$(ls -t .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/ceph-reads-s1-*.txt | head -1)"`
+   (the newest `s1` capture; in zsh the glob has a match once the script has run).
    Any other set (for example no `osd` cap) is a FAIL.
 
 c4 goes only after c2 and c3 pass items 1-7; after it, rerun `csi-state.sh --expect stage1` and the smoke sequence.
@@ -252,9 +277,11 @@ patch and runs `oc diff` before each push. Gates first, and stage 1 verified and
    `KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get cephconnections.csi.ceph.io,clientprofiles.csi.ceph.io`
    -> one `rook-ceph` row in each.
 4. Smoke sequence PASS, then delete the namespace and confirm the PV and RBD image are gone.
-5. No new `FailedMount` or `FailedAttachVolume` (Events command in Stage 1 item 4; nothing newer than the window start).
-6. CNPG pods not restarted (Stage 1 pre-hop CNPG command: `RESTARTS` unchanged, no `START` after the window start).
-7. OSD prepare pods `Completed` on node4, node5, node6 (Stage 1 item 6).
+5. No `FailedMount` or `FailedAttachVolume` since the window start (record `window-start.txt` before each push; Events
+   command in Stage 1 item 4; both counts `0`).
+6. CNPG pods not restarted (Stage 1 pre-hop CNPG command: `RESTARTS` unchanged, no `START` at or after
+   `$WINDOW_START`).
+7. OSD prepare pods `Completed` on node4, node5, node6, all `NEW` against `$WINDOW_START` (Stage 1 item 6 command).
 8. Operator: `bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s2` -> `0 reads failed`, the provisioner caps still
    `mgr allow rw` / `mon profile rbd, allow command 'osd blocklist'` / `osd profile rbd`.
 
@@ -299,14 +326,15 @@ KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get cephconnections.csi.ceph.
    rook-ceph-mon-endpoints-csi-monitors` line may still show `:6789`; that is expected.
 2. Operator: `bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s3`. In the `ceph config dump | grep ...` section
    `rbd_default_map_options` reads `ms_mode=prefer-crc`:
-   `grep rbd_default_map_options .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/ceph-reads-s3-*.txt`.
+   `grep rbd_default_map_options "$(ls -t .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/ceph-reads-s3-*.txt | head -1)"`.
 3. A freshly mapped volume uses msgr2: run the smoke sequence (new PVC and pod), then the operator reads the
    mapping on the node that runs `smoke-writer` (find it with `oc -n rook-upgrade-smoke get pod smoke-writer -o wide`
    and the nodeplugin pod on that node):
    `oc -n rook-ceph exec <nodeplugin pod> -c csi-rbdplugin -- sh -c 'cat /sys/bus/rbd/devices/*/config_info'`
    -> the smoke volume's line shows `:3300` and `ms_mode=prefer-crc`. Volumes mapped before the roll keep their old
    mapping until the pod is rescheduled; that is not a failure.
-4. No new `FailedMount` or `FailedAttachVolume` (Events command in Stage 1 item 4).
+4. No `FailedMount` or `FailedAttachVolume` since the window start (record `window-start.txt` before the push; Events
+   command in Stage 1 item 4; both counts `0`).
 5. Health is back to the standing WARN (only `BLUESTORE_SLOW_OP_ALERT`) and PGs are `active+clean`, both in the
    `ceph health detail` and `ceph -s` sections of the `s3` capture.
 6. Delete the smoke namespace and confirm the PV and RBD image are gone.
