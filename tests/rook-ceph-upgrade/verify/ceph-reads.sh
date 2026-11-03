@@ -11,6 +11,7 @@ set -u -o pipefail
 [ $# -eq 1 ] || { echo "usage: $0 <label>" >&2; exit 2; }
 LABEL="$1"
 case "$LABEL" in *[!A-Za-z0-9._-]*|"") echo "label must match [A-Za-z0-9._-]+" >&2; exit 2 ;; esac
+command -v oc >/dev/null 2>&1 || { echo "oc not found" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "jq not found" >&2; exit 2; }
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -33,30 +34,44 @@ grep_read() {
   elif [ "${st[1]}" -eq 1 ]; then echo "(no match, ceph command ok)" >> "$OUT"; fi
 }
 
-section "ceph versions";        tool ceph versions >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
+section "ceph versions"
+VERS="$(tool ceph versions 2>&1)"; VERS_RC=$?
+printf '%s\n' "$VERS" >> "$OUT"
+[ "$VERS_RC" -eq 0 ] || echo "READ-FAILED rc=$VERS_RC" >> "$OUT"
+# Tentacle-or-later only if some daemon is not 19.x; unknown (read or parse failed) counts as "run it".
+PRE_TENTACLE=0
+if [ "$VERS_RC" -eq 0 ]; then
+  [ "$(printf '%s' "$VERS" | jq -r '[.overall // {} | keys[]] | if length>0 and all(.[]; test("^ceph version 19\\.")) then "yes" else "no" end' 2>/dev/null)" = yes ] && PRE_TENTACLE=1
+fi
 section "ceph health detail";   tool ceph health detail >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 section "ceph -s";              tool ceph -s >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 section "ceph df";              tool ceph df >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 section "ceph osd tree";        tool ceph osd tree >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 section "ceph mon dump";        tool ceph mon dump >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 section "ceph mon dump -f json | jq auth_service_cipher.name"
-tool ceph mon dump -f json 2>>"$OUT" | jq -r '.auth_service_cipher.name // "unset"' >> "$OUT" 2>&1 || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
+tool ceph mon dump -f json 2>>"$OUT" | jq -r '.auth_service_cipher.name // "unset"' >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 section "ceph osd dump | grep require_osd_release|flags"
 grep_read 'require_osd_release|flags' ceph osd dump
 section "ceph config dump | grep rbd_default_map_options|ms_"
 grep_read 'rbd_default_map_options|ms_' ceph config dump
 section "ceph auth get client.csi-rbd-provisioner.1 (key deleted)"
-tool ceph auth get client.csi-rbd-provisioner.1 -f json 2>>"$OUT" | jq 'map(del(.key))' >> "$OUT" 2>&1 || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
+tool ceph auth get client.csi-rbd-provisioner.1 -f json 2>>"$OUT" | jq 'map(del(.key))' >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 # Ceph docs: `ceph auth ls -f json` is {"auth_dump":[{"entity":"client.x","key":"AQ...","caps":{...}}]}. The
 # shape of `auth dump-keys` is not verified on this cluster, so this filter keeps only .entity / .name and the
 # type derived from it, and deletes every other field; the self-check below is the safety net.
 section "ceph auth dump-keys (entity names and key type only)"
+if [ "$PRE_TENTACLE" -eq 1 ]; then
+  echo "READ-SKIPPED (pre-Tentacle, dump-keys needs 20.2.4+)" >> "$OUT"
+else
 tool ceph auth dump-keys -f json 2>>"$OUT" | jq -c '
   def ents: if type=="array" then .[] elif type=="object" and has("auth_dump") then .auth_dump[] elif type=="object" then to_entries[] | (.value + {entity: .key}) else . end;
   [ ents | objects | {entity: (.entity // .name // "unknown"), type_str: (.type_str // ((.entity // .name // "") | split(".")[0]))} ]' >> "$OUT" 2>&1 \
-  || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
+  || echo "READ-FAILED rc=$?" >> "$OUT"
+fi
 section "ceph mgr module ls | head -20"
-tool ceph mgr module ls 2>>"$OUT" | head -20 >> "$OUT" || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
+# Read fully first, then truncate: head closing early under pipefail would report SIGPIPE (141) as a failure.
+MGR="$(tool ceph mgr module ls 2>>"$OUT")" && printf '%s\n' "$MGR" | sed -n '1,20p' >> "$OUT" \
+  || echo "READ-FAILED rc=$?" >> "$OUT"
 
 # Self-check: no CephX key may be on disk.
 if grep -Eq 'AQ[A-Za-z0-9+/]{20,}' "$OUT"; then
@@ -64,4 +79,7 @@ if grep -Eq 'AQ[A-Za-z0-9+/]{20,}' "$OUT"; then
   echo "ceph-reads: CephX key material matched in the capture; file deleted. Fix the jq filters before re-running." >&2
   exit 2
 fi
+NFAIL="$(grep -c '^READ-FAILED' "$OUT")"
+echo "$NFAIL reads failed"
 echo "wrote $OUT"
+[ "$NFAIL" -eq 0 ] || exit 1
