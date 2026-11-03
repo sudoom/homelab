@@ -2997,3 +2997,39 @@ Tooling on master: `tests/rook-ceph-upgrade/` (runbook, `csi-state.sh`, `ceph-re
 backup and restore manifests, `ceph-latency.sh`) and the `ceph-nvme-block` series in `tests/storage-benchmark/run.sh`
 (24G shared file, 32Gi PVC, refuses to run when the pool probe fails). Next: Task 8's last fix round (the recovery
 patch must also apply right after the hop commit), then the backup after the OADP soak.
+
+## 2026-11-03 (evening) — stage-1 recovery from the hop commit; stage-4 runbook
+
+**Stage-1 recovery right after the hop.** The recovery patch was built for the state after the cluster-chart commit
+(c3), but the likeliest moment to need it is right after the operator hop (c2), before c3 is pushed. c3 only touches
+`components/storage/`, so on the post-c2 state the same patch applies with that path excluded:
+
+```bash
+git apply --check --exclude='components/storage/*' s1-recovery.patch
+git apply --exclude='components/storage/*' s1-recovery.patch
+```
+
+The operator, cluster and root-app renders came out byte-identical to the post-c3 recovery. Even without a v1.20.9
+cluster chart, going back to the v1.19.5 operator rolls the OSDs again: in v1.19.5 the OSD pod's `config-init` init
+container runs from the operator image (`pkg/operator/ceph/cluster/osd/spec.go`, `Image: c.rookVersion`), and the
+2026-06-12 revert (`49406f5`) rolled all OSDs the same way. The hand-applied `Delete=false,Prune=false` on the Driver is
+now read right after the annotate and again after the cleanup commit (c4), instead of "after the next sync", which
+for this app only comes with a manifest change.
+
+**Stage 4 and Argo CD's failed-revision rule.** Writing the Tentacle section turned up how `rook-ceph-cluster` behaves
+once its sync fails on HEALTH_ERR: Argo CD retries five times (5 s, factor 2, max 3 min) and then never auto-syncs that
+revision again. In v3.5.5, `controller/appcontroller.go`:
+
+```
+Skipping auto-sync: failed previous sync attempt to %s and will not retry for %s
+```
+
+Without `manifest-generate-paths`, any new commit is a new revision and gets one new attempt. The roll takes far longer
+than the retries, so after it the four TTL-3600 Jobs (waves 10/11) stay missing until the next commit. The runbook now
+holds every master commit from the Tentacle commit until all daemons run 20.2.5 and the monmap's `auth_service_cipher`
+reads `aes256k`. The first commit after that (the evidence and blog commit) re-syncs the app and brings the Jobs back.
+
+Other stage-4 decisions: `noautoscale` is unset as soon as the daemon checks pass, not after the next-morning CNPG
+snapshot check (`-l cnpg.io/cluster`, one `readyToUse` row per cluster after 05:00Z). The rook mgr-module check reads
+`ceph mgr module ls -f json`. `ceph-reads.sh`'s key self-check used to match AES keys (`AQ…`) only; it now also matches
+the 60-character AES256K shape the daemon keys rotate to, and requires the padding so a git sha does not trip it.
