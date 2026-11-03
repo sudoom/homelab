@@ -694,9 +694,15 @@ The `main` run's create prompt was answered the next morning, which is why the `
 earlier than the Job. The CPU limit went from 14 to 10 because etcd's WAL fsync p99 on node6 read 49 ms during run 1
 against 6 and 4 ms on the other two nodes, with no alert (recorded in `blog/blog-descheduler-draft.md`); it costs a
 slower compile on the images that miss the cache. `main` ran with `PRUNE=false`: `oadp/` is identical on the fork
-branches `oadp-1.6` and `oadp-1.6-4.22` (0 gitlinks and 0 files differ), so reused layers are the ones run 1 had just
-proved from scratch, and the build log shows 205 `Using cache` lines. The risk I accepted: a layer cached from a base
-image that moved since the first run goes unnoticed. The release-4.22 run stands as the from-scratch proof.
+branches `oadp-1.6` and `oadp-1.6-4.22` (0 gitlinks and 0 files differ), and the ledger counts 205 `Using cache` lines
+(the saved extract has none). That makes the `main` run the weaker proof, not an equal one. The inputs were not
+identical: the logs show `OKD_VERSION=5.0.0-okd-scos.0` on `main` against `4.22.0-okd-scos.2` (main extract line 58,
+4.22 extract line 65) and a different `IMG_CLI` digest (`5cd06e69b7d0...` against `839f3fb078d2...`, lines 37 and 44).
+The registry's `fedora:44` digest read before the build also moved, from `9b53c238bb4e` (4.22 line 103) to
+`cb3bd21415bd` (main line 96), yet the digest "used by this build" is `aad5fee562d2` in both (4.22 line 128, main line
+121): the `main` run reused the older cached base. So the `main` run shows that the branch builds and that its bundle
+checks pass; it does not show that it builds from scratch. The release-4.22 run is the from-scratch proof, and upstream
+CI builds fresh.
 
 Peak disk is the largest `DISK` value, bytes used on the build graph root. With `PRUNE=false` the `main` run started
 at 70.9 GB (the graph kept from run 1), so its 87.7 GB is the cache plus the new work, not a from-scratch figure; the
@@ -754,9 +760,11 @@ count.
 
 The `main` run pushed the same 20 names under tag `1.6.0-2026-11-02-233420`. 15 of the 19 image digests equal run 1's. Five
 refs differ: `cli-binaries` (5de8655fa8ec, 10 B larger), `must-gather`
-(6d21455565c8, 1 152 303 B larger), `vmdp-binaries` (bbf57e990aa0, 13 B smaller), `vmfr-filebrowser` (183a78eb0b27,
-7 B larger) and the bundle (ea5adb6dcf98, 13 B smaller, as its CSV name carries the DATE). I did not look into why the
-four images differ; they are not needed for the catalog, since each bundle pins its own run's digests.
+(6d21455565c8, 1 153 303 B larger), `vmdp-binaries` (bbf57e990aa0, 13 B smaller), `vmfr-filebrowser` (183a78eb0b27,
+7 B larger) and the bundle (ea5adb6dcf98, 13 B smaller, as its CSV name carries the DATE). I did not diagnose why
+the four images differ. The likely reason, unproven, is the differing inputs above (`OKD_VERSION`, `IMG_CLI`;
+`cli-binaries`, `vmdp-binaries` and `must-gather` plausibly consume them) and cached layers carrying the older base;
+the images are not needed for the catalog, since each bundle pins its own run's digests.
 
 Bundle refs for the catalog step (full):
 
