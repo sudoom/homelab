@@ -1,0 +1,10 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: okd-test-descheduler
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: {{ .Values.image | quote }}
+  displayName: "OKD test — Kube Descheduler"
+  publisher: OKD Community

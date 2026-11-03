@@ -170,6 +170,14 @@ applications:
     namespace: openshift-marketplace
     syncWave: "1"
 
+  # Temporary: zot test build of the okderators Kube Descheduler 5.4 catalog, until the
+  # kube-descheduler Subscription moves back to okderators.
+  descheduler-test-catalog:
+    enabled: true
+    path: components/operators/descheduler-test-catalog
+    namespace: openshift-marketplace
+    syncWave: "1"
+
   loki-operator:
     enabled: true
     path: components/operators/loki-operator

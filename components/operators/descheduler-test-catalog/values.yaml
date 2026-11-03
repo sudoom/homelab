@@ -1,0 +1,7 @@
+# Test build of the okderators descheduler catalog: release-4.22 with the Kube Descheduler
+# bundle clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110 (head of the channel), pushed to
+# the cluster's zot (tag 2026-11-03-083443). Pinned by digest.
+# Temporary: this chart and its root-app entry leave again when the kube-descheduler Subscription
+# (components/operators/kube-descheduler/) moves back to `okderators` (once okderators publishes 5.4).
+image: zot.apps.okd.sudops.pl/okd-test/descheduler-catalog:2026-11-03-083443@sha256:f0b730d3b6a7fd902c8f6adfbda23e859be5f7acc51c66168c96536a9d660420
+# No updateStrategy: the image is pinned by digest, so there is nothing to poll.
