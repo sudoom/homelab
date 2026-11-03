@@ -23,6 +23,15 @@ NS=rook-ceph
 # tool <ceph args...>: run a ceph command in the toolbox, stdout only to stdout, stderr kept visible in the file.
 tool() { oc -n "$NS" exec deploy/rook-ceph-tools -- "$@"; }
 section() { printf '\n===== %s =====\n' "$1" >> "$OUT"; }
+# grep_read <pattern> <ceph args...>: grep exit 1 (no match) is a legitimate empty result, not a failure;
+# only a failed ceph command or grep exit >= 2 is READ-FAILED.
+grep_read() {
+  local pat="$1"; shift
+  tool "$@" 2>>"$OUT" | grep -E "$pat" >> "$OUT"
+  local st=("${PIPESTATUS[@]}")
+  if [ "${st[0]}" -ne 0 ] || [ "${st[1]}" -ge 2 ]; then echo "READ-FAILED rc=${st[0]}/${st[1]}" >> "$OUT"
+  elif [ "${st[1]}" -eq 1 ]; then echo "(no match, ceph command ok)" >> "$OUT"; fi
+}
 
 section "ceph versions";        tool ceph versions >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
 section "ceph health detail";   tool ceph health detail >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
@@ -33,9 +42,9 @@ section "ceph mon dump";        tool ceph mon dump >> "$OUT" 2>&1 || echo "READ-
 section "ceph mon dump -f json | jq auth_service_cipher.name"
 tool ceph mon dump -f json 2>>"$OUT" | jq -r '.auth_service_cipher.name // "unset"' >> "$OUT" 2>&1 || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
 section "ceph osd dump | grep require_osd_release|flags"
-tool ceph osd dump 2>>"$OUT" | grep -E 'require_osd_release|flags' >> "$OUT" || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
+grep_read 'require_osd_release|flags' ceph osd dump
 section "ceph config dump | grep rbd_default_map_options|ms_"
-tool ceph config dump 2>>"$OUT" | grep -E 'rbd_default_map_options|ms_' >> "$OUT" || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
+grep_read 'rbd_default_map_options|ms_' ceph config dump
 section "ceph auth get client.csi-rbd-provisioner.1 (key deleted)"
 tool ceph auth get client.csi-rbd-provisioner.1 -f json 2>>"$OUT" | jq 'map(del(.key))' >> "$OUT" 2>&1 || echo "READ-FAILED or no output, rc=$?" >> "$OUT"
 # Ceph docs: `ceph auth ls -f json` is {"auth_dump":[{"entity":"client.x","key":"AQ...","caps":{...}}]}. The

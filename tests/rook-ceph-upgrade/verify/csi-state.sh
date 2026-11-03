@@ -131,9 +131,9 @@ if [ "$STAGE" = stage3 ] || [ "$STAGE" = stage4 ]; then
   CONN="$(ocr -n $NS get cephconnections.csi.ceph.io rook-ceph -o json)"
   CONN_OBS="$(echo "$CONN" | jq -r '(.spec.monitors // []) as $m | if ($m|length)==0 then "none" else ([$m[] | select(endswith(":3300")|not)] | if length==0 then "all:3300 (\($m|length))" else "non-3300: \(join(","))" end) end' 2>/dev/null || echo unreadable)"
   case "$CONN_OBS" in all:3300*) report PASS cephconnection-monitors-3300 "$CONN_OBS" ;; *) report FAIL cephconnection-monitors-3300 "$CONN_OBS" ;; esac
-  CFG="$(ocr -n $NS get cm rook-ceph-csi-config -o jsonpath='{.data.csi-cluster-config-json}')"
+  CFG="$(ocr -n $NS get cm ceph-csi-config -o jsonpath='{.data.config\.json}')"
   CFG_OBS="$(echo "$CFG" | jq -r '[.[]?.monitors[]?] as $m | if ($m|length)==0 then "none" else ([$m[] | select(endswith(":3300")|not)] | if length==0 then "all:3300 (\($m|length))" else "non-3300: \(join(","))" end) end' 2>/dev/null || echo unreadable)"
-  case "$CFG_OBS" in all:3300*) report PASS csi-cluster-config-monitors-3300 "$CFG_OBS" ;; *) report FAIL csi-cluster-config-monitors-3300 "$CFG_OBS" ;; esac
+  case "$CFG_OBS" in all:3300*) report PASS ceph-csi-config-monitors-3300 "$CFG_OBS" ;; *) report FAIL ceph-csi-config-monitors-3300 "$CFG_OBS" ;; esac
 fi
 
 if [ "$STAGE" = stage4 ]; then
@@ -143,6 +143,8 @@ fi
 
 # ---- info ----------------------------------------------------------------------------------------------------
 CEPHX="$(ocr -n $NS get cephcluster -o json | jq -c '.items[0].status.cephx // "none"' 2>/dev/null)"
+MON_EP="$(ocr -n $NS get cm rook-ceph-mon-endpoints -o jsonpath='{.data.csi-cluster-config-json}' | jq -c '[.[]?.monitors[]?]' 2>/dev/null)"
+echo "INFO rook-ceph-mon-endpoints-csi-monitors=${MON_EP:-unreadable} (informational only: Rook keeps :6789 for existing mons)"
 echo "INFO driver-uid=$(echo "$DRV_JSON" | jq -r '.metadata.uid // "unknown"') driver-generation=$(echo "$DRV_JSON" | jq -r '.metadata.generation // "unknown"') cephx=${CEPHX:-unreadable}"
 
 if [ "$FAILS" -eq 0 ]; then echo "RESULT PASS $STAGE"; exit 0; fi
