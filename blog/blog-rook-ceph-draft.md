@@ -2950,3 +2950,50 @@ at tags and from the live cluster:
   OSDs, so the Ceph stage needs every node schedulable.
 - Every Rook version change and every Ceph image change rolls mons, mgrs and OSDs one at a time (OSDs gated by
   `ceph osd ok-to-stop`): on this no-drain cluster, four stages mean twelve OSD degraded windows.
+
+## 2026-11-03 (afternoon) — design and plan approved; prep found two more renames
+
+Nothing on the cluster changed. The design and the 17-task plan were each reviewed by a separate read-only Fable agent
+before approval, and both reviews changed what will run.
+
+**Design review (2 blockers, 5 majors).** The stage-1 CSI handover had been left to the builder. Removing the
+`csi-driver-config` Application would foreground-delete the production RBD Driver, because root-app puts the Argo CD
+resources finalizer on every Application, and a foreground-deleted Driver livelocks (`bugs/upstream-ceph-csi-operator-reconciles-terminating-driver.md`).
+The design now fixes the order: protect the Driver with `argocd.argoproj.io/sync-options: Delete=false,Prune=false`,
+then one commit that bumps the operator, adds `ceph-csi-drivers` as a second dependency of the operator wrapper, keeps
+the old ServiceAccounts in our own template, and removes `csi-driver-config`. Keeping the old SAs is not optional:
+deleting a ServiceAccount invalidates the bound tokens of pods still running under it. Stage 4's point of no return
+moved to the Tentacle commit itself (Ceph has no downgrade from Tentacle), with a no-touch rule for the roll and a
+stall contingency (`ceph health mute` of the two `AUTH_INSECURE_SERVICE_*` errors, never `skipUpgradeChecks`, which
+also drops `ok-to-stop`). The backup moved before the baseline and now includes `zot/data-zot-0`.
+
+**Plan review (1 blocker, 7 majors).** Patches written with plain `git diff` drop new files, so the two new templates
+would have been lost silently. Every patch task now `git add -N`s new files and ends by applying its chain to a clean
+tree and diffing the render byte-for-byte. Two stage-4 checks used commands that cannot show the value:
+`auth_service_cipher` is a monmap field (`ceph mon dump -f json | jq -r .auth_service_cipher.name`), and key types come
+from `ceph auth dump-keys`, which prints key material, so `ceph-reads.sh` filters it and deletes its own output if a key
+pattern gets through.
+
+**Prep findings (Task 8, the stage-1 patches).**
+- v1.20.9 renames the CSI operator's own ServiceAccount too: the ceph-csi-operator 1.0.4 subchart uses `ceph-csi`
+  instead of `ceph-csi-controller-manager`, while its three bindings keep their names and switch subject. The running
+  v0.6.0 pod would lose its RBAC before being replaced, the June pattern on a different object. Pinned:
+  `rook-ceph.ceph-csi-operator.serviceAccount.name: ceph-csi-controller-manager`, permanently.
+- The new operator falls back to `<prefix>rbd-{ctrl,node}plugin-sa` for a Driver without SA names, and v1.20.9 sets the
+  prefix to `""`. The hop sets `csiServiceAccountPrefix: "ceph-csi-"` so the fallback is the kept old pair.
+- Chart defaults that would have changed behaviour silently: `grpcTimeout` 30 (live 150), OperatorConfig
+  `snapshotPolicy: none` and `hostNetwork: false` / `replicas: 1`, and log rotation on at the Driver level. All pinned to
+  live values.
+- `helm template` of the Rook charts needs `--api-versions security.openshift.io/v1`, or SCC `rook-ceph-csi` drops out
+  of the local render while Argo CD renders it.
+- After the hop the operator app owns the Driver and the protective annotation is gone (same field manager), so a plain
+  revert would prune the Driver. Recovery is a pre-built forward patch, and once the hop verifies the Driver gets a
+  hand-applied `Delete=false,Prune=false` (field manager `kubectl-annotate`, which Argo CD's server-side apply leaves
+  alone). `csi-driver-config` gets `FailOnSharedResource=true` so the two apps cannot flip the Driver between them.
+- `grafana-pvc` is mounted by no pod (Grafana runs on an `emptyDir`), so the backup's restore check compares the two
+  mounted `keepers` volumes instead.
+
+Tooling on master: `tests/rook-ceph-upgrade/` (runbook, `csi-state.sh`, `ceph-reads.sh`, `images-check.sh`, smoke test,
+backup and restore manifests, `ceph-latency.sh`) and the `ceph-nvme-block` series in `tests/storage-benchmark/run.sh`
+(24G shared file, 32Gi PVC, refuses to run when the pool probe fails). Next: Task 8's last fix round (the recovery
+patch must also apply right after the hop commit), then the backup after the OADP soak.

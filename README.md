@@ -400,10 +400,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   passed, the first recorded data mover restore here. The full `release-4.22` build, the catalog image and the upgrade
   are done: the cluster runs the 1.6 test build from catalog `okd-test-oadp` since 2026-11-03 08:00Z, and drill run 2 on
   1.6 passed. The 24 h soak runs until about 2026-11-04 08:00Z (Task 10), then the draft PRs
-  (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) Rook and Ceph, planned 2026-11-03 (design
-  local, not yet approved):** Rook v1.19.5 → v1.20.9 → v1.21.1, then msgr2 required (CRC; encryption stays the TODO
-  below), then Ceph Squid 19.2.4 → Tentacle 20.2.5. Why: v1.19.5 supports Kube 1.30-1.35 (v1.21.1: 1.32-1.37), and Ceph
-  Squid reached its target EOL on 2026-10-31. Before it: a one-off OADP backup of the app PVCs to garage, and a fio +
+  (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) Rook and Ceph, design and plan approved
+  2026-11-03 (local, both Fable-reviewed), prep in progress:** Rook v1.19.5 → v1.20.9 → v1.21.1, then msgr2 required
+  (CRC; encryption stays the TODO below), then Ceph Squid 19.2.4 → Tentacle 20.2.5. Tooling and runbook are in
+  `tests/rook-ceph-upgrade/`; the stage-1 patches are prepared and reviewed outside git until their window. Why: v1.19.5 supports Kube 1.30-1.35 (v1.21.1: 1.32-1.37), and Ceph
+  Squid reached its target EOL on 2026-10-31. Before it: a one-off OADP backup of the app PVCs and zot to garage, then a fio +
   OSD-latency baseline repeated after every stage. Windows start about 2026-11-06, after the descheduler soak, under a
   freeze on builds, MachineConfig rerolls, the logging removal and power tuning. The June v1.20.0 CSI break was the
   v1.20 CSI move to the `ceph-csi-drivers` chart meeting stale charts: the old ServiceAccounts were pruned while the
