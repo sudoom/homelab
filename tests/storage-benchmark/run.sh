@@ -339,7 +339,7 @@ NEED_BYTES=$(( $(to_bytes "$FILESIZE") * CLIENTS * 2 ))
 AVAIL_BYTES=""
 AVAIL_SRC=""
 case "$BACKEND" in
-  ceph-nvme-block)   AVAIL_BYTES="$(ceph_pool_avail nvme-replicated)"; AVAIL_SRC="ceph pool nvme-replicated" ;;
+  ceph-nvme-block)   AVAIL_BYTES="$(ceph_pool_avail nvme-replicated || true)"; AVAIL_SRC="ceph pool nvme-replicated" ;;
   # The TrueNAS backends were removed 2026-09-12 with their datasets, exports
   # and StorageClasses. Restoring them means restoring this probe too, and it
   # must read the DATASET, not the pool: `zfs list -o available` on a quota'd
@@ -410,7 +410,13 @@ fi
 
 # Ceph RBD: the PVC itself must be a small share of the pool. A thick-ish
 # benchmark volume on a pool with 152 GiB max_avail (2026-09-05) is an outage.
-if [[ "$ENFORCED" == "1" && -n "$AVAIL_BYTES" ]]; then
+if [[ "$ENFORCED" == "1" ]]; then
+  # Fail closed: an enforcing backend never proceeds on an unprobed pool.
+  [[ "$AVAIL_BYTES" =~ ^[0-9]+$ ]] || die "could not probe $AVAIL_SRC available bytes (got '${AVAIL_BYTES}'), so the
+  25% PVC rule cannot be checked and $SC enforces its size. The probe reads
+  ceph_pool_max_avail via the mgr metrics proxy (oc get --raw
+  /api/v1/namespaces/rook-ceph/services/http:rook-ceph-mgr:9283/proxy/metrics);
+  check that it answers and that you are logged in, then re-run."
   if [[ $(( PVC_BYTES * 4 )) -gt "$AVAIL_BYTES" ]]; then
     die "PVC $PVC_SIZE exceeds 25% of $AVAIL_SRC available ($(human "$AVAIL_BYTES")).
   Refusing to provision a benchmark volume that large against this pool."
