@@ -891,3 +891,45 @@ The pod showed the same pattern as the main build. The Job was created at about 
 `build-storage` was 87.6 GB at that start. Both slow creates so far happened with a kept graph root, which fits the
 relabel guess from the main run, but the cause is not proven: I have not read the CRI-O journal on node6. Until the
 graph root is pruned, each pod start on that volume may cost a few minutes.
+
+## 2026-11-03 — pre-upgrade baseline (OADP 1.5.0)
+
+Read-only readings before the 1.5 → 1.6 hop, all with `KUBECONFIG=~/.kube/config-readonly`, namespace `openshift-adp`.
+Nothing was changed on the cluster. The full DPA is saved outside git (`.superpowers/.../work/oadp/dpa-before.yaml`);
+it references its credential only by Secret name (`garage-credentials`, key `cloud`).
+
+```
+oc -n openshift-adp get csv | grep oadp
+oadp-operator.v1.5.0-2026-01-05-165341   OADP Operator   1.5.0-2026-01-05-165341   replaces v1.4.0-2025-01-23-195220   Succeeded
+
+oc -n openshift-adp get subscription oadp-operator -o jsonpath='{.spec.source} {.spec.channel} {.spec.installPlanApproval} startingCSV={.spec.startingCSV}{"\n"}{.status.state} installed={.status.installedCSV}{"\n"}'
+okderators alpha Manual startingCSV=
+AtLatestKnown installed=oadp-operator.v1.5.0-2026-01-05-165341
+
+oc -n openshift-adp get installplan
+install-fj9jr   oadp-operator.v1.5.0-2026-01-05-165341   Automatic   true     (the only one; no pending plan)
+
+oc -n openshift-adp get dpa -o jsonpath=...conditions...
+dpa: Reconciled=True Complete 2026-09-07T17:27:59Z
+
+oc -n openshift-adp get bsl -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase} lastValidation={.status.lastValidationTime}{"\n"}{end}'
+truenas-garage Available lastValidation=2026-11-03T07:45:34Z
+```
+
+Pods (`oc -n openshift-adp get pods -o jsonpath=...`): `velero` (1), `openshift-adp-controller-manager` (1) and
+`node-agent` (3, one per node) are Running; three `oadp-drill-truenas-garage-kopia-maintain-job-*` pods are Succeeded.
+Images, all `quay.io/okderators/oadp/`: `velero@sha256:f17c68a2…9003` for velero, node-agent and the maintain jobs;
+`operator@sha256:e4ecc140…8a41` for the controller manager. The `okderators` CatalogSource is on
+`quay.io/okderators/catalog-index:4.22`.
+
+DPA shape that must survive the hop: one BSL `truenas-garage` (aws provider, `s3Url` `http://192.168.1.25:30188`,
+bucket `velero`, prefix `velero`, `checksumAlgorithm: ""`), `nodeAgent` enabled with `uploaderType: kopia`,
+`defaultPlugins` aws, csi, openshift, `disableFsBackup: false`; DPA generation 5.
+
+CRDs (`oc get crd`, filtered to `oadp.openshift.io` and `velero.io`): 21, every one with a single version that is
+both served and stored. `velero.io`: backuprepositories, backups, backupstoragelocations, deletebackuprequests,
+downloadrequests, podvolumebackups, podvolumerestores, restores, schedules, serverstatusrequests,
+volumesnapshotlocations at `v1`; datadownloads and datauploads at `v2alpha1`. `oadp.openshift.io` at `v1alpha1`:
+cloudstorages, dataprotectionapplications, dataprotectiontests, nonadminbackups,
+nonadminbackupstoragelocationrequests, nonadminbackupstoragelocations, nonadmindownloadrequests, nonadminrestores.
+After the hop, compare these served/storage flags against this list.
