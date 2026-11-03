@@ -776,3 +776,79 @@ The `main` start equals the end of the 4.22 run to within 8 KB, as it should wit
 ### The slow pod start
 
 Each Job's pod took about five minutes to get its container running: the 4.22 Job was created at 07:41Z (the `DATE`) and its first `STEP` is 07:46:19Z; the `main` Job started 08:07:33Z and its first `STEP` is 08:13:56Z (6 min 23 s). The ledger recorded `CreateContainerError` as expected and not a failure, and the watcher did not treat it as one. This is the "slow create seen twice with the kept graph root" from the 2026-11-03 ruling, about 4.5 min per start on average. The cause is not proven. The leading guess, and only a guess: with `PRUNE=false` the PVC carries a graph root of ~87 GB, and the container create waits on the runtime working through that volume (an SELinux relabel or ownership pass). What would settle it: the same Job on a fresh PVC, or the kubelet and CRI-O events of the create (`oc describe pod` events on the next run), neither read yet.
+
+## 2026-11-03 — descheduler catalog graphs validated, test catalog image
+
+Task 5: `MODE=catalog` adds each branch's new bundle to a clone of the okderators catalog branches, proves the upgrade graph with the walker, runs two negative controls, and builds the test catalog image. Nothing is pushed to `okd-project/okderators-catalog-index`; the edit lives in the Job's `/work/run` and the image. Evidence: `work/catalog-2026-11-03-083443.txt` (scratch, not committed).
+
+Before (Step 1, the failing check, read on the catalog branches): `release-4.22` has the package `cluster-kube-descheduler-operator`, channel `alpha`, one entry, `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655`, which is its head; `release-5.0` has no such package. The run's own `INFO release-4.22 head before` line says the same.
+
+Command shape (README form, run by the operator's permission prompt; the bundle refs are the two from the previous section, with the tag dropped by the script before use because opm v1.74.0 refuses tag plus digest):
+
+```bash
+DATE=2026-11-03-083443
+oc process --local -f tests/okderators-descheduler-build/job-template.yaml \
+  -p MODE=catalog -p DATE=$DATE \
+  -p CATALOG_BRANCHES='release-4.22 release-5.0' \
+  -p BUNDLES='release-4.22=zot.apps.okd.sudops.pl/okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-03-074110@sha256:83246c48a473079b9b688344e4ee2f94fac8947eeedc590de8a593bdfa11b937 release-5.0=zot.apps.okd.sudops.pl/okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-03-080630@sha256:92c6368bae3e2ac7da49309d17977075e2f012c02a269598ad28d8f69dddce3b' \
+  | oc -n okd-build create -f -
+```
+
+Job `descheduler-build-catalog-2026-11-03-083443`, 08:34:59Z to 08:41:20Z; script from 08:39:27Z, 98 s (tools 25 s, catalog-edit 35 s), the rest was the slow pod start again (4 min 28 s). `RESULT PASS catalog 2026-11-03-083443`, `catalog-edit: 0 checks failed`. Job deleted by prompt afterwards. Tool versions as in the builds: opm v1.74.0, python 3.14.8.
+
+### release-4.22 (catalog commit 98c6d9d5)
+
+| | before | after |
+|---|---|---|
+| `alpha` entries | `v5.3.0-2026-10-12-113655` | `v5.3.0-2026-10-12-113655`, `v5.4.0-2026-11-03-074110` |
+| head | `v5.3.0-2026-10-12-113655` | `v5.4.0-2026-11-03-074110` |
+
+The edit adds `catalog/cluster-kube-descheduler-operator/clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110.yaml` (opm render of the bundle, as `hack/add-bundle.sh` does) and three lines in the package file; 2 files, 33 insertions, no file removed, old entries unchanged:
+
+```
+  - name: clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110
+    replaces: clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655
+    skipRange: '>=5.3.0-0 <5.4.0-2026-11-03-074110'
+```
+
+`replaces` and `skipRange` were read back from the rendered catalog (`edit-release-4.22`). Checks, all PASS: `branch-data-release-4.22`, `bundle-release-4.22` (version 5.4.0-2026-11-03-074110, CSV and CRD present, `olm.maxOpenShiftVersion` 4.23, relatedImages by digest), `bundles-release-4.22`, `edit-release-4.22`, `opm-validate-release-4.22`.
+
+Walker (`walk-release-4.22`), starting from both CSVs a cluster may run: the installed 5.3.0 and the test-shaped `v5.4.0-2026-11-02-074110` (the name this cluster's own test build would have had a day earlier; absent from the channel):
+
+```
+walk v5.3.0-2026-10-12-113655 -(replaces+skipRange)-> v5.4.0-2026-11-03-074110
+walk v5.4.0-2026-11-03-074110
+walk v5.4.0-2026-11-02-074110 -(skipRange)-> v5.4.0-2026-11-03-074110 (absent from the channel)
+PASS 2 entries + 1 CSV absent from the channel reach v5.4.0-2026-11-03-074110
+```
+
+### Negative controls (4.22)
+
+- **`negative-control-no-edge`: PASS (fails as designed).** The same catalog without `replaces` and `skipRange` has two heads, `v5.3.0-2026-10-12-113655` and `v5.4.0-2026-11-03-074110`, and strands 5.3.0 together with the test-shaped CSV; `opm validate` itself refuses it (`level=fatal msg="invalid index: ... invalid package \"cluster-kube-descheduler-operat...`; the extract cuts the message there). Proves the edge is what joins 5.4 to the old graph and that the validator and the walker both see its absence.
+- **`negative-control-replaces-only`: PASS (fails as designed).** With only `replaces`, `opm validate` passes, but the walker reports `v5.4.0-2026-11-02-074110` stranded. Proves `opm validate` alone is not enough: a CSV that is not a channel entry (our test build) reaches the new head only through `skipRange`, so the `skipRange` is load-bearing for the later move of this cluster off the test build.
+
+### release-5.0 (catalog commit 4daed51b)
+
+| | before | after |
+|---|---|---|
+| package | none | `cluster-kube-descheduler-operator`, `defaultChannel: alpha` |
+| `alpha` entries | n/a | one: `v5.4.0-2026-11-03-080630` (head) |
+
+New files: the package file (11 lines) and the rendered bundle `clusterkubedescheduleroperator.v5.4.0-2026-11-03-080630.yaml`; 2 files, 41 insertions, no other file changed. The entry has `skipRange: '>=5.3.0-0 <5.4.0-2026-11-03-080630'` and no `replaces`. Checks, all PASS: `branch-data-release-5.0` (replaces NONE, installed NONE), `bundle-release-5.0` (`olm.maxOpenShiftVersion` 5.1, relatedImages by digest), `bundles-release-5.0`, `edit-release-5.0` (new package, channel alpha, one entry, no other file changed), `opm-validate-release-5.0`, `walk-release-5.0` (1 entry reaches the head; installed: none), `fresh-head-release-5.0` (the channel's one entry and single head, no `replaces`). No negative controls on this branch: there is no old entry to strand.
+
+### The image
+
+Built from `IMAGE_BRANCH=release-4.22` (the edited tree of that branch) on the opm base image pinned by digest, `ADD catalog /configs`, cache pre-populated with `opm serve --cache-only`. The image is re-checked after the build, as the cluster would read it:
+
+```
+CHECK opm-validate-image PASS
+image walk v5.3.0-2026-10-12-113655 -(replaces+skipRange)-> v5.4.0-2026-11-03-074110
+image walk v5.4.0-2026-11-02-074110 -(skipRange)-> v5.4.0-2026-11-03-074110 (absent from the channel)
+CHECK catalog-image PASS ...: package cluster-kube-descheduler-operator; head v5.4.0-2026-11-03-074110; every entry and installed [...] reach the head
+```
+
+```
+PUSHED zot.apps.okd.sudops.pl/okd-test/descheduler-catalog:2026-11-03-083443@sha256:f0b730d3b6a7fd902c8f6adfbda23e859be5f7acc51c66168c96536a9d660420 31349230
+```
+
+31349230 bytes (31 MB), head `clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`. This is the image Task 6 Step 1 points the homelab test CatalogSource at. The `release-5.0` tree is validated but not in the image: nothing on this cluster reads it.
