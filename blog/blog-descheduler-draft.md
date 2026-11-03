@@ -608,3 +608,43 @@ What stays stubbed until Task 4, so none of it is proven yet:
 - Real `init` and `deinit`: the submodule clones. `submodule-pins` itself ran against real git, on a small pipeline with real submodules.
 
 The zot check stays an operator step before each run, as in the other Jobs: the pod has no token to read the metric with.
+
+## 2026-11-03 — descheduler 5.4: eviction check manifests and the rollback runbook
+
+Before the 5.3 -> 5.4 upgrade I want a check that shows the operand still evicts, on 5.3 first and again on 5.4. Waiting for
+LowNodeUtilization is no check: it evicts only when node6 drops under 40%, nine times since 10-27, and not on demand. The
+`AffinityAndTaints` profile is on, so I use `RemovePodsViolatingInterPodAntiAffinity` and make a pod violate its own term
+(`tests/descheduler-5.4-check/`).
+
+Shape and why:
+
+- `anchor` is pinned to node6 by required node affinity on `kubernetes.io/hostname=node6.okd.sudops.pl`, an existing label (a new node label would re-apply NNCPs). node6 is the node that does not read overutilized, so LowNodeUtilization does not take pods from it, and the anti-affinity plugin looks only at the candidate's own terms, so it never evicts `anchor`.
+- `victim` has required anti-affinity against `drill=anchor` and only a preferred (weight 100) affinity to `app=anchor`. At first no pod has `drill=anchor`, so it starts beside `anchor`; after `oc label pod <anchor pod> drill=anchor` it violates the term, and its replacement lands elsewhere because the term is required. The affinity is never a requirement, or the replacement could not schedule at all.
+- No volumes, PDB or `priorityClassName`, `automountServiceAccountToken: false`: `emptyDir`, `hostPath` and PVC make a pod non-evictable (`evictLocalStoragePods` false, `ignorePvcPods` on), and a PDB or priority class would be one more thing to explain a missing eviction by.
+- The pass condition names the strategy. An eviction of either pod by another strategy (LowNodeUtilization could in principle pick one) invalidates the run, so the log line and `descheduler_pods_evicted_total` must both carry `RemovePodsViolatingInterPodAntiAffinity`, `anchor`'s UID must be unchanged, and the check never runs Monday 19:00Z-23:00Z when the operand rolls and resets log and counters.
+
+Image: the `registry.k8s.io/pause` index by digest, which zot mirrors. Resolved and verified with skopeo (sandbox off):
+
+```
+skopeo inspect --raw docker://registry.k8s.io/pause:3.10.2 | shasum -a 256
+f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+skopeo inspect --raw docker://registry.k8s.io/pause@sha256:f548e0e8... | shasum -a 256     # same digest back
+skopeo inspect --override-os linux --override-arch amd64 --config docker://registry.k8s.io/pause@sha256:f548e0e8... | grep '"User"'
+        "User": "65535:65535"
+```
+
+A numeric non-root user, so `runAsNonRoot: true` works under `restricted-v2` with no fixed UID in the manifest.
+
+The chart gains an optional `subscription.startingCSV` for the rollback; OLM ignores it while a CSV is installed, so it matters only after the 5.4 CSV is deleted. It must not change today's render, and it does not (the "before" is the chart at HEAD):
+
+```
+helm lint components/operators/kube-descheduler/        1 chart(s) linted, 0 chart(s) failed
+cmp before.yaml after.yaml                              (no output: byte-identical, 66 lines)
+helm template ... --set subscription.startingCSV=clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655 | diff before.yaml -
+66a67
+>   startingCSV: clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655
+kubeconform -strict -ignore-missing-schemas (chart, with startingCSV set)   Valid: 3, Invalid: 0, Errors: 0, Skipped: 1
+kubeconform -strict -ignore-missing-schemas namespace.yaml anchor.yaml victim.yaml   Valid: 3, Invalid: 0, Errors: 0, Skipped: 0
+```
+
+The skipped one is the KubeDescheduler CR (no schema in the catalog). The rollback order is in `components/operators/kube-descheduler/README.md`: commit the revert with `startingCSV` first, delete the 5.4 CSV, approve the InstallPlan; the CRD schema is identical; the NetworkPolicy `descheduler-operand` stays behind, so the runbook lists it and leaves the decision. Every mutating command there is marked as the operator's, by prompt. Nothing has been applied to the cluster.
