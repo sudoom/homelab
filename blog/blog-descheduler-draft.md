@@ -648,3 +648,51 @@ kubeconform -strict -ignore-missing-schemas namespace.yaml anchor.yaml victim.ya
 ```
 
 The skipped one is the KubeDescheduler CR (no schema in the catalog). The rollback order is in `components/operators/kube-descheduler/README.md`: commit the revert with `startingCSV` first, delete the 5.4 CSV, approve the InstallPlan; the CRD schema is identical; the NetworkPolicy `descheduler-operand` stays behind, so the runbook lists it and leaves the decision. Every mutating command there is marked as the operator's, by prompt. Nothing has been applied to the cluster.
+
+## 2026-11-03 — eviction check on 5.3: PASS
+
+The installed `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` evicts a pod that violates required pod anti-affinity,
+and the evidence names the plugin, so LowNodeUtilization cannot have produced the pass. Run with `tests/descheduler-5.4-check/`,
+Tuesday 06:48Z (outside Monday's rotation window), while the OADP `main` build ran on node6. Each `oc` mutation went by the
+operator's permission prompt.
+
+Baseline, read-only, operand pod `descheduler-54dc68f9d-m227g` (started 2026-11-02 21:17:36Z):
+
+```
+KUBECONFIG=~/.kube/config-readonly oc get --raw /api/v1/namespaces/openshift-kube-descheduler-operator/services/https:metrics:10258/proxy/metrics
+descheduler_loop_duration_seconds_count 10
+descheduler_lownodeutilization_node_classification{node="node4.okd.sudops.pl"} 2
+descheduler_lownodeutilization_node_classification{node="node5.okd.sudops.pl"} 2
+descheduler_lownodeutilization_node_classification{node="node6.okd.sudops.pl"} 1
+(no descheduler_pods_evicted_total series)
+```
+
+Steps:
+
+```
+oc apply -f tests/descheduler-5.4-check/namespace.yaml -f tests/descheduler-5.4-check/anchor.yaml
+  anchor-785df79cc-889nq Running node6, UID 6e805e4f-15d4-48ff-b1dd-9135d57579ac, scc restricted-v2, no volumes
+oc apply -f tests/descheduler-5.4-check/victim.yaml
+  victim-79ffdf8f69-ctwcb Running node6
+oc -n descheduler-check label pod anchor-785df79cc-889nq drill=anchor        # 06:54:00Z
+```
+
+The next hourly loop, 07:18:34Z:
+
+```
+evictions.go:615] "Evicted pod" pod="descheduler-check/victim-79ffdf8f69-ctwcb" reason="" strategy="RemovePodsViolatingInterPodAntiAffinity" node="node6.okd.sudops.pl" profile="AffinityAndTaints"
+lownodeutilization.go:313] "No node is underutilized, nothing to do here, you might tune your thresholds further"
+
+descheduler_pods_evicted_total{namespace="descheduler-check",node="node6.okd.sudops.pl",profile="AffinityAndTaints",result="success",strategy="RemovePodsViolatingInterPodAntiAffinity"} 1
+descheduler_loop_duration_seconds_count 11
+
+anchor-785df79cc-889nq   Running node6  UID 6e805e4f-15d4-48ff-b1dd-9135d57579ac (unchanged)
+victim-79ffdf8f69-xt96d  Running node4
+```
+
+All four criteria hold: the line names the anti-affinity strategy, the counter with that strategy went from no series to 1 in
+the same operand pod, the replacement runs off node6, and `anchor` kept its UID. Cleanup: `oc delete namespace descheduler-check`.
+
+Two things seen on the way. The pods carry `topology.kubernetes.io/zone: fd-c` as a pod label, added by something at admission;
+it plays no part here. And it took 25 minutes from label to eviction only because the loop is hourly; the plugin acted on the
+first loop after the label.
