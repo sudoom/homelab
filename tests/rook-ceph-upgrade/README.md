@@ -178,14 +178,25 @@ in the operator's window. Run the gates (list above) first.
 |---|---|---|
 | 1 | `s1-c1a-pins` | explicit `cephClusterSpec.network.connections.requireMsgr2: false` and `upgradeOSDRequiresHealthyPGs: true` in the cluster `values.yaml`; expected to roll no daemon |
 | 2 | `s1-c1b-driver-protect` | `argocd.argoproj.io/sync-options: Delete=false,Prune=false` on the Driver in `csi-driver-config` |
-| 3 | `s1-c1c-prunelast` | root-app `extraSyncOptions: [PruneLast=true]` on `rook-ceph-operator` only |
+| 3 | `s1-c1c-prunelast` | root-app `extraSyncOptions`: `PruneLast=true` on `rook-ceph-operator`, `FailOnSharedResource=true` on `csi-driver-config` |
 | 4 | `s1-c2-operator-hop` | operator chart to v1.20.9 (the hop) |
 | 5 | `s1-c3-cluster-chart` | cluster wrapper to v1.20.9 |
 | 6 | `s1-c4-legacy-cleanup` | remove the legacy CSI resources, only after c2 and c3 verify |
 
 Before each push the controller runs `git apply --check` on the patch, re-renders the chart from the applied patch
 (`helm dependency build`, `helm template`, kubeconform) and runs `oc diff` against live; a diff that differs from the
-render evidence stops the push.
+render evidence stops the push. Every render passes `--api-versions security.openshift.io/v1` (without it the charts
+drop their SCCs), and the diff runs with `-n rook-ceph`: the `ceph-csi-drivers` Roles and RoleBindings render with no
+namespace, and ArgoCD puts them in `rook-ceph`.
+
+```bash
+# CONTROLLER, from the applied patch (operator wrapper shown; the cluster wrapper is the same with its own path)
+find components/operators/rook-ceph/charts -name '*.tgz' -delete
+helm dependency build components/operators/rook-ceph
+helm template rook-ceph-operator components/operators/rook-ceph/ -n rook-ceph \
+  -f components/operators/rook-ceph/values.yaml --api-versions security.openshift.io/v1 --kube-version 1.35.5 \
+  | oc diff -n rook-ceph -f -
+```
 
 **Window start.** At the start of every window (c2, c3 and each stage-2 commit) the controller records the UTC time
 before pushing, in the evidence tree (never committed), and every "newer than the window start" check below reads it:
@@ -208,6 +219,15 @@ KUBECONFIG=~/.kube/config-readonly oc get pods -A -l cnpg.io/cluster -o custom-c
 
 Run the smoke sequence (above) once and the Events command below; keep both outputs as the baseline.
 (c1a should roll no daemon; if any mon, mgr or OSD pod restarts after it, stop and report before c2.)
+
+The v1.20.9 chart sets `ROOK_DELETE_UNUSED_CRUSH_RULES=true` in `rook-ceph-operator-config`, so the new operator deletes
+CRUSH rules no pool uses once its mgr is up. The operator records the rules and each pool's rule before c2:
+
+```bash
+# OPERATOR (exec), before the c2 push; repeat after c2 (verify item 9)
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd crush rule ls
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd pool ls detail | grep -o "^pool [0-9]* '[^']*'.*crush_rule [0-9]*"
+```
 
 **Verify after c2 and again after c3** (every item must hold):
 
@@ -252,12 +272,87 @@ KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get pods -l app=rook-ceph-osd
    `grep -A12 'ceph auth get client.csi-rbd-provisioner.1' "$(ls -t .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/ceph-reads-s1-*.txt | head -1)"`
    (the newest `s1` capture; in zsh the glob has a match once the script has run).
    Any other set (for example no `osd` cap) is a FAIL.
+8. Exactly one Driver: `KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get drivers.csi.ceph.io` lists only
+   `rook-ceph.rbd.csi.ceph.com` (the drivers chart has cephfs, nfs and nvmeof off; a second Driver means a value did
+   not take).
+9. Operator: rerun the two CRUSH reads from the pre-hop state. Every pool keeps its `crush_rule` number, and any rule
+   missing from `ceph osd crush rule ls` is one no pool referenced before c2. Anything else is a FAIL.
 
-c4 goes only after c2 and c3 pass items 1-7; after it, rerun `csi-state.sh --expect stage1` and the smoke sequence.
+Between the c2 push and root-app deleting it, the `csi-driver-config` Application can show a failed sync
+(`FailOnSharedResource`: the Driver already carries rook-ceph-operator's tracking id). That is expected and is what
+stops it re-applying a hostNetwork-only Driver over the drivers chart's. It must disappear once root-app has synced;
+if the Application is still there after that, stop and report.
 
-**Recovery.** If CSI mounts break and do not recover within 30 minutes of focused work, revert c2 and c3 together
-(one revert commit pair pushed together) to the post-c1 state. Never revert one without the other: the Driver would
-then reference service accounts of the wrong chart version. c4 is not reverted this way (it only runs after verify).
+**Lasting protection (after c2 verifies).** ArgoCD's adoption of the Driver by rook-ceph-operator drops the
+`Delete=false,Prune=false` annotation that `csi-driver-config` had set (one field manager, `argocd-controller`, for every
+app, and the drivers chart has no annotations hook). Put it back by hand so it is owned by a different field manager
+(`kubectl-annotate`) and survives ArgoCD's applies:
+
+```bash
+# CONTROLLER (prompted), once items 1-9 pass after c2
+oc -n rook-ceph annotate drivers.csi.ceph.io rook-ceph.rbd.csi.ceph.com argocd.argoproj.io/sync-options=Delete=false,Prune=false --overwrite
+# then, after the next rook-ceph-operator sync has finished (its operationState.finishedAt later than the annotate):
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get drivers.csi.ceph.io rook-ceph.rbd.csi.ceph.com \
+  -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/sync-options}{"\n"}{range .metadata.managedFields[*]}{.manager}{" "}{end}{"\n"}'
+```
+
+Expected: `Delete=false,Prune=false`, and `kubectl-annotate` among the managers. Without the annotation, any later
+commit that takes the Driver out of the operator render (a revert, a chart change) prunes it with foreground
+propagation, which deletes the plugin Deployment and DaemonSet it owns and livelocks the deletion
+(`bugs/upstream-ceph-csi-operator-reconciles-terminating-driver.md`). `--overwrite` keeps the command working if the
+old annotation is still there; it is an annotation the Driver should carry either way.
+
+c4 goes only after c2 and c3 pass items 1-9 and the lasting protection is confirmed; after it, rerun
+`csi-state.sh --expect stage1` and the smoke sequence.
+
+**Recovery.** Only if CSI mounts break and do not recover within 30 minutes of focused work. Never a plain revert of
+c2 or c3: a revert takes the Driver, the new service accounts, their RBAC and their SCC grant out of the operator render
+while plugin pods still run under them, and PruneLast then deletes them (the Driver with foreground propagation, which
+also deletes the plugin Deployment and DaemonSet). The recovery is a forward commit, `s1-recovery.patch`, made for the
+post-c3 state (c1a..c3 on master; after c4 it does not apply, so stop and re-dispatch). It puts both Rook charts back to
+v1.19.5 with master's values (c1a's pins stay), brings `csi-driver-config` back without `FailOnSharedResource` (after the
+rollback the Driver still carries rook-ceph-operator's tracking id, which that app never releases, so
+`csi-driver-config` must take the Driver over to restore ctrlplugin hostNetwork), and adds a temporary
+`templates/csi-rollback-rbac.yaml` that keeps the new pair `rook-ceph-rbd-csi-ceph-com-{ctrl,node}plugin-sa`, its RBAC
+and its SCC grant until the plugins have rolled back to the old pair. Render evidence:
+`work/renders/s1-recovery-checks.txt`.
+
+Before the push (controller):
+
+```bash
+# 1. The Driver must carry the hand-applied protection (lasting-protection read above). If it does not
+#    (recovery before c2 verified), run the prompted annotate from "Lasting protection" first: the recovery
+#    takes the Driver out of the operator render, and only Prune=false on the live object stops the prune.
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get drivers.csi.ceph.io rook-ceph.rbd.csi.ceph.com \
+  -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/sync-options}{"\n"}'          # Delete=false,Prune=false
+# 2. The recovery also prunes the OperatorConfig and the image-set ConfigMap (the v1.19.5 chart does not render
+#    them; Rook v1.19.5 recreates both at runtime). A missing OperatorConfig makes ceph-csi-operator reconcile the
+#    Driver without defaults (built-in images, no priority classes: an extra plugin roll); a missing image-set
+#    ConfigMap stalls the reconcile. Hold both (prompted):
+oc -n rook-ceph annotate operatorconfigs.csi.ceph.io/ceph-csi-operator-config configmap/rook-csi-operator-image-set-configmap argocd.argoproj.io/sync-options=Prune=false --overwrite
+# 3. The recovery prunes CRD cephobjectstoreaccounts.ceph.rook.io (new in the v1.20.9 render). Expect no resources:
+KUBECONFIG=~/.kube/config-readonly oc get cephobjectstoreaccounts.ceph.rook.io -A
+```
+
+Then `git apply --check` and apply `s1-recovery.patch`, commit, push. The operator downgrade rolls every mon, mgr and
+OSD again (the pod templates carry the Rook version), one OSD at a time, so treat it as another degraded window.
+rook-ceph-operator then stays OutOfSync for the objects held by `Prune=false`; that is expected until the follow-up.
+
+Verify after the recovery (all must hold):
+
+1. `KUBECONFIG=~/.kube/config-readonly bash tests/rook-ceph-upgrade/verify/csi-state.sh --expect stage0` -> `RESULT PASS
+   stage0` once the plugins have rolled back (old service accounts on every plugin pod, no service account names on the
+   Driver, ctrlplugin hostNetwork, csi-snapshotter present, cephcsi v3.16.2, operator v1.19.5).
+2. Smoke sequence PASS.
+3. No plugin pod under the new pair:
+   `KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get pods -o jsonpath='{range .items[*]}{.spec.serviceAccountName}{"\n"}{end}' | grep -c rook-ceph-rbd-csi-ceph-com`
+   -> `0`.
+
+Follow-up, once item 3 reads `0`: one commit that deletes
+`components/operators/rook-ceph/templates/csi-rollback-rbac.yaml`; then (prompted) drop rook-ceph-operator's tracking id
+from the two held objects so that app returns to Synced:
+`oc -n rook-ceph annotate operatorconfigs.csi.ceph.io/ceph-csi-operator-config configmap/rook-csi-operator-image-set-configmap argocd.argoproj.io/tracking-id-`.
+The Driver keeps its annotation; `csi-driver-config` tracks it again.
 
 ## Stage 2: Rook v1.21.1
 
