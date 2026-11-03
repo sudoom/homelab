@@ -852,3 +852,27 @@ PUSHED zot.apps.okd.sudops.pl/okd-test/descheduler-catalog:2026-11-03-083443@sha
 ```
 
 31349230 bytes (31 MB), head `clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`. zot after the catalog run (08:44:49Z, after all three runs): 30.68 GiB free of 48.91 GiB, 18.21 GiB used. This is the image Task 6 Step 1 points the homelab test CatalogSource at. The `release-5.0` tree is validated but not in the image: nothing on this cluster reads it.
+
+## 2026-11-03 — descheduler test CatalogSource and the pre-upgrade baseline (5.3)
+
+Preparation for the 5.3 to 5.4 hop. Nothing on the operator changes yet: only a CatalogSource is added, and the upgrade edit is prepared as a patch that is not pushed.
+
+**Catalog chart.** `components/operators/descheduler-test-catalog/` mirrors `oadp-test-catalog`: one CatalogSource `okd-test-descheduler` in `openshift-marketplace`, image pinned by digest (`zot.apps.okd.sudops.pl/okd-test/descheduler-catalog:2026-11-03-083443@sha256:f0b730d3...`, head `clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`), root-app entry `descheduler-test-catalog` at wave 1. Temporary until okderators publishes 5.4.
+
+```
+helm lint components/operators/descheduler-test-catalog
+helm template root-app bootstrap/root-app/ -f bootstrap/root-app/values.yaml | grep -A22 'name: descheduler-test-catalog'
+helm template dtc components/operators/descheduler-test-catalog | kubeconform -strict -ignore-missing-schemas -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' -summary
+-> 1 chart(s) linted, 0 failed;  Valid: 1, Invalid: 0, Errors: 0
+```
+
+**Baseline before the upgrade (read-only, `KUBECONFIG=~/.kube/config-readonly`, namespace `openshift-kube-descheduler-operator`).**
+
+- CSV `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655`, phase Succeeded.
+- Subscription `cluster-kube-descheduler-operator`: source `okderators`, channel `alpha`, `installPlanApproval: Manual`, state `AtLatestKnown`, installed = current = the 5.3 CSV. One InstallPlan `install-nbl8w`, approved.
+- `KubeDescheduler/cluster` spec: `mode: Automatic`, `deschedulingIntervalSeconds: 3600`, `managementState: Managed`, `profiles: [AffinityAndTaints, LongLifecycle]`, `devLowNodeUtilizationThresholds: High`, no `unsupportedConfigOverrides`.
+- Policy ConfigMap: `cluster` (key `policy.yaml`, 477 lines; the operand Deployment `descheduler` mounts it). Saved locally as `policy-before.yaml` in the gitignored work dir. Protected-namespace count: every `exclude:` list holds 77 namespaces (5 of 5 lists). LowNodeUtilization thresholds 40/40/40, targets 70/70/70; `ignorePvcPods: true` on both DefaultEvictors.
+- Images: operand `quay.io/okderators/kube-descheduler/descheduler@sha256:fa98c723...`, operator `quay.io/okderators/kube-descheduler/operator@sha256:8a2f3f1f...`.
+- Metrics via `oc get --raw /api/v1/namespaces/openshift-kube-descheduler-operator/services/https:metrics:10258/proxy/metrics`: `descheduler_loop_duration_seconds_count 12`; `descheduler_pods_evicted_total` has one series, 1 eviction in `descheduler-check` (node6, AffinityAndTaints, RemovePodsViolatingInterPodAntiAffinity, success), left from the earlier drill.
+
+**Upgrade change, prepared and not pushed.** One line in `components/operators/kube-descheduler/values.yaml`: `subscription.source: okderators` to `okd-test-descheduler`. The `replaces` edge in the test catalog drives the upgrade; `installPlanApproval` stays `Manual`; `startingCSV` stays unset (rollback only). Checked: `helm template` of the chart with the patch differs from HEAD in exactly that `source:` line; reverted it renders byte-identically; `git apply --check` passes on HEAD.
