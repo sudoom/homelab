@@ -1,0 +1,44 @@
+# Writes 64 MiB of random data and its sha256 to the PVC, prints both, then sleeps.
+# Runs under restricted-v2 (assigned UID; fsGroup applied by the platform on mount).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-writer
+  namespace: rook-upgrade-smoke
+spec:
+  terminationGracePeriodSeconds: 5
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: writer
+      # ubi9/ubi-minimal digest, same as tests/oadp-1.6-drill/writer.yaml
+      image: registry.access.redhat.com/ubi9/ubi-minimal@sha256:312b02a8f8ad5bdd219849c3e854cc5191c92fb7b8ce9b30fe2daed2de849094
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          D=/data
+          dd if=/dev/urandom of="$D/smoke.bin.tmp" bs=1M count=64 2>/dev/null
+          sync
+          mv "$D/smoke.bin.tmp" "$D/smoke.bin"
+          set -- $(sha256sum "$D/smoke.bin")
+          echo "$1" > "$D/smoke.sha256.tmp"
+          sync
+          mv "$D/smoke.sha256.tmp" "$D/smoke.sha256"
+          sync
+          echo "SMOKE written sha256=$(cat "$D/smoke.sha256") bytes=$(wc -c < "$D/smoke.bin")"
+          exec sleep 36000
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: smoke

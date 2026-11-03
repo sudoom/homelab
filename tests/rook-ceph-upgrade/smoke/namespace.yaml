@@ -1,0 +1,6 @@
+# CSI smoke test for the Rook/Ceph upgrade. Delete the namespace when done:
+#   oc delete namespace rook-upgrade-smoke
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rook-upgrade-smoke

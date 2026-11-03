@@ -1,0 +1,37 @@
+# Mounts the restored PVC and prints the sha256 recomputed from the restored file next to the stored sum.
+# PASS = both equal the writer's sum.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-reader
+  namespace: rook-upgrade-smoke
+spec:
+  terminationGracePeriodSeconds: 5
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: reader
+      image: registry.access.redhat.com/ubi9/ubi-minimal@sha256:312b02a8f8ad5bdd219849c3e854cc5191c92fb7b8ce9b30fe2daed2de849094
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          D=/data
+          [ -f "$D/smoke.bin" ] && [ -f "$D/smoke.sha256" ] || { echo "SMOKE MISSING restored files"; exec sleep 36000; }
+          set -- $(sha256sum "$D/smoke.bin")
+          echo "SMOKE restored sha256=$1 stored=$(cat "$D/smoke.sha256") bytes=$(wc -c < "$D/smoke.bin")"
+          exec sleep 36000
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: smoke-restore
