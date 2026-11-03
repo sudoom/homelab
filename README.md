@@ -397,9 +397,10 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   moved to `oadp-1.6` (every pipeline branch pins `oadp-1.5`, operator gitlink `5520b16`) plus catalog-index PRs. Plan approved 2026-11-02 and executing: all 18 images, so 1.6 is complete for every OADP user (eight new images, six
   more submodules, no konveyor image in the bundle); real scheduled backups are not part of this work. Done: pins, both
   fork branches (`oadp-1.6`, `oadp-1.6-4.22`), the build Job, drill manifests and runbook, and the drill on 1.5, which
-  passed, the first recorded data mover restore here. Running: the first full `release-4.22` build, Job
-  `oadp-build-full-2026-11-02-205027`. Next: the catalog image, then the upgrade, a drill at each stage, a 24 h soak and
-  draft PRs (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) A supervised, coherent
+  passed, the first recorded data mover restore here. The full `release-4.22` build, the catalog image and the upgrade
+  are done: the cluster runs the 1.6 test build from catalog `okd-test-oadp` since 2026-11-03 08:00Z, and drill run 2 on
+  1.6 passed. The 24 h soak runs until about 2026-11-04 08:00Z (Task 10), then the draft PRs
+  (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) A supervised, coherent
   Rook bump to v1.20.9.** v1.19.5 supports Kube 1.30-1.35, so the cluster sits at its top edge; v1.20.9 covers 1.31-1.37.
   The June v1.20.0 CSI break came from our charts never being re-vendored, not from Rook. **(3) Before 5.0, a descheduler upgrade:**
   `ClusterNotUpgradeable` fires because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares

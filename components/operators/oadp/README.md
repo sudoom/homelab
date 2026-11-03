@@ -5,10 +5,10 @@ are configured by the sibling chart `components/cluster-config/oadp/` (DPA `dpa`
 `192.168.1.25:30188`, Schedule `daily`, which stays `paused: true`). This chart only installs the operator, so
 everything here is about the Subscription: where it reads from, which CSV it runs, and how to move it.
 
-**Status 2026-11-02:** CSV `oadp-operator.v1.5.0-2026-01-05-165341` from `okderators`, `installPlanApproval: Manual`
-(InstallPlan `install-fj9jr` Complete). The move to the okderators 1.6 build (`oadp-operator.v1.6.0-<DATE_422>` from
-the test catalog `okd-test-oadp`) is prepared and not applied; the plan and results are in
-`blog/blog-okderators-oadp-1.6-draft.md`. Replace `<DATE_422>` below with the build date from that draft.
+**Status 2026-11-03:** the cluster runs the okderators 1.6 test build, CSV `oadp-operator.v1.6.0-2026-11-02-205027` from
+the test catalog `okd-test-oadp`, since 2026-11-03 08:00Z (InstallPlan `install-zqssm`, approved by hand;
+`installPlanApproval: Manual`). It replaced `oadp-operator.v1.5.0-2026-01-05-165341` from `okderators`
+(InstallPlan `install-fj9jr`). The plan and results are in `blog/blog-okderators-oadp-1.6-draft.md`.
 
 ## What the chart installs
 
@@ -73,7 +73,7 @@ ocr -n openshift-adp get bsl truenas-garage -o jsonpath='{.status.phase} {.statu
 ocr -n openshift-adp get schedules.velero.io daily -o jsonpath='{.spec.paused}{"\n"}'                       # true
 ocr -n openshift-adp get backups.velero.io drill-15 -o jsonpath='{.status.phase} {.status.expiration}{"\n"}' # Completed
 ocr -n openshift-marketplace get catalogsource okd-test-oadp -o jsonpath='{.status.connectionState.lastObservedState}{"\n"}'  # READY
-ocr get packagemanifests -l catalog=okd-test-oadp -o jsonpath='{range .items[*].status.channels[*]}{.name} {.currentCSV}{"\n"}{end}'   # alpha oadp-operator.v1.6.0-<DATE_422>
+ocr get packagemanifests -l catalog=okd-test-oadp -o jsonpath='{range .items[*].status.channels[*]}{.name} {.currentCSV}{"\n"}{end}'   # alpha oadp-operator.v1.6.0-2026-11-02-205027
 ocr -n openshift-adp get dpa dpa -o yaml > "$SCR/dpa-before.yaml"        # saved for the post-upgrade diff
 ocr -n openshift-adp get networkpolicies -o name > "$SCR/netpol-before.txt"
 ```
@@ -82,7 +82,7 @@ ocr -n openshift-adp get networkpolicies -o name > "$SCR/netpol-before.txt"
 name on this cluster; always select by `catalog=okd-test-oadp`.
 
 **2. The commit.** In `components/operators/oadp/values.yaml` set `source: okd-test-oadp` and
-`startingCSV: oadp-operator.v1.6.0-<DATE_422>` (the template renders a `startingCSV` line only when the value is set; `installPlanApproval`
+`startingCSV: oadp-operator.v1.6.0-2026-11-02-205027` (the template renders a `startingCSV` line only when the value is set; `installPlanApproval`
 stays `Manual`). Commit `oadp: move to the okderators 1.6 test build`, push. The Subscription resolves and OLM
 generates an InstallPlan with `approved: false`.
 
@@ -90,7 +90,7 @@ generates an InstallPlan with `approved: false`.
 ocr -n openshift-adp get subscription oadp-operator -o jsonpath='{.status.state} {.status.installPlanRef.name}{"\n"}'
 ocr -n openshift-adp get installplan -o custom-columns=NAME:.metadata.name,CSV:.spec.clusterServiceVersionNames,APPROVED:.spec.approved,PHASE:.status.phase
 # select the plan by the CSV it installs: status.installPlanRef can still name an older, Complete plan
-IP=$(ocr -n openshift-adp get installplan -o jsonpath='{range .items[?(@.spec.clusterServiceVersionNames[0]=="oadp-operator.v1.6.0-<DATE_422>")]}{.metadata.name}{"\n"}{end}')
+IP=$(ocr -n openshift-adp get installplan -o jsonpath='{range .items[?(@.spec.clusterServiceVersionNames[0]=="oadp-operator.v1.6.0-2026-11-02-205027")]}{.metadata.name}{"\n"}{end}')
 echo "$IP"                                                      # exactly one name
 ocr -n openshift-adp get installplan "$IP" -o jsonpath='{range .status.plan[*]}{.resolving} {.resource.kind} {.resource.name} {.status}{"\n"}{end}'
 ```
@@ -166,7 +166,7 @@ that is fine and changes nothing.
 **2. Delete the 1.6 CSV (OPERATOR).**
 
 ```bash
-oc -n openshift-adp delete csv oadp-operator.v1.6.0-<DATE_422>      # OPERATOR
+oc -n openshift-adp delete csv oadp-operator.v1.6.0-2026-11-02-205027      # OPERATOR
 ```
 
 With no installed CSV matching `status.installedCSV`, the resolver honours `startingCSV` and OLM generates an
@@ -239,7 +239,7 @@ The failed attempt goes into the blog draft with the commands and outputs that d
 ## Back to okderators for good
 
 When `catalog-index:4.22` lists the official 1.6 entry, commit `source: okderators` and `startingCSV` = the official
-CSV. The installed test CSV is a `1.6.0-<DATE_422>` prerelease; the official entry's `skipRange`
+CSV. The installed test CSV is a `1.6.0-2026-11-02-205027` prerelease; the official entry's `skipRange`
 (`>=1.4.0-0 <1.6.0-<its date>`) is what lets OLM offer it. If no InstallPlan appears, do the supervised re-subscribe
 above (delete the test CSV and the Subscription after the commit). Check that the installed CSV is the official one and every pod image (containers and initContainers) is under
 `quay.io/okderators/oadp/`, as in the drill's run 4. Repeat the drill on the official images

@@ -2,9 +2,8 @@
 # leaves the data in the bucket and the BSL sync recreates the CR (rehearsal, 2026-08-28).
 # Apply only after every drill restore has been verified.
 #
-# Task 9 Step 5 records, and the Step 6 commit adds, one DeleteBackupRequest per Backup that Schedule drill-schedule
-# produced, by name (its Backups are named drill-schedule-<timestamp>), before this
-# file is applied.
+# Includes the one Backup that Schedule drill-schedule produced (Task 9 Step 5) before it was deleted,
+# drill-schedule-20261103083008. Any other drill-schedule-<timestamp> Backup needs its own entry here.
 apiVersion: velero.io/v1
 kind: DeleteBackupRequest
 metadata:
@@ -28,3 +27,11 @@ metadata:
   namespace: openshift-adp
 spec:
   backupName: drill-16-soak
+---
+apiVersion: velero.io/v1
+kind: DeleteBackupRequest
+metadata:
+  name: drill-schedule-20261103083008-purge
+  namespace: openshift-adp
+spec:
+  backupName: drill-schedule-20261103083008

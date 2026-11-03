@@ -933,3 +933,112 @@ volumesnapshotlocations at `v1`; datadownloads and datauploads at `v2alpha1`. `o
 cloudstorages, dataprotectionapplications, dataprotectiontests, nonadminbackups,
 nonadminbackupstoragelocationrequests, nonadminbackupstoragelocations, nonadmindownloadrequests, nonadminrestores.
 After the hop, compare these served/storage flags against this list.
+
+## 2026-11-03 — Task 9: upgraded to 1.6, drills on 1.6 passed
+
+Everything below was read with `KUBECONFIG=~/.kube/config-readonly`; every cluster change was a command the operator
+approved at a prompt. Times are UTC.
+
+### Gates (07:52)
+
+DPA `Reconciled`, BSL `truenas-garage` `Available` (validated 07:52:34), Task 8 passed, `drill-15` `Completed` 33/33 with
+`status.expiration` 2026-11-16T20:52:01Z, CatalogSource `okd-test-oadp` READY with the 1.6 head, `dpa-before.yaml` saved,
+Schedule `daily` `paused: true`. All clear.
+
+### Commit and InstallPlan
+
+Committed and pushed `b02ae26` (`oadp: move to the okderators 1.6 test build`) at 07:53:06. InstallPlan `install-zqssm`
+for `oadp-operator.v1.6.0-2026-11-02-205027` appeared at 07:56 in `RequiresApproval`; its bundle ConfigMap `sourceImage`
+is our 4.22 bundle `@sha256:d42c3f7e…`. Steps: the CSV, 23 CRDs, RBAC (Roles, ClusterRoles, bindings), 5 ServiceAccounts
+and the metrics Service. CRD comparison against the pre-upgrade list: the 21 existing CRDs keep their single served and
+stored version, 2 are new (`virtualmachinebackupsdiscoveries`, `virtualmachinefilerestores`), 0 stored versions removed.
+The operator approved the plan at 08:00:15.
+
+### The leader-lease wait
+
+The 1.6 CSV was `Succeeded` at 08:01:05 and the Subscription read `AtLatestKnown` 1.6, but nothing moved for about
+three minutes. The old 1.5 pod did not release the `oadp.openshift.io` lease, so the new operator waited on it
+(`leaseDurationSeconds` 137) and acquired it at 08:03:51. It then rolled the velero Deployment to
+`okd-test/oadp/velero@8e026079e30f` (generation 2) at once. The pause is the old pod holding the lease, not a hang.
+
+### Step 3 checks (08:04:52 to 08:06)
+
+- Only the 1.6 CSV is left; 1.5 is gone.
+- Every pod runs on `okd-test/oadp/` digests with 0 restarts: operator `0a3f068d`; velero `8e026079` with init
+  containers aws-plugin `e0ca82a0` and openshift-plugin `96def84a`; 3 node-agents on velero `8e026079`; cli-binaries
+  `fc22fa2c`; vmdp-binaries `8d50dbe2`.
+- DPA generation 5, `Reconciled`, spec identical to `dpa-before.yaml` (`jq -S` diff of both specs is empty).
+- BSL `truenas-garage` `Available`, validated 08:04:08.
+- NetworkPolicies in `openshift-adp`: `oadp-cli-server-`, `oadp-operator-`, `oadp-vmdp-server-`, `velero-mover-`,
+  `velero-network-policy`.
+- 23 CRDs: storedVersions 11 `v1`, 10 `v1alpha1`, 2 `v2alpha1` (the 21 unchanged plus the 2 new).
+- 1.6 creates two download servers at operator start, which 1.5 did not have: Deployments
+  `openshift-adp-oadp-cli-server` and `-vmdp-server` (1/1), Services `:80 -> 8080`, Routes `oadp-cli-server-route` and
+  `oadp-vmdp-server-route` (edge, `Admitted=True`), and cluster-scoped `ConsoleCLIDownload`s `openshift-adp-oadp-cli`
+  and `-vmdp`. Archives, fetched through the service proxy: `kubectl-oadp_linux_amd64` 65097890 B, sha256
+  `498bfce7…`; `oadp-vmdp_linux_amd64` 50311330 B, sha256 `0172e5df…`; both x86-64 ELF. I did not fetch through the
+  Routes: curl is denied locally, so the Route level is admitted but not exercised.
+
+### Drill run 2
+
+Pre-flight clean: 0 Released or Failed PVs, every attached VolumeAttachment's PV Bound. The source writer logged
+`DRILL sha256=b29d2dc0f2ea165345a30936217c9cd382260fac1d1bc4a31ec36fef8e60d642` (A) and `DRILL gen=661294aa…` (G1).
+
+**r16a, the 1.5 backup restored by 1.6.** `restore-drill-15-r16a` applied 08:08:03, `Completed` 08:08:48, errors 0,
+warnings 2 (ConfigMaps `kube-root-ca.crt` and `openshift-service-ca.crt` already exist, as on r15). DataDownload
+`drill-15-r16a-slbxr` `Completed` 134217858/134217858 on node6, PVC Bound. The restored writer logged A and G1.
+
+**New bytes.** `oc -n oadp-drill rollout restart deploy/drill-writer` at 08:10:36; the new pod logged A unchanged and
+G2 = `534d5c1c31574f15ff1a5c169264525b898bcd9dbc6ffc6426562b267d63b0b9` (08:10:47). Bucket baseline before the backup:
+134574093 B, 49 objects (08:11:32).
+
+**drill-16.** `oc apply -f backup-16.yaml` at 08:11:54, `Completed` 08:12:39, errors 0, warnings 0, 33/33, expires
+2026-11-17T08:11:54Z. DataUpload `drill-16-8h59p` `Completed`, `bytesDone` 134217858/134217858, `incrementalBytes`
+134217858. BackupRepository `Ready`. Bucket 134574093 -> 201999089 B (+67424996 B = 64.3 MiB), objects 49 -> 66
+(read 08:13:52). `incrementalBytes` equals the whole volume although only the 64 MiB generation file was new, so it does
+not prove the write path; the bucket growth does. The Schedule's backup below reports 64 MiB (67108929) for the same situation.
+
+**r16b, the 1.6 backup restored by 1.6.** `restore-drill-16-r16b` `Completed` 08:14:10 to 08:15:18, errors 0, warnings
+2 (the same two ConfigMaps). DataDownload `drill-16-r16b-vn5qs` 134217858/134217858 on node6, PVC Bound. The restored
+writer logged A (`b29d2dc0…`) and G2 (`534d5c1c…`). Checksums match, so the 1.6 write path and the 1.6 read path both
+work.
+
+### The uncounted "PVC is not bound" log line
+
+The velero log carried `level=warning msg="PVC is not bound or has no volume name"` (`volumes_information.go:757`,
+`drill-data`, 08:08:17) on r16a, and the same line on r16b. The drill README treats a warning about the PVC as a fail.
+I ruled this one not a failure: it is outside `status.warnings` (which stayed at the two ConfigMaps), it comes from the
+volume-info collector running while the data-mover PVC is still Pending by design, and the checksums show the data came
+out of the bucket. I do not know whether 1.5 logged it; it was not checked. If the ruling is wrong, a PVC
+restore defect would hide behind that line, but missing or wrong data would have changed A or G.
+
+### The Schedule path
+
+Source writer restarted 08:16:58; G3 = `3c961b2eb8f23d391839b30db0206785f476ed7acb17171c48894165b48d97ac` (08:17:21).
+Bucket baseline 202004366 B, 71 objects (08:17:35). `oc apply -f schedule-drill.yaml` at 08:22:56 (`Enabled`). The
+first Backup `drill-schedule-20261103083008` ran 08:30:08 to 08:31:09, on the `*/15` boundary and after the Schedule's
+creation, `Completed`, errors 0, warnings 0, 47/47. DataUpload `drill-schedule-20261103083008-mdg8b`: `bytesDone`
+134217858, `incrementalBytes` 67108929 (64 MiB, the new generation file). Bucket 202004366 -> 269432714 B (+67428348 B =
+64.3 MiB), objects 71 -> 88 (08:32:16). Schedule deleted 08:33:25 so it takes no more backups; this was its only
+Backup. I added `drill-schedule-20261103083008` to `tests/oadp-1.6-drill/delete-requests.yaml`; its Backups stay until
+Task 10. `daily` stays paused.
+
+### Maintenance read
+
+```
+oc -n openshift-adp get jobs -l velero.io/repo-name=oadp-drill-truenas-garage-kopia -o custom-columns='NAME:.metadata.name,DONE:.status.completionTime'
+...-maintain-job-1793683729824   2026-11-03T05:28:55Z
+...-maintain-job-1793687629835   2026-11-03T06:33:55Z
+...-maintain-job-1793691529846   2026-11-03T07:38:55Z
+oc -n openshift-adp get backuprepositories.velero.io oadp-drill-truenas-garage-kopia -o jsonpath='{.status.lastMaintenanceTime}'
+2026-11-03T07:38:55Z
+```
+
+Read at 08:35:57. The last maintenance Job (07:38:55) ran under 1.5, before the 1.6 CSV was created (08:00:16). The
+first one under 1.6 has not run yet; `maintenanceFrequency` is 1h, so it is due about 08:39. To be recorded in Task 10.
+
+### Result
+
+Upgrade clean, no rollback needed. Drill run 2 passed: a 1.5 backup restores on 1.6, a 1.6 backup of changed data
+restores with the right checksums, and the Schedule path takes a backup on its boundary. The 24 h soak runs until about
+2026-11-04 08:00 (Task 10).
