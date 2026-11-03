@@ -94,7 +94,11 @@ ocr -n oadp-drill-r15 logs deploy/drill-writer
 Restore warnings are recorded, not a fail by count: the 2026-08-28 rehearsal Restore (a ConfigMap-mapped
 storage-class restore) was `Completed` with 0 errors and 7 warnings (`blog/blog-truenas-migration-draft.md`). A
 Backup with warnings fails condition 1; a Restore with warnings is read line by line, and any warning about the PVC,
-the DataDownload or the volume data is a FAIL.
+the DataDownload or the volume data is a FAIL. One expected exception: the Velero log line `PVC is not bound or has
+no volume name` (`volumes_information.go`) is logged by `RestoreVolumeInfoTracker.Populate`, which runs after
+`status.Warnings` is computed and while a data-mover PVC is still Pending by design (openshift/velero oadp-1.6
+`restore_controller.go:700`, after L653 and L673-676; oadp-1.5 has the same code path). It is expected on every
+data-mover restore and is not a FAIL; the checksums decide.
 
 **Re-running a failed Restore:** applying the same name again does nothing, and an existing PVC in the target namespace
 is skipped. Delete the Restore and its target namespace first, wait until both and the target PV are gone, then apply:
@@ -156,7 +160,7 @@ its completion time is after the 1.6 CSV's creation:
 ocr -n openshift-adp get jobs -l velero.io/repo-name=oadp-drill-truenas-garage-kopia \
   -o custom-columns='NAME:.metadata.name,DONE:.status.completionTime'
 ocr -n openshift-adp get backuprepositories.velero.io oadp-drill-truenas-garage-kopia -o jsonpath='{.status.lastMaintenanceTime}{"\n"}'
-ocr -n openshift-adp get csv oadp-operator.v1.6.0-<DATE_422> -o jsonpath='{.metadata.creationTimestamp}{"\n"}'
+ocr -n openshift-adp get csv oadp-operator.v1.6.0-2026-11-02-205027 -o jsonpath='{.metadata.creationTimestamp}{"\n"}'
 ```
 
 Then the Schedule path. The Backup it produces must write new bytes too, so restart the writer and record the bucket
@@ -196,7 +200,7 @@ oc apply -f restore-drill-16-soak-r16c.yaml                                     
 First prove the drill runs on the official images, not the test build:
 
 ```bash
-ocr -n openshift-adp get csv -o custom-columns='NAME:.metadata.name,PHASE:.status.phase'     # oadp-operator.v1.6.0-<official date> Succeeded; no -<DATE_422>
+ocr -n openshift-adp get csv -o custom-columns='NAME:.metadata.name,PHASE:.status.phase'     # oadp-operator.v1.6.0-<official date> Succeeded; no -2026-11-02-205027
 ocr -n openshift-adp get pods -o custom-columns='NAME:.metadata.name,IMAGES:.spec.containers[*].image,INIT:.spec.initContainers[*].image'
 ```
 

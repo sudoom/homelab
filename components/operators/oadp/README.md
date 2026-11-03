@@ -118,14 +118,14 @@ STRIP='del(.status, .metadata.resourceVersion, .metadata.generation, .metadata.m
 diff <(yq "$STRIP" "$SCR/dpa-before.yaml") <(ocr -n openshift-adp get dpa dpa -o yaml | yq "$STRIP")   # spec unchanged
 ocr -n openshift-adp get bsl truenas-garage -o jsonpath='{.status.phase} {.status.lastValidationTime}{"\n"}'   # Available, fresh
 ocr -n openshift-adp get pods -o custom-columns='NAME:.metadata.name,IMAGES:.spec.containers[*].image,INIT:.spec.initContainers[*].image,READY:.status.containerStatuses[*].ready'
-ocr -n openshift-adp get networkpolicies -o name | diff "$SCR/netpol-before.txt" -     # new policies owned by the DPA; record them
-ocr get crd -o jsonpath='{range .items[?(@.spec.group=="velero.io")]}{.metadata.name} {.status.storedVersions}{"\n"}{end}'   # same storedVersions
+ocr -n openshift-adp get networkpolicies -o name      # 1.5 had none; the five 1.6 creates are owned by the DPA; record them
+ocr get crd -o jsonpath='{range .items[?(@.spec.group=="velero.io")]}{.metadata.name} {.status.storedVersions}{"\n"}{end}'   # same storedVersions as the blog's pre-upgrade CRD baseline
 ```
 
 Every operator, Velero and node-agent image must be under `zot.apps.okd.sudops.pl/okd-test/oadp/` by digest. 1.6
 also creates two download servers at operator start (`console-cli-download`, `vmdp-cli-download`) when the
 `ConsoleCLIDownload` CRD exists, whether or not KubeVirt does: for each a Deployment, Service and Route owned by the
-operator Deployment, plus a cluster-scoped `ConsoleCLIDownload` with no owner. Record their names (expected `openshift-adp-oadp-cli` and `openshift-adp-oadp-vmdp`, to be confirmed here); the
+operator Deployment, plus a cluster-scoped `ConsoleCLIDownload` with no owner. Record their names (confirmed at the 2026-11-03 upgrade: `openshift-adp-oadp-cli` and `openshift-adp-oadp-vmdp`); the
 rollback deletes the `ConsoleCLIDownload`s by hand.
 
 ```bash
@@ -136,13 +136,13 @@ ocr get consoleclidownload                                   # new entries since
 Each Route (`oadp-cli-server-route`, `oadp-vmdp-server-route`) must be admitted and serve one archive with HTTP 200.
 The `ConsoleCLIDownload` link points at the Route root (`https://<host>/`, `cli_download_controller.go:305`), which
 the server answers with its archive listing; fetch one file named in it. The fetch runs from the operator's shell
-(OPERATOR, a network read of our own Route; the listing format is to be confirmed at the upgrade).
+(OPERATOR, a network read of our own Route; the listing, confirmed 2026-11-03, has `href="/static/style.css"` first, then the GitHub repo link, then the `href="/download/<file>"` links, so the loop selects the first `/download/` link).
 
 ```bash
 for r in oadp-cli-server-route oadp-vmdp-server-route; do
   H=$(ocr -n openshift-adp get route $r -o jsonpath='{.spec.host}')
   echo "$r $H admitted=$(ocr -n openshift-adp get route $r -o jsonpath='{.status.ingress[0].conditions[?(@.type=="Admitted")].status}')"
-  F=$(curl -sk "https://$H/" | grep -o 'href="[^"]*"' | head -1 | cut -d'"' -f2)       # OPERATOR; first archive in the listing
+  F=$(curl -sk "https://$H/" | grep -o 'href="/download/[^"]*"' | head -1 | cut -d'"' -f2)       # OPERATOR; first archive in the listing (not the stylesheet)
   if [ -z "$F" ]; then echo "  FAIL: no archive found in the listing at https://$H/"; continue; fi   # an empty name would fetch the root, which is 200
   echo "  archive=$F http=$(curl -sk -o /dev/null -w '%{http_code}' "https://$H/$F")"                  # OPERATOR; want 200
 done
@@ -194,15 +194,14 @@ oc -n openshift-adp patch installplan <the unapproved name> --type merge -p '{"s
 ```
 
 **4. Delete the two `ConsoleCLIDownload`s (OPERATOR).** Cluster-scoped, no owner, so nothing garbage-collects them.
-Use the names recorded in upgrade step 4.
+The names were recorded at the 2026-11-03 upgrade.
 
 ```bash
-oc delete consoleclidownload <console-cli-download-name> <vmdp-cli-download-name>           # OPERATOR
+oc delete consoleclidownload openshift-adp-oadp-cli openshift-adp-oadp-vmdp           # OPERATOR
 ```
 
 **5. Remove what 1.6 wrote to the drill (OPERATOR).** Not `tests/oadp-1.6-drill/delete-requests.yaml`: that file
-also purges `drill-15`, which the retry gate (upgrade step 1) needs; it holds no `drill-schedule-*` entries until the
-Task 9 Step 6 commit; a `DeleteBackupRequest` for a Backup that does not exist yet stays `Processed` and a later
+also purges `drill-15`, which the retry gate (upgrade step 1) needs; it holds only the one `drill-schedule-*` entry (`drill-schedule-20261103083008`, from the 2026-11-03 run); a `DeleteBackupRequest` for a Backup that does not exist yet stays `Processed` and a later
 `oc apply` of the same name is then unchanged; and nothing there deletes `drill-schedule`. Instead: Schedule first, so
 it takes no more backups, then one rollback-named request per 1.6 Backup that exists (never `drill-15`, never anything
 `daily` made). The 1.5 Velero reads what the 1.6 Velero wrote, so these are removed rather than left to be misread.
@@ -222,12 +221,12 @@ ocr -n openshift-adp get deletebackuprequests.velero.io      # none left, or rea
 
 **6. Checks (readonly).** CSV `oadp-operator.v1.5.0-2026-01-05-165341` `Succeeded`, DPA `Reconciled`, BSL
 `Available` with a fresh validation, Velero and node-agent pods on the 1.5 images, Schedule `daily` still
-`paused: true`, no `console-cli-download` / `vmdp-cli-download` objects left, `storedVersions` as in
-`$SCR/crd-versions-before.txt`. 1.6's NetworkPolicies are owned by the DPA, not the CSV, so they stay after the
+`paused: true`, no `console-cli-download` / `vmdp-cli-download` objects left, `storedVersions` as in the CRD baseline of
+the blog's 2026-11-03 pre-upgrade baseline section (21 CRDs, one version each). 1.6's NetworkPolicies are owned by the DPA, not the CSV, so they stay after the
 rollback:
 
 ```bash
-ocr -n openshift-adp get networkpolicies -o name | diff "$SCR/netpol-before.txt" -     # policies 1.6 added and 1.5 does not own
+ocr -n openshift-adp get networkpolicies -o name      # 1.5 had none, so every policy listed is 1.6's
 ```
 
 List them. If BSL validation stays `Available` and a 1.5 backup works (the drill's run 1 again, with `drill-15`

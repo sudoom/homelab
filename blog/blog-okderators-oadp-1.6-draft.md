@@ -936,7 +936,7 @@ After the hop, compare these served/storage flags against this list.
 
 ## 2026-11-03 — Task 9: upgraded to 1.6, drills on 1.6 passed
 
-Everything below was read with `KUBECONFIG=~/.kube/config-readonly`; every cluster change was a command the operator
+Cluster reads used `KUBECONFIG=~/.kube/config-readonly`; the bucket figures come from garage's admin API on the NAS (read over ssh, the token kept in a shell variable there); every cluster change was a command the operator
 approved at a prompt. Times are UTC.
 
 ### Gates (07:52)
@@ -969,15 +969,21 @@ three minutes. The old 1.5 pod did not release the `oadp.openshift.io` lease, so
   `fc22fa2c`; vmdp-binaries `8d50dbe2`.
 - DPA generation 5, `Reconciled`, spec identical to `dpa-before.yaml` (`jq -S` diff of both specs is empty).
 - BSL `truenas-garage` `Available`, validated 08:04:08.
-- NetworkPolicies in `openshift-adp`: `oadp-cli-server-`, `oadp-operator-`, `oadp-vmdp-server-`, `velero-mover-`,
-  `velero-network-policy`.
+- NetworkPolicies in `openshift-adp`: `oadp-cli-server-network-policy`, `oadp-operator-network-policy`,
+  `oadp-vmdp-server-network-policy`, `velero-mover-network-policy`, `velero-network-policy`. All five were created
+  08:03:52 and are owned by the DataProtectionApplication; 1.5 had none.
 - 23 CRDs: storedVersions 11 `v1`, 10 `v1alpha1`, 2 `v2alpha1` (the 21 unchanged plus the 2 new).
 - 1.6 creates two download servers at operator start, which 1.5 did not have: Deployments
   `openshift-adp-oadp-cli-server` and `-vmdp-server` (1/1), Services `:80 -> 8080`, Routes `oadp-cli-server-route` and
   `oadp-vmdp-server-route` (edge, `Admitted=True`), and cluster-scoped `ConsoleCLIDownload`s `openshift-adp-oadp-cli`
   and `-vmdp`. Archives, fetched through the service proxy: `kubectl-oadp_linux_amd64` 65097890 B, sha256
-  `498bfce7…`; `oadp-vmdp_linux_amd64` 50311330 B, sha256 `0172e5df…`; both x86-64 ELF. I did not fetch through the
-  Routes: curl is denied locally, so the Route level is admitted but not exercised.
+  `498bfce7…`; `oadp-vmdp_linux_amd64` 50311330 B, sha256 `0172e5df…`; both x86-64 ELF. Route level, run by the
+  operator with a script that picks the first `/download/` link: `oadp-cli-server-route-openshift-adp.apps.okd.sudops.pl`
+  admitted=True, root http=200, `/download/kubectl-oadp_linux_amd64` http=200, 65097890 B;
+  `oadp-vmdp-server-route-openshift-adp.apps.okd.sudops.pl` admitted=True, root http=200,
+  `/download/oadp-vmdp_linux_amd64` http=200, 50311330 B; both sizes equal the service-proxy fetch. The listing has
+  `href="/static/style.css"` first, then the GitHub repo link, then the `/download/<file>` links, so the first href is
+  the stylesheet; the chart README's loop took `head -1` of all hrefs and is fixed.
 
 ### Drill run 2
 
@@ -995,8 +1001,15 @@ G2 = `534d5c1c31574f15ff1a5c169264525b898bcd9dbc6ffc6426562b267d63b0b9` (08:10:4
 **drill-16.** `oc apply -f backup-16.yaml` at 08:11:54, `Completed` 08:12:39, errors 0, warnings 0, 33/33, expires
 2026-11-17T08:11:54Z. DataUpload `drill-16-8h59p` `Completed`, `bytesDone` 134217858/134217858, `incrementalBytes`
 134217858. BackupRepository `Ready`. Bucket 134574093 -> 201999089 B (+67424996 B = 64.3 MiB), objects 49 -> 66
-(read 08:13:52). `incrementalBytes` equals the whole volume although only the 64 MiB generation file was new, so it does
-not prove the write path; the bucket growth does. The Schedule's backup below reports 64 MiB (67108929) for the same situation.
+(read 08:13:52). `incrementalBytes` equals the whole volume although only the 64 MiB generation file was new. In source it is
+`estimatedTotalBytes - cachedBytes` (openshift/velero oadp-1.6 `pkg/uploader/kopia/progress.go:181-182`,
+`pkg/uploader/provider/kopia.go:193`, `pkg/controller/data_upload_controller.go:509`): bytes read and hashed, never bytes
+uploaded, so it cannot prove the write path; bucket growth does. The DataUpload logged `Using parent snapshot
+d2898dce187a04cd03c976a12fb712a9`, drill-15's, written by 1.5 on 2026-11-02 20:52:29Z, yet `incrementalBytes` is the full
+134217858, so `cachedBytes` was 0: 1.6's first backup re-read the whole volume despite finding the 1.5 parent. The cause
+is not established. The bucket still grew only 64 MiB because Kopia dedups content. The Schedule's Backup below used
+parent `fb28135368f08327c6622d80fc4bf836` (drill-16's, written by 1.6) and cached `drill.bin`, hence 67108929; that was
+a different situation, not the same one.
 
 **r16b, the 1.6 backup restored by 1.6.** `restore-drill-16-r16b` `Completed` 08:14:10 to 08:15:18, errors 0, warnings
 2 (the same two ConfigMaps). DataDownload `drill-16-r16b-vn5qs` 134217858/134217858 on node6, PVC Bound. The restored
@@ -1009,7 +1022,9 @@ The velero log carried `level=warning msg="PVC is not bound or has no volume nam
 `drill-data`, 08:08:17) on r16a, and the same line on r16b. The drill README treats a warning about the PVC as a fail.
 I ruled this one not a failure: it is outside `status.warnings` (which stayed at the two ConfigMaps), it comes from the
 volume-info collector running while the data-mover PVC is still Pending by design, and the checksums show the data came
-out of the bucket. I do not know whether 1.5 logged it; it was not checked. If the ruling is wrong, a PVC
+out of the bucket. The line comes from `RestoreVolumeInfoTracker.Populate`, which runs after `status.Warnings` is computed
+(openshift/velero oadp-1.6 `restore_controller.go:700`, after L653 and L673-676). 1.5 has the same code path; I did
+not check r15's log for it. If the ruling is wrong, a PVC
 restore defect would hide behind that line, but missing or wrong data would have changed A or G.
 
 ### The Schedule path
