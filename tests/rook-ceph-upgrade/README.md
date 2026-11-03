@@ -448,4 +448,221 @@ OSDs, so allow the same degraded window.
 
 ## Stage 4: Ceph Tentacle 20.2.5
 
-(empty)
+Ceph goes from Squid 19.2.4 to Tentacle 20.2.5 (`quay.io/ceph/ceph:v20.2.5-20261028`, five pins) with the CephX daemon
+key rotation in the same commit. Rook is already v1.21.1 and msgr2 is required (stages 2 and 3 settled). Patches come
+from Task 13: `work/patches/s4-c1-rook-module-off.patch` (c1) and `work/patches/s4-c2-tentacle.patch` (c2). The
+controller applies, renders, runs `oc diff` and pushes each one after the operator says go; the `!` lines are the
+operator's.
+
+### Step 1: point of no return
+
+**The c2 push is the point of no return.** Once the first mon restarts on 20.2.5 there is no documented downgrade from
+Tentacle; recovery is fix forward only. Everything before c2 is reversible (c1 by reverting it, `noautoscale` by
+unsetting it); nothing after the first mon restart is. Do not start without 2 h headroom and the operator's explicit go
+for c2.
+
+**Order.**
+
+1. Gates (top of this file), plus Step 2's extra gates.
+2. c1 push (`rook` mgr module disabled). Verify: `ceph mgr module ls` (the `ceph mgr module ls` section of
+   `ceph-reads.sh`) shows `rook` disabled, and health is the standing WARN (only `BLUESTORE_SLOW_OP_ALERT`).
+3. Step 2: pre-commit checks, written to `work/evidence/s4-pre.txt`.
+4. Step 3: operator sets `noautoscale`.
+5. The operator's explicit go for c2.
+6. c2 push (record `window-start.txt` first), then Steps 5 and 6 (watch; Step 4 is what you will see). Step 7 only if
+   the roll stalls.
+7. Step 8: verify.
+8. Operator unsets `noautoscale` (Step 3).
+
+### Step 2: pre-commit checks
+
+All of these hold immediately before the c2 push. The controller writes the results, one line each, into
+`.superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/s4-pre.txt`; a single failure means no push.
+
+1. Second restore check, controller (each apply prompts). It is the same spec as Stage B's, under a new name, so the
+   first Restore (deleted in Stage B step 9) cannot collide. Derive the manifest from `backup/restore-check.yaml`; the
+   `sed` matches only the `metadata.name` line (`backupName: pre-rook-upgrade` is untouched):
+
+```bash
+# CONTROLLER (prompted), only if Stage B step 9 deleted the namespace
+oc apply -f tests/rook-ceph-upgrade/backup/restore-namespace.yaml
+# CONTROLLER (prompted)
+sed 's/name: pre-rook-upgrade-check$/name: pre-rook-upgrade-check2/' tests/rook-ceph-upgrade/backup/restore-check.yaml | oc apply -f -
+```
+
+   Then repeat Stage B steps 5-9 by number, with these changes: the Restore is `pre-rook-upgrade-check2`; step 5
+   waits for its DataDownloads (`webtlo-data-pvc`, `transmission-config-pvc`) to reach `Completed`; the compare in
+   step 8 uses the live pods as they are now, and `START` is still the Backup `pre-rook-upgrade`'s
+   `status.startTimestamp` (same Backup); step 9 deletes `pre-rook-upgrade-check2` and the namespace again. Pass criteria are Stage B's (empty `diff`, total compare lines at least 1, no `ERROR`). A FAIL stops the
+   stage: this backup is the only copy of the data a failed Tentacle roll could cost.
+2. CNPG archiving on all three clusters, `ContinuousArchiving=True` (command from the `cluster-health` skill):
+
+```bash
+# CONTROLLER (readonly)
+for nc in media:media-postgres immich:immich-postgres homebox:homebox-postgres; do
+  KUBECONFIG=~/.kube/config-readonly oc -n "${nc%%:*}" get cluster "${nc##*:}" -o jsonpath='{.metadata.name} ready={.status.readyInstances}/{.status.instances} {range .status.conditions[?(@.type=="ContinuousArchiving")]}archiving={.status}/{.reason}{end}{"\n"}'
+done
+```
+
+   Expected: three lines, each `archiving=True`, ready equal to instances.
+3. The image through zot, and zot's free space after (it pre-pulls):
+
+```bash
+# CONTROLLER
+bash tests/rook-ceph-upgrade/verify/images-check.sh quay.io/ceph/ceph:v20.2.5-20261028   # IMAGE OK
+```
+
+4. Gates (top of this file) hold, plus these Stage 4 gates: every node `Ready` and schedulable; no MCP updating; PGs
+   active+clean; all three OSDs `up` and `in`; no `ceph.rook.io/do-not-reconcile` label on any Deployment:
+
+```bash
+# CONTROLLER (readonly)
+KUBECONFIG=~/.kube/config-readonly oc get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable,READY:'.status.conditions[?(@.type=="Ready")].status'   # three rows: <none>, True
+KUBECONFIG=~/.kube/config-readonly oc get mcp   # UPDATING False on every pool
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get deploy -l ceph.rook.io/do-not-reconcile -o name   # empty
+```
+
+   The OSD state comes from the operator's capture: `bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s4-pre`. In its
+   `ceph osd tree` section `osd.0`, `osd.1` and `osd.2` read `up` with weight `1.00000` (`in`); its `ceph health detail`
+   section shows only `BLUESTORE_SLOW_OP_ALERT`; `ceph -s` shows PGs `active+clean`. The exit code must be `0`.
+5. Smoke sequence PASS and `KUBECONFIG=~/.kube/config-readonly bash tests/rook-ceph-upgrade/verify/csi-state.sh --expect stage3`
+   -> `RESULT PASS stage3`, so a failure after c2 cannot be blamed on a state that was already broken.
+6. Not Monday 19:00-23:00Z (next: 2026-11-09), quiet IO.
+
+### Step 3: `noautoscale`
+
+Ceph-internal mutation: the operator runs both lines, flagged and confirmed first. It stops the PG autoscaler from
+changing `pg_num` while OSDs restart.
+
+```bash
+# OPERATOR, before the c2 push (confirm first)
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd pool set noautoscale
+# OPERATOR, after Step 8 passes (confirm first)
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd pool unset noautoscale
+```
+
+Check each: `oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd pool get noautoscale` reads `noautoscale is on`
+(then `off`), or the `flags` line of the `ceph osd dump` section in `ceph-reads.sh` lists `noautoscale` (then does not).
+If the roll is abandoned or stalls for good, the unset still happens: do not leave the flag on.
+
+### Step 4: expected during the roll
+
+None of this is the incident:
+
+- `HEALTH_ERR` from `AUTH_INSECURE_SERVICE_KEY_TYPE` and `AUTH_INSECURE_SERVICE_TICKETS`, until the cipher is `aes256k`.
+- `rook-ceph-cluster` reads **Degraded** (our ArgoCD health check maps Ceph `HEALTH_ERR` to Degraded). Its multi-wave
+  sync fails and retries, and its Jobs stop with it: the four Jobs in the chart, `csi-rbd-provisioner-caps-fix-bootstrap`,
+  `pg-num-floor-bootstrap`, `mgr-pool-crush-rule-bootstrap` and `rbd-trash-purge-schedule-bootstrap` (`ttlSecondsAfterFinished`
+  3600, `Replace=true`; ArgoCD recreates each once the sync runs again). `root-app` reads Degraded too.
+- The four muted `AUTH_INSECURE_*` warnings (`AUTH_INSECURE_ROTATING_SERVICE_KEY_TYPE`, `AUTH_INSECURE_CLIENT_KEY_TYPE`,
+  `AUTH_INSECURE_KEYS_ALLOWED`, `AUTH_INSECURE_KEYS_CREATABLE`; c2 sets them through `healthCheck.muteHealthWarning`).
+  Whether and how `ceph health detail` lists a muted warning is read in the window.
+
+### Step 5: no-touch rule
+
+From the c2 push until `ceph versions` shows every daemon on 20.2.5 **and** `ceph mon dump -f json | jq -r
+.auth_service_cipher.name` reads `aes256k` (a monmap field Rook sets with `ceph mon set`): no commit to either storage
+app (`rook-ceph`, `rook-ceph-cluster`), no operator pod restart, no node event (no cordon, drain or reboot). A reconcile
+restart mid-roll re-runs Rook's health check and stalls the upgrade with mons on 20.2.5 and OSDs on 19.2.4. The
+operator reads the cipher: `ceph-reads.sh s4-roll` (section `ceph mon dump -f json | jq auth_service_cipher.name`).
+
+### Step 6: watch
+
+```bash
+# CONTROLLER (readonly), repeat every few minutes
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph logs deploy/rook-ceph-operator --since=10m | grep -E 'refusing to upgrade|upgrad'
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get cephcluster -o jsonpath='{.items[0].status.ceph.versions}{"\n"}{.items[0].status.phase} {.items[0].status.ceph.health}{"\n"}'
+```
+
+Progress = the daemons on 20.2.5 grow in `status.ceph.versions` (mons first). `refusing to upgrade` with the daemon
+versions split is Step 7; a slow but moving roll is not.
+
+### Step 7: contingency (stall)
+
+Only if the operator log shows `refusing to upgrade` with the daemon versions split. The operator runs, flagged and
+confirmed first:
+
+```bash
+# OPERATOR (confirm first)
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph health mute AUTH_INSECURE_SERVICE_KEY_TYPE 4h
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph health mute AUTH_INSECURE_SERVICE_TICKETS 4h
+oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph health
+```
+
+`ceph health` must read `HEALTH_WARN` before relying on it; then wait for Rook's next reconcile (do not trigger one).
+That a mute lets Rook proceed is inferred from Ceph's mute semantics, not documented by Rook, so the `HEALTH_WARN` read
+is the check. Never `skipUpgradeChecks: true`: it also drops the `ok-to-stop` gate, which on three OSDs is what stops
+two OSDs being down at once. The mutes expire after 4 h; the roll must be done by then.
+
+### Step 8: verify
+
+Record `window-start.txt` before the c2 push (Stage 1 "Window start"). After the admin key rotates, the toolbox may
+hold the old key.
+
+1. Operator: wait 60 s or restart the toolbox, then `bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s4` -> `0 reads
+   failed` (exit 0). The items below read that capture
+   (`ls -t .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/ceph-reads-s4-*.txt | head -1`).
+2. `ceph versions` section -> every mon, mgr and OSD on `20.2.5`, none on `19.2.4`.
+3. `ceph auth dump-keys` section (filtered to entity and `type_str`; the key fields are deleted by `ceph-reads.sh`) ->
+   `aes256k` for the mon, mgr and OSD entities. The section must not read `READ-SKIPPED`; it is skipped only while
+   some daemon is still on 19.x. Controller: `csi-state.sh` prints `INFO ... cephx=` with the CephCluster
+   `status.cephx`; the new key generation shows there (c2 sets `keyGeneration: 2`).
+4. `ceph osd dump` section -> `require_osd_release tentacle`; `ceph mon dump` section -> `min_mon_release 20 (tentacle)`;
+   the cipher section reads `aes256k`.
+5. `ceph health detail` section -> the standing WARN only: `BLUESTORE_SLOW_OP_ALERT` plus the muted `AUTH_INSECURE_*`
+   warnings and `AUTH_INSECURE_CLIENT_KEY_TYPE`; `AUTH_INSECURE_SERVICE_KEY_TYPE` and `AUTH_INSECURE_SERVICE_TICKETS`
+   are gone. Exact text read in the window.
+6. `noautoscale` unset: after Step 3's unset, `ceph osd pool get noautoscale` -> `noautoscale is off` or no
+   `noautoscale` in the `flags` line of the `ceph osd dump` section.
+7. Controller: `KUBECONFIG=~/.kube/config-readonly bash tests/rook-ceph-upgrade/verify/csi-state.sh --expect stage4` ->
+   every line `CHECK PASS` (including `cephcluster-version` `20.2.5*`), `RESULT PASS stage4`, exit 0.
+8. Smoke sequence PASS (writer, reader recomputed and reader stored sums equal). Before deleting its namespace, take
+   the OADP check: `backup/backup-smoke.yaml` -> Backup `post-tentacle-smoke`:
+
+```bash
+# CONTROLLER (prompted)
+oc apply -f tests/rook-ceph-upgrade/backup/backup-smoke.yaml
+# CONTROLLER (readonly), repeat until Completed
+KUBECONFIG=~/.kube/config-readonly oc -n openshift-adp get backups.velero.io post-tentacle-smoke -o jsonpath='{.status.phase} errors={.status.errors} warnings={.status.warnings}{"\n"}'
+KUBECONFIG=~/.kube/config-readonly oc -n openshift-adp get datauploads.velero.io -l velero.io/backup-name=post-tentacle-smoke
+```
+
+   Expected: Backup `Completed`, `errors=0`, a DataUpload `Completed` for each smoke PVC (`smoke`, `smoke-restore`).
+   Then delete the smoke namespace and confirm the PVs and RBD images are gone. The Backup expires with its 72 h ttl.
+9. The next CNPG scheduled VolumeSnapshot (created after the window start) is `readyToUse: true`:
+
+```bash
+# CONTROLLER (readonly), after the next scheduled run
+WINDOW_START="$(cat .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/window-start.txt)"
+KUBECONFIG=~/.kube/config-readonly oc get volumesnapshots.snapshot.storage.k8s.io -A -o json \
+  | jq -r --arg s "$WINDOW_START" '.items[] | select(.metadata.creationTimestamp >= $s) | "\(.metadata.namespace)/\(.metadata.name) readyToUse=\(.status.readyToUse)"'
+```
+
+10. The four Jobs' first runs after the rotation are `Complete` (they read the admin keyring): once `rook-ceph-cluster`
+    syncs again, each of `csi-rbd-provisioner-caps-fix-bootstrap`, `pg-num-floor-bootstrap`,
+    `mgr-pool-crush-rule-bootstrap` and `rbd-trash-purge-schedule-bootstrap` is `Complete` and started after the
+    window start:
+
+```bash
+# CONTROLLER (readonly)
+WINDOW_START="$(cat .superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/evidence/window-start.txt)"
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get jobs -o json \
+  | jq -r --arg s "$WINDOW_START" '.items[] | select(.metadata.name | test("caps-fix-bootstrap|pg-num-floor-bootstrap|mgr-pool-crush-rule-bootstrap|rbd-trash-purge-schedule-bootstrap")) | "\(.metadata.name) succeeded=\(.status.succeeded // 0) started=\(.status.startTime) \(if .status.startTime >= $s then "NEW" else "STALE" end)"'
+```
+
+    Four rows, `succeeded=1`, `NEW`. A Job whose TTL has not yet expired shows `STALE`; wait for ArgoCD to recreate it.
+11. Caps equal the caps-fix Job's set: in the `ceph auth get client.csi-rbd-provisioner.1` section of the `s4` capture,
+    `mgr allow rw`, `mon profile rbd, allow command 'osd blocklist'`, `osd profile rbd`.
+12. No `FailedMount` or `FailedAttachVolume` since the window start (Events command in Stage 1 item 4; both counts
+    `0`), and CNPG pods not restarted by the roll (Stage 1 pre-hop CNPG command; no `START` at or after
+    `$WINDOW_START`).
+13. Recorded only, not a pass criterion: whether `nvme-replicated` shows a PG target in the operator's
+    `oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd pool autoscale-status` (the Squid `bulk` bug behind the
+    `pg_num` floor Job). Copy the row into the blog draft either way.
+
+After Step 8 passes the operator unsets `noautoscale` (Step 3), and the standing WARN definition changes in the
+`cluster-health` skill, CLAUDE.md and the design together: it now also carries the muted `AUTH_INSECURE_*` warnings and
+`AUTH_INSECURE_CLIENT_KEY_TYPE` (until CSI keys move to AES256K, which needs kernel 7.0).
+
+**Recovery.** There is none back to Squid. Fix forward: read the operator log, keep the no-touch rule, use Step 7 for a
+stall. If CSI mounts break and do not recover within 30 minutes of focused work, stop and report; no teardown.

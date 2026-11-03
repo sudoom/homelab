@@ -1,0 +1,16 @@
+# Post-Tentacle OADP check (Stage 4 verify): backs up the CSI smoke namespace through the snapshot data
+# mover (Kopia) to the garage bucket. Same data-mover fields as backup.yaml. No resource policy: the
+# namespace holds only the two smoke PVCs, both Ceph RBD. ttl 72h: it is a throwaway proof.
+# Apply while rook-upgrade-smoke still exists (smoke/ sequence run, namespace not yet deleted).
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: post-tentacle-smoke
+  namespace: openshift-adp
+spec:
+  includedNamespaces:
+    - rook-upgrade-smoke
+  storageLocation: truenas-garage
+  snapshotMoveData: true
+  defaultVolumesToFsBackup: false
+  ttl: 72h
