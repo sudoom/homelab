@@ -89,11 +89,19 @@ CLEAN=0
 # measured 2.4x slower, because it is one box behind a 1G link. Without the
 # layout in the row, that looks like a contradiction.
 #
-# ceph-nvme-block IS DELIBERATELY ABSENT (2026-09-05). It is RWO, so it can
+# ceph-nvme-block WAS ABSENT FROM 2026-09-05 TO 2026-11-03, and is back for one
+# purpose (2026-11-03): the Rook/Ceph before/after series. It is RWO, so it can
 # never take part in the multi-client dimension, and it is NVMe against
-# HDD-backed NFS backends -- a comparison that tells you the device class
-# differs, which nobody needed a benchmark to learn. Add it back only for an
-# NVMe-vs-NVMe question.
+# HDD-backed NFS backends, so ITS ROWS ARE A SERIES OF THEIR OWN AND ARE NOT
+# COMPARABLE WITH THE NFS ROWS -- compare a ceph-nvme-block row only with another
+# ceph-nvme-block row carrying the same BENCH_LAYOUT_NOTE shape.
+#
+# Its filesize is 24G, not 64G, set with BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1.
+# That is above the OSDs' aggregate cache: 3 x ~4 GiB osd_memory_target = ~12 GiB,
+# and at size 3 each OSD serves about a third of the reads, so ~4 GiB of cache
+# stands behind any one read stream. The four bulk workloads share ONE file (see
+# the filename_format post-pass in render()) so the PVC needs 24G, not 4 x 24G.
+# Only the four bulk workloads run on this backend; smallfile-* is refused.
 #
 # PVC SIZE IS DERIVED FROM THE CORPUS COUNT, and the count is not one per
 # client. fio's default filename_format is $jobname.$jobnum.$filenum, so each
@@ -156,7 +164,8 @@ CLEAN=0
 # leaving the sender, once arriving at the reader). There is no single port
 # whose counter means "CephFS throughput".
 BACKENDS_TABLE="\
-nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet"
+nfs-csi|nfs-csi|ReadWriteMany|600Gi|6|home-router/nas|Synology DS418 SHR (~RAID5 1-drive tol) 4x3.6TB over NFS, 1G frontnet
+ceph-nvme-block|ceph-nvme-block|ReadWriteOnce|32Gi|1|cephpool/nvme-replicated|Ceph RBD replicated x3 on 3 NVMe (PM9A1), one OSD per node, 10G backnet, bulk workloads on one shared file"
 
 backend_row() { echo "$BACKENDS_TABLE" | grep "^$1|" || true; }
 
@@ -174,6 +183,8 @@ usage_list() {
   echo "Workloads: ${ALL_WORKLOADS}"
   echo
   echo "All backends run at the SAME filesize (${FILESIZE}) so results are comparable."
+  echo "Exception: ceph-nvme-block is its own series (24G, one shared bulk file, four bulk"
+  echo "workloads) for the Rook/Ceph before/after runs -- not comparable with the NFS rows."
   echo
   echo "NOTE: nfs-csi is the Synology, which is being sold. Measure it while it"
   echo "      still exists — it is the only baseline for 'was the migration worth it'."
@@ -212,6 +223,16 @@ esac
 
 ROW="$(backend_row "$BACKEND")"
 [[ -n "$ROW" ]] || die "unknown backend '$BACKEND' (try --list)"
+# ceph-nvme-block runs the four bulk workloads only: its 32Gi PVC holds one shared
+# bulk file, and a smallfile corpus (a full filesize of 64k files) would not fit.
+if [[ "$BACKEND" == "ceph-nvme-block" ]]; then
+  [[ -n "$WORKLOADS" ]] || WORKLOADS="seq-read-1m seq-write-1m rand-read-4k rand-write-4k"
+  case "$WORKLOADS" in
+    *smallfile*) die "'$BACKEND' runs the four bulk workloads only; smallfile-* is refused.
+  The 32Gi PVC holds one shared bulk file, and a smallfile corpus would need a
+  further full filesize of 64 KiB files on a pool with little headroom." ;;
+  esac
+fi
 [[ -n "$WORKLOADS" ]] || WORKLOADS="$ALL_WORKLOADS"
 
 IFS='|' read -r _NAME SC ACCESS_MODE PVC_SIZE MAX_CLIENTS SWITCH_IF LAYOUT <<< "$ROW"
@@ -359,20 +380,42 @@ fi
 #
 # Advisory on NFS (nothing enforces the request there), so it warns instead of
 # dying unless the class actually enforces it.
-GRID_BYTES=$(( $(to_bytes "$FILESIZE") * 5 * CLIENTS ))
+# Corpus count per backend: the four bulk workloads of ceph-nvme-block share one
+# file (filename_format post-pass in render()), the NFS backends keep four bulk
+# files plus one shared smallfile corpus. ENFORCED backends die instead of warn.
+CORPORA=5
+ENFORCED=0
+case "$BACKEND" in
+  ceph-nvme-block) CORPORA=1; ENFORCED=1 ;;
+esac
+GRID_BYTES=$(( $(to_bytes "$FILESIZE") * CORPORA * CLIENTS ))
 PVC_BYTES=$(to_bytes "$PVC_SIZE")
 if [[ "$GRID_BYTES" -gt "$PVC_BYTES" ]]; then
+  if [[ "$ENFORCED" == "1" ]]; then
+    die "the grid at clients=$CLIENTS retains $(human "$GRID_BYTES") of corpora
+  ($CORPORA shared bulk file per client, ${FILESIZE} each) but the PVC is only
+  $(human "$PVC_BYTES") and $SC ENFORCES the request: the layout would hit
+  ENOSPC mid-run and read like a storage fault. Lower --filesize."
+  fi
   MSG="a full 18-cell grid at clients=$CLIENTS retains $(human "$GRID_BYTES") of corpora
   (4 bulk corpora + 1 shared smallfile corpus, 64G each, per client) but the PVC
   is only $(human "$PVC_BYTES")."
-  # Every registered backend is NFS, where the request is advisory. A backend
-  # whose class ENFORCES the request must `die` here instead: otherwise the
-  # failure lands hours in, as ENOSPC mid-layout, looking like a storage fault.
+  # Advisory on NFS: nothing enforces the request there.
   echo "  WARN $MSG"
   echo "       Advisory here -- $SC does not enforce the request, so the real"
   echo "       limits are the share's own quota. Not fatal."
 else
   echo "  ok   PVC $PVC_SIZE covers a full grid at clients=$CLIENTS ($(human "$GRID_BYTES") of retained corpora)"
+fi
+
+# Ceph RBD: the PVC itself must be a small share of the pool. A thick-ish
+# benchmark volume on a pool with 152 GiB max_avail (2026-09-05) is an outage.
+if [[ "$ENFORCED" == "1" && -n "$AVAIL_BYTES" ]]; then
+  if [[ $(( PVC_BYTES * 4 )) -gt "$AVAIL_BYTES" ]]; then
+    die "PVC $PVC_SIZE exceeds 25% of $AVAIL_SRC available ($(human "$AVAIL_BYTES")).
+  Refusing to provision a benchmark volume that large against this pool."
+  fi
+  echo "  ok   PVC $PVC_SIZE is within 25% of $AVAIL_SRC available ($(human "$AVAIL_BYTES"))"
 fi
 
 # --clean removes the retained layout files (and only those). They are kept by
@@ -569,6 +612,31 @@ except Exception:
 }
 
 render() {
+  local workload="$1" pvc="$2" job="$3"
+  render_base "$workload" "$pvc" "$job" | render_post
+}
+
+# ceph-nvme-block only: all four bulk workloads use ONE file. fio's default
+# filename_format is $jobname.$jobnum.$filenum (one file per workload); fio-jobs.yaml
+# and the template must stay byte-identical, so the override is inserted here,
+# into the pod script's sed chain that edits the job file, as an extra clause
+# that appends filename_format after the filesize= line. Every other backend's
+# render passes through untouched.
+render_post() {
+  if [[ "$BACKEND" == "ceph-nvme-block" ]]; then
+    # '#' delimits the outer sed because the matched text is full of '|'. The
+    # inserted clause is GNU sed (it runs in the fio image): \n is a newline there.
+    # The line break comes from $nl, not a backslash-newline in a here-doc: bash
+    # drops line continuations when it pre-parses a process substitution.
+    local nl=$'\n'
+    local clause='-e '"'"'s/^filesize=.*/\&\\nfilename_format=bulk.$jobnum.$filenum/'"'"' \\'
+    sed -e 's#^\( *\)\(-e ".*BENCH_NRFILES}|g" \\\)$#\1\2\'"${nl}"'\1'"${clause}"'#'
+  else
+    cat
+  fi
+}
+
+render_base() {
   local workload="$1" pvc="$2" job="$3"
   sed -e "s|__NAMESPACE__|${NAMESPACE}|g" \
       -e "s|__PVC_NAME__|${pvc}|g" \

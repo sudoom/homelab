@@ -61,6 +61,30 @@ measured ~2.4× slower** — one box behind a 1 Gbit link beats disk count. With
 the layout in the row that reads like a contradiction. (`cephfs-hdd` left the
 backend registry on 2026-09-13; the tier itself was retired 2026-09-07.)
 
+### The `ceph-nvme-block` series (Rook/Ceph before/after, added 2026-11-03)
+
+A series of its own: **do not compare its rows with the NFS rows.** It exists so each stage of the Rook/Ceph
+upgrade is measured the same way, and a row is comparable only with another `ceph-nvme-block` row carrying the same
+`BENCH_LAYOUT_NOTE` shape.
+
+- **24G, not 64G.** Above the OSDs' aggregate cache (3 × ~4 GiB `osd_memory_target`; at size 3 each OSD serves about a
+  third of reads), so it needs `BENCH_ALLOW_SMALL=1` to pass the 64G cache gate.
+- **One shared bulk file.** For this backend only, `run.sh` inserts `filename_format=bulk.$jobnum.$filenum` into the
+  pod script's job-file edit chain (a post-pass on the rendered manifest), so the four bulk workloads use one file and
+  the PVC is `32Gi`. `fio-jobs.yaml` and `bench-job.yaml.tpl` are untouched; every other backend renders as before.
+- **Four bulk workloads only** (`seq-read-1m seq-write-1m rand-read-4k rand-write-4k`, the default for this backend).
+  `smallfile-*` is refused.
+- **Gate 6 dies** (not warns) when the grid exceeds the PVC, because RBD enforces the size; a new gate refuses a PVC
+  larger than 25% of the pool's `MAX AVAIL`.
+
+```bash
+BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 \
+BENCH_LAYOUT_NOTE='shared-bulk BENCH_ALLOW_SMALL=1 rep=1/3 stage=<label>' \
+  ./run.sh --backend ceph-nvme-block                 # add --dry-run to see gates and the render
+```
+
+Per-OSD latency for the same windows: `tests/rook-ceph-upgrade/metrics/ceph-latency.sh`.
+
 ## Safety
 
 The harness refuses rather than warns. In order:
