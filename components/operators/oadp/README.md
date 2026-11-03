@@ -144,7 +144,7 @@ for r in oadp-cli-server-route oadp-vmdp-server-route; do
   echo "$r $H admitted=$(ocr -n openshift-adp get route $r -o jsonpath='{.status.ingress[0].conditions[?(@.type=="Admitted")].status}')"
   F=$(curl -sk "https://$H/" | grep -o 'href="/download/[^"]*"' | head -1 | cut -d'"' -f2)       # OPERATOR; first archive in the listing (not the stylesheet)
   if [ -z "$F" ]; then echo "  FAIL: no archive found in the listing at https://$H/"; continue; fi   # an empty name would fetch the root, which is 200
-  echo "  archive=$F http=$(curl -sk -o /dev/null -w '%{http_code}' "https://$H/$F")"                  # OPERATOR; want 200
+  echo "  archive=$F http=$(curl -sk -o /dev/null -w '%{http_code}' "https://$H$F")"                  # OPERATOR; want 200
 done
 ```
 

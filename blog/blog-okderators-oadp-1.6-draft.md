@@ -983,7 +983,8 @@ three minutes. The old 1.5 pod did not release the `oadp.openshift.io` lease, so
   `oadp-vmdp-server-route-openshift-adp.apps.okd.sudops.pl` admitted=True, root http=200,
   `/download/oadp-vmdp_linux_amd64` http=200, 50311330 B; both sizes equal the service-proxy fetch. The listing has
   `href="/static/style.css"` first, then the GitHub repo link, then the `/download/<file>` links, so the first href is
-  the stylesheet; the chart README's loop took `head -1` of all hrefs and is fixed.
+  the stylesheet; the chart README's loop took `head -1` of all hrefs; it now selects the first `/download/` link and joins the URL
+  as `https://$H$F`, as the tested script does.
 
 ### Drill run 2
 
