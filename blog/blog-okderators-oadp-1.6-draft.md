@@ -795,3 +795,99 @@ as an artifact of the two failed creates. No log existed before the start. node6
 create took, so there is nothing to compare against. The cause is not proven. The leading guess, and only a guess, is
 CRI-O relabelling the roughly 71 GB of files kept on the volume by `PRUNE=false` (the pod runs under the `privileged`
 SCC with no SELinux level of its own). If it recurs with a kept graph, read the journal on node6 first.
+
+## 2026-11-03 — Task 6: catalog graphs validated, test catalog image
+
+Both bundles were pushed in Task 5, so this run adds each one to its okderators catalog branch, proves the upgrade
+graph with a walker, and builds the test catalog image for the homelab's OADP CatalogSource. Same Job template as the
+builds, `MODE=catalog`. It ran by the operator's permission prompt on the create.
+
+### The command
+
+Before it, on 2026-11-03 at 07:31Z I read the catalog heads: `release-4.22` alpha head
+`oadp-operator.v1.5.0-2026-01-05-165341`, `release-5.0` head `oadp-operator.v1.4.0-2025-01-23-195220`, no 1.6 on
+either. The cluster's Subscription read `AtLatestKnown` on 1.5.0 from `okderators`.
+
+```bash
+DATE=2026-11-03-073144
+oc process --local -f tests/okderators-oadp-build/job-template.yaml \
+  -p MODE=catalog -p DATE=$DATE \
+  -p CATALOG_BRANCHES='release-4.22 release-5.0' \
+  -p BUNDLES='release-4.22=zot.apps.okd.sudops.pl/okd-test/oadp/bundle:1.6.0-2026-11-02-205027@sha256:d42c3f7e4d9dadd5a1a5c8daba0ebabf9e5ecf5c0f7596b368b634c6b6c67ff2 release-5.0=zot.apps.okd.sudops.pl/okd-test/oadp/bundle:1.6.0-2026-11-02-233420@sha256:ea5adb6dcf98c6046e3b6196c8c910ac41b2d289d0f20ea00a831e09f89f5173' \
+  | oc -n okd-build create -f -
+```
+
+Job `oadp-build-catalog-2026-11-03-073144`, node6. It finished at 07:38:44Z: `RESULT PASS`, `catalog-edit: 0 checks
+failed`, every `CHECK` PASS. The extract is `work/catalog-2026-11-03-073144.txt` (local, not committed).
+
+### Channel before and after
+
+Each branch got the new bundle file `catalog/oadp-operator/<CSV>.yaml` (352 lines, rendered with `opm render -o yaml`)
+and one entry appended to the `alpha` channel. Each diff is 2 files changed, 356 insertions, 1 deletion; the
+deletion is the last line of the package file, re-emitted by the diff with an identical text on the `+` side. Nothing
+else was removed, and the old entries are unchanged (`CHECK edit-*`).
+
+| branch | head before | entries | new entry | `replaces` | `skipRange` |
+|---|---|---|---|---|---|
+| `release-4.22` | `oadp-operator.v1.5.0-2026-01-05-165341` | 3 to 4 | `oadp-operator.v1.6.0-2026-11-02-205027` | `oadp-operator.v1.5.0-2026-01-05-165341` | `'>=1.4.0-0 <1.6.0-2026-11-02-205027'` |
+| `release-5.0` | `oadp-operator.v1.4.0-2025-01-23-195220` | 2 to 3 | `oadp-operator.v1.6.0-2026-11-02-233420` | `oadp-operator.v1.4.0-2025-01-23-195220` | `'>=1.4.0-0 <1.6.0-2026-11-02-233420'` |
+
+Catalog commits the clones were taken at: `release-4.22` `98c6d9d54411ed494a13e2a00fd5f76ffb4d82bc`, `release-5.0`
+`4daed51b21a8693b3f44feef6eee74fb4bf1c04d`, both from `okd-project/okderators-catalog-index`. `opm validate catalog`
+passed on both edited trees (`opm` v1.74.0).
+
+### Walker
+
+`catalog-walk.py` starts from every channel entry and every CSV a cluster may run, and follows `replaces`, `skips`
+and `skipRange` edges to the head.
+
+`release-4.22` (`CHECK walk-release-4.22 PASS`), 4 entries plus 1 CSV absent from the channel reach
+`oadp-operator.v1.6.0-2026-11-02-205027`:
+
+- `v1.4.0-2024-09-04-143635`: by skipRange
+- `v1.4.0-2025-01-23-195220`: by skipRange
+- `v1.5.0-2026-01-05-165341` (what the cluster runs today): by replaces and skipRange
+- `v1.6.0-2026-11-01-205027`, the test-shaped CSV (the new DATE a day earlier), not in the channel: by skipRange
+
+`release-5.0` (`CHECK walk-release-5.0 PASS`), 3 entries reach `oadp-operator.v1.6.0-2026-11-02-233420`:
+`v1.4.0-2024-09-04-143635` by skipRange, `v1.4.0-2025-01-23-195220` by replaces and skipRange.
+
+The image walk, run on the catalog rendered back from zot, printed the same five edges as `release-4.22`.
+
+### Negative controls
+
+Four, two per branch, each on a copy of the edited tree:
+
+- `negative-control-no-edge-release-4.22`: entry without `replaces` and `skipRange`. The walker reports two heads
+  (`v1.5.0-2026-01-05-165341` and the new one), with 1.5.0 stranded together with the other three (both 1.4.0 and the
+  `v1.6.0-2026-11-01-205027`), and `opm validate` refuses it with `invalid package "oadp-operator"`. Proves the walker
+  and `opm validate` both notice a bundle with no edge, and that the installed 1.5.0 would be offered nothing.
+- `negative-control-replaces-only-release-4.22`: entry with only `replaces`. `opm validate` passes, and the walker
+  reports exactly `oadp-operator.v1.6.0-2026-11-01-205027` stranded. Proves the `skipRange` is what serves the test-shaped
+  CSV, and that `opm validate` alone would not have caught it.
+- `negative-control-no-edge-release-5.0`: same as the first, two heads (`v1.4.0-2025-01-23-195220` and the new one),
+  1.4.0 stranded with the other 1.4.0, `opm validate` refuses it.
+- `negative-control-replaces-only-release-5.0`: no installed CSV is absent from the channel on this branch, so the
+  control asserts the opposite: with `replaces` alone the walker still passes, 3 entries reach the head. It shows the
+  `skipRange` costs nothing here and that the branch has no test-shaped CSV to strand.
+
+### Test catalog image
+
+Built from the `release-4.22` tree (`IMAGE_BRANCH`), package `oadp-operator` only, with the Containerfile's base
+pinned to the opm v1.74.0 digest (`quay.io/operator-framework/opm@sha256:b32d3891616662620da08d7f0ec42c2e69fa2de43427dc975d35b12f7a969a0f`).
+`opm-validate-image` and `catalog-image` PASS: pushed, rendered back from zot, exactly one package, head
+`oadp-operator.v1.6.0-2026-11-02-205027`, every entry and the four installed CSVs reach it.
+
+```
+zot.apps.okd.sudops.pl/okd-test/oadp-catalog:2026-11-03-073144@sha256:6f40ce7912852a2a0b0c7ee17401a621021e7d82a7a7dbf65c3aa4ea7240280b
+```
+
+31691582 bytes (about 30 MiB). Next for it is Task 7's CatalogSource in the homelab.
+
+### Slow container create, again
+
+The pod showed the same pattern as the main build. The Job was created at about 07:32Z and the container started at
+07:36:30Z, about 4.5 min later, with `restartCount` 1, no crash and no `lastState`. The kept graph root on
+`build-storage` was 87.6 GB at that start. Both slow creates so far happened with a kept graph root, which fits the
+relabel guess from the main run, but the cause is not proven: I have not read the CRI-O journal on node6. Until the
+graph root is pruned, each pod start on that volume may cost a few minutes.
