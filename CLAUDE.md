@@ -273,12 +273,10 @@ with a rule below, the repo rule wins and I say which one I am following and why
   agent with `model: "fable"` before asking for approval or starting the work. Give it the plan, the spec and the facts
   it needs, not my conclusions. Fix the findings that hold up, then present the plan with what the review found, what I
   changed and what I rejected and why. A single-step suggestion is not a plan.
-- **Every review runs on Fable (operator, 2026-11-03: "all reviews should be done by fable as well").** Any agent whose
-  job is to review is dispatched with `model: "fable"`: design builder checks (the `brainstorming` skill's included),
-  plan reviews, the per-task reviews and scoped re-reviews in `subagent-driven-development`, final whole-branch
-  reviews, and any agent review of an upstream or `sudoom/homelab` PR. This overrides the superpowers skills'
-  model-selection advice for review roles; implementers, recon and research agents keep their own model choice. Found
-  2026-11-03: the Rook/Ceph design's builder check ran on Opus and was redone on Fable before approval.
+- **Fable reviews plans only (operator, 2026-11-03: "fable review - only for plans").** A plan or design proposed for
+  approval gets its Fable review (the rule above; the Rook/Ceph design's builder check ran on Opus and was redone on
+  Fable before approval). Every other review keeps the skills' normal model choice: per-task reviews and scoped
+  re-reviews in `subagent-driven-development`, final whole-branch reviews, and PR reviews.
 
 **These conflict with existing rules — the repo rule wins:**
 
