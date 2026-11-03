@@ -162,6 +162,14 @@ applications:
     namespace: openshift-marketplace
     syncWave: "1"
 
+  # Temporary: zot test build of the okderators OADP 1.6 catalog, until the oadp
+  # Subscription moves back to okderators.
+  oadp-test-catalog:
+    enabled: true
+    path: components/operators/oadp-test-catalog
+    namespace: openshift-marketplace
+    syncWave: "1"
+
   loki-operator:
     enabled: true
     path: components/operators/loki-operator

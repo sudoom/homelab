@@ -1,0 +1,7 @@
+# Test build of the okderators OADP catalog: release-4.22 with the OADP 1.6 bundle
+# oadp-operator.v1.6.0-2026-11-02-205027 (head of the channel), pushed to the cluster's zot
+# (tag 2026-11-03-073144). Pinned by digest.
+# Temporary: this chart and its root-app entry leave again when the oadp Subscription
+# (components/operators/oadp/) moves back to `okderators` (once okderators publishes 1.6).
+image: zot.apps.okd.sudops.pl/okd-test/oadp-catalog:2026-11-03-073144@sha256:6f40ce7912852a2a0b0c7ee17401a621021e7d82a7a7dbf65c3aa4ea7240280b
+# No updateStrategy: the image is pinned by digest, so there is nothing to poll.
