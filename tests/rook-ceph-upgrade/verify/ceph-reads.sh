@@ -73,8 +73,11 @@ section "ceph mgr module ls | head -20"
 MGR="$(tool ceph mgr module ls 2>>"$OUT")" && printf '%s\n' "$MGR" | sed -n '1,20p' >> "$OUT" \
   || echo "READ-FAILED rc=$?" >> "$OUT"
 
-# Self-check: no CephX key may be on disk.
-if grep -Eq 'AQ[A-Za-z0-9+/]{20,}' "$OUT"; then
+# Self-check: no CephX key may be on disk. Three shapes: the AES key prefix `AQ...`; any AES key (28 raw bytes =
+# 40 base64 chars ending `==`); any AES256K key (2+8+2+32 = 44 raw bytes = 60 chars ending `=`, Tentacle daemon
+# keys). The mandatory padding keeps a 40-hex git sha (`ceph versions`) or a 64-hex sha256 from matching.
+KEYRE='AQ[A-Za-z0-9+/]{20,}|(^|[^A-Za-z0-9+/])([A-Za-z0-9+/]{38}==|[A-Za-z0-9+/]{59}=)($|[^A-Za-z0-9+/=])'
+if grep -Eq "$KEYRE" "$OUT"; then
   rm -f "$OUT"
   echo "ceph-reads: CephX key material matched in the capture; file deleted. Fix the jq filters before re-running." >&2
   exit 2
