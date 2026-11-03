@@ -666,3 +666,124 @@ namespace, because OpenShift creates them. That is lower than the file-system re
 
 The restored pod and PVC ran on node6, as the source did, so the restore did not prove a pull from another node. It did
 not need to: the data came through the bucket either way.
+
+## 2026-11-03 — Task 5: both full builds passed
+
+Both full builds of the OADP 1.6 pipeline ran as one-off Jobs on the cluster (node6, privileged podman, build storage on
+the `build-storage` PVC, grown to 150Gi before the first run) and both passed. Figures below are read from the build
+logs (`RESULT`, `CHECK`, `PUSHED`, `DISK` and `STEP` lines), not from memory.
+
+### The two runs
+
+| | release-4.22 | main |
+|---|---|---|
+| Job | `oadp-build-full-2026-11-02-205027` | `oadp-build-full-2026-11-02-233420` |
+| Pipeline branch (fork) | `oadp-1.6-4.22` | `oadp-1.6` |
+| DATE | `2026-11-02-205027` | `2026-11-02-233420` |
+| Job start | 2026-11-02 20:50:27Z | created 2026-11-03 06:24:03Z, container started 06:28:27Z |
+| Complete | 23:32:31Z | 07:23:34Z |
+| Wall time | 2 h 42 min | 59 min from creation, 55 min from container start |
+| CPU limit | 14 (nproc 14) | 10 (nproc 10) |
+| PRUNE | true (cold graph, from scratch) | false (graph from run 1 kept) |
+| Result | `RESULT PASS full 2026-11-02-205027` | `RESULT PASS full 2026-11-02-233420` |
+| CHECK lines | 23 PASS, 0 FAIL | 23 PASS, 0 FAIL |
+| Pushed | 19 images + bundle = 20 refs, 2 132 837 052 B (1.99 GiB) | 20 refs, 2 133 990 346 B (1.99 GiB) |
+| Peak disk (largest `DISK`) | 71 072 272 384 B = 71.1 GB (66.2 GiB) | 87 719 718 912 B = 87.7 GB (81.7 GiB) |
+
+The `main` run's create prompt was answered the next morning, which is why the `DATE` tag (rendered 23:34Z) is
+earlier than the Job. The CPU limit went from 14 to 10 because etcd's WAL fsync p99 on node6 read 49 ms during run 1
+against 6 and 4 ms on the other two nodes, with no alert (recorded in `blog/blog-descheduler-draft.md`); it costs a
+slower compile on the images that miss the cache. `main` ran with `PRUNE=false`: `oadp/` is identical on the fork
+branches `oadp-1.6` and `oadp-1.6-4.22` (0 gitlinks and 0 files differ), so reused layers are the ones run 1 had just
+proved from scratch, and the build log shows 205 `Using cache` lines. The risk I accepted: a layer cached from a base
+image that moved since the first run goes unnoticed. The release-4.22 run stands as the from-scratch proof.
+
+Peak disk is the largest `DISK` value, bytes used on the build graph root. With `PRUNE=false` the `main` run started
+at 70.9 GB (the graph kept from run 1), so its 87.7 GB is the cache plus the new work, not a from-scratch figure; the
+from-scratch peak is run 1's 71.1 GB. The PVC (150Gi) never ran short.
+
+### The CHECK list (identical names and result in both runs)
+
+| CHECK | Result |
+|---|---|
+| pipeline-gitlinks (19 `oadp/` gitlinks are the pins) | PASS |
+| base-images (7 FROM refs resolve) | PASS |
+| submodule-pins (19 initialised; HEAD = pin where unpatched) | PASS |
+| operator-commit (operator `483de5e05055` 'OKDify'; vm-file-restore `adb1fb335674`; clean trees) | PASS |
+| image-smoke, 8 images: vm-file-restore, kubevirt-datamover-controller, kubevirt-datamover-plugin, cli-binaries, vmdp-binaries, vmfr-sshd, vmfr-filebrowser, vmfr-access (+ the roll-up line) | 9 lines, all PASS |
+| velero-version (v1.18.4-OADP) | PASS |
+| vm-file-restore-env (`VMFR_ACCESS_IMAGE`, `VMFR_SSH_IMAGE`, `VMFR_BROWSER_IMAGE` in `/manager`) | PASS |
+| bundle-objects (50 files, the pin's list exactly) | PASS |
+| no-redhat-registry | PASS |
+| csv-name | PASS |
+| install-modes (OwnNamespace only) | PASS |
+| images-by-digest (19 refs: 18 `RELATED_IMAGE_*` + manager, all by digest under `okd-test/oadp/`) | PASS |
+| no-konveyor | PASS |
+| okd-strings | PASS |
+| operator-sdk-validate (v1.36.1: passed, 5 warnings, 0 errors) | PASS |
+
+That is 4 + 9 + 2 + 8 = 23 `CHECK` lines per run.
+
+### The 20 pushed refs, release-4.22 run (tag `1.6.0-2026-11-02-205027`)
+
+Registry `zot.apps.okd.sudops.pl/okd-test/oadp/`; digest is the first 12 hex of the sha256; size is the `PUSHED` byte
+count.
+
+| Image | Digest | Size |
+|---|---|---|
+| aws-legacy-plugin | d6e30d82b2f5 | 77.2 MiB |
+| aws-plugin | e0ca82a0b95d | 86.8 MiB |
+| azure-plugin | d4e6fd013173 | 73.1 MiB |
+| cli-binaries | fc22fa2c54bf | 152.0 MiB |
+| gcp-plugin | 3db413b5cbd9 | 85.0 MiB |
+| hypershift-plugin | ed166ea87432 | 73.1 MiB |
+| kubevirt-datamover-controller | a660db48aedb | 98.0 MiB |
+| kubevirt-datamover-plugin | 528d68e50dd9 | 83.6 MiB |
+| kubevirt-plugin | 3cb29f0c8c6f | 77.2 MiB |
+| must-gather | 1c2739c7e9f4 | 246.8 MiB |
+| non-admin | 9d364c9e2c3d | 72.1 MiB |
+| openshift-plugin | 96def84a737c | 99.3 MiB |
+| operator | 0a3f068da846 | 94.6 MiB |
+| velero | 8e026079e30f | 134.3 MiB |
+| vmdp-binaries | 8d50dbe2bb70 | 107.2 MiB |
+| vmfr-access | f4f396e2a8a5 | 311.7 MiB |
+| vmfr-filebrowser | 680f5caceeea | 54.5 MiB |
+| vmfr-sshd | 2cc1b8d1924e | 68.8 MiB |
+| vm-file-restore | 2e912c26dd59 | 38.7 MiB |
+| bundle | d42c3f7e4d9d | 95 253 B |
+
+The `main` run pushed the same 20 names under tag `1.6.0-2026-11-02-233420`. 15 of the 19 image digests equal run 1's. Five
+refs differ: `cli-binaries` (5de8655fa8ec, 10 B larger), `must-gather`
+(6d21455565c8, 1 152 303 B larger), `vmdp-binaries` (bbf57e990aa0, 13 B smaller), `vmfr-filebrowser` (183a78eb0b27,
+7 B larger) and the bundle (ea5adb6dcf98, 13 B smaller, as its CSV name carries the DATE). I did not look into why the
+four images differ; they are not needed for the catalog, since each bundle pins its own run's digests.
+
+Bundle refs for the catalog step (full):
+
+- release-4.22: `zot.apps.okd.sudops.pl/okd-test/oadp/bundle:1.6.0-2026-11-02-205027@sha256:d42c3f7e4d9dadd5a1a5c8daba0ebabf9e5ecf5c0f7596b368b634c6b6c67ff2`
+- main: `zot.apps.okd.sudops.pl/okd-test/oadp/bundle:1.6.0-2026-11-02-233420@sha256:ea5adb6dcf98c6046e3b6196c8c910ac41b2d289d0f20ea00a831e09f89f5173`
+
+### zot before and after
+
+Kubelet stats summary of `zot/data-zot-0`: 15.3-15.4 GiB free before the release-4.22 run (right after the
+2026-11-02 cleanup, before zot's next GC), 31 GiB free after both runs. Each run pushed 1.99 GiB. I did not
+separate how much of the rise is GC of the cleanup's deleted images; the measurement is two points. Floor in the
+brief was 5 GiB, so the gate held with room.
+
+### Peak disk against upstream CI
+
+GitHub's `ubuntu-latest` has about 14 GB free. Both peaks, 71.1 GB (from scratch) and 87.7 GB (with a kept graph), are
+far over that. So the `main` PR must say that upstream CI needs logging's `free_disk_space` step (from the fork
+branch of okd-operator-pipeline #35, which is not merged), and even that step may not free enough for a from-scratch
+build; I have not tried it. The in-cluster figure is what a runner has to hold: 19 images built, 71 GB of layers.
+
+### The slow container start on the main run
+
+Pod on node6 reported `CreateContainerError`, `context deadline exceeded`, at 06:26:07Z and again at 06:28:07Z, with
+the image present and the volume attached; the container started on its own at 06:28:27Z, about 4.4 min after
+scheduling. `restartCount` read 1 with `restartPolicy: Never`, no `lastState` and no previous container, which I take
+as an artifact of the two failed creates. No log existed before the start. node6 at 06:27: container runtime about
+0.91 cores, kube-apiserver-node6 3.86 cores. I did not read the CRI-O journal, and I did not record how long run 1's
+create took, so there is nothing to compare against. The cause is not proven. The leading guess, and only a guess, is
+CRI-O relabelling the roughly 71 GB of files kept on the volume by `PRUNE=false` (the pod runs under the `privileged`
+SCC with no SELinux level of its own). If it recurs with a kept graph, read the journal on node6 first.
