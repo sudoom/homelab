@@ -1,0 +1,5 @@
+# Target namespace of the restore check; deleted at the end of Stage B.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rook-upgrade-restore

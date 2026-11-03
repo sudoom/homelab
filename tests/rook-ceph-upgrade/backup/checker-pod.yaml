@@ -1,0 +1,47 @@
+# Mounts the restored grafana PVC read-only and prints `sha256  size  mtime  path` (mtime in epoch
+# seconds, path relative to the volume root) for every regular file, sorted by path. Compare with
+# the same list computed in the live grafana pod (README Stage B). bash globstar instead of find:
+# ubi-minimal has bash and coreutils but no findutils. The pod runs under restricted-v2 with a random
+# UID; the namespace fsGroup makes the ext4 volume group-readable on mount.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: restore-checker
+  namespace: rook-upgrade-restore
+spec:
+  terminationGracePeriodSeconds: 5
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: checker
+      image: registry.access.redhat.com/ubi9/ubi-minimal@sha256:312b02a8f8ad5bdd219849c3e854cc5191c92fb7b8ce9b30fe2daed2de849094
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -u
+          shopt -s globstar dotglob nullglob
+          cd /data
+          echo "CHECK begin"
+          for f in **/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] || continue
+            set -- $(sha256sum -- "$f")
+            echo "$1  $(stat -c '%s  %Y' -- "$f")  $f"
+          done | LC_ALL=C sort -k4
+          echo "CHECK end"
+          exec sleep 36000
+      volumeMounts:
+        - name: data
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: grafana-pvc
+        readOnly: true

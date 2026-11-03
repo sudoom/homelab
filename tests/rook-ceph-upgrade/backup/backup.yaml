@@ -1,0 +1,25 @@
+# One-off pre-upgrade backup of the app PVCs through the CSI snapshot data mover (Kopia) to the
+# garage bucket on TrueNAS. Same data-mover fields as tests/oadp-1.6-drill/backup-16.yaml.
+# Snapshots are crash-consistent, apps are not quiesced (accepted). NFS volumes are skipped by
+# the volume policy. includeClusterResources unset: namespaced objects and PVCs only.
+# Schedule `daily` stays paused. ttl 720h: the backup outlives the whole upgrade.
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: pre-rook-upgrade
+  namespace: openshift-adp
+spec:
+  includedNamespaces:
+    - grafana
+    - homebox
+    - immich
+    - keepers
+    - media
+    - zot
+  storageLocation: truenas-garage
+  snapshotMoveData: true
+  defaultVolumesToFsBackup: false
+  ttl: 720h
+  resourcePolicy:
+    kind: configmap
+    name: pre-rook-upgrade-policy

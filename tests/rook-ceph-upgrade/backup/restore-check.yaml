@@ -1,0 +1,17 @@
+# Restores only the grafana PVC (data mover: the DataDownload fills the volume) into
+# rook-upgrade-restore. includeClusterResources false keeps it off cluster-scoped objects.
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: pre-rook-upgrade-check
+  namespace: openshift-adp
+spec:
+  backupName: pre-rook-upgrade
+  includedNamespaces:
+    - grafana
+  includedResources:
+    - persistentvolumeclaims
+  namespaceMapping:
+    grafana: rook-upgrade-restore
+  includeClusterResources: false
+  restorePVs: true

@@ -1,0 +1,22 @@
+# Stage B volume policy: skip every NFS volume, back up only the Ceph RBD PVCs.
+# Velero v1.18 resource-filtering doc: `version: v1` is the only version, `nfs: {}` matches any
+# in-tree NFS source, `csi: {driver: ...}` matches a CSI driver. The NFS PVs here are CSI
+# (nfs.csi.k8s.io), so the second rule is the one that matches; the first is belt and braces.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pre-rook-upgrade-policy
+  namespace: openshift-adp
+data:
+  policy.yaml: |
+    version: v1
+    volumePolicies:
+      - conditions:
+          nfs: {}
+        action:
+          type: skip
+      - conditions:
+          csi:
+            driver: nfs.csi.k8s.io
+        action:
+          type: skip
