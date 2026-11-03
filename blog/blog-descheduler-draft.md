@@ -696,3 +696,83 @@ the same operand pod, the replacement runs off node6, and `anchor` kept its UID.
 Two things seen on the way. The pods carry `topology.kubernetes.io/zone: fd-c` as a pod label, added by something at admission;
 it plays no part here. And it took 25 minutes from label to eviction only because the loop is hourly; the plugin acted on the
 first loop after the label.
+
+## 2026-11-03 — okderators descheduler 5.4: both builds passed on the first round
+
+Task 4 of the plan: the full build from each pipeline branch, run as a one-off Job in `okd-build` (`tests/okderators-descheduler-build/`), each command by the operator's permission prompt. This was the first build ever from pipeline `release-4.22` for this operator (the section "Nothing has ever built from pipeline `release-4.22`" above and the 2026-11-02 build-Job section say why). Both ran with `PRUNE=false`: the shared graph root on the `build-storage` PVC still holds OADP's ~87.6 GB of layers, and an OADP fix found at its upgrade would otherwise mean a ~2.5 h recompile. So the `DISK` lines include OADP's layers and this build's disk is a delta, not its own peak. Gate before each prompt: no other Job in `okd-build` (lock free), no OADP retry pending, zot measured above 5 GiB.
+
+Evidence: `work/build-full-4.22-2026-11-03-074110.txt` and `work/build-full-main-2026-11-03-080630.txt` (scratch, not committed). Both Jobs deleted by prompt once read.
+
+| | `release-4.22` | `main` |
+|---|---|---|
+| Job | `descheduler-build-full-2026-11-03-074110` | `descheduler-build-full-2026-11-03-080630` |
+| `PIPELINE_BRANCH` | `descheduler-5.4-4.22` (5b6ca6b2) | `descheduler-5.4` (2b7c8503) |
+| `DATE` | `2026-11-03-074110` | `2026-11-03-080630` |
+| `OKD_VERSION` / `OCP_RELEASE` | `4.22.0-okd-scos.2` / 4.22 | `5.0.0-okd-scos.0` / 5.0 |
+| script start to `RESULT PASS` | 07:46:19Z, 981 s (16 min 21 s) | 08:13:56Z, 1061 s (17 min 41 s) |
+| Job, create to completion | 07:41Z to 08:02:52Z, ~21 min | 08:07:33Z to 08:31:50Z, ~24 min |
+| `build_containers` | 740 s | 825 s |
+| other steps | init 40 s, image-smoke 30 s, push 15 s, bundle 8 s | init 40 s, image-smoke 4 s, push 12 s, bundle 9 s |
+| `RESULT` | PASS full 2026-11-03-074110 | PASS full 2026-11-03-080630 |
+
+The gap between the Job's create time and the script's first `STEP` is the slow pod start (below).
+
+### Checks
+
+All 13 `CHECK` lines PASS on both, no retry round:
+
+| CHECK | `release-4.22` | `main` |
+|---|---|---|
+| submodule-pins | 2 submodules, HEAD = pin: operator `1eb4d75fac7d`, descheduler `076d0fc5c3e7` | operator `5c0659fc46ba`, descheduler `ca28d9e98897` |
+| image-smoke/operator | `--help` exit 0 | same |
+| image-smoke/descheduler | `--help` exit 0 | same |
+| image-smoke | 2 images each ran their own binary | same |
+| operand-version | `v20260219-v0.35.0` | `v20260520-v0.36.0` |
+| bundle-objects | CSV + CRD exactly as the pin's list; 22 clusterPermissions rules, 0 permissions rules | CSV + CRD; 26 clusterPermissions rules, 3 permissions rules |
+| no-redhat-registry | none in CSV, objects, files, labels | same |
+| csv-name | `clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110` | `clusterkubedescheduleroperator.v5.4.0-2026-11-03-080630` |
+| images-by-digest | 2 refs under `okd-test/kube-descheduler/`, recorded by this run | same |
+| max-ocp | `olm.maxOpenShiftVersion` 4.23 | 5.1 |
+| min-kube | 1.35.0 | 1.35.0 (recorded) |
+| operator-sdk-validate | v1.36.1: passed, 1 warning, 0 errors | same |
+
+The one warning is both times `found olm.properties annotation, please define these properties in metadata/properties.yaml instead`. The CSV carries `replaces=none` and `olm.skipRange=>=5.0.0 <5.4.0-<DATE>` on both; the catalog edit adds the graph edges (next section).
+
+- **Operand version differs because the submodule pins differ.** `release-4.22` pins the operator and descheduler submodules at upstream `release-4.22` commits, whose descheduler is built as upstream v0.35.0 (`v20260219-v0.35.0`); `main` pins them at `release-5.0` commits carrying v0.36.0 (`v20260520-v0.36.0`). Kube 1.35 on both. The check reads the version out of the built image, not out of a file.
+- **Cap.** The cap is the OKD minor + 1: 4.23 on the 4.22 build, 5.1 on the 5.0 build. `min-kube` 1.35.0 on both.
+- **RBAC counts.** `bundle-objects` reads them out of the CSV (the NetworkPolicy rules are rules inside the CSV, not objects): the 4.22 build has 22 clusterPermissions rules and no namespaced `permissions`; the 5.0 build has 26 clusterPermissions rules and 3 `permissions` rules.
+
+### Pushed
+
+| ref | digest | bytes |
+|---|---|---|
+| `okd-test/kube-descheduler/descheduler:5.4.0-2026-11-03-074110` | `sha256:1cef5485` | 111062991 (111 MB) |
+| `okd-test/kube-descheduler/operator:5.4.0-2026-11-03-074110` | `sha256:36abd4ba` | 152674119 (153 MB) |
+| `okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-03-074110` | `sha256:83246c48` | 12440 |
+| `okd-test/kube-descheduler/descheduler:5.4.0-2026-11-03-080630` | `sha256:1e619028` | 111770357 (112 MB) |
+| `okd-test/kube-descheduler/operator:5.4.0-2026-11-03-080630` | `sha256:94fdd2e0` | 215875086 (216 MB) |
+| `okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-03-080630` | `sha256:92c6368b` | 12605 |
+
+Bundle refs in full (these are the `BUNDLES` of the catalog run), under `zot.apps.okd.sudops.pl`:
+
+```
+zot.apps.okd.sudops.pl/okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-03-074110@sha256:83246c48a473079b9b688344e4ee2f94fac8947eeedc590de8a593bdfa11b937
+zot.apps.okd.sudops.pl/okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-03-080630@sha256:92c6368bae3e2ac7da49309d17977075e2f012c02a269598ad28d8f69dddce3b
+```
+
+About 264 MB went into zot for the 4.22 run and about 328 MB for the main run (the three `PUSHED` sizes each, blobs shared between tags not netted out). zot measured before each prompt: 31 GiB before the 4.22 build, 30.8 GiB before the main build (the ledger figures; the pre-run gate is at least 5 GiB free). I did not measure zot after either run, so there is no "after" figure here; the Task 5 catalog image adds 31 MB, and the test images are deleted by digest at the end of the work.
+
+### Disk, as a delta
+
+`DISK` is bytes used on the shared graph root, so the absolute numbers are OADP's layers plus ours:
+
+| | start (`tools`) | after `build_containers` | end (`deinit`) | delta over start |
+|---|---|---|---|---|
+| `release-4.22` | 86351462400 (86.4 GB) | 92344086528 (92.3 GB) | 92345122816 | +5.99 GB |
+| `main` | 92345131008 (92.3 GB) | 97082802176 (97.1 GB) | 97083899904 | +4.74 GB |
+
+The `main` start equals the end of the 4.22 run to within 8 KB, as it should with nothing pruned in between. Together the two descheduler builds added about 10.7 GB. `DISK` dips at `clone` (86.35 to 86.25 GB on the 4.22 run, 92.35 to 91.88 GB on the `main` run) before `init` brings it back; I did not look into why. Free space on `/work` went from 71.6 GB to 65.6 GB on the 4.22 run and from 65.6 GB to 60.8 GB on the `main` run; the catalog run started at 60.8 GB free. The 97.1 GB figure is therefore not a fresh-runner peak, and it should not be read as one.
+
+### The slow pod start
+
+Each Job's pod took about five minutes to get its container running: the 4.22 Job was created at 07:41Z (the `DATE`) and its first `STEP` is 07:46:19Z; the `main` Job started 08:07:33Z and its first `STEP` is 08:13:56Z (6 min 23 s). The ledger recorded `CreateContainerError` as expected and not a failure, and the watcher did not treat it as one. This is the "slow create seen twice with the kept graph root" from the 2026-11-03 ruling, about 4.5 min per start on average. The cause is not proven. The leading guess, and only a guess: with `PRUNE=false` the PVC carries a graph root of ~87 GB, and the container create waits on the runtime working through that volume (an SELinux relabel or ownership pass). What would settle it: the same Job on a fresh PVC, or the kubelet and CRI-O events of the create (`oc describe pod` events on the next run), neither read yet.
