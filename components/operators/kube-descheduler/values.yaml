@@ -8,6 +8,9 @@ subscription:
   sourceNamespace: openshift-marketplace
   # Manual like the other okderators subscriptions (see templates/operator.yaml).
   installPlanApproval: Manual
+  # Unset by default and then rendered nowhere. Set it only for a rollback, see
+  # README.md; OLM ignores it while a CSV from this Subscription is installed.
+  # startingCSV: clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655
 
 kubeDescheduler:
   # Automatic since 2026-10-24 (Predictive = dry run: logs and counts what it
