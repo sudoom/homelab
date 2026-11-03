@@ -760,7 +760,7 @@ zot.apps.okd.sudops.pl/okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-0
 zot.apps.okd.sudops.pl/okd-test/kube-descheduler/operator-bundle:5.4.0-2026-11-03-080630@sha256:92c6368bae3e2ac7da49309d17977075e2f012c02a269598ad28d8f69dddce3b
 ```
 
-About 264 MB went into zot for the 4.22 run and about 328 MB for the main run (the three `PUSHED` sizes each, blobs shared between tags not netted out). zot measured before each prompt: 31 GiB before the 4.22 build, 30.8 GiB before the main build (the ledger figures; the pre-run gate is at least 5 GiB free). I did not measure zot after either run, so there is no "after" figure here; the Task 5 catalog image adds 31 MB, and the test images are deleted by digest at the end of the work.
+About 264 MB went into zot for the 4.22 run and about 328 MB for the main run (the three `PUSHED` sizes each, blobs shared between tags not netted out). zot free space (kubelet stats summary `availableBytes` of `zot/data-zot-0`, 48.91 GiB volume): 31 GiB free before the 4.22 build and 30.8 GiB free before the main build (the pre-run gate is at least 5 GiB free). After both builds and the catalog run, at 2026-11-03 08:44:49Z: 30.68 GiB free (32943345664 B), 18.21 GiB used. The Task 5 catalog image adds 31 MB, and the test images are deleted by digest at the end of the work.
 
 ### Disk, as a delta
 
@@ -851,4 +851,4 @@ CHECK catalog-image PASS ...: package cluster-kube-descheduler-operator; head v5
 PUSHED zot.apps.okd.sudops.pl/okd-test/descheduler-catalog:2026-11-03-083443@sha256:f0b730d3b6a7fd902c8f6adfbda23e859be5f7acc51c66168c96536a9d660420 31349230
 ```
 
-31349230 bytes (31 MB), head `clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`. This is the image Task 6 Step 1 points the homelab test CatalogSource at. The `release-5.0` tree is validated but not in the image: nothing on this cluster reads it.
+31349230 bytes (31 MB), head `clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`. zot after the catalog run (08:44:49Z, after all three runs): 30.68 GiB free of 48.91 GiB, 18.21 GiB used. This is the image Task 6 Step 1 points the homelab test CatalogSource at. The `release-5.0` tree is validated but not in the image: nothing on this cluster reads it.
