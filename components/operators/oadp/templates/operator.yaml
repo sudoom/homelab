@@ -36,6 +36,9 @@ spec:
   # Manual means the InstallPlan waits: `oc -n <ns> get installplan` then patch
   # `spec.approved: true` one operator at a time, verifying between each.
   installPlanApproval: Manual
+{{- with .Values.startingCSV }}
+  startingCSV: {{ . }}
+{{- end }}
   name: oadp-operator
   source: {{ .Values.source }}
   sourceNamespace: {{ .Values.sourceNamespace }}

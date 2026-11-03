@@ -1,4 +1,5 @@
 namespace: openshift-adp
 channel: alpha
-source: okderators
+source: okd-test-oadp
+startingCSV: oadp-operator.v1.6.0-2026-11-02-205027
 sourceNamespace: openshift-marketplace
