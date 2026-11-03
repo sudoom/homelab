@@ -82,6 +82,7 @@ The other 17 PVCs are Ceph RBD and in scope: grafana-pvc; homebox-data, homebox-
 immich-postgres-1, immich-postgres-2; transmission-config-pvc, webtlo-data-pvc (keepers); bazarr, jellyfin, prowlarr,
 radarr, sonarr, transmission and transmission-slave config PVCs plus media-postgres-1 and media-postgres-3 (media);
 data-zot-0. The expected DataUpload count is 17 (re-count with the command below before applying).
+`grafana-pvc` is backed up but mounted by no pod (Grafana uses an emptyDir), so it is not the restore check.
 `immich-library` (nfs-csi, 192.168.1.2) is a leftover dynamic PVC; it is skipped like the rest.
 
 ```bash
@@ -111,37 +112,51 @@ kinds the logs name, still mapped into `rook-upgrade-restore`).
    and `oc -n openshift-adp get datauploads.velero.io -l velero.io/backup-name=pre-rook-upgrade`. Note
    `.status.startTimestamp`.
 4. Bucket size again about a minute after `Completed`: it must have grown.
-5. `restore-namespace.yaml`, then `restore-check.yaml` -> Restore `pre-rook-upgrade-check`; watch
-   `restores.velero.io` and `datadownloads.velero.io` until `Completed`; PVC `grafana-pvc` is Bound in
-   `rook-upgrade-restore`.
-6. `checker-pod.yaml` -> Pod `restore-checker`; `oc -n rook-upgrade-restore logs restore-checker` prints
-   `sha256  size  mtime  path` per file between `CHECK begin` and `CHECK end`.
-7. Operator, the same list inside the live pod (read-only `oc exec`; the pod name is `grafana-deployment-*`):
+5. `restore-namespace.yaml`, then `restore-check.yaml` -> Restore `pre-rook-upgrade-check` (keepers PVCs only);
+   watch `restores.velero.io` and `datadownloads.velero.io` until `Completed`. `webtlo-data-pvc` and
+   `transmission-config-pvc` are Bound in `rook-upgrade-restore`. The restore also creates `keepers-data-nfs` there;
+   it **stays Pending by design** (its PV `truenas-keepers-data` is a static NFS PV bound to the live claim, and the
+   volume policy skipped it). Ignore it, never mount it; it is deleted with the namespace. A Restore that ends
+   `PartiallyFailed` only because of that claim: read `status.warnings`/`errors` and report, do not retry.
+6. `checker-pod.yaml` -> Pod `restore-checker` (mounts the two restored Ceph PVCs read-only);
+   `oc -n rook-upgrade-restore logs restore-checker > restored.txt` prints `sha256  size  mtime  path` per file in
+   sections `CHECK begin webtlo|transmission` ... `CHECK end ...`. Any `ERROR` line is a FAIL (a file could not be
+   read; the list is never silently shortened).
+7. Operator, the same list inside the live pods (read-only `oc exec`). Mounts read 2026-11-03: pod `webtlo-*`,
+   container `webtlo`, `webtlo-data-pvc` at `/data`; pod `transmission-*`, container `transmission`,
+   `transmission-config-pvc` at `/config` (`keepers-data-nfs` is also mounted at `/data` there; do not list it).
 
 ```bash
 # OPERATOR
-POD=$(oc -n grafana get pods -o name | grep grafana-deployment-)
-oc -n grafana exec "$POD" -- sh -c 'cd /var/lib/grafana && find . -type f | sed "s|^\./||" | LC_ALL=C sort | while IFS= read -r f; do set -- $(sha256sum "$f"); echo "$1  $(stat -c "%s  %Y" "$f")  $f"; done' > /tmp/grafana-live.txt
+live_list() { oc -n keepers exec "$1" -c "$2" -- sh -c "cd $3 && find . -type f | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do sum=\$(sha256sum \"\$f\") || { echo \"ERROR \$f\"; continue; }; echo \"\${sum%% *}  \$(stat -c '%s  %Y' \"\$f\")  \$f\"; done"; }
+live_list "$(oc -n keepers get pods -o name | grep '/webtlo-')" webtlo /data > webtlo-live.txt
+live_list "$(oc -n keepers get pods -o name | grep '/transmission-')" transmission /config > transmission-live.txt
 ```
 
-   If the image lacks `find`/`stat`/`sha256sum`, say so and the controller adapts the one-liner.
-8. Compare only files whose mtime predates the Backup's `status.startTimestamp` (files Grafana wrote after the
-   snapshot differ legitimately). With `START` the startTimestamp in epoch seconds
-   (`date -u -j -f %Y-%m-%dT%H:%M:%SZ <ts> +%s` on macOS):
-   `awk -v s="$START" '$3 < s' /tmp/grafana-live.txt > live.cmp`, the same on the checker log (strip the CHECK
-   lines first), then `diff live.cmp restored.cmp`.
-9. Cleanup (controller): delete the Restore, then `oc delete namespace rook-upgrade-restore` and confirm the PV and
-   RBD image are gone. The Backup stays (ttl 720h) as the pre-upgrade fallback.
+   If a live image lacks `find`/`stat`/`sha256sum`, say so and the controller adapts the one-liner.
+8. Compare only files whose mtime predates the Backup's `status.startTimestamp` (apps write after the snapshot, and
+   those files differ legitimately). `START` = the startTimestamp in epoch seconds
+   (`date -u -j -f %Y-%m-%dT%H:%M:%SZ <ts> +%s` on macOS). Per PVC (`vol` = `webtlo` or `transmission`; the
+   restored section is the lines between `CHECK begin vol` and `CHECK end vol`):
+   `awk -v s="$START" '$3 < s' vol-live.txt > vol-live.cmp`, the same on the restored section into
+   `vol-restored.cmp`, then `wc -l vol-live.cmp vol-restored.cmp` and `diff vol-live.cmp vol-restored.cmp`.
+9. Cleanup (controller): delete the Restore, then `oc delete namespace rook-upgrade-restore` and confirm both PVs
+   and RBD images are gone. The Backup stays (ttl 720h) as the pre-upgrade fallback.
 
 ### Pass criteria
 
 - Backup `Completed`, `status.errors` 0 (note warnings).
 - One DataUpload `Completed` per Ceph PVC in scope (17), none for an NFS PVC.
 - Bucket bytes and objects grew.
-- Restore `Completed`, one DataDownload `Completed`; the compare set is non-empty and every sha256 is equal.
-- If grafana's compare set is empty (everything changed after the snapshot), restore the `keepers` PVCs (two 1Gi
-  config PVCs, no CNPG) the same way (`includedNamespaces: [keepers]`, mapped into `rook-upgrade-restore`, a checker
-  pod per PVC) and compare there.
+- Restore: DataDownloads `Completed` for `webtlo-data-pvc` and `transmission-config-pvc`; no `ERROR` line in the
+  checker log.
+- Compare counts: per PVC the live and restored `.cmp` line counts are equal, and the total over both PVCs is at
+  least 1. A diff of two empty files is not a pass.
+- `diff` is empty for both PVCs (every sha256, size and mtime equal).
+
+**Stop rules.** Any mismatch on a file older than the Backup's `status.startTimestamp` is a FAIL: Stage B stops and is
+reported to the operator (no retry, no pass). An empty compare set (total 0) is also a stop-and-report; there is no
+automatic fallback PVC.
 
 ## Stage M: baseline
 

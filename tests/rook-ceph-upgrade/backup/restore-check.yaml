@@ -1,5 +1,8 @@
-# Restores only the grafana PVC (data mover: the DataDownload fills the volume) into
+# Restores only the keepers PVCs (data mover: a DataDownload fills each Ceph volume) into
 # rook-upgrade-restore. includeClusterResources false keeps it off cluster-scoped objects.
+# The restore also recreates keepers-data-nfs there. It stays Pending by design: its PV
+# (truenas-keepers-data) is a static NFS PV bound to the live claim and skipped by the volume policy.
+# The checker must not mount it; it goes away with the namespace.
 apiVersion: velero.io/v1
 kind: Restore
 metadata:
@@ -8,10 +11,10 @@ metadata:
 spec:
   backupName: pre-rook-upgrade
   includedNamespaces:
-    - grafana
+    - keepers
   includedResources:
     - persistentvolumeclaims
   namespaceMapping:
-    grafana: rook-upgrade-restore
+    keepers: rook-upgrade-restore
   includeClusterResources: false
   restorePVs: true

@@ -1,8 +1,10 @@
-# Mounts the restored grafana PVC read-only and prints `sha256  size  mtime  path` (mtime in epoch
-# seconds, path relative to the volume root) for every regular file, sorted by path. Compare with
-# the same list computed in the live grafana pod (README Stage B). bash globstar instead of find:
-# ubi-minimal has bash and coreutils but no findutils. The pod runs under restricted-v2 with a random
-# UID; the namespace fsGroup makes the ext4 volume group-readable on mount.
+# Mounts the two restored keepers Ceph PVCs read-only (webtlo-data-pvc, transmission-config-pvc; never
+# keepers-data-nfs) and prints `sha256  size  mtime  path` (mtime in epoch seconds, path relative to the
+# volume root) for every regular file, sorted by path, one section per PVC. A file that cannot be read
+# prints an `ERROR` line instead of being dropped. bash globstar instead of find: ubi-minimal has bash and
+# coreutils but no findutils. Same pod shape as the OADP drill writer (tests/oadp-1.6-drill/writer.yaml):
+# restricted-v2, runAsNonRoot, no fixed UID or fsGroup; the platform applies fsGroup on mount, which is how
+# the drill's restored volumes were read by a different namespace's UID.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -27,21 +29,33 @@ spec:
         - |
           set -u
           shopt -s globstar dotglob nullglob
-          cd /data
-          echo "CHECK begin"
-          for f in **/*; do
-            [ -f "$f" ] && [ ! -L "$f" ] || continue
-            set -- $(sha256sum -- "$f")
-            echo "$1  $(stat -c '%s  %Y' -- "$f")  $f"
-          done | LC_ALL=C sort -k4
-          echo "CHECK end"
+          for vol in webtlo transmission; do
+            cd "/mnt/$vol"
+            echo "CHECK begin $vol"
+            for f in **/*; do
+              [ -f "$f" ] && [ ! -L "$f" ] || continue
+              if sum=$(sha256sum -- "$f" 2>&1) && meta=$(stat -c '%s  %Y' -- "$f" 2>&1); then
+                echo "${sum%% *}  $meta  $f"
+              else
+                echo "ERROR  $vol  $f"
+              fi
+            done | LC_ALL=C sort -k4
+            echo "CHECK end $vol"
+          done
           exec sleep 36000
       volumeMounts:
-        - name: data
-          mountPath: /data
+        - name: webtlo
+          mountPath: /mnt/webtlo
+          readOnly: true
+        - name: transmission
+          mountPath: /mnt/transmission
           readOnly: true
   volumes:
-    - name: data
+    - name: webtlo
       persistentVolumeClaim:
-        claimName: grafana-pvc
+        claimName: webtlo-data-pvc
+        readOnly: true
+    - name: transmission
+      persistentVolumeClaim:
+        claimName: transmission-config-pvc
         readOnly: true
