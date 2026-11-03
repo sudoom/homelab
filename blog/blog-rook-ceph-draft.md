@@ -2909,3 +2909,44 @@ the 80% rule. The 07-05 blind spot, proven with live numbers.
 only surface in the OpenShift console, which degrades with the same-pool stack. The rule is
 the early-warning; delivering it off-cluster (Pushover/ntfy/email) so it survives a brownout
 is a separate follow-up. The `discard` mountOption item (MED) still pairs with this.
+
+## 2026-11-03 — planning Rook v1.21.1 and Ceph Tentacle: what the recon found (nothing changed)
+
+Two reasons to move. OKD 5.0 brings Kubernetes 1.36, and Rook v1.19.5 supports 1.30-1.35. And Ceph Squid reached its target
+end of life on 2026-10-31 (`doc/releases/releases.yml`, ceph main: `squid: target_eol: 2026-10-31`; last release 19.2.7 on
+2026-10-12). Tentacle 20.2.5 was released 2026-11-02 and is supported to 2027-06-01; Umbrella 21.2.0 came out 2026-10-28.
+
+Rook's supported Kubernetes ranges (`Documentation/Getting-Started/Prerequisites/prerequisites.md` at each branch):
+v1.19 1.30-1.35, v1.20 1.31-1.37, v1.21 1.32-1.37. Latest releases: v1.21.1 (2026-10-26), v1.20.9 and v1.19.12 (2026-10-14).
+
+The operator chose the staged route: Rook v1.19.5 → v1.20.9 → v1.21.1, then msgr2 required (CRC, no encryption), then
+Ceph Tentacle 20.2.5, with a one-off OADP backup of the app PVCs to garage first and fio + OSD-latency readings before and
+after every stage. The design is local and not yet approved. What the recon established, read-only, from upstream code
+at tags and from the live cluster:
+
+- **The June 2026-06-12 outage, explained.** v1.20 moves every CSI setting out of the `rook-ceph` chart into the
+  ceph-csi-operator's `ceph-csi-drivers` chart, and the CSI ServiceAccounts change name with it:
+  `ceph-csi-rbd-{ctrl,node}plugin-sa` (v1.19, operator subchart) → `rook-ceph-rbd-csi-ceph-com-{ctrl,node}plugin-sa`
+  (v1.20+, drivers chart). The v1.20 render dropped the old SAs and RBAC, ArgoCD pruned them, and the surviving Driver CR
+  pointed at names that no longer existed. The stale vendored charts made it worse, but the mechanism is the chart move.
+- **The CSI operator is already here.** ceph-csi-operator v0.6.0 runs today (`ROOK_USE_CSI_OPERATOR=true`, cephcsi
+  v3.16.2), and `components/cluster-config/csi-driver-config/` SSA-patches the RBD Driver CR. On OKD the drivers chart
+  needs the SCC binding for the new SA names, `snapshotPolicy: volumeSnapshot` (the default `none` would break CNPG and
+  OADP snapshots), ctrlplugin `hostNetwork: true` and `replicas: 2`.
+- **A v1.21.1 chart bug, found by render:** `csi.createCsiOperatorResources` is missing from the chart's values, so the
+  operator ConfigMap renders it empty, and Rook would then delete the CephConnection and ClientProfile. It must be set
+  explicitly. No upstream issue existed at the time of reading.
+- **msgr2.** Our mons are recorded by Rook as v1 `:6789` only (`rook-ceph-mon-endpoints`, the CephConnection, the CSI
+  JSON) with `requireMsgr2: false`. The monmap very likely holds `v2:…:3300` as well, because Rook creates mons with a
+  portless `--public-addr`. Switching `requireMsgr2` on rewrites the CSI config and CephConnection to `:3300`, sets
+  `rbd_default_map_options=ms_mode=prefer-crc`, changes `ROOK_MSGR2` and therefore rolls every mon, mgr and OSD;
+  existing kernel mappings keep working. Rook's v1.19.5 docs call network changes after deployment unsupported (except
+  encryption), and v1.21.1's chart turns msgr2 on by default, so it is planned as its own stage on v1.21.1, with
+  `requireMsgr2: false` pinned explicitly through both Rook hops.
+- **Ceph 20 on Rook 1.19.** The operator's version gate checks only the major version, so v1.19.5 accepts Tentacle; the
+  old note in the `rook-ceph` skill that v1.19.5 rejects Ceph 20 is wrong. The 20.2.4+ CephX key type needs Rook ≥
+  v1.20.6 for the rotation path, and 20.2.4+ raises `AUTH_INSECURE_SERVICE_*` HEALTH_ERR until daemon keys rotate, so
+  the image and the rotation go in one change. Open rook#18537: rotation while a node is cordoned strands that node's
+  OSDs, so the Ceph stage needs every node schedulable.
+- Every Rook version change and every Ceph image change rolls mons, mgrs and OSDs one at a time (OSDs gated by
+  `ceph osd ok-to-stop`): on this no-drain cluster, four stages mean twelve OSD degraded windows.
