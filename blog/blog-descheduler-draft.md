@@ -876,3 +876,80 @@ helm template dtc components/operators/descheduler-test-catalog | kubeconform -s
 - Metrics via `oc get --raw /api/v1/namespaces/openshift-kube-descheduler-operator/services/https:metrics:10258/proxy/metrics`: `descheduler_loop_duration_seconds_count 12`; `descheduler_pods_evicted_total` has one series, 1 eviction in `descheduler-check` (node6, AffinityAndTaints, RemovePodsViolatingInterPodAntiAffinity, success), left from the earlier drill.
 
 **Upgrade change, prepared and not pushed.** One line in `components/operators/kube-descheduler/values.yaml`: `subscription.source: okderators` to `okd-test-descheduler`. The `replaces` edge in the test catalog drives the upgrade; `installPlanApproval` stays `Manual`; `startingCSV` stays unset (rollback only). Checked: `helm template` of the chart with the patch differs from HEAD in exactly that `source:` line; reverted it renders byte-identically; `git apply --check` passes on HEAD.
+
+## 2026-11-04 — upgraded to the okderators 5.4 test build; eviction check on 5.4: PASS
+
+Cluster reads used `KUBECONFIG=~/.kube/config-readonly`; every cluster change was a command the operator approved at a
+prompt; PromQL and the alert board were read by the operator (`oc exec` into Prometheus and Alertmanager). Times UTC,
+Wednesday, so the run and the 24 h soak stay clear of the Monday 19:00-23:00 operand roll.
+
+### Gates (11:52)
+
+The OADP 1.6 soak had passed (its drill cleanup finished 11:44). CatalogSource `okd-test-descheduler` `READY`, head
+`clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`. Subscription on `okderators`, `AtLatestKnown`, 5.3.0,
+`Manual`, only InstallPlan `install-nbl8w` (5.3.0). The live policy ConfigMap was byte-identical to `policy-before.yaml`
+from 2026-11-03; the CR spec was saved as the second baseline. The alert board held only the standing alerts.
+
+### The change
+
+`upgrade.patch` is one line in `components/operators/kube-descheduler/values.yaml`: `subscription.source: okderators` ->
+`okd-test-descheduler`. `helm lint` clean, kubeconform 3 valid and 1 skipped (the CR), and `oc diff` showed the source
+line and `generation` only. The readonly SA cannot run `oc diff` (`cannot patch resource "subscriptions"`: the
+server-side dry run needs patch), so that one read used the operator's kubeconfig. Committed and pushed `619cff0`
+(`descheduler: move to the okderators 5.4 test build`) at 11:53:46.
+
+### InstallPlan and upgrade
+
+InstallPlan `install-9ktxd` for the 5.4 CSV appeared at 11:56 in `RequiresApproval`, bundle
+`zot.apps.okd.sudops.pl/okd-test/kube-descheduler/operator-bundle@sha256:83246c48…` from `okd-test-descheduler`. Its five
+steps: the CSV (`replaces` 5.3.0), CRD `kubedeschedulers.operator.openshift.io`, one ClusterRole and its binding, and
+ServiceAccount `openshift-descheduler`. The bundle's CRD (read from the unpacked bundle ConfigMap in
+`openshift-marketplace`, `olm.contentEncoding: gzip+base64`, so base64 twice, then gunzip) serves and stores `v1` only,
+the same as live: no version removed. Approved by prompt at about 11:59:20.
+
+By 11:59:53 the 5.4 CSV was `Succeeded`, 5.3 gone, InstallPlan `Complete`, Subscription `AtLatestKnown` on 5.4. No
+leader-lease wait this time (OADP's 1.6 operator waited ~3 min for its old pod's lease). Operator
+`descheduler-operator-7d7644df84-nb9gj` on `okd-test/kube-descheduler/operator@sha256:36abd4ba…` (11:59:29), operand
+`descheduler-85bdfcfb9c-kqqr2` on `okd-test/kube-descheduler/descheduler@sha256:1cef5485…` (11:59:46,
+`descheduler_build_info` AppVersion 0.35.0), both on node6, 0 restarts.
+
+### Checks
+
+- CR spec identical to the saved baseline; policy ConfigMap identical to `policy-before.yaml`, so there is no
+  difference to explain and the protected-namespace lists are unchanged.
+- First loop 11:59:52: `totalEvicted=0`, no errors.
+- NetworkPolicy `descheduler-operand` present.
+- `ClusterVersion`: the `Upgradeable` condition is gone (it read `False` at 11:36); no ClusterOperator reports
+  `Upgradeable=False`. The 5.4 CSV declares `olm.maxOpenShiftVersion` 4.23 (5.3: 4.22). The alert board after the check
+  (operator, ~13:05) no longer lists `ClusterNotUpgradeable`; seven standing alerts, none new.
+- Metrics. Prometheus target `up{pod="descheduler-85bdfcfb9c-kqqr2", instance="10.128.0.30:10258"} = 1`, so the
+  NetworkPolicy admits the platform Prometheus. The API-proxy read (`oc get --raw
+  …/services/https:metrics:10258/proxy/metrics`), the reader on 5.3, now works 1 time in 3; the others end in
+  `dial tcp 10.128.0.30:10258: i/o timeout`, consistent with the policy admitting only monitoring namespaces; which
+  apiserver answered the one success was not checked. My first PromQL read joined three queries with `or`,
+  which dropped the loop counter (its label set equals `up`'s) and matched no eviction series, because Prometheus renames
+  the metric's own `namespace` label to `exported_namespace`. The check README now gives the right query.
+  Re-run as three queries (operator, 13:05:15): `descheduler_loop_duration_seconds_count` 2, the same `offset 30m` 1 (the
+  12:59:52 loop counted in Prometheus's own data), and `descheduler_pods_evicted_total{exported_namespace="descheduler-check",
+  pod_namespace="descheduler-check", result="success", strategy="RemovePodsViolatingInterPodAntiAffinity"}` 1. 5.4's
+  series also carries `pod_namespace`, which the rename does not touch.
+
+### Eviction check on 5.4 (Task 7 repeated)
+
+Baseline (proxy read, operand `kqqr2`): classification node4=2 node5=2 node6=1, no `descheduler_pods_evicted_total`
+series, loop count 1. Applied by prompt: `namespace.yaml`, `anchor.yaml` (`anchor-785df79cc-hf8z5`, node6, UID
+`363f5d5b-7ae6-45d5-956f-a45f03ea58f5`), `victim.yaml` (`victim-79ffdf8f69-9d6ks`, node6), then
+`oc -n descheduler-check label pod anchor-785df79cc-hf8z5 drill=anchor` at 12:06.
+
+```
+I1104 12:59:52.238154       1 evictions.go:589] "Evicted pod" pod="descheduler-check/victim-79ffdf8f69-9d6ks" reason="" strategy="RemovePodsViolatingInterPodAntiAffinity" node="node6.okd.sudops.pl" profile="AffinityAndTaints"
+I1104 12:59:52.244779       1 descheduler.go:252] "Number of evictions/requests" totalEvicted=1 evictionRequests=0
+```
+
+- `descheduler_pods_evicted_total{namespace="descheduler-check",node="node6.okd.sudops.pl",profile="AffinityAndTaints",result="success",strategy="RemovePodsViolatingInterPodAntiAffinity"} 1`
+  (proxy read 13:00:39, same operand pod, still 0 restarts); loop count 2.
+- Replacement `victim-79ffdf8f69-rk228` Running on node5.
+- Anchor UID unchanged.
+
+All four conditions hold. `oc delete namespace descheduler-check` by prompt; gone at 13:02:15. Next: the 24 h soak
+until about 2026-11-05 12:00, then the draft pipeline PRs.

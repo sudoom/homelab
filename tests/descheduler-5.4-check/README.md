@@ -42,7 +42,9 @@ KUBECONFIG=~/.kube/config-readonly oc get --raw /api/v1/namespaces/openshift-kub
 ```
 
 The raw metric read works on 5.3. On 5.4 the new NetworkPolicy `descheduler-operand` may refuse it; use PromQL instead,
-run by the operator: `descheduler_pods_evicted_total{namespace="descheduler-check"}`.
+run by the operator. Prometheus renames the metric's own `namespace` label to `exported_namespace` (the target's
+namespace wins), so the query is `descheduler_pods_evicted_total{exported_namespace="descheduler-check"}`; on 5.4 the
+proxy read worked 1 time in 3 (2026-11-04).
 
 ## Pass
 

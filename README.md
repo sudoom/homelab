@@ -90,7 +90,7 @@ components/
   operators/
     nmstate/               # NMState operator (okderators 4.21 test build from `okd-test-nmstate`, since 2026-10-26)
     cert-manager/          # cert-manager operator (okderators catalog)
-    kube-descheduler/      # Wave 1 — Kube Descheduler Operator (okderators) + KubeDescheduler CR (wave 5), Automatic since 2026-10-24
+    kube-descheduler/      # Wave 1 — Kube Descheduler Operator (okderators 5.4 test build, okd-test-descheduler) + KubeDescheduler CR (wave 5)
     rook-ceph/             # Rook-Ceph via upstream Helm chart
     grafana/               # Grafana operator (community-operators)
     sealed-secrets/        # Bitnami sealed-secrets controller
@@ -413,16 +413,17 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   freeze on builds, MachineConfig rerolls, the logging removal and power tuning. The June v1.20.0 CSI break was the
   v1.20 CSI move to the `ceph-csi-drivers` chart meeting stale charts: the old ServiceAccounts were pruned while the
   Driver CR still needed them (`blog/blog-rook-ceph-draft.md`, 2026-11-03). **(3) Before 5.0, a descheduler upgrade:**
-  `ClusterNotUpgradeable` fires because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
+  `ClusterNotUpgradeable` fired because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
   `maxOpenShiftVersion` 4.22, and OLM blocks the next minor or major upgrade until a newer descheduler is installed.
   Harmless until a hop is planned. Read 2026-11-02: no okderators catalog a 4.22 cluster reaches offers anything newer.
   `release-4.21` and `release-4.22` head at that same 5.3.0, and only `release-4.20` has a 5.4 (5.4.0-2026-07-13).
   Nothing has ever built from pipeline `release-4.22`: its deploy workflow triggers on `main` and would target catalog
   `release-4.21`. `main`'s 2026-09-23 failure was the catalog-PR job, not the build. A `release-4.22` build sets the cap to
-  4.23, which clears OLM's check on 4.22 by source reading (`normalizeOCPVersion`), to be confirmed live. CRD and
+  4.23, which clears OLM's check on 4.22 (`normalizeOCPVersion`), confirmed live 2026-11-04. CRD and
   profiles are unchanged from 5.3 to 5.4. The 12-task plan was approved 2026-11-02 and is running: both builds and the catalog image
-  passed on 2026-11-03, the eviction check passed on 5.3, and CatalogSource `okd-test-descheduler` (5.4 head) is live
-  with the Subscription still on 5.3. The upgrade waits for the OADP soak (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
+  passed on 2026-11-03, and the eviction check on 5.3. The cluster runs the 5.4 test build from `okd-test-descheduler`
+  since 2026-11-04 11:59Z: the eviction check passed on 5.4 and `ClusterNotUpgradeable` cleared. 24 h soak until about
+  2026-11-05 12:00Z, then the draft PRs (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
   February 2025 one, with five of our packages at ancient versions and no descheduler or NMState, and quay has no
   `catalog-index:5.0`, so no 5.0 entry reaches anyone until okderators rebuilds and publishes it. That affects every
   operator here, OADP 1.6 included. Raised upstream 2026-11-02:

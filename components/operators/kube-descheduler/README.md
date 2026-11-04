@@ -1,7 +1,8 @@
 # kube-descheduler
 
-The Kube Descheduler Operator from the `okderators` catalog, with the `KubeDescheduler/cluster` CR that runs it.
-Installed CSV today: `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655`.
+The Kube Descheduler Operator, with the `KubeDescheduler/cluster` CR that runs it. Since 2026-11-04 it comes from our
+okderators 5.4 test catalog `okd-test-descheduler`, until okderators publishes 5.4; before that from `okderators` (5.3.0).
+Installed CSV today: `clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`.
 
 ## What it installs
 
@@ -9,7 +10,7 @@ Installed CSV today: `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655`.
 
 - Namespace `openshift-kube-descheduler-operator` (label `openshift.io/cluster-monitoring`, so the platform Prometheus reads the operand's ServiceMonitor), wave 0.
 - OperatorGroup in OwnNamespace mode (the CSV does not support AllNamespaces), wave 0.
-- Subscription `cluster-kube-descheduler-operator`: channel `alpha`, source `okderators`, `installPlanApproval: Manual`, wave 1. Do not set it to Automatic: a catalog change would then upgrade the operator unsupervised.
+- Subscription `cluster-kube-descheduler-operator`: channel `alpha`, source `okd-test-descheduler` (`okderators` until 2026-11-04), `installPlanApproval: Manual`, wave 1. Do not set it to Automatic: a catalog change would then upgrade the operator unsupervised.
 - `KubeDescheduler/cluster`, wave 5: mode `Automatic`, interval 3600 s, profiles `AffinityAndTaints` and `LongLifecycle`, `devLowNodeUtilizationThresholds: High`. The operator only reconciles the CR named `cluster`.
 
 It never evicts pods in `openshift-*`, `kube-system` or `hypershift`. Pods with `emptyDir`, `hostPath` or a PVC are not evictable either (`evictLocalStoragePods` false, `ignorePvcPods` on).
