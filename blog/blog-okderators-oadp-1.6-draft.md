@@ -1058,3 +1058,62 @@ first one under 1.6 has not run yet; `maintenanceFrequency` is 1h, so it is due 
 Upgrade clean, no rollback needed. Drill run 2 passed: a 1.5 backup restores on 1.6, a 1.6 backup of changed data
 restores with the right checksums, and the Schedule path takes a backup on its boundary. The 24 h soak runs until about
 2026-11-04 08:00 (Task 10).
+
+## 2026-11-04 — Task 10: 24 h soak passed, drill run 3, cleanup
+
+Cluster reads used `KUBECONFIG=~/.kube/config-readonly`; the bucket figures come from garage's admin API on the NAS
+(the operator ran the README's `GetBucketInfo` block); every cluster change was a command the operator approved at a
+prompt. Times are UTC.
+
+### Soak checks (11:36, 27.5 h after the upgrade)
+
+- CSV `oadp-operator.v1.6.0-2026-11-02-205027` `Succeeded`.
+- 0 restarts on all seven pods, every one started 08:00 to 08:04 on 2026-11-03: operator, velero, three node-agents,
+  cli-server, vmdp-server.
+- DPA `Reconciled=True/Complete`; BSL `truenas-garage` `Available`, validated 11:36:16.
+- Three repository maintenance Jobs for `oadp-drill-truenas-garage-kopia` `Completed` today (08:29, 09:34, 10:39), all
+  after the 1.6 CSV's creation (2026-11-03T08:00:16Z); the BackupRepository read `Ready`, `lastMaintenanceTime`
+  10:39:14. This was the prerequisite for run 3: maintenance is what can damage a repository.
+- Schedule `daily` `paused: true`; the cluster sweep was clean.
+- Alertmanager (`/api/v2/alerts?active=true`, read by the operator after the drill): the same eight alerts as before
+  the upgrade, the newest `CephHealthWarning` from 2026-11-02 21:17; nothing started since 1.6 went in.
+
+**Soak verdict: PASS.**
+
+### Drill run 3
+
+```bash
+oc -n oadp-drill rollout restart deploy/drill-writer      # 11:38:48, gen written
+oc apply -f tests/oadp-1.6-drill/backup-16-soak.yaml
+oc apply -f tests/oadp-1.6-drill/restore-drill-16-soak-r16c.yaml
+```
+
+| Check | Result |
+|---|---|
+| Source writer | `DRILL sha256=b29d2dc0…d642` (A, unchanged), `DRILL gen=07f7f74a…8dda` (new; the README's `<G3>`, here G4, since G3 above is the Schedule's) |
+| Bucket before | bytes=269466088 objects=114 |
+| Backup `drill-16-soak` | `Completed` 11:39:43 to 11:40:18, errors 0, warnings 0 |
+| DataUpload `drill-16-soak-8xmpv` | `Completed`, bytesDone 134217858/134217858, `incrementalBytes` 67108929 |
+| Bucket after (~11:41) | bytes=336888130 objects=131: +67422042 B (64.3 MiB), +17 objects |
+| Restore `drill-16-soak-r16c` | `Completed` 11:41:07 to 11:41:47, errors 0, warnings 2 (the two ConfigMaps, as on r15, r16a, r16b) |
+| DataDownload `drill-16-soak-r16c-ss2t8` | `Completed` 134217858/134217858, PVC Bound |
+| Restored writer (`oadp-drill-r16c`) | `DRILL sha256=b29d2dc0…d642` and `DRILL gen=07f7f74a…8dda`: A and G4 |
+
+All six drill conditions hold. The DataUpload logged `Using parent snapshot 5c16c4befe89881d96089f8bedbfd8a4`
+(node-agent, 11:40:06), which is neither drill-15's (`d2898dce…`) nor drill-16's (`fb281353…`), so it is the Schedule
+Backup's, written by 1.6. As with that Backup, Kopia cached the unchanged `drill.bin` and `incrementalBytes` is the
+64 MiB generation file plus its 65-byte sum (67108929); the bucket grew by one generation.
+
+### Cleanup (11:42 to 11:44)
+
+```bash
+oc apply -f tests/oadp-1.6-drill/delete-requests.yaml
+oc delete ns oadp-drill oadp-drill-r15 oadp-drill-r16a oadp-drill-r16b oadp-drill-r16c --ignore-not-found
+```
+
+The four `DeleteBackupRequest`s (`drill-15`, `drill-16`, `drill-16-soak`, `drill-schedule-20261103083008`) were
+processed and removed by the controller within a minute, so none had errors; all four Backups were gone at 11:43:08.
+The Restores had already gone with their Backups, so the README's `delete restores` line had nothing to do. No
+`oadp-drill`, `Released` or `Failed` PV was left at 11:43:55. Schedule `daily` is still paused. The BackupRepository
+`oadp-drill-truenas-garage-kopia` is still listed `Ready`. The bucket is not expected to shrink until Kopia's weekly
+full maintenance.
