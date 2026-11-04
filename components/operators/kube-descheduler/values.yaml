@@ -4,7 +4,7 @@ namespace: openshift-kube-descheduler-operator
 
 subscription:
   channel: alpha
-  source: okderators
+  source: okd-test-descheduler
   sourceNamespace: openshift-marketplace
   # Manual like the other okderators subscriptions (see templates/operator.yaml).
   installPlanApproval: Manual
