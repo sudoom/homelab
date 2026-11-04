@@ -1,10 +1,13 @@
-# Mounts the two restored keepers Ceph PVCs read-only (webtlo-data-pvc, transmission-config-pvc; never
-# keepers-data-nfs) and prints `sha256  size  mtime  path` (mtime in epoch seconds, path relative to the
-# volume root) for every regular file, sorted by path, one section per PVC. A file that cannot be read
-# prints an `ERROR` line instead of being dropped. bash globstar instead of find: ubi-minimal has bash and
-# coreutils but no findutils. Same pod shape as the OADP drill writer (tests/oadp-1.6-drill/writer.yaml):
-# restricted-v2, runAsNonRoot, no fixed UID or fsGroup; the platform applies fsGroup on mount, which is how
-# the drill's restored volumes were read by a different namespace's UID.
+# Mounts the two restored keepers Ceph PVCs (webtlo-data-pvc, transmission-config-pvc; never keepers-data-nfs)
+# and prints `sha256  size  mtime  path` (mtime in epoch seconds, path relative to the volume root) for every
+# regular file, sorted by path, one section per PVC. A file that cannot be read prints an `ERROR` line instead of
+# being dropped, and so does a volume root that cannot be entered. bash globstar instead of find: ubi-minimal has
+# bash and coreutils but no findutils. restricted-v2, runAsNonRoot, no fixed UID or fsGroup.
+# The mounts are read-write on purpose (2026-11-04): the live keepers pods run as root, so the restored files
+# are root-owned, and kubelet applies the pod's fsGroup (CSIDriver fsGroupPolicy File) only to writable mounts.
+# Read-only, the first run got `cd: /mnt/webtlo: Permission denied`. The fsGroup pass changes group and mode bits
+# on this throwaway copy only; content, size and mtime (the compared fields) stay as restored. The script writes
+# nothing.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -30,8 +33,8 @@ spec:
           set -u
           shopt -s globstar dotglob nullglob
           for vol in webtlo transmission; do
-            cd "/mnt/$vol"
             echo "CHECK begin $vol"
+            if ! cd "/mnt/$vol"; then echo "ERROR  $vol  cannot enter /mnt/$vol"; echo "CHECK end $vol"; continue; fi
             for f in **/*; do
               [ -f "$f" ] && [ ! -L "$f" ] || continue
               if sum=$(sha256sum -- "$f" 2>&1) && meta=$(stat -c '%s  %Y' -- "$f" 2>&1); then
@@ -46,16 +49,12 @@ spec:
       volumeMounts:
         - name: webtlo
           mountPath: /mnt/webtlo
-          readOnly: true
         - name: transmission
           mountPath: /mnt/transmission
-          readOnly: true
   volumes:
     - name: webtlo
       persistentVolumeClaim:
         claimName: webtlo-data-pvc
-        readOnly: true
     - name: transmission
       persistentVolumeClaim:
         claimName: transmission-config-pvc
-        readOnly: true

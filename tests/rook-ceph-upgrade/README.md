@@ -81,15 +81,16 @@ PVs (none uses the in-tree `nfs` source, so only the second rule matches them); 
 | keepers/keepers-data-nfs | nfs.csi.k8s.io | 192.168.10.10 | (empty, static PV) | csi rule |
 | media/media-data-nfs-pvc | nfs.csi.k8s.io | 192.168.10.10 | (empty, static PV) | csi rule |
 
-The other 17 PVCs are Ceph RBD and in scope: grafana-pvc; homebox-data, homebox-postgres-1, homebox-postgres-2;
+The other 18 PVCs are Ceph RBD and in scope: grafana-pvc; homebox-data, homebox-postgres-1, homebox-postgres-2;
 immich-postgres-1, immich-postgres-2; transmission-config-pvc, webtlo-data-pvc (keepers); bazarr, jellyfin, prowlarr,
 radarr, sonarr, transmission and transmission-slave config PVCs plus media-postgres-1 and media-postgres-3 (media);
-data-zot-0. The expected DataUpload count is 17 (re-count with the command below before applying).
+data-zot-0. The expected DataUpload count is 18 (re-count with the command below before applying; the 2026-11-03 text said 17,
+a miscount of this same list, corrected 2026-11-04).
 `grafana-pvc` is backed up but mounted by no pod (Grafana uses an emptyDir), so it is not the restore check.
 `immich-library` (nfs-csi, 192.168.1.2) is a leftover dynamic PVC; it is skipped like the rest.
 
 ```bash
-KUBECONFIG=~/.kube/config-readonly oc get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.spec.storageClassName}{"\n"}{end}' | grep -E '^(grafana|homebox|immich|keepers|media|zot)/' | grep -c ceph-nvme-block   # 17
+KUBECONFIG=~/.kube/config-readonly oc get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.spec.storageClassName}{"\n"}{end}' | grep -E '^(grafana|homebox|immich|keepers|media|zot)/' | grep -c ceph-nvme-block   # 18
 ```
 
 **Velero docs checked (v1.18).** Volume policy syntax (`version: v1`, `nfs: {}`, `csi: {driver: ...}`, actions
@@ -121,7 +122,9 @@ kinds the logs name, still mapped into `rook-upgrade-restore`).
    it **stays Pending by design** (its PV `truenas-keepers-data` is a static NFS PV bound to the live claim, and the
    volume policy skipped it). Ignore it, never mount it; it is deleted with the namespace. A Restore that ends
    `PartiallyFailed` only because of that claim: read `status.warnings`/`errors` and report, do not retry.
-6. `checker-pod.yaml` -> Pod `restore-checker` (mounts the two restored Ceph PVCs read-only);
+6. `checker-pod.yaml` -> Pod `restore-checker` (mounts the two restored Ceph PVCs read-write and writes nothing: the
+   live pods run as root, so the files are root-owned, and kubelet grants the pod's `fsGroup` only on writable mounts;
+   the first run, read-only, got `cd: /mnt/webtlo: Permission denied`, 2026-11-04);
    `oc -n rook-upgrade-restore logs restore-checker > restored.txt` prints `sha256  size  mtime  path` per file in
    sections `CHECK begin webtlo|transmission` ... `CHECK end ...`. Any `ERROR` line is a FAIL (a file could not be
    read; the list is never silently shortened).
@@ -149,7 +152,7 @@ live_list "$(oc -n keepers get pods -o name | grep '/transmission-')" transmissi
 ### Pass criteria
 
 - Backup `Completed`, `status.errors` 0 (note warnings).
-- One DataUpload `Completed` per Ceph PVC in scope (17), none for an NFS PVC.
+- One DataUpload `Completed` per Ceph PVC in scope (18), none for an NFS PVC.
 - Bucket bytes and objects grew.
 - Restore: DataDownloads `Completed` for `webtlo-data-pvc` and `transmission-config-pvc`; no `ERROR` line in the
   checker log.
