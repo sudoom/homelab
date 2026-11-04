@@ -15,8 +15,10 @@ Chronology and results: `blog/blog-descheduler-draft.md`.
 
 **Shared namespace.** This directory creates only the ConfigMap `descheduler-build-scripts`. The
 namespace `okd-build`, ServiceAccount `builder`, the privileged RoleBinding and PVC `build-storage`
-are owned by `tests/okderators-logging-build/manifests.yaml` and already exist. If the namespace is
-ever gone, apply the logging directory first (`oc apply -k tests/okderators-logging-build/`, which
+are owned by `tests/okderators-logging-build/manifests.yaml`. PVC `build-storage` was deleted on 2026-11-04 (Rook
+upgrade Stage B; builds are frozen until that upgrade ends), so re-apply that directory before the next build, which
+recreates the claim at its manifest size (100 Gi; an OADP-sized build needs 150 Gi, see
+`tests/okderators-oadp-build/README.md`). If the namespace is ever gone, apply the logging directory first (`oc apply -k tests/okderators-logging-build/`, which
 also creates its own `build-scripts` ConfigMap), then this one. `oc delete -k` here removes only the
 ConfigMap; deleting the namespace and PVC is `oc delete -k tests/okderators-logging-build/`.
 
