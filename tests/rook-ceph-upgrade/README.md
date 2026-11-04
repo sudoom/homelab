@@ -126,8 +126,9 @@ kinds the logs name, still mapped into `rook-upgrade-restore`).
    live pods run as root, so the files are root-owned, and kubelet grants the pod's `fsGroup` only on writable mounts;
    the first run, read-only, got `cd: /mnt/webtlo: Permission denied`, 2026-11-04);
    `oc -n rook-upgrade-restore logs restore-checker > restored.txt` prints `sha256  size  mtime  path` per file in
-   sections `CHECK begin webtlo|transmission` ... `CHECK end ...`. Any `ERROR` line is a FAIL (a file could not be
-   read; the list is never silently shortened).
+   sections `CHECK begin webtlo|transmission` ... `CHECK end ...`. Any `ERROR` line is a FAIL (a file or a volume
+   root could not be read). A subdirectory that cannot be entered is skipped by globstar without an `ERROR` line; the
+   equal-line-count criterion against the live list (Pass criteria) is what catches that.
 7. Operator, the same list inside the live pods (read-only `oc exec`). Mounts read 2026-11-03: pod `webtlo-*`,
    container `webtlo`, `webtlo-data-pvc` at `/data`; pod `transmission-*`, container `transmission`,
    `transmission-config-pvc` at `/config` (`keepers-data-nfs` is also mounted at `/data` there; do not list it).
