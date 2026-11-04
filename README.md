@@ -400,7 +400,10 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   passed, the first recorded data mover restore here. The full `release-4.22` build, the catalog image and the upgrade
   are done: the cluster runs the 1.6 test build from catalog `okd-test-oadp` since 2026-11-03 08:00Z, and drill run 2 on
   1.6 passed. The 24 h soak passed 2026-11-04 (drill run 3 restored the new generation; drill Backups and namespaces
-  cleaned up); the draft PRs are next (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) Rook and Ceph, design and plan approved
+  cleaned up). Draft pipeline PRs filed 2026-11-04:
+  [#47](https://github.com/okd-project/okd-operator-pipeline/pull/47) (`main`) and
+  [#48](https://github.com/okd-project/okd-operator-pipeline/pull/48) (`release-4.22`); catalog-index PRs follow their
+  merge and CI (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) Rook and Ceph, design and plan approved
   2026-11-03 (local, both Fable-reviewed), prep in progress:** Rook v1.19.5 → v1.20.9 → v1.21.1, then msgr2 required
   (CRC; encryption stays the TODO below), then Ceph Squid 19.2.4 → Tentacle 20.2.5. Tooling and runbook are in
   `tests/rook-ceph-upgrade/` (runbook stages B, 1-4 written and reviewed); the stage-1 patches are prepared and

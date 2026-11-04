@@ -1117,3 +1117,17 @@ The Restores had already gone with their Backups, so the README's `delete restor
 `oadp-drill`, `Released` or `Failed` PV was left at 11:43:55. Schedule `daily` is still paused. The BackupRepository
 `oadp-drill-truenas-garage-kopia` is still listed `Ready`. The bucket is not expected to shrink until Kopia's weekly
 full maintenance.
+
+## 2026-11-04 — Task 11: pipeline PRs filed (draft)
+
+- [okd-operator-pipeline#47](https://github.com/okd-project/okd-operator-pipeline/pull/47) `[oadp] Update to 1.6`,
+  `main` <- `sudoom:oadp-1.6` (`cc968a9e2771`, 7 commits, 42 files). Carries the argument: the 1.6 pins, Go 1.26, the
+  regenerated `operator.patch`, the must-gather source, the `init()` fix, the eight new images and seven new
+  submodules, the eight quay repositories the CI robot needs write on, peak disk (71.1 GB), the builds, the live upgrade,
+  the drills and the soak.
+- [okd-operator-pipeline#48](https://github.com/okd-project/okd-operator-pipeline/pull/48) `[oadp] Update to 1.6
+  (release-4.22)`, `release-4.22` <- `sudoom:oadp-1.6-4.22` (`aca81305e30e`, 8 commits, 43 files): the backport,
+  plus `oadp-deploy.yaml` retargeted to trigger on `release-4.22` with `catalog_branch: release-4.22`.
+
+Both stay draft; marking them ready is the operator's call. The catalog-index PRs (`release-4.22`, `release-5.0`, with
+the `skipRange`) come after these merge and upstream CI has published the images.
