@@ -1090,7 +1090,7 @@ oc apply -f tests/oadp-1.6-drill/restore-drill-16-soak-r16c.yaml
 
 | Check | Result |
 |---|---|
-| Source writer | `DRILL sha256=b29d2dc0…d642` (A, unchanged), `DRILL gen=07f7f74a…8dda` (new; the README's `<G3>`, here G4, since G3 above is the Schedule's) |
+| Source writer | `DRILL sha256=b29d2dc0…d642` (A, unchanged), `DRILL gen=07f7f74a…8dda` (new; the drill README calls it `<G3>`; this blog calls it G4, because its G3 is the Schedule's generation above) |
 | Bucket before | bytes=269466088 objects=114 |
 | Backup `drill-16-soak` | `Completed` 11:39:43 to 11:40:18, errors 0, warnings 0 |
 | DataUpload `drill-16-soak-8xmpv` | `Completed`, bytesDone 134217858/134217858, `incrementalBytes` 67108929 |
@@ -1100,8 +1100,8 @@ oc apply -f tests/oadp-1.6-drill/restore-drill-16-soak-r16c.yaml
 | Restored writer (`oadp-drill-r16c`) | `DRILL sha256=b29d2dc0…d642` and `DRILL gen=07f7f74a…8dda`: A and G4 |
 
 All six drill conditions hold. The DataUpload logged `Using parent snapshot 5c16c4befe89881d96089f8bedbfd8a4`
-(node-agent, 11:40:06), which is neither drill-15's (`d2898dce…`) nor drill-16's (`fb281353…`), so it is the Schedule
-Backup's, written by 1.6. As with that Backup, Kopia cached the unchanged `drill.bin` and `incrementalBytes` is the
+(node-agent, 11:40:06), which is neither drill-15's (`d2898dce…`) nor drill-16's (`fb281353…`). By elimination among the
+three earlier drill Backups it is the Schedule Backup's, written by 1.6 (its id was not recorded on the day). As with that Backup, Kopia cached the unchanged `drill.bin` and `incrementalBytes` is the
 64 MiB generation file plus its 65-byte sum (67108929); the bucket grew by one generation.
 
 ### Cleanup (11:42 to 11:44)

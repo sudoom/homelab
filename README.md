@@ -394,8 +394,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   34/34 COs clean; `blog/blog-okd-4.22-upgrade-draft.md`). scos.10 (2026-09-09) is the last OKD 4.x build, so the next
   hop is 5.0. The `okderators` CatalogSource is on `catalog-index:4.22` since 2026-10-29 (no InstallPlans). Left over,
   in order: **(1) OADP 1.5 → 1.6:** Red Hat ships 1.6 only in the 4.22 index. okderators needs `main` and `release-4.22`
-  moved to `oadp-1.6` (every pipeline branch pins `oadp-1.5`, operator gitlink `5520b16`) plus catalog-index PRs. Plan approved 2026-11-02 and executing: all 18 images, so 1.6 is complete for every OADP user (eight new images, six
-  more submodules, no konveyor image in the bundle); real scheduled backups are not part of this work. Done: pins, both
+  moved to `oadp-1.6` (every pipeline branch pins `oadp-1.5`, operator gitlink `5520b16`) plus catalog-index PRs. Plan approved 2026-11-02 and executing: all 18 images, so 1.6 is complete for every OADP user (eight new images from six
+  new submodules, plus a seventh for must-gather's source; no konveyor image in the bundle); real scheduled backups are not part of this work. Done: pins, both
   fork branches (`oadp-1.6`, `oadp-1.6-4.22`), the build Job, drill manifests and runbook, and the drill on 1.5, which
   passed, the first recorded data mover restore here. The full `release-4.22` build, the catalog image and the upgrade
   are done: the cluster runs the 1.6 test build from catalog `okd-test-oadp` since 2026-11-03 08:00Z, and drill run 2 on
