@@ -3033,3 +3033,94 @@ Other stage-4 decisions: `noautoscale` is unset as soon as the daemon checks pas
 snapshot check (`-l cnpg.io/cluster`, one `readyToUse` row per cluster after 05:00Z). The rook mgr-module check reads
 `ceph mgr module ls -f json`. `ceph-reads.sh`'s key self-check used to match AES keys (`AQ…`) only; it now also matches
 the 60-character AES256K shape the daemon keys rotate to, and requires the padding so a git sha does not trip it.
+
+## 2026-11-04 — CSI smoke baseline and the pre-upgrade backup to garage (Stage B)
+
+Rook v1.19.5, Ceph 19.2.4, OADP 1.6 (Velero v1.18.4, Kopia data mover). Cluster reads used
+`KUBECONFIG=~/.kube/config-readonly`; every apply and delete was a command the operator approved at a prompt; the
+Ceph toolbox, garage and the live keepers pods were read by the operator. Times UTC, Wednesday. Runbook:
+`tests/rook-ceph-upgrade/README.md` ("CSI smoke test", "Stage B").
+
+### Smoke on v1.19.5 (13:10 to 13:16)
+
+`smoke/` applied in order (namespace, PVC `smoke` 1 GiB `ceph-nvme-block`, `smoke-writer`, VolumeSnapshot
+`smoke-snap`, PVC `smoke-restore` from it, `smoke-reader`), both pods on node6:
+
+```
+SMOKE written sha256=6dca402d6ee84a483dc3b0bdd2d3c72b6e64718ebfbf831b7c5e312d671f7535 bytes=67108864
+SMOKE restored sha256=6dca402d6ee84a483dc3b0bdd2d3c72b6e64718ebfbf831b7c5e312d671f7535 stored=6dca402d6ee84a483dc3b0bdd2d3c72b6e64718ebfbf831b7c5e312d671f7535 bytes=67108864
+```
+
+PASS. `oc delete namespace rook-upgrade-smoke`; both PVs and the snapshot content were gone at 13:16:00, and in the
+toolbox neither RBD image (`csi-vol-723a9823…`, `csi-vol-e1296c30…`) was in `nvme-replicated` or its trash. This is
+the stage-0 reference the smoke after every later stage is compared with.
+
+### Clearing the build PVC
+
+`okd-build/build-storage` (150 GiB, the OADP and descheduler build cache, no pod using it; builds are frozen until
+the upgrade ends): `oc -n okd-build delete pvc build-storage`. PV gone at 13:16:45; image `csi-vol-a258c065…` in
+neither the pool nor the trash. Pool afterwards (`ceph df`): `nvme-replicated` STORED 151 GiB, USED 445 GiB, 32.86%,
+MAX AVAIL 303 GiB.
+
+### Gates (13:16 to 13:20)
+
+3/3 nodes Ready, MCPs not updating, `HEALTH_WARN` = `BLUESTORE_SLOW_OP_ALERT` on osd.1 only, `129 pgs: 129
+active+clean`, client IO 784 KiB/s written and 5 op/s, CNPG archiving on all three clusters, Schedule `daily` paused,
+OADP soak passed the same morning. garage: `zfs list -o name,used,avail tank/s3` -> `10.7G` used, `5.70T` avail,
+against a 166 GiB scope. Bucket `velero` baseline: bytes=335709584 objects=91.
+
+Scope re-count: 18 Ceph PVCs in `grafana`, `homebox`, `immich`, `keepers`, `media`, `zot` (166 GiB of requests). The
+runbook said 17 while listing 18; corrected. The four NFS PVCs are skipped by the volume policy.
+
+### Backup
+
+```bash
+oc apply -f tests/rook-ceph-upgrade/backup/volume-policy.yaml   # ConfigMap pre-rook-upgrade-policy
+oc apply -f tests/rook-ceph-upgrade/backup/backup.yaml          # Backup pre-rook-upgrade, 13:37:43
+```
+
+`Completed` 13:37:43 to 13:44:50, errors 0, warnings 0, 591/591 items, expires 2026-12-04T13:37:43Z. 18 DataUploads,
+all `Completed`, none for an NFS PVC; 29100665986 bytes read in total (27.1 GiB). The largest:
+
+| PVC | bytes |
+|---|---|
+| zot/data-zot-0 | 22236395514 |
+| media/jellyfin-config-pvc | 1385324248 |
+| immich/immich-postgres-1 | 1324842323 |
+| immich/immich-postgres-2 | 1324586602 |
+| media/media-postgres-1 | 734530953 |
+| media/media-postgres-3 | 734369809 |
+| homebox/homebox-postgres-1 | 453265037 |
+| homebox/homebox-postgres-2 | 419731193 |
+
+`grafana-pvc` (mounted by no pod) and `homebox-data` read 0 bytes. The second looked odd, so I checked kubelet's
+stats summary: `usedBytes=24576`, `inodesUsed=11`, i.e. an empty filesystem; homebox keeps its data in Postgres.
+Bucket after (~13:48): bytes=23104846390 objects=1221, +22769136806 B (21.2 GiB) and +1130 objects for 27.1 GiB read.
+
+### Restore check
+
+`restore-namespace.yaml`, then `restore-check.yaml` (keepers PVCs only, mapped to `rook-upgrade-restore`):
+`Completed` 13:47:24 to 13:48:07, errors 0, warnings 0, 21/21. DataDownloads `webtlo-data-pvc` 5557937/5557937 and
+`transmission-config-pvc` 9448547/9448547, both PVCs Bound; `keepers-data-nfs` `Pending`, as designed.
+
+The first checker run read nothing: `cd: /mnt/webtlo: Permission denied`. The live `webtlo` pod runs as
+`runAsUser: 0` and `transmission` is privileged, so the restored files are root-owned, while the checker runs as
+`restricted-v2` (UID 1001070000). kubelet applies a pod's `fsGroup` to an RBD volume (CSIDriver `fsGroupPolicy:
+File`) only when the mount is writable, and the checker mounted read-only. The script also had no guard after `cd`,
+so its globstar loop went on walking the container's `/`; I deleted the pod. Fix in `checker-pod.yaml`: writable
+mounts (the script still writes nothing; the fsGroup pass changes group and mode bits on the throwaway copy, not
+content, size or mtime), and an `ERROR` line if a volume root cannot be entered. Running the checker as root would
+have needed an SCC grant for the namespace. Second run on node6, `fsGroup` 1001070000: webtlo 11 files, transmission
+215, 0 `ERROR`.
+
+The operator listed the same two volumes inside the live pods (`oc exec`, `find` + `sha256sum` + `stat`): 11 and 215
+files, 0 `ERROR`. Compared on files with mtime before the Backup's `startTimestamp` (1793799463): 11/11 and 215/215
+lines, both diffs empty, and no live file was newer than the Backup. The mtimes matching also shows the fsGroup pass
+left them alone.
+
+Cleanup: Restore deleted, `oc delete namespace rook-upgrade-restore`; both restored PVs gone at 14:03:51 and their images
+(`csi-vol-9d8c3dae…`, `csi-vol-553ed2c5…`) in neither the pool nor the trash (toolbox, operator), no `Released` or
+`Failed` PV, the live `keepers-data-nfs` and its PV `truenas-keepers-data` still Bound. The Backup
+`pre-rook-upgrade` stays as the pre-upgrade fallback until 2026-12-04.
+
+**Stage B: PASS.** Next: Stage M, the fio and OSD-latency baseline, after the descheduler soak ends (~2026-11-05 12:00).
