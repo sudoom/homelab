@@ -415,7 +415,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   Driver CR still needed them (`blog/blog-rook-ceph-draft.md`, 2026-11-03). **(3) Before 5.0, a descheduler upgrade:**
   `ClusterNotUpgradeable` fired because `clusterkubedescheduleroperator.v5.3.0-2026-10-12-113655` declares
   `maxOpenShiftVersion` 4.22, and OLM blocks the next minor or major upgrade until a newer descheduler is installed.
-  Harmless until a hop is planned. Read 2026-11-02: no okderators catalog a 4.22 cluster reaches offers anything newer.
+  Harmless until a hop is planned; a 5.0 hop still needs the descheduler in a published 5.0 catalog (below).
+  Read 2026-11-02: no okderators catalog a 4.22 cluster reaches offers anything newer.
   `release-4.21` and `release-4.22` head at that same 5.3.0, and only `release-4.20` has a 5.4 (5.4.0-2026-07-13).
   Nothing has ever built from pipeline `release-4.22`: its deploy workflow triggers on `main` and would target catalog
   `release-4.21`. `main`'s 2026-09-23 failure was the catalog-PR job, not the build. A `release-4.22` build sets the cap to
