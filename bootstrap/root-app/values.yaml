@@ -225,8 +225,14 @@ applications:
     namespace: rook-ceph
     syncWave: "2"
 
+  # Retired with the Rook v1.20 hop: the ceph-csi-drivers chart in
+  # rook-ceph-operator owns the RBD Driver now, ctrlplugin hostNetwork included.
+  # The Driver template carries Delete=false,Prune=false, so removing this app
+  # leaves the Driver in place. If rook-ceph-operator syncs first, this app's
+  # sync fails on FailOnSharedResource until root-app deletes it (expected).
+  # Deleted in the legacy-cleanup commit.
   csi-driver-config:
-    enabled: true
+    enabled: false
     path: components/cluster-config/csi-driver-config
     namespace: rook-ceph
     syncWave: "2"

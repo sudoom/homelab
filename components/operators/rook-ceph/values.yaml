@@ -7,12 +7,94 @@ rook-ceph:
   hostpathRequiresPrivileged: true
   # Enable host networking for Ceph daemons (adds allowHostNetwork to SCC)
   useOperatorHostNetwork: true
-  csi:
-    enableRbdDriver: true
-    # Off since 2026-09-13: the CephFS tier was retired 2026-09-07 and no
-    # CephFS PV, StorageClass or CephFilesystem remains, so the driver's five
-    # plugin pods served nothing. Re-enable together with a rebuilt tier, and
-    # restore the cephfs Driver hostNetwork patch in csi-driver-config with it.
-    enableCephfsDriver: false
   monitoring:
     enabled: true
+  ceph-csi-operator:
+    serviceAccount:
+      # Permanent. The ceph-csi-operator 1.0.4 subchart (Rook v1.20) would
+      # rename the operator's ServiceAccount from ceph-csi-controller-manager to
+      # ceph-csi. Keeping the existing name means the manager, metrics-auth and
+      # leader-election bindings never point at a missing or new SA while the
+      # running operator pod is replaced, and the SA is never pruned under it.
+      name: ceph-csi-controller-manager
+    controllerManager:
+      manager:
+        env:
+          # Rook v1.20 hop only; removed with templates/csi-legacy-rbac.yaml.
+          # A Driver without serviceAccountName gets <prefix>rbd-{ctrl,node}plugin-sa.
+          # Rook v1.20.9 sets the prefix to "", which resolves to rbd-*-sa that
+          # nothing creates (the 2026-06-12 outage); "ceph-csi-" resolves to the
+          # old pair that csi-legacy-rbac.yaml keeps.
+          csiServiceAccountPrefix: "ceph-csi-"
+
+# Values passed to the ceph-csi-drivers subchart (prefixed with ceph-csi-drivers:).
+# Since Rook v1.20 this chart owns the CSI Driver and OperatorConfig CRs and the
+# CSI plugin ServiceAccounts and RBAC. Base: Rook's recommended values
+# (rook/rook deploy/charts/ceph-csi-drivers/values.yaml@v1.20.9), plus the
+# overrides this cluster needs.
+ceph-csi-drivers:
+  operatorConfig:
+    namespace: rook-ceph
+    driverSpecDefaults:
+      imageSet:
+        name: rook-csi-operator-image-set-configmap
+      # ceph-csi-operator's built-in default and the value the sidecars ran with
+      # before the v1.20 hop; the chart default is 30.
+      grpcTimeout: 150
+      # The chart default "none" would leave any Driver without its own policy
+      # with no csi-snapshotter; before the hop an unset policy meant volumeSnapshot.
+      snapshotPolicy: volumeSnapshot
+      nodePlugin:
+        priorityClassName: system-node-critical
+      controllerPlugin:
+        priorityClassName: system-cluster-critical
+        # The values Rook v1.19 set here, kept so the hop does not change them.
+        # The operator does not merge hostNetwork from these defaults into a
+        # Driver; the rbd Driver sets both itself.
+        hostNetwork: true
+        replicas: 2
+      log:
+        rotation:
+          # Off, as before the v1.20 hop. Rotation writes the logs to a hostPath,
+          # which on SELinux-enforcing nodes needs controllerPlugin.privileged: true.
+          enabled: false
+  drivers:
+    rbd:
+      # The live Driver also carries the annotation
+      # argocd.argoproj.io/sync-options: Delete=false,Prune=false, applied by hand
+      # after the v1.20 hop (oc annotate, field manager kubectl-annotate). This
+      # chart has no annotations hook, and ArgoCD's own apply dropped the copy
+      # csi-driver-config had set. Without it, any change that takes the Driver
+      # out of this render (a revert, a chart change) would prune it, and a
+      # foreground-deleted Driver livelocks
+      # (bugs/upstream-ceph-csi-operator-reconciles-terminating-driver.md).
+      enabled: true
+      name: rook-ceph.rbd.csi.ceph.com
+      log:
+        rotation:
+          # The Driver's own log block wins over driverSpecDefaults.log, and the
+          # chart defaults it to enabled, so rotation is switched off here too.
+          enabled: false
+      # Was 150 s before the v1.20 hop (operator default); the chart default is 30.
+      grpcTimeout: 150
+      # The chart default "none" drops the csi-snapshotter sidecar, and every
+      # VolumeSnapshot (CNPG backups, OADP) would stay not ready.
+      snapshotPolicy: volumeSnapshot
+      controllerPlugin:
+        # The OSDs bind the storage backnet (192.168.10.0/24). A ctrlplugin on
+        # the pod network cannot reach them and every CreateVolume hangs.
+        # Until the v1.20 hop the csi-driver-config app patched this in.
+        hostNetwork: true
+        replicas: 2
+    # Off since 2026-09-13: the CephFS tier was retired 2026-09-07 and no CephFS
+    # PV, StorageClass or CephFilesystem remains. Re-enable together with a
+    # rebuilt tier, with controllerPlugin.hostNetwork: true like rbd.
+    cephfs:
+      enabled: false
+      name: rook-ceph.cephfs.csi.ceph.com
+    nfs:
+      enabled: false
+      name: rook-ceph.nfs.csi.ceph.com
+    nvmeof:
+      enabled: false
+      name: rook-ceph.nvmeof.csi.ceph.com

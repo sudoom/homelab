@@ -1,6 +1,9 @@
 dependencies:
 - name: rook-ceph
   repository: https://charts.rook.io/release
-  version: v1.19.5
-digest: sha256:a3c5f122a9557f0f5cd08b1361c318b8ae9c8fb87f3777d79c31967ee35485d2
-generated: "2026-06-12T13:26:47.75261+02:00"
+  version: v1.20.9
+- name: ceph-csi-drivers
+  repository: https://ceph.github.io/ceph-csi-operator
+  version: 1.0.4
+digest: sha256:7fa169e72a277bd820efef69fc4dd4921abded97072232088d3ec5cfd01cce97
+generated: "2026-11-03T13:52:21.645745+01:00"

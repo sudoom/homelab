@@ -5,5 +5,11 @@ version: 1.0.0
 type: application
 dependencies:
   - name: rook-ceph
-    version: v1.19.5
+    version: v1.20.9
     repository: https://charts.rook.io/release
+  # Since Rook v1.20 the CSI Driver and OperatorConfig CRs, and the CSI plugin
+  # ServiceAccounts and RBAC, come from this chart, not from rook-ceph.
+  # Pairs with rook-ceph v1.20.9 (its ceph-csi-operator subchart is 1.0.4).
+  - name: ceph-csi-drivers
+    version: 1.0.4
+    repository: https://ceph.github.io/ceph-csi-operator
