@@ -965,9 +965,9 @@ The plan's soak conditions, read at or after 24 h from the 2026-11-04 11:59Z upg
 | Hourly loops (operand log) | 25 `"Number of evictions/requests"` lines, 11-04 11:59 through 11-05 11:59, one at :59 every hour, none missing | yes |
 | Evictions | one in 24 h: `descheduler-check/victim-79ffdf8f69-9d6ks` at 11-04 12:59:52Z, the Task 8 check; every other loop `totalEvicted=0` | yes |
 | Log errors | no `E`-level lines in the operand or operator log | yes |
-| Metrics (dashboard data) | PromQL, operator, 12:03Z: `descheduler_loop_duration_seconds_count` 25; `min_over_time(up{namespace="openshift-kube-descheduler-operator"}[24h])` 1; `sum(descheduler_pods_evicted_total)` 1 | yes |
+| Metrics (PromQL in place of a dashboard view) | operator-run `promtool` in `prometheus-k8s-0`, 12:03:03Z: `descheduler_loop_duration_seconds_count` 25; `min_over_time(up{namespace="openshift-kube-descheduler-operator"}[24h])` 1; `sum(descheduler_pods_evicted_total)` 1 | yes |
 | Alerts | 12:02Z: the 7 standing (CephHealthWarning, PodDisruptionBudgetAtLimit ×3 media/immich/homebox, KubeCPUOvercommit, Watchdog, InsightsRecommendationActive), none new; `ClusterNotUpgradeable` still absent | yes |
-| Cluster sweep | 3/3 Ready, ClusterVersion Available and not Progressing, ClusterOperators clean, 55/55 apps Synced Healthy, CSVs and certificates fine, no non-Running or waiting pods, only the 03:00 transmission restarts, Ceph `BLUESTORE_SLOW_OP` only | yes |
+| Cluster sweep | 3/3 Ready, ClusterVersion Available and not Progressing, ClusterOperators clean, 55/55 apps Synced Healthy, CSVs and certificates fine, no non-Running or waiting pods, only the 03:00 transmission restarts, CNPG ×3 2/2 with `ContinuousArchiving=True` (12:04:58Z), Ceph `HEALTH_WARN` only for "2 OSD(s) experiencing slow operations in BlueStore" (the known-benign `BLUESTORE_SLOW_OP`) | yes |
 
 The log reads ran under the readonly kubeconfig:
 
@@ -988,5 +988,5 @@ done
 
 `min_over_time(up[24h]) = 1` is the point of the metrics row: 5.4's NetworkPolicy (ingress 10258 from monitoring
 namespaces only) never cut the platform Prometheus off, so the descheduler dashboard has had data for the whole day.
-The soak stayed clear of the Monday 19:00–23:00Z rotation (it ran Wednesday to Thursday). Next: the draft pipeline
+The soak stayed clear of the Monday-evening operand roll (around 21:00Z; it ran Wednesday to Thursday). Next: the draft pipeline
 PRs.
