@@ -406,7 +406,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   [#47](https://github.com/okd-project/okd-operator-pipeline/pull/47) (`main`) and
   [#48](https://github.com/okd-project/okd-operator-pipeline/pull/48) (`release-4.22`); catalog-index PRs follow their
   merge and CI (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) Rook and Ceph, design and plan approved
-  2026-11-03 (local, both Fable-reviewed), prep in progress:** Rook v1.19.5 → v1.20.9 → v1.21.1, then msgr2 required
+  2026-11-03 (local, both Fable-reviewed), under way: backup and baseline done, stage 1 next:** Rook v1.19.5 → v1.20.9 → v1.21.1, then msgr2 required
   (CRC; encryption stays the TODO below), then Ceph Squid 19.2.4 → Tentacle 20.2.5. Tooling and runbook are in
   `tests/rook-ceph-upgrade/` (runbook stages B, 1-4 written and reviewed); the stage-1 patches are prepared and
   reviewed outside git until their window. Why: v1.19.5 supports Kube 1.30-1.35 (v1.21.1: 1.32-1.37), and Ceph
