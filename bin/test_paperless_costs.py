@@ -10,6 +10,7 @@ import json
 import os
 import unittest
 import urllib.error
+import urllib.request
 from decimal import Decimal
 from importlib import machinery, util
 
@@ -132,6 +133,15 @@ class Tests(unittest.TestCase):
             pc.NoRedirect().redirect_request(req, None, 302, "Found", {}, "http://evil.test/x")
         self.assertIn("evil.test", str(cm.exception))
         self.assertNotIn("SECRET", str(cm.exception))
+
+    def test_default_opener_installs_noredirect(self):
+        # The opener main() and fetch_all() use by default must carry NoRedirect
+        # in place of urllib's stock HTTPRedirectHandler, or the test above proves nothing.
+        handlers = pc._default_opener.__self__.handlers
+        self.assertTrue(any(isinstance(h, pc.NoRedirect) for h in handlers))
+        self.assertFalse(any(type(h) is urllib.request.HTTPRedirectHandler for h in handlers))
+        self.assertIs(pc.main.__defaults__[-1], pc._default_opener)
+        self.assertIs(pc.fetch_all.__defaults__[-1], pc._default_opener)
 
     def test_timeout_exits_cleanly(self):
         def opener(req, timeout=None):
