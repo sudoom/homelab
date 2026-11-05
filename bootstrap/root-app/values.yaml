@@ -95,6 +95,10 @@ applications:
     path: components/operators/rook-ceph
     namespace: rook-ceph
     syncWave: "1"
+    # Prune last so a removed CSI/RBAC object is deleted only after the rest
+    # of the sync is healthy (Rook upgrade stages).
+    extraSyncOptions:
+      - PruneLast=true
 
   grafana-operator:
     enabled: true
@@ -226,6 +230,12 @@ applications:
     path: components/cluster-config/csi-driver-config
     namespace: rook-ceph
     syncWave: "2"
+    # Rook v1.20 hop: once rook-ceph-operator renders the Driver, this app must
+    # not apply it again (same ArgoCD field manager, so its hostNetwork-only
+    # apply would strip the drivers chart's fields). FailOnSharedResource makes
+    # its sync fail instead while it waits for root-app to delete it.
+    extraSyncOptions:
+      - FailOnSharedResource=true
 
   # OLM v1: sets availabilityMode=Unavailable on the three Red Hat default
   # ClusterCatalogs (no entitlement here, zero ClusterExtensions). Stops the

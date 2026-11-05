@@ -31,6 +31,11 @@ spec:
       - ServerSideDiff=true
       - RespectIgnoreDifferences=true
       - SkipDryRunOnMissingResource=true
+{{- with $app.extraSyncOptions }}
+{{- range . }}
+      - {{ . }}
+{{- end }}
+{{- end }}
     retry:
       limit: 5
       backoff:
