@@ -846,7 +846,9 @@
   when:
     - _pl_exists | bool
     - ((truenas_pl_live.stdout | from_json).paperless.db_password | default('', true)) | length == 0
-  no_log: true
+  # No no_log here on purpose: on a fail task it censors msg, and this message
+  # carries no secret. Ansible prints a skipped task's condition as text, never
+  # its evaluated value, so the live config is not shown either way.
 
 - name: Reconcile the paperless app values
   ansible.builtin.command:
