@@ -3163,7 +3163,7 @@ logging removal, no power-tuning change until the Tentacle stage is done.
 | `rand-write-4k` | 2,395 iops, p99 31.1 ms | 1,987, p99 48.0 | 2,457, p99 28.7 | 2,280 iops |
 
 All on node4, exit 0, 12 rows in `data/storage-benchmark-results.tsv`; the summary and notes are in
-`data/storage-throughput.md`. Two things the output says that are not problems:
+`data/storage-throughput.md`. Three things the output shows that are not problems:
 
 - **"fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)"** on both read workloads (run 1: 2877 Mb/s on the switch
   against fio's ~3327 for `seq-read-1m`). The harness was written for NFS, where every byte crosses the switch. On
