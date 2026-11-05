@@ -496,16 +496,33 @@ chronology: `blog/blog-paperless-draft.md`.
   environment. The render test is `ansible-playbook -i localhost, -c local tests/paperless-render.yml` (once more
   with `-e truenas_paperless_ai_enabled=true`).
 
+### Nightly export
+
+`paperless-export.py` (`roles/truenas-tasks/files/`, installed to `/mnt/tank/monitoring/bin/` next to the textfile
+collector) is run by the root cron job `paperless export (managed by ansible/truenas)` at **04:15**
+(`truenas_paperless_export`). It finds the one container labelled `com.docker.compose.project=ix-paperless` and
+`com.docker.compose.service=paperless`, runs `document_exporter /paperless/export -d --no-progress-bar` in it (no
+`-u`: the image drops to uid 568 itself, so the files are 568-owned like the dataset), counts the
+`documents.document` records in `manifest.json` and writes `paperless-export.prom` into the textfile directory
+(`truenas_paperless_export_last_success_timestamp_seconds`, `truenas_paperless_export_documents`) through a temp file
+and `os.replace`. It is silent on success; on failure it prints one line to stderr, exits non-zero and leaves the
+previous `.prom` file in place, and TrueNAS mails the stderr. `TrueNASPaperlessExportStale` (warning 36 h, critical
+72 h, plus an absent-series rule) is in `components/cluster-config/truenas-exporter/templates/prometheusrule.yaml`.
+Tests: `python3 -m unittest ansible/truenas/tests/test_paperless_export.py -v` (a fake `docker` on `--docker`; no
+Docker needed). `tank/paperless` also has a recursive snapshot task (every 6 h, 90 days).
+
 ## Backup tasks (Cloud Sync)
 
 `truenas_cloudsync_credentials` and `truenas_cloudsync_tasks` in `group_vars/all.yml` declare
 rclone-based Cloud Sync tasks; the design notes are next to them. Two legs copy `tank/immich`
-every night, both over SFTP:
+every night, and the two `paperless` rows carry `tank/paperless/export`, all over SFTP:
 
 | Time | Target | Mode | Why |
 |---|---|---|---|
 | 05:00 | the Synology, `photo` share, `backups/immich` | `COPY` | In the house. A photo deleted in Immich stays there, so it only grows |
 | 06:00 | a Hetzner Storage Box sub-account, folder `/immich` | `SYNC` | Offsite mirror. History comes from the box's weekly snapshots (10 kept), which the TrueNAS login cannot touch |
+| 04:45 | the Synology, `photo` share, `backups/paperless` | `COPY` | `tank/paperless/export` (the nightly document export), in the house; deletions in paperless do not propagate |
+| 07:30 | the Storage Box, folder `/paperless` | `SYNC`, `transfers: 2` | Offsite copy of the same export. After the 06:00 Immich leg: the box allows 10 connections per account |
 
 Both legs run **from a snapshot**, so a file written mid-run is either wholly in or wholly out.
 

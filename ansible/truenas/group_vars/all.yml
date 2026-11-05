@@ -795,6 +795,20 @@ truenas_textfile_collector:
   cron: "*/5 * * * *"
   description: "node_exporter textfile collector (managed by ansible/truenas)"
 
+# ---- paperless nightly export ----------------------------------------------
+# paperless-export.py runs document_exporter in the paperless container (into
+# tank/paperless/export, which both Cloud Sync legs copy) and publishes
+# truenas_paperless_export_* through the textfile collector. 04:15 Europe/Warsaw:
+# after the 02:00 snapshots, before the 04:45 Synology leg. Runs as root (docker
+# socket). stdout is hidden because the script is silent on success; stderr is
+# not, so a failing export is mailed. All arguments are passed explicitly. The
+# command contains no single quotes (it is JSON-encoded into a midclt argv).
+truenas_paperless_export:
+  script_path: /mnt/tank/monitoring/bin/paperless-export.py
+  cron: "15 4 * * *"
+  description: "paperless export (managed by ansible/truenas)"
+  hide_stdout: true
+
 truenas_snapshot_tasks:
   - dataset: media
     recursive: true
@@ -821,6 +835,14 @@ truenas_snapshot_tasks:
     lifetime_value: 30
     lifetime_unit: DAY
     schedule: { minute: "0", hour: "*/2", dom: "*", month: "*", dow: "*" }
+  # paperless: one recursive task over the parent dataset (data, media, consume,
+  # postgres, export). 90 days like `backup`; the export child is what the
+  # offsite legs read, the snapshots are the local history under it.
+  - dataset: paperless
+    recursive: true
+    lifetime_value: 90
+    lifetime_unit: DAY
+    schedule: { minute: "0", hour: "*/6", dom: "*", month: "*", dow: "*" }
 
 # ---------------------------------------------------------------------------
 # Cloud Sync backup tasks (rclone underneath; converged by truenas-tasks).
@@ -919,3 +941,28 @@ truenas_cloudsync_tasks:
     exclude:
       - "/thumbs/**"
       - "/encoded-video/**"
+  # paperless: the document_exporter output (originals, archive PDFs, manifest
+  # with the database), refreshed by the 04:15 export cron job. No excludes: the
+  # export holds only what a restore needs.
+  - description: "backup: tank/paperless/export -> synology photo/backups/paperless (managed by ansible/truenas)"
+    dataset: paperless/export
+    credentials: synology-sftp
+    attributes:
+      folder: /photo/backups/paperless
+    transfer_mode: COPY
+    snapshot: true
+    # 04:45: half an hour after the export starts. Before the 05:00 immich leg.
+    schedule: { minute: "45", hour: "4", dom: "*", month: "*", dow: "*" }
+  - description: "offsite: tank/paperless/export -> hetzner storage box /paperless (managed by ansible/truenas)"
+    dataset: paperless/export
+    credentials: hetzner-storagebox
+    attributes:
+      folder: /paperless
+    transfer_mode: SYNC
+    snapshot: true
+    # Same connection budget as the immich leg (10 per account; 2 transfers +
+    # 8 checkers each), so the two must not overlap: 07:30 is after the 06:00
+    # immich leg. Check that leg's finish times before relying on this
+    # (truenas_cloudsync_last_job_finished_timestamp_seconds, past week).
+    transfers: 2
+    schedule: { minute: "30", hour: "7", dom: "*", month: "*", dow: "*" }

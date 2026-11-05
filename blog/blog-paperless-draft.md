@@ -123,3 +123,51 @@ The role section was also exercised with a stub `midclt` on `PATH` that logged i
 vault password; a create payload with the three generated secrets and literal `{{ created_year }}` braces; no
 `app.update` when the live config matches; and on drift an update payload with only the six top-level keys, the live
 secrets carried through, and the admin fields taken from the live dict, not the declared one.
+
+## 2026-11-05 — Task 2: nightly export, snapshots, offsite copies, alert rule
+
+The paperless data is backed up as a `document_exporter` run, not by copying the live dataset: the export is a
+self-consistent set (originals, archive PDFs, a manifest that carries the database), and it is what the two Cloud Sync
+legs copy. Per the docs (administration, "Document exporter"), `-d` deletes files of removed documents from the
+target, and `--no-progress-bar` keeps it quiet for cron.
+
+**Script.** `ansible/truenas/roles/truenas-tasks/files/paperless-export.py <textfile-dir> --app-name paperless
+--export-host-path /mnt/tank/paperless/export --export-container-path /paperless/export [--docker /usr/bin/docker]`.
+Container lookup is `docker ps -q --filter label=com.docker.compose.project=ix-paperless --filter
+label=com.docker.compose.service=paperless` and must return exactly one id. The labels are unverified until the app
+exists (Task 3 Step 4); the fallback is `--filter name=ix-paperless-paperless-1`. The exec has no `-u`: the container
+runs as 0:0 and the image wrapper drops to the paperless user (568), so the files come out 568-owned. After a zero
+exit it counts `documents.document` records in `manifest.json` and writes the `.prom` file atomically (temp file
+without the `.prom` suffix, `os.replace`), as the textfile collector does. Silent on success; one stderr line and a
+non-zero exit on every failure, with the old `.prom` untouched (so the staleness alert keeps counting from the last
+good run). `--docker` exists so the tests can pass a fake binary's absolute path.
+
+**Tests (RED then GREEN).**
+
+```
+python3 -m unittest ansible/truenas/tests/test_paperless_export.py -v    # RED: FileNotFoundError, the script did not exist (5 errors)
+python3 -m unittest ansible/truenas/tests/test_paperless_export.py -v    # GREEN: 5 tests OK
+```
+
+They cover success (both metrics, documents = 3 out of a manifest that also holds tag and user records, timestamp
+about now, `os.replace` called with no `.prom` present and a temp name not ending in `.prom`, the right exec argv) and
+four failures (no container, two containers, exporter exit 1, manifest missing), each with a non-zero code, a stderr
+line and a pre-existing `.prom` left byte-identical.
+
+**Ansible.** `truenas_paperless_export` in group_vars (cron `15 4 * * *`, description `paperless export (managed by
+ansible/truenas)`, stdout hidden, stderr kept so a failure is mailed). The cron command passes every argument
+explicitly. A recursive snapshot task on `paperless` (every 6 h, 90 days). Two Cloud Sync tasks on
+`paperless/export`: Synology `COPY` at 04:45 into `photo/backups/paperless`, Hetzner `SYNC` at 07:30 into `/paperless`
+with `transfers: 2`, both from a snapshot, no excludes. 07:30 is after the Immich offsite leg (06:00) because the box
+allows 10 connections per account and each task can open 2 transfers plus 8 checkers; the pre-check is the Immich
+task's finish time over the past week (PromQL in the task report), and the paperless leg moves later if that leg ever
+runs close to 07:30. Both reuse the Immich legs' credentials (`synology-sftp`, `hetzner-storagebox`), so no new vault entries.
+
+**Alert group `truenas-paperless`** (`TrueNASPaperlessExportStale`: warning at 36 h, critical at 72 h, both `for: 15m`
+with `keep_firing_for: 2h`, and a critical `absent_over_time(...[36h])` rule with a `window` label, for the same reason
+the Cloud Sync rules carry one). It is validated here but committed in Task 3, after the first export has produced the
+series: the absent rule would otherwise fire from the commit until the app exists and dirty the health sweeps the Rook
+stages gate on.
+
+Checks: `ansible-playbook -i inventory.yml playbook.yml --syntax-check` rc 0; `helm lint` clean; `helm template |
+kubeconform -strict -ignore-missing-schemas` 5 valid, 0 invalid. Nothing ran against the box or the cluster.

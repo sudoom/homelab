@@ -237,6 +237,47 @@
   when: truenas_textfile_collector.description not in truenas_cron_descs
 
 # ---------------------------------------------------------------------------
+# paperless nightly export -- same pattern as the textfile collector above: the
+# script on tank/monitoring/bin, a root cron job, the metrics through the
+# collector's directory. See `truenas_paperless_export` in group_vars.
+# ---------------------------------------------------------------------------
+- name: Install the paperless export script
+  ansible.builtin.copy:
+    src: paperless-export.py
+    dest: "{{ truenas_paperless_export.script_path }}"
+    mode: "0755"
+
+- name: Create the paperless export cron job
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - cronjob.create
+      - "{{ _job | to_json }}"
+  vars:
+    _f: "{{ truenas_paperless_export.cron.split() }}"
+    _job:
+      user: root
+      command: >-
+        /usr/bin/python3 {{ truenas_paperless_export.script_path }}
+        {{ truenas_node_exporter.textfile_dir }}
+        --app-name {{ truenas_paperless.app_name }}
+        --export-host-path {{ truenas_paperless.paths.export }}
+        --export-container-path {{ truenas_paperless.container_paths.export }}
+        --docker /usr/bin/docker
+      description: "{{ truenas_paperless_export.description }}"
+      schedule:
+        minute: "{{ _f[0] }}"
+        hour: "{{ _f[1] }}"
+        dom: "{{ _f[2] }}"
+        month: "{{ _f[3] }}"
+        dow: "{{ _f[4] }}"
+      enabled: true
+      stdout: "{{ truenas_paperless_export.hide_stdout }}"
+      stderr: false
+  when: truenas_paperless_export.description not in truenas_cron_descs
+
+# ---------------------------------------------------------------------------
 # Cloud Sync backup tasks -- `truenas_cloudsync_credentials` and
 # `truenas_cloudsync_tasks` in group_vars, where the design is explained.
 #
