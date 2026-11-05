@@ -37,6 +37,7 @@ over which path, by which method**. A number without those is not reusable.
 | **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | 246 MB/s | — | 2026-08-29 | 1 reader, migration-derived (superseded by fio) |
 | **TrueNAS** (RAIDZ2 6-wide) | NFS over 10G backnet | 431 MB/s | — | 2026-08-30 | 2 readers, migration-derived (superseded by fio) |
 | **TrueNAS** (RAIDZ2 6-wide) | SMB over 1G frontnet | — | **~114 MB/s** | 2026-08-31 | 2 Macs, Time Machine, link-saturating |
+| **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **400.2 MiB/s** | **62.7 MiB/s** | 2026-11-05 | 1 client (node4), fio `seq-*-1m`, one 24G file, mean of 3 runs; Rook/Ceph upgrade series, compare only within it |
 | *(reference)* cross-node pod | iperf3, 1G frontnet | 879 Mbit/s | — | 2026-05-21 | pre-IPsec baseline |
 
 **TrueNAS NFS is ~4.3× CephFS-HDD read and ~4.7× the Synology on sequential reads —
@@ -144,6 +145,30 @@ Also note the cross-check is weaker here than on the Synology: the 10G port carr
 live media/immich/keepers NFS mounts too, so on the low-payload `rand-*` rows background
 traffic dwarfs the benchmark and the wire cannot isolate it. Those rows are recorded
 `UNCORROBORATED` — the fio figure stands, nothing independent confirms it.
+
+### Ceph RBD `ceph-nvme-block` — the Rook/Ceph upgrade baseline (2026-11-05)
+
+`tests/storage-benchmark/run.sh --backend ceph-nvme-block`, 1 client (node4), `BENCH_FILESIZE=24G` with
+`BENCH_ALLOW_SMALL=1` (above the OSDs' ~12 GiB aggregate cache), one shared bulk file, 60 s per workload,
+`libaio`, Rook v1.19.5 / Ceph Squid 19.2.4, pool `nvme-replicated` size 3. Three runs in the 12:00-14:00Z slot.
+A series of its own: compare these rows only with later `ceph-nvme-block` rows carrying the same
+`BENCH_LAYOUT_NOTE` shape (`shared-bulk BENCH_ALLOW_SMALL=1 rep=<n>/3 stage=<label>`), never with the NFS rows.
+
+| workload | run 1 | run 2 | run 3 | mean |
+|---|---|---|---|---|
+| `seq-read-1m` | 406.1 MiB/s, p99 49.0 ms | 393.6, p99 50.1 | 400.9, p99 48.5 | **400.2 MiB/s** |
+| `seq-write-1m` | 65.8 MiB/s, p99 248.5 ms | 68.0, p99 244.3 | 54.2, p99 337.6 | **62.7 MiB/s** |
+| `rand-read-4k` | 15,478 iops (60.5 MiB/s), p99 6.26 ms | 16,380 (64.0), p99 5.67 | 17,820 (69.6), p99 4.69 | **16,559 iops** |
+| `rand-write-4k` | 2,395 iops (9.4 MiB/s), p99 31.1 ms | 1,987 (7.8), p99 48.0 | 2,457 (9.6), p99 28.7 | **2,280 iops** |
+
+- **Writes vary most between runs** (seq-write 54.2-68.0 MiB/s, rand-write p99 28.7-48.0 ms), which is why each
+  point is three runs. `BLUESTORE_SLOW_OP_ALERT` went from 2 OSDs to 3 between run 1 and run 2.
+- **The wire check undercounts reads on RBD.** Run 1's switch counter read 2877 Mb/s against fio's ~3327 for
+  `seq-read-1m`: the reads the client's own OSD (node4) serves never cross the switch. Not a cache effect (O_DIRECT,
+  24G above the OSD cache).
+- **Sequential writes are ~6x slower than reads**, with p99 near 250 ms: each 1 MiB write is replicated to three
+  consumer NVMe drives without power-loss protection. Recorded, not judged: the series exists to see how the
+  upgrade moves these numbers.
 
 ### TrueNAS SMB (Time Machine) — the 1G frontnet is the constraint here
 

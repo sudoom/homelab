@@ -167,7 +167,45 @@ automatic fallback PVC.
 
 ## Stage M: baseline
 
-(empty)
+Runs after Stage B and the descheduler soak, and starts the freeze. Every later measurement point (after each
+stage) repeats it with its own label, in the same UTC slot.
+
+- **Slot: 12:00-14:00Z** (operator, 2026-11-05). Nothing scheduled runs then: OADP `daily` 02:00 (paused), CNPG
+  backups 03:30-04:30, snapshot retention 05:30, cert sync 03:14.
+- **One file, kept for the three runs only.** `run.sh` keeps the 32Gi PVC and its 24G file between runs, so runs 2
+  and 3 skip the layout; `--clean` removes them after run 3, and the next point lays the file out again (layout is
+  never measured).
+
+```bash
+# CONTROLLER (readonly): the gates above, plus the CSI pre-flight from the rook-ceph skill:
+# no Released/Failed PV, no attached VolumeAttachment without its PV, no unbound PVC, no MCP updating.
+
+# OPERATOR: pool space. The controller reads nvme-replicated MAX AVAIL from the evidence file and
+# confirms 32Gi <= 25% of it; if not, stop and bring the number to the operator.
+bash tests/rook-ceph-upgrade/verify/ceph-reads.sh <label>
+
+# OPERATOR: dry run, then rep=1/3, 2/3, 3/3 one at a time; the controller checks each run's gates and
+# the pool cross-check (run.sh headroom vs the ceph df MAX AVAIL above) before the next.
+KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 \
+BENCH_LAYOUT_NOTE='shared-bulk BENCH_ALLOW_SMALL=1 rep=<n>/3 stage=<label>' \
+  ./tests/storage-benchmark/run.sh --backend ceph-nvme-block [--dry-run]
+
+# OPERATOR: after rep 3
+KUBECONFIG=~/.kube/config ./tests/storage-benchmark/run.sh --backend ceph-nvme-block --clean
+
+# OPERATOR: the 24 h latency window, read at the start of the NEXT stage (Task 9 Step 1 for the baseline)
+bash tests/rook-ceph-upgrade/metrics/ceph-latency.sh --end <next stage start, UTC> --window 24h --label <label>
+```
+
+- The read rows print `fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)`. On RBD that is expected, not a cache: the
+  client node's own OSD serves the objects whose primary it holds, and those reads never reach the switch. The flag
+  was written for the NFS backends, where every byte crosses the wire.
+- Rows land in `data/storage-benchmark-results.tsv` (written by the run); the controller adds the summary to
+  `data/storage-throughput.md` and the blog. Record-only: no pass/fail on the numbers.
+
+**Baseline (`stage=baseline`) taken 2026-11-05:** reps at 12:28:44Z, 12:57:52Z and 13:17:42Z (run ids
+`bench-20261105-132844`, `-135752`, `-141742`; the id carries local time), all on node4. **Freeze since
+2026-11-05T12:28:44Z.** Latency window: pending, read at stage 1's start.
 
 ## Stage 1: Rook v1.20.9
 

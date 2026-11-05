@@ -3124,3 +3124,56 @@ Cleanup: Restore deleted, `oc delete namespace rook-upgrade-restore`; both resto
 `pre-rook-upgrade` stays as the pre-upgrade fallback until 2026-12-04.
 
 **Stage B: PASS.** Next: Stage M, the fio and OSD-latency baseline, after the descheduler soak ends (~2026-11-05 12:00).
+
+## 2026-11-05 — Stage M: the fio baseline before the upgrade (freeze starts)
+
+Task 5 of the upgrade plan. The gate held: the descheduler 5.4 soak passed today, Stage B yesterday. The operator
+picked the **12:00-14:00Z slot** for this point and every later one ("slot ok"); nothing scheduled runs then (all
+the cluster's backups and snapshot jobs sit between 02:00 and 06:00Z).
+
+Readonly pre-flight at 12:15Z: MCPs Updated and not Updating, no node unschedulable, no Released/Failed PV, no
+attached VolumeAttachment without its PV, no unbound PVC, no benchmark namespace.
+
+Pool space, operator-run `bash tests/rook-ceph-upgrade/verify/ceph-reads.sh baseline` (12:17:26Z, 0 reads failed):
+
+```
+HEALTH_WARN 2 OSD(s) experiencing slow operations in BlueStore   (osd.0, osd.1)
+pgs:     129 active+clean
+client:   605 KiB/s wr, 0 op/s rd, 5 op/s wr
+nvme-replicated   1  128  150 GiB   48.30k  441 GiB  32.48    305 GiB
+```
+
+25% of 305 GiB is 76 GiB, so the 32Gi benchmark PVC passes the plan's gate. The harness's own gate agreed
+(headroom 304.97 GiB, "PVC 32Gi is within 25%"). Dry run, then three runs, each by the operator:
+
+```bash
+KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 \
+BENCH_LAYOUT_NOTE='shared-bulk BENCH_ALLOW_SMALL=1 rep=<n>/3 stage=baseline' \
+  ./tests/storage-benchmark/run.sh --backend ceph-nvme-block
+```
+
+**The freeze started with run 1, at 2026-11-05T12:28:44Z**: no in-cluster builds, no MachineConfig reroll, no
+logging removal, no power-tuning change until the Tentacle stage is done.
+
+| workload | run 1 (12:28Z) | run 2 (12:57Z) | run 3 (13:17Z) | mean |
+|---|---|---|---|---|
+| `seq-read-1m` | 406.1 MiB/s, p99 49.0 ms | 393.6, p99 50.1 | 400.9, p99 48.5 | 400.2 MiB/s |
+| `seq-write-1m` | 65.8 MiB/s, p99 248.5 ms | 68.0, p99 244.3 | 54.2, p99 337.6 | 62.7 MiB/s |
+| `rand-read-4k` | 15,478 iops, p99 6.26 ms | 16,380, p99 5.67 | 17,820, p99 4.69 | 16,559 iops |
+| `rand-write-4k` | 2,395 iops, p99 31.1 ms | 1,987, p99 48.0 | 2,457, p99 28.7 | 2,280 iops |
+
+All on node4, exit 0, 12 rows in `data/storage-benchmark-results.tsv`; the summary and notes are in
+`data/storage-throughput.md`. Two things the output says that are not problems:
+
+- **"fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)"** on both read workloads (run 1: 2877 Mb/s on the switch
+  against fio's ~3327 for `seq-read-1m`). The harness was written for NFS, where every byte crosses the switch. On
+  RBD the client node's own OSD serves the objects whose primary it holds, and those reads stay inside node4.
+  O_DIRECT and a 24G file above the OSD cache rule out a cache.
+- **`BLUESTORE_SLOW_OP_ALERT` went from 2 OSDs to 3** between run 1 and run 2 (run 2's gate). Same known-benign
+  latch (one op over 5 s in 24 h); which OSD joined and when is read with the next `ceph-reads.sh`. Run 1's
+  sequential writes (p99 248 ms) are a plausible trigger.
+- Headroom fell from 304.9 to 280.2 GiB between runs: the retained 24G file, as expected.
+
+The numbers are record-only (operator: "just to see how it changed"). The 24 h OSD-latency window
+(`ceph-latency.sh --end <stage 1 start> --window 24h --label baseline`) is read when stage 1 starts. The Stage M
+procedure is now written into `tests/rook-ceph-upgrade/README.md`, which until today said "(empty)".
