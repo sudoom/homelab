@@ -92,6 +92,14 @@ rook-ceph-cluster:
     # degraded PGs would take data offline.
     upgradeOSDRequiresHealthyPGs: true
 
+    # CSI CephX keys stay aes: AES256K needs kernel 7.0+, and the nodes run
+    # 6.12. Rook v1.20.9's chart default is aes too; pinned so a later chart
+    # default cannot change it. Rook v1.19.5's CRD has no keyType field.
+    security:
+      cephx:
+        csi:
+          keyType: aes
+
     cephConfig:
       global:
         # All four keys are required for our setup. Anything Ceph 19.x
