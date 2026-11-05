@@ -426,7 +426,10 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   profiles are unchanged from 5.3 to 5.4. The 12-task plan was approved 2026-11-02 and is running: both builds and the catalog image
   passed on 2026-11-03, and the eviction check on 5.3. The cluster runs the 5.4 test build from `okd-test-descheduler`
   since 2026-11-04 11:59Z: the eviction check passed on 5.4 and `ClusterNotUpgradeable` cleared. The 24 h soak passed
-  2026-11-05; next are the draft PRs (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
+  2026-11-05. Draft pipeline PRs filed 2026-11-05:
+  [#49](https://github.com/okd-project/okd-operator-pipeline/pull/49) (`release-4.22`) and
+  [#50](https://github.com/okd-project/okd-operator-pipeline/pull/50) (`main`); catalog-index PRs follow their merge and
+  CI (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
   February 2025 one, with five of our packages at ancient versions and no descheduler or NMState, and quay has no
   `catalog-index:5.0`, so no 5.0 entry reaches anyone until okderators rebuilds and publishes it. That affects every
   operator here, OADP 1.6 included. Raised upstream 2026-11-02:

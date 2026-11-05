@@ -990,3 +990,20 @@ done
 namespaces only) never cut the platform Prometheus off, so the descheduler dashboard has had data for the whole day.
 The soak stayed clear of the Monday-evening operand roll (around 21:00Z; it ran Wednesday to Thursday). Next: the draft pipeline
 PRs.
+
+## 2026-11-05 — Task 10: pipeline PRs filed (draft)
+
+- [okd-operator-pipeline#49](https://github.com/okd-project/okd-operator-pipeline/pull/49) `[kube-descheduler] Update to 5.4 (release-4.22)`,
+  `release-4.22` <- `sudoom:descheduler-5.4-4.22` (`5b6ca6b`, 2 commits, 3 files: both gitlinks and
+  `kube-descheduler-deploy.yaml`, which now triggers on `release-4.22` and passes `catalog_branch: release-4.22`). Carries
+  the argument: nothing was ever built from this branch, the 4.22 cap that sets `Upgradeable=False`, the build, the live
+  upgrade, the eviction check and the soak, and the `replaces` + `skipRange` the catalog entry will need.
+- [okd-operator-pipeline#50](https://github.com/okd-project/okd-operator-pipeline/pull/50) `[kube-descheduler] Update to 5.4`,
+  `main` <- `sudoom:descheduler-5.4` (`2b7c850`, 1 commit, both gitlinks to the `release-5.0` heads). Short: the build, a
+  link to #49, that the 2026-09-23 `main` failure was the catalog-PR job's `Checkout catalog index`, and that catalog
+  `release-5.0` has no descheduler and no `catalog-index:5.0` image (okderators-catalog-index #62).
+
+Both branches sat on the current upstream heads when filed (`release-4.22` `8ab81e0`, `main` `2598107`). The operator
+approved the titles and bodies before filing ("yes, file both"). Both stay draft; marking them ready is the operator's
+call. The catalog-index PRs (`release-4.22` with `replaces` and `skipRange`, `release-5.0` as a new package) follow
+their merge and upstream CI.
