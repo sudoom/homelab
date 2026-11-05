@@ -411,7 +411,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   `tests/rook-ceph-upgrade/` (runbook stages B, 1-4 written and reviewed); the stage-1 patches are prepared and
   reviewed outside git until their window. Why: v1.19.5 supports Kube 1.30-1.35 (v1.21.1: 1.32-1.37), and Ceph
   Squid reached its target EOL on 2026-10-31. The one-off OADP backup of the app PVCs and zot to garage was taken and
-  restore-checked on 2026-11-04 (Backup `pre-rook-upgrade`, kept to 2026-12-04); the fio baseline was taken 2026-11-05 (3 runs, freeze since 12:28:44Z) and the OSD-latency window is read at stage 1's start,
+  restore-checked on 2026-11-04 (Backup `pre-rook-upgrade`, kept to 2026-12-04). The fio baseline was
+  taken 2026-11-05 (3 runs; freeze since 12:28:44Z); the OSD-latency window is read at stage 1's start, and both are
   repeated after every stage. Windows start about 2026-11-06 (the descheduler soak passed 2026-11-05), under a
   freeze on builds, MachineConfig rerolls, the logging removal and power tuning. The June v1.20.0 CSI break was the
   v1.20 CSI move to the `ceph-csi-drivers` chart meeting stale charts: the old ServiceAccounts were pruned while the

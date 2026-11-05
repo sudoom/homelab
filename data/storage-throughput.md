@@ -163,11 +163,12 @@ A series of its own: compare these rows only with later `ceph-nvme-block` rows c
 
 - **Writes vary most between runs** (seq-write 54.2-68.0 MiB/s, rand-write p99 28.7-48.0 ms), which is why each
   point is three runs. `BLUESTORE_SLOW_OP_ALERT` went from 2 OSDs to 3 between run 1 and run 2.
-- **The wire check undercounts reads on RBD.** Run 1's switch counter read 2877 Mb/s against fio's ~3327 for
-  `seq-read-1m`: the reads the client's own OSD (node4) serves never cross the switch. Not a cache effect (O_DIRECT,
-  24G above the OSD cache).
-- **Sequential writes are ~6x slower than reads**, with p99 near 250 ms: each 1 MiB write is replicated to three
-  consumer NVMe drives without power-loss protection. Recorded, not judged: the series exists to see how the
+- **The harness's wire check does not fit RBD.** Wire against fio, reads: seq-read 2877/3327 (86%), 2800/3224 (87%), 2085/3284 (63%); rand-read 408.8/495 (83%), 510.7/524 (97%, not flagged), 455.4/570 (80%); one write cell was
+  flagged too (run 2 `seq-write-1m`, 94%). Likely cause: the client node's own OSD serves the objects whose primary
+  it holds, which never cross the switch (about a third would predict ~67%); the 63-97% spread is not explained.
+  Not a cache effect (O_DIRECT, 24G above the OSD cache).
+- **Sequential writes are ~6x slower than reads**, with p99 near 250 ms: likely because each 1 MiB write is replicated to
+  three consumer NVMe drives without power-loss protection (PM9A1, `blog/blog-rook-ceph-draft.md` hardware table). Recorded, not judged: the series exists to see how the
   upgrade moves these numbers.
 
 ### TrueNAS SMB (Time Machine) — the 1G frontnet is the constraint here

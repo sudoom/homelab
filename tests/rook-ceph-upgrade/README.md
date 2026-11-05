@@ -190,16 +190,21 @@ KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 \
 BENCH_LAYOUT_NOTE='shared-bulk BENCH_ALLOW_SMALL=1 rep=<n>/3 stage=<label>' \
   ./tests/storage-benchmark/run.sh --backend ceph-nvme-block [--dry-run]
 
-# OPERATOR: after rep 3
-KUBECONFIG=~/.kube/config ./tests/storage-benchmark/run.sh --backend ceph-nvme-block --clean
+# OPERATOR: after rep 3. run.sh runs its gates before --clean, so it needs the same size settings, and --clean only
+# empties the PVC; deleting the PVC removes the RBD image (deferred delete via the trash purge schedule).
+KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 ./tests/storage-benchmark/run.sh --backend ceph-nvme-block --clean
+oc -n default delete pvc storage-bench-ceph-nvme-block
 
-# OPERATOR: the 24 h latency window, read at the start of the NEXT stage (Task 9 Step 1 for the baseline)
+# OPERATOR: the 24 h latency window, read at the start of the NEXT stage (Task 9 Step 1 for the baseline).
+# It ends at that start, so it covers the fio runs only if the stage starts within 24 h of them; either way it is
+# the quiet day before the stage, which is what the series compares.
 bash tests/rook-ceph-upgrade/metrics/ceph-latency.sh --end <next stage start, UTC> --window 24h --label <label>
 ```
 
-- The read rows print `fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)`. On RBD that is expected, not a cache: the
-  client node's own OSD serves the objects whose primary it holds, and those reads never reach the switch. The flag
-  was written for the NFS backends, where every byte crosses the wire.
+- Most read rows (and sometimes a write row) print `fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)`. The check was
+  written for the NFS backends, where every byte crosses the switch once; on RBD the client node's own OSD likely
+  serves part of the reads and writes fan out to replicas, so wire and fio differ by design (baseline: 63-97% on
+  reads). Record the flag, do not act on it. O_DIRECT and the 24G file rule out a cache.
 - Rows land in `data/storage-benchmark-results.tsv` (written by the run); the controller adds the summary to
   `data/storage-throughput.md` and the blog. Record-only: no pass/fail on the numbers.
 

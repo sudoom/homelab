@@ -3165,14 +3165,23 @@ logging removal, no power-tuning change until the Tentacle stage is done.
 All on node4, exit 0, 12 rows in `data/storage-benchmark-results.tsv`; the summary and notes are in
 `data/storage-throughput.md`. Three things the output shows that are not problems:
 
-- **"fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)"** on both read workloads (run 1: 2877 Mb/s on the switch
-  against fio's ~3327 for `seq-read-1m`). The harness was written for NFS, where every byte crosses the switch. On
-  RBD the client node's own OSD serves the objects whose primary it holds, and those reads stay inside node4.
-  O_DIRECT and a 24G file above the OSD cache rule out a cache.
+- **"fio CLAIMS MORE THAN CROSSED THE WIRE (cache?)"** on 5 of the 6 read cells and one write cell (run 2
+  `seq-write-1m`, 526.4 against ~557 Mb/s). Wire against fio, reads: seq-read 2877/3327 (86%), 2800/3224 (87%), 2085/3284 (63%); rand-read 408.8/495 (83%), 510.7/524 (97%, not flagged), 455.4/570 (80%). The harness was written
+  for NFS, where every byte crosses the switch once. RBD does not: the client node's own OSD likely serves the
+  objects whose primary it holds (about a third, which would predict ~67%), and writes fan out to replicas. The
+  spread (63-97%) is not explained, and the counter is a peak over the fio window that may include other traffic,
+  so for this backend the flag is not a meaningful check. A cache is ruled out: O_DIRECT, and a 24G file above the
+  OSD cache.
 - **`BLUESTORE_SLOW_OP_ALERT` went from 2 OSDs to 3** between run 1 and run 2 (run 2's gate). Same known-benign
-  latch (one op over 5 s in 24 h); which OSD joined and when is read with the next `ceph-reads.sh`. Run 1's
-  sequential writes (p99 248 ms) are a plausible trigger.
+  latch (a single op over 5 s latches it for 24 h, rook-ceph skill); which OSD joined and when is read with the next
+  `ceph-reads.sh`. Unverified guess: run 1's sequential writes (p99 248 ms).
 - Headroom fell from 304.9 to 280.2 GiB between runs: the retained 24G file, as expected.
+
+Cleanup: `run.sh --clean` runs the harness gates first, so without `BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1` it died
+at the PVC-size gate (default 64G > 32Gi), and it only empties the PVC; the PVC itself needs
+`oc -n default delete pvc storage-bench-ceph-nvme-block` (runbook corrected). Also found:
+`default/storage-bench-nfs-csi` (nfs-csi, 600Gi, created 2026-09-05), left from the NFS campaign; flagged to the
+operator, not touched.
 
 The numbers are record-only (operator: "just to see how it changed"). The 24 h OSD-latency window
 (`ceph-latency.sh --end <stage 1 start> --window 24h --label baseline`) is read when stage 1 starts. The Stage M
