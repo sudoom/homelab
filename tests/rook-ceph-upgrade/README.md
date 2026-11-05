@@ -267,6 +267,27 @@ KUBECONFIG=~/.kube/config-readonly oc get pods -A -l cnpg.io/cluster -o custom-c
 Run the smoke sequence (above) once and the Events command below; keep both outputs as the baseline.
 (c1a should roll no daemon; if any mon, mgr or OSD pod restarts after it, stop and report before c2.)
 
+One exception, seen on 2026-11-05: c1a rolled all three mons and both mgrs, and the only template change was the
+`cephx-key-identifier` annotation. Its value is the keyring Secret's `resourceVersion`. Etcd encryption (`aescbc`)
+rotates its key every Monday around 20:56Z and rewrites every Secret, keyrings included, without changing their
+content. Rook does not react to that rewrite; the next full CephCluster reconcile (any CephCluster spec change)
+copies the new values into the mon and mgr templates and rolls them once. Before stopping, diff the old and new
+ReplicaSet templates; if `cephx-key-identifier` is the only difference and its new value equals the Secret's
+`resourceVersion`, the roll is this and the stage can continue:
+
+```bash
+# CONTROLLER (readonly): identifier on each Deployment vs the keyring Secret's resourceVersion (metadata only)
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get deploy -l 'app in (rook-ceph-mon,rook-ceph-mgr)' \
+  -o jsonpath='{range .items[*]}{.metadata.name} {.spec.template.metadata.annotations.cephx-key-identifier}{"\n"}{end}'
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get secrets -o json \
+  | jq -r '.items[] | select(.metadata.name|test("mons-keyring|mgr-.-keyring")) | "\(.metadata.name) \(.metadata.resourceVersion)"'
+KUBECONFIG=~/.kube/config-readonly oc -n openshift-config-managed get secrets -o json \
+  | jq -r '.items[] | select(.metadata.name|test("^encryption-key-openshift-kube-apiserver")) | "\(.metadata.name) \(.metadata.annotations["encryption.apiserver.operator.openshift.io/migrated-timestamp"])"' | tail -2
+```
+
+On Rook v1.19.5 the same reconcile also flips the RBD ctrlplugin's `hostNetwork` off and back on: Rook rewrites the
+Driver without it and `csi-driver-config` puts it back about ten seconds later. Known, and gone after c2.
+
 The v1.20.9 chart sets `ROOK_DELETE_UNUSED_CRUSH_RULES=true` in `rook-ceph-operator-config`, so the new operator deletes
 CRUSH rules no pool uses once its mgr is up. The operator records the rules and each pool's rule before c2:
 
@@ -280,6 +301,14 @@ oc -n rook-ceph exec deploy/rook-ceph-tools -- ceph osd pool ls detail | grep -o
 
 1. `KUBECONFIG=~/.kube/config-readonly bash tests/rook-ceph-upgrade/verify/csi-state.sh --expect stage1` -> every
    line `CHECK PASS`, last line `RESULT PASS stage1`, exit 0. Note `driver-generation` on the `INFO` line.
+   If only `cephcsi-tag-ctrl` and `cephcsi-tag-node` fail with `observed='v3.16.2'` (2026-11-05): the outgoing
+   v1.19.5 operator rewrote `rook-csi-operator-image-set-configmap` with its own defaults one second after ArgoCD
+   applied v3.17.1, and ceph-csi-operator built the plugins from that. ArgoCD self-heal restores the ConfigMap, but
+   ceph-csi-operator does not reconcile the Driver when the ConfigMap changes. Confirm the ConfigMap reads v3.17.1
+   (`oc -n rook-ceph get cm rook-csi-operator-image-set-configmap -o jsonpath='{.data.plugin}'`), then restart
+   ceph-csi-operator (prompted, the operator approves):
+   `oc -n rook-ceph delete pod -l control-plane=ceph-csi-op-controller-manager` (label read 2026-11-05). On start it reconciles the Driver from the current image set; the plugins roll once (under a
+   minute), then rerun this item.
 2. The same command ten minutes later: `RESULT PASS stage1` again and `driver-generation` unchanged (a moving
    generation means something keeps rewriting the Driver spec).
 3. Smoke sequence PASS (writer, reader recomputed and reader stored sums equal), then delete the namespace and
