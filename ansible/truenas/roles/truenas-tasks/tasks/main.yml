@@ -273,7 +273,7 @@
         month: "{{ _f[3] }}"
         dow: "{{ _f[4] }}"
       enabled: true
-      stdout: "{{ truenas_paperless_export.hide_stdout }}"
+      stdout: "{{ truenas_paperless_export.hide_stdout | bool }}"
       stderr: false
   when: truenas_paperless_export.description not in truenas_cron_descs
 

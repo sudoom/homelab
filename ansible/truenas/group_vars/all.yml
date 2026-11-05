@@ -799,7 +799,7 @@ truenas_textfile_collector:
 # paperless-export.py runs document_exporter in the paperless container (into
 # tank/paperless/export, which both Cloud Sync legs copy) and publishes
 # truenas_paperless_export_* through the textfile collector. 04:15 Europe/Warsaw:
-# after the 02:00 snapshots, before the 04:45 Synology leg. Runs as root (docker
+# between the paperless snapshots (every 6 h from 00:00) and the 04:45 Synology leg. Runs as root (docker
 # socket). stdout is hidden because the script is silent on success; stderr is
 # not, so a failing export is mailed. All arguments are passed explicitly. The
 # command contains no single quotes (it is JSON-encoded into a midclt argv).
