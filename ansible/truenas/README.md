@@ -79,6 +79,7 @@ check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
 | garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
 | node_exporter custom app | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
 | Syncthing catalog app (Mac ↔ Mac sync of the projects tree, plus the mini's `~/Documents` mirror) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
+| paperless-ngx catalog app (freelance paperwork archive) and its `paperless/*` datasets | `truenas-apps`, `truenas-storage` | app name; declared values reconciled against `app.config` (generated secrets and the first-install admin fields never re-sent); skipped, loudly, while the vault lacks the admin password |
 
 ## What it deliberately does NOT manage
 
@@ -466,6 +467,35 @@ button, not by hand.
 - **No offsite.** Tracked content is on GitHub; the untracked half lives on two
   Macs and this box, all one site.
 
+## Paperless
+
+paperless-ngx 3.4.2 as the community-train catalog app `paperless-ngx` (app `paperless`, catalog version `1.6.78`),
+declared in `truenas_paperless` (`group_vars/all.yml`) and deployed by `roles/truenas-apps`. Design record and
+chronology: `blog/blog-paperless-draft.md`.
+
+| What | Value |
+|---|---|
+| UI | `http://192.168.1.25:30070/` (plain HTTP; all interfaces, so also on the storage backnet, as garage and Syncthing) |
+| Database | the app's own Postgres 18 container, never SQLite; Valkey broker; Tika/Gotenberg off; in-app trash off |
+| Datasets | `tank/paperless` (parent) with `data`, `media`, `consume`, `postgres` (16K) and `export`; all `host_path`. `consume` exists only because the app requires it: documents go in through the UI |
+| Ownership | the role chowns `data`, `media`, `consume`, `export` to 568:568; `postgres` is fixed by the catalog's `auto_permissions` |
+| Export mount | `paperless/export` at `/paperless/export` in the container (`additional_storage`) |
+| OCR / dates | `PAPERLESS_OCR_LANGUAGES=pol`, `PAPERLESS_OCR_LANGUAGE=pol+eng`, `PAPERLESS_DATE_PARSER_LANGUAGES=pl+en`; `PAPERLESS_SEARCH_LANGUAGE` stays unset (no Polish stemmer; a bad value fails startup) |
+| File layout | `PAPERLESS_FILENAME_FORMAT` is `!unsafe` so Ansible does not render paperless's own `{{ ... }}` placeholders |
+
+- **Secrets.** `db_password`, `redis_password` and `secret_key` are generated on the box at create time (garage
+  pattern) and never stored. The admin password is the vault variable `truenas_paperless_admin_password`
+  (`vars/vault.yml.example`). **It is first-install only**: `admin_user`, `admin_mail` and `admin_password` are
+  immutable in the catalog schema, the update path never sends them, and a later password change happens in paperless.
+  If the vault lacks the variable and the app is absent, the role skips the create and says so on every run.
+- **Reconcile.** The role compares run_as, port, every storage path, the environment and the trash/Tika/Postgres
+  values against `app.config`; on drift it sends `app.update` with the live `paperless` dict merged with the declared
+  one minus the six keys above, so the generated secrets survive. A failure shows its reason through `core.get_jobs`.
+- **AI is environment-only.** `truenas_paperless_ai_enabled` (default `false`) adds the eight `PAPERLESS_AI_*`
+  settings (Ollama on `192.168.1.3`). Never set them in the paperless admin UI: a UI value silently overrides the
+  environment. The render test is `ansible-playbook -i localhost, -c local tests/paperless-render.yml` (once more
+  with `-e truenas_paperless_ai_enabled=true`).
+
 ## Backup tasks (Cloud Sync)
 
 `truenas_cloudsync_credentials` and `truenas_cloudsync_tasks` in `group_vars/all.yml` declare
@@ -563,7 +593,7 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `roles/truenas-shares/` | NFS exports + service enablement |
 | `roles/truenas-smb/` | SMB Time Machine targets: `aapl_extensions`, per-Mac users/groups, dataset ACLs, shares, service |
 | `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots, Cloud Sync backup tasks |
-| `roles/truenas-apps/` | garage (Velero BSL) and Syncthing as catalog apps, node_exporter as a custom app: deploy/update, and garage's layout/key/bucket bootstrap |
+| `roles/truenas-apps/` | garage (Velero BSL), Syncthing and paperless-ngx as catalog apps, node_exporter as a custom app: deploy/update, and garage's layout/key/bucket bootstrap |
 | `files/sync-stignore-shared` | Syncthing ignore list for both folders (`projects`, `documents`). Copied to `<folder root>/.stignore-shared` on every member; not applied by Ansible |
 | `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
 | `destroy-empty-dataset.sh` | One-shot gated destroy of an **empty** dataset — the only remedy for create-time-only property drift (deliberately NOT in the playbook) |

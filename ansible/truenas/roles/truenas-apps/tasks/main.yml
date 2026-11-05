@@ -678,3 +678,230 @@
       password at first login). Pairing is one-time and by hand; see the README.
       The NAS folder must be RECEIVE-ONLY, and each Mac adds this node by
       address, tcp://192.168.1.25:{{ truenas_syncthing.ports.sync }}.
+
+# ---------------------------------------------------------------------------
+# paperless-ngx — catalog app (community train), deployed the way garage and
+# Syncthing are. Why a catalog app, the bind address, the first-install-only
+# admin credentials and the AI-in-environment-only rule sit above
+# `truenas_paperless` in group_vars. Datasets come from truenas-storage.
+# ---------------------------------------------------------------------------
+
+# The container runs as run_as (568) and a fresh dataset is root:root. Ownership
+# is checked per path and fixed only when wrong. Not `postgres`: the catalog's
+# auto_permissions (set below) gives it to Postgres's own uid at start.
+- name: Stat the paperless storage paths
+  ansible.builtin.command:
+    argv: [midclt, call, filesystem.stat, "{{ item }}"]
+  register: truenas_pl_stat
+  changed_when: false
+  check_mode: false
+  loop:
+    - "{{ truenas_paperless.paths.data }}"
+    - "{{ truenas_paperless.paths.media }}"
+    - "{{ truenas_paperless.paths.consume }}"
+    - "{{ truenas_paperless.paths.export }}"
+
+- name: Chown the paperless storage paths to the apps account
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - filesystem.chown
+      - "{{ {'path': item.item, 'uid': truenas_paperless.run_as_uid, 'gid': truenas_paperless.run_as_gid, 'options': {'recursive': true, 'traverse': false}} | to_json }}"
+  loop: "{{ truenas_pl_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: (item.stdout | from_json).uid != truenas_paperless.run_as_uid
+
+- name: Decide whether the paperless catalog app already exists
+  ansible.builtin.set_fact:
+    _pl_exists: "{{ truenas_paperless.app_name in truenas_app_names }}"
+
+# Defined ONCE and used by the create and the reconcile. The three generated
+# secrets are NOT in here: they are added at create time only. admin_* are
+# first-install only (immutable in the schema) and the update path drops them.
+- name: Build the paperless app values
+  ansible.builtin.set_fact:
+    _pl_values:
+      TZ: "{{ truenas_timezone }}"
+      paperless:
+        postgres_image_selector: postgres_18_image
+        admin_user: "{{ truenas_paperless.admin_user }}"
+        admin_mail: "{{ truenas_paperless.admin_mail }}"
+        admin_password: "{{ truenas_paperless_admin_password | default('') }}"
+        enable_trash: false
+        enable_tika_gotenberg: false
+        additional_envs: "{{ truenas_paperless_additional_envs }}"
+      run_as:
+        user: "{{ truenas_paperless.run_as_uid | int }}"
+        group: "{{ truenas_paperless.run_as_gid | int }}"
+      network:
+        web_port: { bind_mode: published, port_number: "{{ truenas_paperless.port | int }}", host_ips: "{{ _ips }}" }
+      storage:
+        data: { type: host_path, host_path_config: { path: "{{ truenas_paperless.paths.data }}" } }
+        media: { type: host_path, host_path_config: { path: "{{ truenas_paperless.paths.media }}" } }
+        consume: { type: host_path, host_path_config: { path: "{{ truenas_paperless.paths.consume }}" } }
+        postgres_data: { type: host_path, host_path_config: { path: "{{ truenas_paperless.paths.postgres }}", auto_permissions: true } }
+        additional_storage:
+          - { type: host_path, mount_path: "{{ truenas_paperless.container_paths.export }}", host_path_config: { path: "{{ truenas_paperless.paths.export }}" } }
+      resources:
+        limits:
+          cpus: "{{ truenas_paperless.cpus | int }}"
+          memory: "{{ truenas_paperless.memory_mb | int }}"
+  vars:
+    _ips: "{{ [] if truenas_paperless.bind_ip == '0.0.0.0' else [truenas_paperless.bind_ip] }}"
+
+# Without the vault password nobody could log in to a fresh app, so skip the
+# create and say so on every run (the Cloud Sync pattern) instead.
+- name: Warn that paperless is not created without the admin password
+  ansible.builtin.debug:
+    msg: >-
+      paperless NOT CREATED: truenas_paperless_admin_password is not set in
+      vars/vault.yml. The app is skipped rather than created with an admin
+      password nobody knows. Add it (ansible-vault edit) and re-run.
+  when:
+    - not (_pl_exists | bool)
+    - truenas_paperless_admin_password is not defined
+
+- name: Generate paperless secrets (only when the app is absent)
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, "32"]
+  register: truenas_pl_secrets
+  changed_when: false
+  loop: [db_password, redis_password, secret_key]
+  loop_control:
+    label: "{{ item }}"
+  when:
+    - not (_pl_exists | bool)
+    - truenas_paperless_admin_password is defined
+  no_log: true
+
+- name: Deploy the paperless catalog app
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.create
+      - "{{ _app | to_json }}"
+  vars:
+    _sec: "{{ truenas_pl_secrets.results | default([]) | map(attribute='stdout') | list }}"
+    _app:
+      app_name: "{{ truenas_paperless.app_name }}"
+      catalog_app: "{{ truenas_paperless.catalog_app }}"
+      train: "{{ truenas_paperless.train }}"
+      version: "{{ truenas_paperless.version }}"
+      values: "{{ _pl_values | combine({'paperless': _pl_values.paperless | combine({'db_password': _sec[0], 'redis_password': _sec[1], 'secret_key': _sec[2]})}) }}"
+  when:
+    - not (_pl_exists | bool)
+    - truenas_paperless_admin_password is defined
+  no_log: true       # the payload carries the generated secrets and the admin password
+  register: truenas_pl_deploy
+  failed_when: false
+
+# no_log hides the failure as well as the payload; the job record has the real
+# error without the arguments (same as garage and Syncthing).
+- name: Read the app.create job record if the paperless deploy failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.create"]]']
+  register: truenas_pl_job
+  changed_when: false
+  when: (truenas_pl_deploy.rc | default(0)) != 0
+
+- name: Fail with the real paperless reason (payload stays hidden)
+  ansible.builtin.fail:
+    msg: "paperless app.create failed: {{ (truenas_pl_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_pl_deploy.rc | default(0)) != 0
+
+- name: Read the live paperless app values
+  ansible.builtin.command:
+    argv: [midclt, call, app.config, "{{ truenas_paperless.app_name }}"]
+  register: truenas_pl_live
+  changed_when: false
+  check_mode: false
+  no_log: true       # carries db_password, redis_password, secret_key, admin_password
+  when: _pl_exists | bool
+
+# Signatures over what this role declares, projected the same way on both sides
+# (app.config merges schema defaults and ix_* keys in, so a whole-dict compare
+# would drift every run). admin_* are not part of it: first-install only.
+#
+# The update sends TZ, run_as, network, storage, resources and `paperless` =
+# the LIVE paperless dict combined with the declared one minus the six keys
+# that must not be sent: db_password, redis_password, secret_key (generated;
+# the live dict carries them through, since app.update merges top-level keys)
+# and admin_user, admin_mail, admin_password (immutable). The whole live config
+# is never echoed.
+- name: Reconcile the paperless app values
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.update
+      - "{{ truenas_paperless.app_name }}"
+      - "{{ {'values': _upd} | to_json }}"
+  vars:
+    _l: "{{ truenas_pl_live.stdout | from_json }}"
+    _v: "{{ _pl_values }}"
+    _skip: [db_password, redis_password, secret_key, admin_user, admin_mail, admin_password]
+    _decl: "{{ _v.paperless | dict2items | rejectattr('key', 'in', _skip) | items2dict }}"
+    _upd:
+      TZ: "{{ _v.TZ }}"
+      run_as: "{{ _v.run_as }}"
+      network: "{{ _v.network }}"
+      storage: "{{ _v.storage }}"
+      resources: "{{ _v.resources }}"
+      paperless: "{{ _l.paperless | default({}, true) | combine(_decl) }}"
+    _lp: "{{ _l.paperless | default({}, true) }}"
+    _le: "{{ _lp.additional_envs | default([], true) }}"
+    _ve: "{{ _v.paperless.additional_envs }}"
+    _want_sig:
+      - "{{ _v.run_as.user | string }}:{{ _v.run_as.group | string }}"
+      - "{{ _v.network.web_port.port_number | string }}={{ _v.network.web_port.host_ips | sort | join(',') }}"
+      - "{{ _v.storage.data.host_path_config.path }}"
+      - "{{ _v.storage.media.host_path_config.path }}"
+      - "{{ _v.storage.consume.host_path_config.path }}"
+      - "{{ _v.storage.postgres_data.host_path_config.path }}"
+      - "{{ _v.storage.additional_storage | map(attribute='mount_path') | join(',') }}>{{ _v.storage.additional_storage | map(attribute='host_path_config.path') | join(',') }}"
+      - "{{ _ve | map(attribute='name') | join(',') }}={{ _ve | map(attribute='value') | join(',') }}"
+      - "{{ _v.paperless.enable_trash | string }}:{{ _v.paperless.enable_tika_gotenberg | string }}"
+      - "{{ _v.paperless.postgres_image_selector }}"
+    _live_sig:
+      - "{{ _l.run_as.user | default('') | string }}:{{ _l.run_as.group | default('') | string }}"
+      - "{{ _l.network.web_port.port_number | default('') | string }}={{ _l.network.web_port.host_ips | default([], true) | sort | join(',') }}"
+      - "{{ _l.storage.data.host_path_config.path | default('') }}"
+      - "{{ _l.storage.media.host_path_config.path | default('') }}"
+      - "{{ _l.storage.consume.host_path_config.path | default('') }}"
+      - "{{ _l.storage.postgres_data.host_path_config.path | default('') }}"
+      - "{{ _l.storage.additional_storage | default([], true) | map(attribute='mount_path') | join(',') }}>{{ _l.storage.additional_storage | default([], true) | map(attribute='host_path_config.path') | join(',') }}"
+      - "{{ _le | map(attribute='name') | join(',') }}={{ _le | map(attribute='value') | join(',') }}"
+      - "{{ _lp.enable_trash | default(false, true) | string }}:{{ _lp.enable_tika_gotenberg | default(false, true) | string }}"
+      - "{{ _lp.postgres_image_selector | default('') }}"
+  when:
+    - _pl_exists | bool
+    - _live_sig != _want_sig
+  no_log: true       # the payload carries the live secrets
+  register: truenas_pl_update
+  failed_when: false
+
+- name: Read the app.update job record if the paperless update failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.update"]]']
+  register: truenas_pl_upd_job
+  changed_when: false
+  when: (truenas_pl_update.rc | default(0)) != 0
+
+- name: Fail with the real paperless update reason (payload stays hidden)
+  ansible.builtin.fail:
+    msg: "paperless app.update failed: {{ (truenas_pl_upd_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_pl_update.rc | default(0)) != 0
+
+- name: Report paperless state
+  ansible.builtin.debug:
+    msg: >-
+      paperless {{ 'catalog app present' if _pl_exists | bool else ('DEPLOYED' if truenas_paperless_admin_password is defined else 'NOT CREATED (no admin password in the vault)') }}
+      -- UI at http://192.168.1.25:{{ truenas_paperless.port }}/ . The admin
+      password is set ONCE, at the first install; change it in paperless, not
+      in the vault.

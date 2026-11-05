@@ -118,6 +118,36 @@ truenas_datasets:
     comments: "garage object blocks. garage's default block size is 1 MiB, so 1M matches."
     quota: 0
 
+  # ---- paperless-ngx (catalog app, host_path everywhere) ---------------
+  # Same rules as the s3 tree: parent before children, one dataset per
+  # mount so the snapshot and Cloud Sync tasks can name them, no owner_uid
+  # (truenas-apps chowns data/media/consume/export to 568; the catalog's
+  # auto_permissions fixes postgres to Postgres's own uid).
+  - name: paperless
+    recordsize: 128K
+    comments: "Parent for the paperless-ngx catalog app. Not exported over NFS or SMB. One recursive snapshot task covers all children."
+    quota: 0
+  - name: paperless/data
+    recordsize: 128K
+    comments: "paperless data dir: search index, classifier model, LLM index. Rebuildable, small."
+    quota: 0
+  - name: paperless/media
+    recordsize: 128K
+    comments: "paperless originals and archive PDFs. The documents themselves."
+    quota: 0
+  - name: paperless/consume
+    recordsize: 128K
+    comments: "paperless consume dir. Exists only because the app requires the path; nothing writes to it (uploads go through the UI)."
+    quota: 0
+  - name: paperless/postgres
+    recordsize: 16K
+    comments: "paperless Postgres data directory (postgres_18_image). 16K suits 8K pages. Chowned by the catalog's auto_permissions."
+    quota: 0
+  - name: paperless/export
+    recordsize: 128K
+    comments: "document_exporter target, refreshed nightly. The offsite Cloud Sync legs read this. Mounted at /paperless/export in the container."
+    quota: 0
+
   # Textfile-collector drop point for the node_exporter running on this box.
   # A DATASET, not a mkdir, for the same reason the s3 tree above is: the app's
   # host_path exists before the container starts, without anyone creating it
@@ -577,6 +607,75 @@ truenas_syncthing:
   paths:
     config: /mnt/tank/apps/syncthing
     data: /mnt/tank/sync
+
+# ---- paperless-ngx (freelance paperwork: bills, invoices, receipts, tax) ----
+# A CATALOG APP (community train), the same rule as garage and Syncthing: a
+# train ships it, so it is not hand-built. The app always runs its own Postgres
+# (never SQLite) and a Valkey broker; Tika and Gotenberg stay off (PDFs only).
+#
+# BIND ADDRESS: [] (all interfaces), because app.ip_choices offers only
+# 0.0.0.0, :: and 192.168.10.10 -- the frontnet address is not offered, the
+# same limit as garage and Syncthing. The UI therefore also answers on the
+# storage backnet. Accepted, as for those two. Plain HTTP on the LAN.
+#
+# ADMIN CREDENTIALS ARE FIRST-INSTALL ONLY (admin_user, admin_mail and
+# admin_password are `immutable: true` in the catalog schema). The role sends
+# them at create time and never on an update; the password lives in the vault
+# as truenas_paperless_admin_password and a later change is made in paperless.
+# db_password, redis_password and secret_key are generated on the box at create
+# time (garage pattern) and carried through updates by the live config.
+#
+# AI SETTINGS ARE SET HERE AND NEVER IN THE ADMIN UI: a value in paperless's
+# Application Configuration silently overrides the environment, and then git no
+# longer says what the app does. Local Ollama only; no hosted backend, ever.
+# truenas_paperless_ai_enabled is separate so the render test can override it
+# with -e and enabling AI is a one-line change.
+#
+# PAPERLESS_SEARCH_LANGUAGE is deliberately unset: Tantivy has no Polish
+# stemmer and an invalid value fails startup.
+truenas_paperless:
+  app_name: paperless
+  catalog_app: paperless-ngx
+  train: community
+  version: "1.6.78"          # paperless-ngx 3.4.2
+  admin_user: admin
+  admin_mail: paperless@homelab.sudops.pl   # required by the schema; no mail is sent
+  run_as_uid: 568
+  run_as_gid: 568
+  port: 30070
+  bind_ip: 0.0.0.0           # see BIND ADDRESS
+  cpus: 2
+  memory_mb: 4096
+  paths:
+    data: /mnt/tank/paperless/data
+    media: /mnt/tank/paperless/media
+    consume: /mnt/tank/paperless/consume
+    export: /mnt/tank/paperless/export
+    postgres: /mnt/tank/paperless/postgres
+  container_paths:
+    export: /paperless/export
+  envs:
+    - { name: PAPERLESS_URL, value: "http://192.168.1.25:30070", container: paperless }
+    - { name: PAPERLESS_OCR_LANGUAGES, value: "pol", container: paperless }
+    - { name: PAPERLESS_OCR_LANGUAGE, value: "pol+eng", container: paperless }
+    - { name: PAPERLESS_DATE_PARSER_LANGUAGES, value: "pl+en", container: paperless }
+    - { name: PAPERLESS_CONSUMER_DELETE_DUPLICATES, value: "true", container: paperless }
+    # !unsafe: Ansible must not render paperless's own Jinja placeholders.
+    - name: PAPERLESS_FILENAME_FORMAT
+      value: !unsafe "{{ created_year }}/{{ correspondent }}/{{ created }} {{ title }}"
+      container: paperless
+  ai_envs:
+    - { name: PAPERLESS_AI_ENABLED, value: "true", container: paperless }
+    - { name: PAPERLESS_AI_LLM_BACKEND, value: "ollama", container: paperless }
+    - { name: PAPERLESS_AI_LLM_ENDPOINT, value: "http://192.168.1.3:11434", container: paperless }
+    - { name: PAPERLESS_AI_LLM_MODEL, value: "gemma4:26b", container: paperless }
+    - { name: PAPERLESS_AI_LLM_EMBEDDING_BACKEND, value: "ollama", container: paperless }
+    - { name: PAPERLESS_AI_LLM_EMBEDDING_MODEL, value: "bge-m3", container: paperless }
+    - { name: PAPERLESS_AI_LLM_OUTPUT_LANGUAGE, value: "Polish", container: paperless }
+    - { name: PAPERLESS_AI_LLM_EXTRA_PARAMS, value: '{"think": false}', container: paperless }
+
+truenas_paperless_ai_enabled: false
+truenas_paperless_additional_envs: "{{ truenas_paperless.envs + (truenas_paperless.ai_envs if truenas_paperless_ai_enabled | bool else []) }}"
 
 # ---- Pool properties ------------------------------------------------------
 # Declared here because the box is code-only: a property set through the web UI

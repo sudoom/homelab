@@ -1,0 +1,51 @@
+---
+# Render test for the paperless catalog app's environment (no TrueNAS host).
+#   ansible-playbook -i localhost, -c local ansible/truenas/tests/paperless-render.yml
+#   ansible-playbook -i localhost, -c local ansible/truenas/tests/paperless-render.yml -e truenas_paperless_ai_enabled=true
+- name: Paperless additional_envs render
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+  vars:
+    _needle: !unsafe "{{ created_year }}"
+  tasks:
+    - name: Read the composed env list (the same variable the role sends)
+      ansible.builtin.set_fact:
+        _envs: "{{ truenas_paperless_additional_envs }}"
+        _names: "{{ truenas_paperless_additional_envs | map(attribute='name') | list }}"
+        _by_name: "{{ dict(truenas_paperless_additional_envs | map(attribute='name') | zip(truenas_paperless_additional_envs | map(attribute='value'))) }}"
+
+    - name: Every entry targets the paperless container
+      ansible.builtin.assert:
+        that: _envs | rejectattr('container', 'equalto', 'paperless') | list | length == 0
+        fail_msg: "an env entry lacks container: paperless"
+
+    - name: The filename format kept its braces
+      ansible.builtin.assert:
+        that: _needle in _by_name.PAPERLESS_FILENAME_FORMAT
+        fail_msg: "PAPERLESS_FILENAME_FORMAT lost its placeholders"
+
+    - name: No env value is empty
+      ansible.builtin.assert:
+        that: _envs | selectattr('value', 'equalto', '') | list | length == 0
+        fail_msg: "an env value is empty"
+
+    - name: Names are unique
+      ansible.builtin.assert:
+        that: _names | length == (_names | unique | length)
+        fail_msg: "duplicate env names"
+
+    - name: PAPERLESS_SEARCH_LANGUAGE stays unset
+      ansible.builtin.assert:
+        that: "'PAPERLESS_SEARCH_LANGUAGE' not in _names"
+
+    - name: AI envs follow the switch
+      ansible.builtin.assert:
+        that:
+          - (_names | select('match', '^PAPERLESS_AI_') | list | length) == (8 if (truenas_paperless_ai_enabled | bool) else 0)
+        fail_msg: "AI env count wrong for truenas_paperless_ai_enabled={{ truenas_paperless_ai_enabled }}"
+
+    - name: Show the render
+      ansible.builtin.debug:
+        msg: "{{ _by_name }}"
