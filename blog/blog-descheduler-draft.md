@@ -1003,7 +1003,8 @@ PRs.
   link to #49, that the 2026-09-23 `main` failure was the catalog-PR job's `Checkout catalog index`, and that catalog
   `release-5.0` has no descheduler and no `catalog-index:5.0` image (okderators-catalog-index #62).
 
-Both branches sat on the current upstream heads when filed (`release-4.22` `8ab81e0`, `main` `2598107`). The operator
+Both branches sat on the current upstream heads when filed (`release-4.22` `8ab81e0`, `main` `2598107`, re-fetched
+on 2026-11-05 just before filing; each upstream head is an ancestor of its fork branch). The operator
 approved the titles and bodies before filing ("yes, file both"). Both stay draft; marking them ready is the operator's
 call. The catalog-index PRs (`release-4.22` with `replaces` and `skipRange`, `release-5.0` as a new package) follow
 their merge and upstream CI.
