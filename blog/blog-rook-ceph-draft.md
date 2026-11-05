@@ -3194,3 +3194,149 @@ pvc-6dac6815-39ea-4412-8fdd-dd7adf503a29`. Readback: no `storage-bench` PVC or P
 The numbers are record-only (operator: "just to see how it changed"). The 24 h OSD-latency window
 (`ceph-latency.sh --end <stage 1 start> --window 24h --label baseline`) is read when stage 1 starts. The Stage M
 procedure is now written into `tests/rook-ceph-upgrade/README.md`, which until today said "(empty)".
+
+## 2026-11-05 (evening) — Stage 1: Rook v1.20.9 and the CSI cutover
+
+Operator go at ~16:25Z after the gates (patch chain c1a..c4 applies in order on master; nine images `IMAGE OK` through
+zot, 27 GiB free; MCPs idle; Thursday) and their reads: `ceph-reads.sh pre-s1` (0 reads failed; HEALTH_WARN
+`BLUESTORE_SLOW_OP_ALERT` on osd.0/1/2 only; 129 active+clean; quiet IO), the 24 h OSD-latency baseline ending
+16:21:24Z, and the two CRUSH reads (rules `replicated_rule`, `nvme-replicated`; both pools on `crush_rule 1`).
+
+Latency baseline (`ceph-latency.sh --end 2026-11-05T16:21:24Z --window 24h --label baseline`, window includes the
+Stage M fio runs; averages, osd.0 / osd.1 / osd.2):
+
+| metric | osd.0 | osd.1 | osd.2 |
+|---|---|---|---|
+| op_r_latency | 1.00 ms | 1.13 ms | 0.74 ms |
+| op_w_latency | 70.7 ms | 67.8 ms | 64.6 ms |
+| commit = apply latency | 16.3 ms | 22.0 ms | 14.5 ms |
+| kv_commit_lat | 4.35 ms | 4.78 ms | 4.19 ms |
+| slow_ops_max | 0 | 0 | 0 |
+
+Every commit followed the runbook loop: `git apply --check`, `git apply`, re-render with
+`--api-versions security.openshift.io/v1 --kube-version 1.35.5`, compare with the reviewed render, kubeconform,
+`oc diff -n rook-ceph` against live (operator kubeconfig: the readonly SA cannot do the server-side dry run), commit,
+push.
+
+| # | commit | pushed | live diff |
+|---|---|---|---|
+| c1a | 4e0c36b `rook-ceph-cluster: pin requireMsgr2 off and healthy-PG OSD upgrades` | 16:24:32Z | CephCluster `upgradeOSDRequiresHealthyPGs` false -> true (requireMsgr2 false already rendered) |
+| c1b | f080554 `csi-driver-config: never delete or prune the RBD Driver` | 16:36:17Z | the Driver annotation only |
+| c1c | a5b7ae9 `root-app: PruneLast on rook-ceph-operator, FailOnSharedResource on csi-driver-config` | 16:42:04Z | the two sync options |
+| c2 | a589c7c `rook-ceph: operator to v1.20.9 with the ceph-csi-drivers chart` | 17:05:52Z | 93 objects changed, 16 new, 42 unused legacy objects pruned last |
+| c3 | e1d1d24 `rook-ceph-cluster: chart to v1.20.9` | 17:39:39Z | CephCluster (+`cephx.csi.keyType: aes`, cmd-reporter resources), toolbox, Ceph alert rules, one SCC |
+| c4 | b545b68 `rook-ceph: drop the legacy CSI service accounts and csi-driver-config` | 17:56:51Z | ceph-csi-controller-manager env only; 10 legacy objects pruned |
+
+### c1a rolled the mons and mgrs: the weekly etcd-encryption rewrite
+
+c1a was supposed to roll nothing. Rook rolled mon-b, mon-c, mon-a (16:28:25-16:29:23Z) and mgr-a, mgr-b
+(16:30:31-16:30:58Z); the OSDs did not move. Stopped and found the cause before c1b. The old and new ReplicaSet
+templates differed in one annotation:
+
+```
+<       "cephx-key-identifier": "166929440"
+>       "cephx-key-identifier": "172354987"
+```
+
+The new value is exactly the keyring Secret's `resourceVersion` (mons-keyring 172354987, mgr-a 172354980, mgr-b
+172354983). A Job that completed at 2026-11-03 00:00:05Z carried RV 172441812 (~32k RVs/hour), which dates 172.35M
+to about 2026-11-02 21:15Z. The APIServer has `encryption: {type: aescbc}`, and its key rotates weekly:
+
+```
+encryption-key-openshift-kube-apiserver-23 created=2026-10-26T20:35:26Z migrated=2026-10-26T20:56:06Z
+encryption-key-openshift-kube-apiserver-24 created=2026-11-02T20:56:30Z migrated=2026-11-02T21:17:45Z
+```
+
+687 Secrets in 80 namespaces carry RVs in the 172.30-172.40M band: the migration rewrote every Secret. The keys did
+not change (`status.cephx` keyGeneration 1 everywhere, `keyRotation.enabled: false`). Rook does not watch its keyring
+Secrets, so nothing happened on Monday; the next full CephCluster reconcile, c1a's spec change, wrote the new RVs into
+the mon and mgr templates. The two previous mon-a revisions (11 on 10-16, 12 on 10-27) also differ from their
+predecessors only in `cephx-key-identifier` (141444058 -> 156647143 -> 166929440); dating those RVs to the 10-12 and
+10-26 rotations was not done. Consequence for later stages: any commit that reconciles the CephCluster after a Monday rotation rolls the
+mons and mgrs once. The Monday 19:00-23:00Z no-window gate already covers the rotation hour. Not yet checked in Rook's
+source; possible upstream issue (an identifier keyed on `resourceVersion` changes without a key change).
+
+The same c1a reconcile also flipped the RBD ctrlplugin's `hostNetwork` off and back (ReplicaSet scale events
+16:28:04Z 2->0, 16:28:05Z the non-hostNetwork RS 0->2, 16:28:07Z 2->0, 16:28:15Z the hostNetwork RS 0->2): Rook v1.19.5
+writes the Driver without the field and `csi-driver-config` puts it back. The Deployment was at revision 73, the two
+ReplicaSets alternating. That is the pre-existing v1.19 behaviour this stage removes; the bug draft
+`bugs/upstream-rook-csi-enable-host-network-not-propagated.md` claimed Rook leaves the field alone and now carries a
+correction.
+
+### c2: the hop
+
+Timeline (readonly watcher polling every 15 s):
+
+| time (Z) | event |
+|---|---|
+| 17:07:55 | root-app picks up c2 |
+| 17:09:01 | `csi-driver-config` Application gone; Driver uid `74e97a34…` unchanged |
+| 17:10:23 | rook-ceph-operator syncs c2 |
+| 17:10:52-53 | old operator pod deleted, new one scheduled; image pull 1m14.8s (1.6 GB via zot) |
+| 17:10:56-17:11:12 | RBD plugins move to `rook-ceph-rbd-csi-ceph-com-{ctrl,node}plugin-sa` (Driver generation 79; ArgoCD's adoption drops the `Delete=false,Prune=false` annotation, as predicted) |
+| 17:11:28-17:11:45 | second plugin roll: `--enable-fencing=false`, `dnsPolicy: ClusterFirstWithHostNet` |
+| 17:12:09 | Rook operator v1.20.9 running |
+| 17:12:35-17:13:57 | mons a, b, c |
+| 17:14:46-17:16:57 | mgrs a, b |
+| 17:16:54-17:17:00 | OSD prepare jobs on node4/5/6 (Succeeded) |
+| 17:17:13-17:18:35 | osd-0 (down about 80 s; 129 PGs degraded at 33.3%, writes continue at min_size 2) |
+| 17:18:52-17:19:57 | osd-1 |
+| 17:20:13-17:21:19 | osd-2 |
+| 17:21:53 | HEALTH_OK (the OSD restarts cleared `BLUESTORE_SLOW_OP_ALERT`) |
+
+`upgradeOSDRequiresHealthyPGs: true` (c1a) held each OSD until the PGs were clean; with only seconds of writes to
+recover, each wait was short. CRUSH: v1.20.9 sets `ROOK_DELETE_UNUSED_CRUSH_RULES=true`, yet `replicated_rule`
+(used by no pool) was still there after c2 and after c3; both pools kept `crush_rule 1`.
+
+### The outgoing operator rewrote the image set
+
+The plan's review list expected the outgoing v1.19.5 operator to touch something mid-hop. It did, and not the Driver.
+`rook-csi-operator-image-set-configmap` managedFields: `argocd-controller` 17:10:43Z (cephcsi v3.17.1), then `rook`
+17:10:44Z, the v1.19.5 operator killed nine seconds later, writing its own defaults (cephcsi v3.16.2,
+provisioner v6.1.1, attacher v4.11.0, registrar v2.16.0). ceph-csi-operator v1.0.4 reconciled the Driver at 17:11:28Z
+and built the plugins from those. ArgoCD self-heal put v3.17.1 back at 17:12:38Z, but ceph-csi-operator does not
+reconcile a Driver when its image-set ConfigMap changes: its log shows no `rook-ceph.rbd.csi.ceph.com` reconcile
+after 17:11:28Z. Verify item 1 then failed on exactly two checks:
+
+```
+CHECK FAIL cephcsi-tag-ctrl observed='v3.16.2' expected='v3.17.1'
+CHECK FAIL cephcsi-tag-node observed='v3.16.2' expected='v3.17.1'
+RESULT FAIL stage1 (2 failed)
+```
+
+Operator decision: restart the CSI operator (`oc -n rook-ceph delete pod ceph-csi-controller-manager-56c6bd5477-smwx7`,
+17:27:27Z). On start it reconciled every Driver from the current image set; both plugins were on cephcsi v3.17.1 with
+provisioner v6.2.0, attacher v4.12.0 and registrar v2.17.0 by 17:28:16Z, and item 1 passed at 17:28:28Z. The Driver
+`generation` stayed 79 from 17:10:56Z on, so nothing kept rewriting it. The CSI operator also logs
+`unable to get … because of unknown namespace for the cache` every few minutes for Drivers that do not exist
+(`openshift-storage.rbd`, `openshift-storage.cephfs`, `rook-ceph.cephfs`): noise. Runbook item 1 now describes the
+symptom and the restart.
+
+### Verification and c3, c4
+
+After c2 and again after c3 every runbook item passed: `csi-state.sh --expect stage1` twice ten minutes apart
+(generation 79 both times), the smoke sequence (64 MiB, writer = recomputed = stored sha256, on node6 both times),
+0 `FailedMount`/`FailedAttachVolume` since each window start, CNPG pods unrestarted (six, all started 2026-10-27),
+three OSD prepare pods newer than the window, one Driver, the CRUSH reads unchanged. `ceph-reads.sh s1` after c3:
+HEALTH_OK, 129 active+clean, `client.csi-rbd-provisioner.1` caps `mgr "allow rw"`, `mon "profile rbd, allow command
+'osd blocklist'"`, `osd "profile rbd"`, equal to the caps-fix Job's set. Per the plan the Job stays and Task 17
+decides; this read cannot settle it, because the Job itself re-ran at 17:42:25Z during c3's sync.
+
+Lasting Driver protection (Step 6b, prompted):
+`oc -n rook-ceph annotate drivers.csi.ceph.io rook-ceph.rbd.csi.ceph.com argocd.argoproj.io/sync-options=Delete=false,Prune=false --overwrite`.
+Read after it and again after c4: `Delete=false,Prune=false`, managers `argocd-controller rook kubectl-annotate`.
+
+c3 rolled only the toolbox (its inlined script changed); no mon, mgr, OSD or plugin pod restarted, because the c1a
+roll had already brought the identifiers up to date. c3 brings the v1.20.9 Ceph alert rules (new
+`CephCertificateError`/`CephCertificateWarning`, NVMe-oF rules). The kubeconform run against the datree catalog
+flags the c3 CephCluster (`keyType` unknown to the catalog's pre-v1.20.9 schema); known from Task 8, and the live
+server-side diff validated it against the v1.20.9 CRD. c4 restarted only ceph-csi-controller-manager; the gate before
+it (`... | grep -c ceph-csi-rbd-`) read 0. A last smoke run after c4 passed. ArgoCD: 54/54 Synced+Healthy
+(`csi-driver-config` gone).
+
+Side find, not stage-related: the pool's trash holds `csi-snap-f49abe06-1ca6-487b-9886-629ad7900ef1`, deleted and
+expired 2026-09-22 05:30:06Z and never purged. README TODO "PV cleanup when stuck" now lists it. It is not the
+10 GiB `STORED` growth between 12:17Z and 16:20Z (150 -> 160 GiB, 164 GiB at 17:49Z), which stays unattributed.
+
+Still open for stage 1: the s1 fio point (three runs in the 2026-11-06 12:00-14:00Z slot) and
+`ceph-latency.sh --end <>= 2026-11-06T17:22Z> --window 24h --label s1`.

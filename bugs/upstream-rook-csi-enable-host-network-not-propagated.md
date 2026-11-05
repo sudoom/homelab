@@ -76,6 +76,13 @@ Only `nodePlugin.hostNetwork` is honored. `controllerPlugin.hostNetwork` stays e
 
 Patch the Driver CRs directly via SSA. In our repo this lives in `components/cluster-config/csi-driver-config/` (chart with one template that emits both Driver CRs with `spec.controllerPlugin.hostNetwork: true`). ArgoCD with ServerSideApply merges the patch with the live Driver CR; Rook leaves the field alone on subsequent reconciles (verified across the operator's reconciliation loop on our cluster).
 
+**Correction and status, 2026-11-05.** Rook v1.19.5 does not leave the field alone on a full CephCluster
+reconcile: it rewrites the Driver without `hostNetwork`, and ArgoCD self-heal puts it back. The ctrlplugin
+Deployment had reached revision 73, alternating between two templates that differ only in `hostNetwork`; the last
+flip ran 16:28:04-16:28:15Z on 2026-11-05 (about ten seconds without host networking). The workaround chart was
+deleted the same day: from Rook v1.20.9 the operator chart's `ceph-csi-drivers` subchart renders the Driver with
+`controllerPlugin.hostNetwork: true`, so this draft only applies to v1.19.x.
+
 Equivalent imperative form:
 
 ```
