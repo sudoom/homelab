@@ -401,7 +401,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   passed, the first recorded data mover restore here. The full `release-4.22` build, the catalog image and the upgrade
   are done: the cluster runs the 1.6 test build from catalog `okd-test-oadp` since 2026-11-03 08:00Z, and drill run 2 on
   1.6 passed. The 24 h soak passed 2026-11-04 (drill run 3 restored the new generation; drill Backups and namespaces
-  cleaned up). Draft pipeline PRs filed 2026-11-04:
+  cleaned up). Pipeline PRs filed 2026-11-04, ready for review since 11:52Z that day:
   [#47](https://github.com/okd-project/okd-operator-pipeline/pull/47) (`main`) and
   [#48](https://github.com/okd-project/okd-operator-pipeline/pull/48) (`release-4.22`); catalog-index PRs follow their
   merge and CI (`blog/blog-okderators-oadp-1.6-draft.md`). **(2) Rook and Ceph, design and plan approved

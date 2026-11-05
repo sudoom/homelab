@@ -1131,3 +1131,6 @@ full maintenance.
 
 Both stay draft; marking them ready is the operator's call. The catalog-index PRs (`release-4.22`, `release-5.0`, with
 the `skipRange`) come after these merge and upstream CI has published the images.
+
+The operator marked both ready for review on 2026-11-04 at 11:52Z (#47 11:52:26Z, #48 11:52:34Z, `ready_for_review`
+events in the PR timelines). No reviews or comments as of 2026-11-05 11:00Z.
