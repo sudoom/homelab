@@ -4,6 +4,6 @@ dependencies:
   version: v1.20.9
 - name: ceph-csi-drivers
   repository: https://ceph.github.io/ceph-csi-operator
-  version: 1.0.4
-digest: sha256:7fa169e72a277bd820efef69fc4dd4921abded97072232088d3ec5cfd01cce97
-generated: "2026-11-03T13:52:21.645745+01:00"
+  version: 1.1.0
+digest: sha256:ddaeca5db6dd8b720f6790662ce8cfdea8e790415a787abd0d311eeb98dbc908
+generated: "2026-11-05T17:07:16.927454742Z"
