@@ -22,8 +22,8 @@
 #
 # Mechanics: the template renders a PARTIAL ClusterCatalog (name +
 # spec.availabilityMode only) that ArgoCD server-side-applies onto the
-# object cluster-olm-operator already created — same pattern as
-# csi-driver-config. It relies on the object existing, which it does on
+# object cluster-olm-operator already created (the pattern the retired
+# RBD Driver patch used). It relies on the object existing, which it does on
 # every OKD install; the OLM docs describe this field as the supported way
 # to disable a default catalog. Revert = remove a name from the list and
 # sync; ArgoCD's prune then deletes nothing (the object is not ours), the

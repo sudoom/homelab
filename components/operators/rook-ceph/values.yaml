@@ -17,15 +17,6 @@ rook-ceph:
       # leader-election bindings never point at a missing or new SA while the
       # running operator pod is replaced, and the SA is never pruned under it.
       name: ceph-csi-controller-manager
-    controllerManager:
-      manager:
-        env:
-          # Rook v1.20 hop only; removed with templates/csi-legacy-rbac.yaml.
-          # A Driver without serviceAccountName gets <prefix>rbd-{ctrl,node}plugin-sa.
-          # Rook v1.20.9 sets the prefix to "", which resolves to rbd-*-sa that
-          # nothing creates (the 2026-06-12 outage); "ceph-csi-" resolves to the
-          # old pair that csi-legacy-rbac.yaml keeps.
-          csiServiceAccountPrefix: "ceph-csi-"
 
 # Values passed to the ceph-csi-drivers subchart (prefixed with ceph-csi-drivers:).
 # Since Rook v1.20 this chart owns the CSI Driver and OperatorConfig CRs and the
@@ -83,7 +74,8 @@ ceph-csi-drivers:
       controllerPlugin:
         # The OSDs bind the storage backnet (192.168.10.0/24). A ctrlplugin on
         # the pod network cannot reach them and every CreateVolume hangs.
-        # Until the v1.20 hop the csi-driver-config app patched this in.
+        # Rook v1.19 never set it on the Driver; a separate ArgoCD app patched
+        # it in until the v1.20 hop.
         hostNetwork: true
         replicas: 2
     # Off since 2026-09-13: the CephFS tier was retired 2026-09-07 and no CephFS
