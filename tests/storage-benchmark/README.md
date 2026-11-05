@@ -289,6 +289,11 @@ the filter off before theorising.
   rather than failing with a bare dnf error.
 - **The PVC is retained between runs** so repeat runs don't re-provision. Delete
   it when finished: `oc -n default delete pvc storage-bench-<backend>`.
+- **`--clean` runs the gates first and has a fixed 600 s deadline** (found 2026-11-05). Pass the same
+  `BENCH_FILESIZE`/`BENCH_ALLOW_SMALL` as the runs, or the size gate refuses before anything is cleaned. On the
+  Synology a big corpus (the 2026-09-05 smallfile set) does not finish in 600 s over NFS: the job timed out still in
+  its `du`, and run.sh deleted it. For a Retain class, delete the PVC and the `Released` PV, then delete the
+  `pvc-<uuid>` directory on the NAS itself, which is far faster than removing it over NFS.
 
 ## Files
 

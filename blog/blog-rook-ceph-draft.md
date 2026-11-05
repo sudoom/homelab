@@ -3183,6 +3183,14 @@ at the PVC-size gate (default 64G > 32Gi), and it only empties the PVC; the PVC 
 `default/storage-bench-nfs-csi` (nfs-csi, 600Gi, created 2026-09-05), left from the NFS campaign; flagged to the
 operator, not touched.
 
+Cleanup done the same day (operator, each by its own command): `oc -n default delete pvc
+storage-bench-ceph-nvme-block`; then for the NFS one, `run.sh --backend nfs-csi --clean`, which timed out at its
+fixed 600 s still in `du` (its log stops at `before:`) and was deleted by run.sh, so the files were left in place;
+`oc -n default delete pvc storage-bench-nfs-csi` and, because `nfs-csi` is `Retain`, `oc delete pv
+pvc-6dac6815-39ea-4412-8fdd-dd7adf503a29`. Readback: no `storage-bench` PVC or PV left. The directory
+`/volume1/kubenfs/pvc-6dac6815-39ea-4412-8fdd-dd7adf503a29` on the Synology is deleted on the NAS by hand (DSM is
+not managed from this repo), which is faster than over NFS. The harness README now records both `--clean` traps.
+
 The numbers are record-only (operator: "just to see how it changed"). The 24 h OSD-latency window
 (`ceph-latency.sh --end <stage 1 start> --window 24h --label baseline`) is read when stage 1 starts. The Stage M
 procedure is now written into `tests/rook-ceph-upgrade/README.md`, which until today said "(empty)".
