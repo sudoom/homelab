@@ -80,6 +80,17 @@ rook-ceph-cluster:
           - "192.168.10.0/24"
         cluster:
           - "192.168.10.0/24"
+      connections:
+        # Explicit on purpose: msgr2-only stays off through the Rook upgrade
+        # stages and flips to true only in stage 3, after every daemon runs
+        # Tentacle. The chart renders false by default; pinning it here keeps
+        # a subchart default change from flipping it silently.
+        requireMsgr2: false
+
+    # Do not roll the next OSD while PGs are unhealthy during an upgrade.
+    # Rook's default is false; with 3 OSDs and no drain headroom a roll on
+    # degraded PGs would take data offline.
+    upgradeOSDRequiresHealthyPGs: true
 
     cephConfig:
       global:
