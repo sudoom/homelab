@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Monthly cost totals per category from a paperless-ngx instance (read-only).
+
+Month = the document's `created` date. Category = the document's one tag whose
+parent is the tag named "Category". Amounts come from the Monetary custom field
+"Amount"; currencies are never converted or mixed.
+
+The API token is read from the macOS Keychain (security find-generic-password)
+and is never printed.
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from decimal import Decimal, InvalidOperation
+
+DEFAULT_URL = "http://192.168.1.25:30070"
+AMOUNT_FIELD = "Amount"
+CATEGORY_TAG = "Category"
+# paperless stores "PLN123.45", "PLN-12.50", or (legacy) a bare "123.45".
+_MONETARY = re.compile(r"^([A-Z]{3})?(-?\d+(?:\.\d+)?)$")
+
+
+def parse_monetary(value, default_currency):
+    """Return (currency, Decimal) or None for an empty value; ValueError if malformed."""
+    if value is None or str(value).strip() == "":
+        return None
+    m = _MONETARY.match(str(value).strip())
+    if not m:
+        raise ValueError(f"unparseable amount {value!r}")
+    try:
+        amount = Decimal(m.group(2))
+    except InvalidOperation:
+        raise ValueError(f"unparseable amount {value!r}")
+    return (m.group(1) or default_currency, amount)
+
+
+def category_of(tag_ids, category_ids):
+    """The single category tag id among tag_ids; None for zero or several."""
+    found = {t for t in tag_ids if t in category_ids}
+    return found.pop() if len(found) == 1 else None
+
+
+def aggregate(docs, amount_field_id, category_ids, default_currency):
+    """-> (totals[currency][YYYY-MM][category_id] = Decimal, excluded list of dicts)."""
+    totals = {}
+    excluded = []
+
+    def exclude(doc, reason):
+        excluded.append({"id": doc.get("id"), "title": doc.get("title"), "reason": reason})
+
+    for doc in docs:
+        values = [cf.get("value") for cf in doc.get("custom_fields", [])
+                  if cf.get("field") == amount_field_id]
+        if not values:
+            continue  # no Amount field on this document
+        try:
+            parsed = parse_monetary(values[0], default_currency)
+        except ValueError as e:
+            exclude(doc, str(e))
+            continue
+        if parsed is None:
+            exclude(doc, "Amount is empty")
+            continue
+        tags = doc.get("tags", [])
+        cats = [t for t in set(tags) if t in category_ids]
+        if len(cats) != 1:
+            exclude(doc, "no category tag" if not cats else f"{len(cats)} category tags")
+            continue
+        created = doc.get("created") or ""
+        if not re.match(r"^\d{4}-\d{2}", created):
+            exclude(doc, f"bad created date {created!r}")
+            continue
+        currency, amount = parsed
+        cell = totals.setdefault(currency, {}).setdefault(created[:7], {})
+        cell[cats[0]] = cell.get(cats[0], Decimal(0)) + amount
+    return totals, excluded
+
+
+def render(totals, tag_names):
+    out = []
+    for currency in sorted(totals, key=lambda c: (c != "PLN", c)):
+        months = totals[currency]
+        cat_ids = sorted({c for m in months.values() for c in m},
+                         key=lambda c: tag_names.get(c, str(c)).lower())
+        header = ["Month"] + [tag_names.get(c, f"tag {c}") for c in cat_ids] + ["Total"]
+        rows = []
+        col_sums = [Decimal(0)] * len(cat_ids)
+        for month in sorted(months):
+            vals = [months[month].get(c, Decimal(0)) for c in cat_ids]
+            col_sums = [a + b for a, b in zip(col_sums, vals)]
+            rows.append([month] + [f"{v:.2f}" for v in vals] + [f"{sum(vals):.2f}"])
+        rows.append(["Total"] + [f"{v:.2f}" for v in col_sums] + [f"{sum(col_sums):.2f}"])
+        widths = [max(len(r[i]) for r in [header] + rows) for i in range(len(header))]
+        out.append(f"== {currency} ==")
+        for r in [header] + rows:
+            out.append("  ".join(c.ljust(widths[0]) if i == 0 else c.rjust(widths[i])
+                                 for i, c in enumerate(r)).rstrip())
+        out.append("")
+    return "\n".join(out)
+
+
+def render_excluded(excluded):
+    if not excluded:
+        return ""
+    lines = ["== Excluded (not counted) ==", "id  title  reason"]
+    lines += [f"{e['id']}  {e['title']}  {e['reason']}" for e in excluded]
+    return "\n".join(lines) + "\n"
+
+
+def fetch_all(url, token, opener=urllib.request.urlopen):
+    """GET url and follow `next` links; returns every result. Exits on HTTP errors."""
+    base = urllib.parse.urlsplit(url)
+    results = []
+    while url:
+        nxt = urllib.parse.urlsplit(url)
+        if (nxt.scheme, nxt.netloc) != (base.scheme, base.netloc):
+            sys.exit(f"refusing to follow paging link to another host: {url}")
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Token {token}", "Accept": "application/json"})
+        try:
+            with opener(req, timeout=30) as resp:
+                page = json.load(resp)
+        except urllib.error.HTTPError as e:
+            sys.exit(f"HTTP {e.code} for {url}")
+        except urllib.error.URLError as e:
+            sys.exit(f"cannot reach {url}: {e.reason}")
+        results.extend(page["results"])
+        url = page.get("next")
+    return results
+
+
+def keychain_token(service):
+    try:
+        r = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                           capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.exit("`security` not found; this script reads the token from the macOS Keychain")
+    if r.returncode != 0 or not r.stdout.strip():
+        sys.exit(f"no Keychain item for service {service!r} (create it with: "
+                 f"security add-generic-password -s {service} -a paperless -w)")
+    return r.stdout.strip()
+
+
+def month_arg(s):
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", s):
+        raise argparse.ArgumentTypeError("expected YYYY-MM")
+    return s
+
+
+def next_month(s):
+    y, m = int(s[:4]), int(s[5:])
+    return f"{y + (m == 12)}-{1 if m == 12 else m + 1:02d}"
+
+
+def main(argv=None, opener=urllib.request.urlopen):
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--from", dest="start", required=True, type=month_arg, metavar="YYYY-MM")
+    p.add_argument("--to", dest="end", required=True, type=month_arg, metavar="YYYY-MM")
+    p.add_argument("--url", default=DEFAULT_URL)
+    p.add_argument("--keychain-service", default="paperless-costs")
+    a = p.parse_args(argv)
+    if a.start > a.end:
+        p.error("--from is after --to")
+    base = a.url.rstrip("/")
+    token = keychain_token(a.keychain_service)
+
+    def q(path, **params):
+        return f"{base}{path}?{urllib.parse.urlencode(params)}"
+
+    fields = fetch_all(q("/api/custom_fields/", name__iexact=AMOUNT_FIELD, page_size=100),
+                       token, opener)
+    if not fields:
+        sys.exit(f"custom field {AMOUNT_FIELD!r} not found")
+    field = fields[0]
+    default_currency = (field.get("extra_data") or {}).get("default_currency") or "PLN"
+
+    tags = fetch_all(q("/api/tags/", page_size=100), token, opener)
+    tag_names = {t["id"]: t["name"] for t in tags}
+    parents = [t["id"] for t in tags if t["name"] == CATEGORY_TAG and not t.get("parent")]
+    if not parents:
+        sys.exit(f"parent tag {CATEGORY_TAG!r} not found")
+    category_ids = {t["id"] for t in tags if t.get("parent") in parents}
+
+    docs = fetch_all(q("/api/documents/", page_size=100,
+                       custom_field_query=json.dumps([AMOUNT_FIELD, "exists", True]),
+                       created__date__gte=f"{a.start}-01",
+                       created__date__lt=f"{next_month(a.end)}-01"), token, opener)
+    totals, excluded = aggregate(docs, field["id"], category_ids, default_currency)
+    print(render(totals, tag_names) or "No documents with an amount in range.\n")
+    print(render_excluded(excluded), end="")
+
+
+if __name__ == "__main__":
+    main()
