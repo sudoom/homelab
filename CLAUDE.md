@@ -132,7 +132,7 @@ For operators bringing CRDs, use **intra-chart** sync-wave annotations: `Subscri
 
 ## Storage (Rook-Ceph)
 
-Rook v1.19.5 managing Ceph Squid 19.2.4 on three NVMe OSDs (`osd.0-2`, one per node, failure domain `host`). Ceph Squid reached its target EOL on 2026-10-31; the staged upgrade to Rook v1.21.1 and Tentacle 20.2.5 is approved and in preparation (README TODO, runbook `tests/rook-ceph-upgrade/README.md`). Two
+Rook v1.19.5 managing Ceph Squid 19.2.4 on three NVMe OSDs (`osd.0-2`, one per node, failure domain `host`). Ceph Squid reached its target EOL on 2026-10-31; the staged upgrade to Rook v1.21.1 and Tentacle 20.2.5 is approved and under way (README TODO, runbook `tests/rook-ceph-upgrade/README.md`): backup and fio baseline done, stage 1 (Rook v1.20.9) next. **A freeze holds since 2026-11-05T12:28:44Z until the Tentacle stage is done: no in-cluster builds, no MachineConfig reroll, no logging removal, no power-tuning change.** Two
 pools: `nvme-replicated` (RBD, StorageClass `ceph-nvme-block`) and `.mgr`. The HDD tier, CephFS and the in-cluster
 object store were retired 2026-09-07: RWX is the NFS classes (`nfs-csi`, `nfs-truenas-*`), S3 is garage on TrueNAS.
 Charts: operator `components/operators/rook-ceph/`, cluster `components/storage/rook-ceph-cluster/` (OSD devices,

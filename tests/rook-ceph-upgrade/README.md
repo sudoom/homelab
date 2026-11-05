@@ -196,8 +196,8 @@ KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 ./tests/storage
 oc -n default delete pvc storage-bench-ceph-nvme-block
 
 # OPERATOR: the 24 h latency window, read at the start of the NEXT stage (Task 9 Step 1 for the baseline).
-# It ends at that start, so it covers the fio runs only if the stage starts within 24 h of them; either way it is
-# the quiet day before the stage, which is what the series compares.
+# It ends at that start, so when the stage starts within 24 h of the point's fio runs the window includes them;
+# every later point's window ("24 h after the roll settled") includes its own runs too, so the points compare.
 bash tests/rook-ceph-upgrade/metrics/ceph-latency.sh --end <next stage start, UTC> --window 24h --label <label>
 ```
 
