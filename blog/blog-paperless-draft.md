@@ -91,15 +91,14 @@ truenas_paperless_additional_envs: "{{ truenas_paperless.envs + (truenas_paperle
 Every entry carries `container: paperless`: the schema requires the key and the compose template keeps only those.
 
 **The filename format.** Ansible would render `{{ created_year }}` to an empty string and every file would land under
-`//-`, so the value is tagged `!unsafe`. Placeholder names: `created_year`, `correspondent` and `created` are in the
-placeholder list of the 3.4.2 usage docs (the workflow-placeholder section); `title` and the "File name handling"
-section itself were not in the local doc copies, so I could not confirm `title` there and used the template the task
-specified, `{{ created_year }}/{{ correspondent }}/{{ created }} {{ title }}`. To confirm on the first deploy: upload
-one document and read its path under `paperless/media`.
+`//-`, so the value is tagged `!unsafe`. Placeholders `created_year`, `correspondent` and `created` are in the usage
+docs' placeholder list, and `{{ title }}` is a documented filename placeholder too (paperless-ngx v3.4.2
+`docs/advanced_usage.md:401-407`), so the template `{{ created_year }}/{{ correspondent }}/{{ created }} {{ title }}`
+is confirmed.
 
-**AI output language.** The 3.4.2 configuration docs describe `PAPERLESS_AI_LLM_OUTPUT_LANGUAGE` as "the language to
-use for AI suggestions ... If not supplied, defaults to the user's UI language setting", with no stated value form, so
-I used `Polish`. To verify when AI is switched on: check that suggestions come back in Polish.
+**AI output language.** `PAPERLESS_AI_LLM_OUTPUT_LANGUAGE` goes through `get_language_name`
+(`src/paperless_ai/ai_classifier.py:85-90`), which returns a non-code string unchanged, so `Polish` reaches the prompt
+as is.
 
 **Role section** (`roles/truenas-apps/tasks/main.yml`, after Syncthing): stat and chown the four non-Postgres paths to
 568; generate the three secrets (`openssl rand -hex 32`, `no_log`) only when the app is absent and the vault password

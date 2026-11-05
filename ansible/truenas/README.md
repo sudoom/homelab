@@ -585,8 +585,8 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `inventory.yml` | Single host `truenas`, mgmt address, `truenas_admin` + sudo |
 | `group_vars/all.yml` | All declarative inputs: pool name, datasets, NFS clients, NTP, schedules |
 | `vars/vault.yml.example` | Committed template (no secrets) |
-| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, the Synology account for the Cloud Sync backup, and the Hetzner Storage Box sub-account for the offsite one |
-| `playbook.yml` | Full convergence (needs `--ask-vault-pass` since 2026-08-31, when `vars/vault.yml` was created; four things use it — SMTP, the two SMB Time Machine passwords, the Synology account, the Storage Box sub-account — and each is skipped, not failed, if its variables are absent) |
+| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, the Synology account for the Cloud Sync backup, the Hetzner Storage Box sub-account for the offsite one, and the paperless admin password (`truenas_paperless_admin_password`, first install only) |
+| `playbook.yml` | Full convergence (needs `--ask-vault-pass` since 2026-08-31, when `vars/vault.yml` was created; five things use it — SMTP, the two SMB Time Machine passwords, the Synology account, the Storage Box sub-account, the paperless admin password — and each is skipped, not failed, if its variables are absent) |
 | `check.yml` | Read-only state report (no vault) |
 | `roles/truenas-storage/` | Assert pool, converge datasets |
 | `roles/truenas-system/` | Timezone, NTP, alert email |

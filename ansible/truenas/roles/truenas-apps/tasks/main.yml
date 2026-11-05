@@ -717,11 +717,15 @@
 - name: Decide whether the paperless catalog app already exists
   ansible.builtin.set_fact:
     _pl_exists: "{{ truenas_paperless.app_name in truenas_app_names }}"
+    # An empty or CHANGEME (the vault example's placeholder) password counts as missing.
+    _pl_pw_ok: "{{ (truenas_paperless_admin_password | default('')) | length > 0 and truenas_paperless_admin_password | default('') != 'CHANGEME' }}"
+  no_log: true
 
 # Defined ONCE and used by the create and the reconcile. The three generated
 # secrets are NOT in here: they are added at create time only. admin_* are
 # first-install only (immutable in the schema) and the update path drops them.
 - name: Build the paperless app values
+  no_log: true       # the fact holds admin_password
   ansible.builtin.set_fact:
     _pl_values:
       TZ: "{{ truenas_timezone }}"
@@ -729,7 +733,7 @@
         postgres_image_selector: postgres_18_image
         admin_user: "{{ truenas_paperless.admin_user }}"
         admin_mail: "{{ truenas_paperless.admin_mail }}"
-        admin_password: "{{ truenas_paperless_admin_password | default('') }}"
+        admin_password: "{{ truenas_paperless_admin_password | default('') if _pl_pw_ok | bool else '' }}"
         enable_trash: false
         enable_tika_gotenberg: false
         additional_envs: "{{ truenas_paperless_additional_envs }}"
@@ -757,12 +761,12 @@
 - name: Warn that paperless is not created without the admin password
   ansible.builtin.debug:
     msg: >-
-      paperless NOT CREATED: truenas_paperless_admin_password is not set in
+      paperless NOT CREATED: truenas_paperless_admin_password is missing, empty or CHANGEME in
       vars/vault.yml. The app is skipped rather than created with an admin
       password nobody knows. Add it (ansible-vault edit) and re-run.
   when:
     - not (_pl_exists | bool)
-    - truenas_paperless_admin_password is not defined
+    - not (_pl_pw_ok | bool)
 
 - name: Generate paperless secrets (only when the app is absent)
   ansible.builtin.command:
@@ -774,7 +778,7 @@
     label: "{{ item }}"
   when:
     - not (_pl_exists | bool)
-    - truenas_paperless_admin_password is defined
+    - _pl_pw_ok | bool
   no_log: true
 
 - name: Deploy the paperless catalog app
@@ -795,7 +799,7 @@
       values: "{{ _pl_values | combine({'paperless': _pl_values.paperless | combine({'db_password': _sec[0], 'redis_password': _sec[1], 'secret_key': _sec[2]})}) }}"
   when:
     - not (_pl_exists | bool)
-    - truenas_paperless_admin_password is defined
+    - _pl_pw_ok | bool
   no_log: true       # the payload carries the generated secrets and the admin password
   register: truenas_pl_deploy
   failed_when: false
@@ -807,6 +811,7 @@
     argv: [midclt, call, core.get_jobs, '[["method", "=", "app.create"]]']
   register: truenas_pl_job
   changed_when: false
+  no_log: true
   when: (truenas_pl_deploy.rc | default(0)) != 0
 
 - name: Fail with the real paperless reason (payload stays hidden)
@@ -833,6 +838,16 @@
 # the live dict carries them through, since app.update merges top-level keys)
 # and admin_user, admin_mail, admin_password (immutable). The whole live config
 # is never echoed.
+# An existing app whose live paperless dict has no db_password would be updated
+# into one that cannot reach its own database; refuse, loudly, instead.
+- name: Refuse to update a paperless app whose live config lacks db_password
+  ansible.builtin.fail:
+    msg: "paperless app exists but its live config has no db_password; refusing to app.update (it could blank the generated secrets). Inspect with: midclt call app.config paperless"
+  when:
+    - _pl_exists | bool
+    - ((truenas_pl_live.stdout | from_json).paperless.db_password | default('', true)) | length == 0
+  no_log: true
+
 - name: Reconcile the paperless app values
   ansible.builtin.command:
     argv:
@@ -868,6 +883,9 @@
       - "{{ _ve | map(attribute='name') | join(',') }}={{ _ve | map(attribute='value') | join(',') }}"
       - "{{ _v.paperless.enable_trash | string }}:{{ _v.paperless.enable_tika_gotenberg | string }}"
       - "{{ _v.paperless.postgres_image_selector }}"
+      - "{{ _v.TZ }}"
+      - "{{ _v.resources.limits.cpus | string }}:{{ _v.resources.limits.memory | string }}"
+      - "{{ _v.storage.postgres_data.host_path_config.auto_permissions | string }}"
     _live_sig:
       - "{{ _l.run_as.user | default('') | string }}:{{ _l.run_as.group | default('') | string }}"
       - "{{ _l.network.web_port.port_number | default('') | string }}={{ _l.network.web_port.host_ips | default([], true) | sort | join(',') }}"
@@ -879,8 +897,12 @@
       - "{{ _le | map(attribute='name') | join(',') }}={{ _le | map(attribute='value') | join(',') }}"
       - "{{ _lp.enable_trash | default(false, true) | string }}:{{ _lp.enable_tika_gotenberg | default(false, true) | string }}"
       - "{{ _lp.postgres_image_selector | default('') }}"
+      - "{{ _l.TZ | default('') }}"
+      - "{{ _l.resources.limits.cpus | default('') | string }}:{{ _l.resources.limits.memory | default('') | string }}"
+      - "{{ _l.storage.postgres_data.host_path_config.auto_permissions | default(false, true) | string }}"
   when:
     - _pl_exists | bool
+    - ((_l.paperless.db_password | default('', true)) | length) > 0
     - _live_sig != _want_sig
   no_log: true       # the payload carries the live secrets
   register: truenas_pl_update
@@ -891,6 +913,7 @@
     argv: [midclt, call, core.get_jobs, '[["method", "=", "app.update"]]']
   register: truenas_pl_upd_job
   changed_when: false
+  no_log: true
   when: (truenas_pl_update.rc | default(0)) != 0
 
 - name: Fail with the real paperless update reason (payload stays hidden)
@@ -901,7 +924,7 @@
 - name: Report paperless state
   ansible.builtin.debug:
     msg: >-
-      paperless {{ 'catalog app present' if _pl_exists | bool else ('DEPLOYED' if truenas_paperless_admin_password is defined else 'NOT CREATED (no admin password in the vault)') }}
+      paperless {{ 'catalog app present' if _pl_exists | bool else ('DEPLOYED' if _pl_pw_ok | bool else 'NOT CREATED (no admin password in the vault)') }}
       -- UI at http://192.168.1.25:{{ truenas_paperless.port }}/ . The admin
       password is set ONCE, at the first install; change it in paperless, not
       in the vault.
