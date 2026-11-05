@@ -11,6 +11,7 @@ and is never printed.
 import argparse
 import json
 import re
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -112,7 +113,17 @@ def render_excluded(excluded):
     return "\n".join(lines) + "\n"
 
 
-def fetch_all(url, token, opener=urllib.request.urlopen):
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib would resend the Authorization header to the target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        sys.exit(f"HTTP {code} for {req.full_url}: refusing redirect to {newurl}")
+
+
+_default_opener = urllib.request.build_opener(NoRedirect).open
+
+
+def fetch_all(url, token, opener=_default_opener):
     """GET url and follow `next` links; returns every result. Exits on HTTP errors."""
     base = urllib.parse.urlsplit(url)
     results = []
@@ -126,9 +137,16 @@ def fetch_all(url, token, opener=urllib.request.urlopen):
             with opener(req, timeout=30) as resp:
                 page = json.load(resp)
         except urllib.error.HTTPError as e:
-            sys.exit(f"HTTP {e.code} for {url}")
+            loc = e.headers.get("Location") if e.headers else None
+            sys.exit(f"HTTP {e.code} for {url}" + (f": refusing redirect to {loc}" if loc else ""))
         except urllib.error.URLError as e:
             sys.exit(f"cannot reach {url}: {e.reason}")
+        except (TimeoutError, socket.timeout):
+            sys.exit(f"timeout reading {url}")
+        except (ValueError, UnicodeDecodeError):
+            sys.exit(f"response from {url} is not valid JSON")
+        if not isinstance(page, dict) or "results" not in page:
+            sys.exit(f"response from {url} is not a paged result list")
         results.extend(page["results"])
         url = page.get("next")
     return results
@@ -157,7 +175,7 @@ def next_month(s):
     return f"{y + (m == 12)}-{1 if m == 12 else m + 1:02d}"
 
 
-def main(argv=None, opener=urllib.request.urlopen):
+def main(argv=None, opener=_default_opener):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--from", dest="start", required=True, type=month_arg, metavar="YYYY-MM")
     p.add_argument("--to", dest="end", required=True, type=month_arg, metavar="YYYY-MM")

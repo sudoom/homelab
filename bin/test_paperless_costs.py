@@ -110,6 +110,45 @@ class Tests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             pc.fetch_all("http://pl.test/a", "T", opener)
 
+    def test_redirect_refused_without_second_request(self):
+        calls = []
+
+        def opener(req, timeout=None):
+            calls.append(req.full_url)
+            raise urllib.error.HTTPError(req.full_url, 302, "Found",
+                                         {"Location": "http://evil.test/x"}, None)
+        with self.assertRaises(SystemExit) as cm:
+            pc.fetch_all("http://pl.test/api/x/", "SECRET", opener)
+        self.assertEqual(len(calls), 1)
+        msg = str(cm.exception)
+        self.assertIn("302", msg)
+        self.assertIn("http://evil.test/x", msg)
+        self.assertNotIn("SECRET", msg)
+
+    def test_redirect_handler_refuses(self):
+        import urllib.request
+        req = urllib.request.Request("http://pl.test/a", headers={"Authorization": "Token SECRET"})
+        with self.assertRaises(SystemExit) as cm:
+            pc.NoRedirect().redirect_request(req, None, 302, "Found", {}, "http://evil.test/x")
+        self.assertIn("evil.test", str(cm.exception))
+        self.assertNotIn("SECRET", str(cm.exception))
+
+    def test_timeout_exits_cleanly(self):
+        def opener(req, timeout=None):
+            raise TimeoutError("timed out")
+        with self.assertRaises(SystemExit) as cm:
+            pc.fetch_all("http://pl.test/api/x/", "SECRET", opener)
+        self.assertIn("timeout", str(cm.exception))
+        self.assertIn("http://pl.test/api/x/", str(cm.exception))
+
+    def test_non_json_body_exits_cleanly(self):
+        def opener(req, timeout=None):
+            return FakeResp(b"<html>login</html>")
+        with self.assertRaises(SystemExit) as cm:
+            pc.fetch_all("http://pl.test/api/x/", "SECRET", opener)
+        self.assertIn("not valid JSON", str(cm.exception))
+        self.assertIn("http://pl.test/api/x/", str(cm.exception))
+
     def test_next_month(self):
         self.assertEqual(pc.next_month("2024-12"), "2025-01")
         self.assertEqual(pc.next_month("2024-02"), "2024-03")
