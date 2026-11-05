@@ -411,7 +411,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   reviewed outside git until their window. Why: v1.19.5 supports Kube 1.30-1.35 (v1.21.1: 1.32-1.37), and Ceph
   Squid reached its target EOL on 2026-10-31. The one-off OADP backup of the app PVCs and zot to garage was taken and
   restore-checked on 2026-11-04 (Backup `pre-rook-upgrade`, kept to 2026-12-04); next is the fio + OSD-latency baseline,
-  repeated after every stage. Windows start about 2026-11-06, after the descheduler soak, under a
+  repeated after every stage. Windows start about 2026-11-06 (the descheduler soak passed 2026-11-05), under a
   freeze on builds, MachineConfig rerolls, the logging removal and power tuning. The June v1.20.0 CSI break was the
   v1.20 CSI move to the `ceph-csi-drivers` chart meeting stale charts: the old ServiceAccounts were pruned while the
   Driver CR still needed them (`blog/blog-rook-ceph-draft.md`, 2026-11-03). **(3) Before 5.0, a descheduler upgrade:**
@@ -425,8 +425,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   4.23, which clears OLM's check on 4.22 (`normalizeOCPVersion`), confirmed live 2026-11-04. CRD and
   profiles are unchanged from 5.3 to 5.4. The 12-task plan was approved 2026-11-02 and is running: both builds and the catalog image
   passed on 2026-11-03, and the eviction check on 5.3. The cluster runs the 5.4 test build from `okd-test-descheduler`
-  since 2026-11-04 11:59Z: the eviction check passed on 5.4 and `ClusterNotUpgradeable` cleared. 24 h soak until about
-  2026-11-05 12:00Z, then the draft PRs (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
+  since 2026-11-04 11:59Z: the eviction check passed on 5.4 and `ClusterNotUpgradeable` cleared. The 24 h soak passed
+  2026-11-05; next are the draft PRs (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
   February 2025 one, with five of our packages at ancient versions and no descheduler or NMState, and quay has no
   `catalog-index:5.0`, so no 5.0 entry reaches anyone until okderators rebuilds and publishes it. That affects every
   operator here, OADP 1.6 included. Raised upstream 2026-11-02:
