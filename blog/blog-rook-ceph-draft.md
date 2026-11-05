@@ -3188,8 +3188,8 @@ storage-bench-ceph-nvme-block`; then for the NFS one, `run.sh --backend nfs-csi 
 fixed 600 s still in `du` (its log stops at `before:`) and was deleted by run.sh, so the files were left in place;
 `oc -n default delete pvc storage-bench-nfs-csi` and, because `nfs-csi` is `Retain`, `oc delete pv
 pvc-6dac6815-39ea-4412-8fdd-dd7adf503a29`. Readback: no `storage-bench` PVC or PV left. The directory
-`/volume1/kubenfs/pvc-6dac6815-39ea-4412-8fdd-dd7adf503a29` on the Synology is left for the operator to delete on
-the NAS (DSM is not managed from this repo), which is faster than over NFS. The harness README now records both `--clean` traps.
+`/volume1/kubenfs/pvc-6dac6815-39ea-4412-8fdd-dd7adf503a29` on the Synology was deleted by the operator on the NAS
+(DSM is not managed from this repo), which is faster than over NFS. The harness README now records both `--clean` traps.
 
 The numbers are record-only (operator: "just to see how it changed"). The 24 h OSD-latency window
 (`ceph-latency.sh --end <stage 1 start> --window 24h --label baseline`) is read when stage 1 starts. The Stage M
