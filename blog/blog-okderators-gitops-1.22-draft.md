@@ -891,3 +891,7 @@ credential itself works; the permission is per repository. The 1.22 build pushes
 
 Nothing is published and Task 11 (catalog PRs) stays blocked. The fix is the maintainers': write on all 13
 repositories, then a re-run of the three runs. The cluster stays on the zot test build.
+
+2026-11-06: filed as okd-operator-pipeline [#51](https://github.com/okd-project/okd-operator-pipeline/issues/51)
+("CI cannot push to quay.io/okderators/gitops/*: Deploy GitOps fails after #39-#41"), with the three runs, the error,
+the 13 repositories and the pointer to #45.

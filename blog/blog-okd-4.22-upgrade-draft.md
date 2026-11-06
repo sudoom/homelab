@@ -803,3 +803,25 @@ catalogsource.operators.coreos.com/operatorhubio-catalog unchanged
 Zero InstallPlans, as expected. The catalog pod moved from node5 to node6. The `:4.21` image (132 MB) stays cached on
 node5, which carries mon c, until image garbage collection removes it; not checked. One trap while checking: an `okderators-dhw67` pod in the events at 11:09Z
 pulling `:4.21` was the hourly `registryPoll` check pod (pull, compare digest, delete), not a second catalog.
+
+## 2026-11-06 — cert-manager 1.20 is missing from the pipeline's `release-4.22`
+
+Since the 2026-10-29 flip, `okd-operator-pipeline` `release-4.22` is the branch that builds our catalog. Its
+`cert-manager/` still builds 1.18 (`MINOR=18`, `.gitmodules` on `cert-manager-1.18`/`release-1.18`). The 1.20 update
+went to `main` (#28) and `release-4.21` (#29) only. `catalog-index:4.22` offers 1.20 because okderators-catalog-index
+#61 copied the bundle built on `release-4.21` (`cert-manager-operator.v1.20.0-2026-10-22-132146`). The next
+cert-manager build from `release-4.22` (a 1.20.x rebuild or a manual dispatch) would build 1.18 again. Nothing on that
+branch triggers it automatically: its `cert-manager-deploy.yaml` fires on pushes to `main`.
+
+The backport is #29 as it stands. `cert-manager/` on `release-4.22` was byte-identical to `release-4.21` before #29
+(`git diff db6ca2c37a upstream/release-4.22 -- cert-manager` is empty; only `.gitmodules` differs, in other operators'
+entries), so `git cherry-pick 74fd770` (the squashed #29) applied without conflicts. The one change on top: the
+workflow's push branch `release-4.21` → `release-4.22`. Result: branch `cert-manager-1.20-4.22` at `6ff7e53` on
+`release-4.22` `a1080bf`, 10 files, and `git diff upstream/release-4.21 HEAD -- cert-manager` is empty. The
+submodule pins are unchanged: `openshift/jetstack-cert-manager` `release-1.20` and
+`openshift/cert-manager-operator` `cert-manager-1.20` are still at #29's `bc643782` and `1adf341f` (compare
+`ahead_by=0`).
+
+The bundle's `olm.skipRange` is `>=1.0.0 <1.20.0-<build date>`, so a 4.22 build also skips the 10-22 entry already in
+the 4.22 catalog. The branch is local only. The check build on the cluster, the push to the fork and the draft PR wait
+for the end of the Rook freeze (no in-cluster builds until the Tentacle stage is done).
