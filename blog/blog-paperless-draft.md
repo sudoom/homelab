@@ -459,3 +459,23 @@ because a UPO carries the taxpayer's own NIP. `Tax/PIT` takes ryczałt (settled 
 payments in totals": the payment confirmation carries `Amount`, `Category` `taxes` or `zus` and `Scope/JDG`, with the
 month the tax is for as `Period`; returns, UPOs and registers never carry an amount. A one-page filing guide with
 these rules went to a private claude.ai page for use while sorting.
+
+## 2026-11-06 (late) — the OCR diagnosis above was wrong: unpaper, not the text layer
+
+After the playbook applied `redo` and the photo-PDF was reprocessed, its content was the same five lines. The task
+log showed why the earlier reasoning did not hold:
+
+```
+[paperless.parsing.tesseract] Text detection: original_has_text=False (text_length=0, mode=redo, produce_archive=True)
+[paperless.parsing.tesseract] OCR strategy: full OCR — OCR_MODE=redo
+[paperless.parsing.tesseract] Calling OCRmyPDF with args: {… 'redo_ocr': True, 'clean': True, 'rotate_pages': True, …}
+[ocrmypdf._exec.tesseract] [tesseract] Too few characters. Skipping this page
+[ocrmypdf._pipeline] page is facing ⇧, confidence 0.00 - no change
+[ocrmypdf._graft] Parsing 1 pages with HocrParser
+```
+
+The PDF had no text layer at all, so `auto` had already run full OCR; the five fragments are what Tesseract read from
+a sharp photo. `redo` changed nothing and is reverted (it would only add OCR to every born-digital PDF). Next
+hypothesis: `clean: True` runs unpaper on the page image before OCR; unpaper is built for flat black-and-white scans,
+and on a photo with a grey background and a shadow it can blank most of the page, which also explains the
+orientation check's "too few characters". `PAPERLESS_OCR_CLEAN=none` is the test; OCR mode is back to the default.
