@@ -343,6 +343,11 @@
       ttl: "3600"
       overwrite: "true"
     status_code: 200
+    return_content: true
+  register: _homelab_record_r
+  # Technitium answers HTTP 200 with status "error" in the body on a rejected
+  # record, so check the JSON status too, as the zone-create task does.
+  failed_when: _homelab_record_r.status != 200 or (_homelab_record_r.json.status | default('')) != "ok"
   loop: "{{ homelab_records }}"
   loop_control:
     label: "{{ item.name }}.{{ homelab_zone_name }} → {{ item.ip }}"

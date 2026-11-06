@@ -76,6 +76,14 @@ homelab_zone_name: homelab.sudops.pl
 homelab_records:
   - { name: nas, ip: 192.168.1.2  }
   - { name: dns, ip: 192.168.1.12 }
+  # TrueNAS (192.168.1.25) apps; Traefik there terminates TLS for all of them.
+  - { name: paperless, ip: 192.168.1.25 }
+  - { name: syncthing, ip: 192.168.1.25 }
+  - { name: garage,    ip: 192.168.1.25 }
+  - { name: s3,        ip: 192.168.1.25 }
+  - { name: "*.s3",    ip: 192.168.1.25 }  # quoted: a bare * is a YAML alias
+  - { name: truenas,   ip: 192.168.1.25 }
+  - { name: traefik,   ip: 192.168.1.25 }
 
 # ---- Blocked zones (return NXDOMAIN locally, never recurse) ----
 # Carry-over from pi-hole's `local=/.../` dnsmasq directives.

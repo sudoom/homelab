@@ -137,6 +137,13 @@ The `technitium-config` role applies the following via Technitium's HTTP API (`/
 | `node5.okd.sudops.pl` | `192.168.1.8` | `okd_nodes` list |
 | `node6.okd.sudops.pl` | `192.168.1.9` | `okd_nodes` list |
 
+**Authoritative zone for `homelab.sudops.pl`** (`/api/zones/records/add`, idempotent via `overwrite=true`; the task fails on a JSON `status` other than `ok`, not only on a non-200 HTTP code). Driven by `homelab_records`:
+| Domain | A → | What |
+|---|---|---|
+| `nas.homelab.sudops.pl` | `192.168.1.2` | Synology |
+| `dns.homelab.sudops.pl` | `192.168.1.12` | dns-master |
+| `paperless`, `syncthing`, `garage`, `s3`, `*.s3`, `truenas`, `traefik` `.homelab.sudops.pl` | `192.168.1.25` | TrueNAS apps, behind its Traefik |
+
 **Blocked zones** (authoritative empty zones → NXDOMAIN by default):
 - `cluster.local` (carry-over from pi-hole `local=/cluster.local/`)
 - `svc.cluster.local.okd.sudops.pl` (search-suffix-leak shape from cluster pods)
