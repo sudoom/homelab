@@ -379,3 +379,8 @@ cleanly (operator: "all good").
 `kwargs.pop("think", None) or self.thinking` (read on llama_index main; paperless never sets `thinking`, and a
 call-time `think=False` would be lost to `False or None`). The setting is removed with a comment saying why; the
 render test now expects seven AI variables. The cost of thinking is latency only.
+
+Task 4 Step 4: `document_llmindex rebuild` in the paperless container (`Rebuilding LLM index`, 5/5 documents). Asked
+in the chat, in Polish, how much the November accounting services cost, it answered with the line item (246,00 PLN
+gross) and the invoice total (338,25 PLN), and listed the invoice first among three linked sources. Task 4 done; the
+nightly index update (`PAPERLESS_LLM_INDEX_TASK_CRON`, 02:10 by default) keeps it current from here.
