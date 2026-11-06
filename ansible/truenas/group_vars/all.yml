@@ -672,7 +672,9 @@ truenas_paperless:
   ai_envs:
     - { name: PAPERLESS_AI_ENABLED, value: "true", container: paperless }
     - { name: PAPERLESS_AI_LLM_BACKEND, value: "ollama", container: paperless }
-    - { name: PAPERLESS_AI_LLM_ENDPOINT, value: "http://192.168.1.3:11434", container: paperless }
+    # :11435 is macmini/ollama-think-proxy, not Ollama itself (:11434): it sets "think": false on chat calls,
+    # which paperless cannot do (see below); 20 s -> 5 s per suggestion on gemma4 (2026-11-06).
+    - { name: PAPERLESS_AI_LLM_ENDPOINT, value: "http://192.168.1.3:11435", container: paperless }
     - { name: PAPERLESS_AI_LLM_MODEL, value: "gemma4:26b", container: paperless }
     - { name: PAPERLESS_AI_LLM_EMBEDDING_BACKEND, value: "ollama", container: paperless }
     - { name: PAPERLESS_AI_LLM_EMBEDDING_MODEL, value: "bge-m3", container: paperless }

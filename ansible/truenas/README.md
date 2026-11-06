@@ -495,8 +495,11 @@ chronology: `blog/blog-paperless-draft.md`.
 - **AI is environment-only.** `truenas_paperless_ai_enabled` (`true` since 2026-11-06) adds the seven `PAPERLESS_AI_*`
   settings (Ollama on `192.168.1.3`). Prerequisites on the Mac mini, by hand: `launchctl setenv OLLAMA_HOST
   0.0.0.0:11434` and an Ollama restart (it listens on localhost otherwise), `ollama pull gemma4:26b` and `ollama pull
-  bge-m3`, and the MikroTik DHCP reservation for `192.168.1.3`. Check from the box:
-  `ssh truenas_admin@192.168.1.25 "curl -s http://192.168.1.3:11434/api/tags" | jq -r ".models[].name"` lists both.
+  bge-m3`, the MikroTik DHCP reservation for `192.168.1.3`, and `macmini/ollama-think-proxy/install.sh`. Paperless
+  talks to that proxy on `:11435`, not to Ollama: it sets `"think": false` on chat calls, which paperless 3.4.2 cannot
+  do and which cuts a suggestion from ~20 s to ~5 s on gemma4 (`macmini/ollama-think-proxy/README.md`). Check from the
+  box: `ssh truenas_admin@192.168.1.25 "curl -s http://192.168.1.3:11435/api/tags" | jq -r ".models[].name"` lists
+  both (through the proxy, which passes `/api/tags` through).
   Never set the AI values in the paperless admin UI: a UI value silently overrides the
   environment. The render test is `ansible-playbook -i localhost, -c local tests/paperless-render.yml` (once more
   with `-e truenas_paperless_ai_enabled=true`).
