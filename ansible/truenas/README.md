@@ -497,6 +497,14 @@ chronology: `blog/blog-paperless-draft.md`.
   environment. The render test is `ansible-playbook -i localhost, -c local tests/paperless-render.yml` (once more
   with `-e truenas_paperless_ai_enabled=true`).
 
+### Restore
+
+From the export, into a throwaway app next to the live one: `tests/paperless-restore/README.md` (`create-app.sh`
+builds the `paperless-restore` app on port 30071 with the export mounted read-only at `/restore`,
+`document_importer /restore` inside it, `compare.sh` checks document count and `original_checksum` sets against
+the live API, then `app.delete … remove_ix_volumes`). A real restore uses the same importer against a fresh app; the
+Synology and Storage Box copies hold the same files as `tank/paperless/export`.
+
 ### Nightly export
 
 `paperless-export.py` (`roles/truenas-tasks/files/`, installed to `/mnt/tank/monitoring/bin/` next to the textfile
