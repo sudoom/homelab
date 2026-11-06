@@ -270,3 +270,14 @@ Each was then uploaded a second time, and all five were refused:
 So `PAPERLESS_CONSUMER_DELETE_DUPLICATES=true` also applies to uploads through the UI, which the docs describe only for
 the consume directory. The log stream is read with `midclt subscribe -n <count> -t <s>
 'app.container_log_follow:{...}'`; file names are not reproduced here.
+
+Step 4 continued: `midclt call --job cronjob.run 5` (rc 0) wrote `paperless-export.prom` with documents = 5 and left 12
+files (511K, 1000:1000) in `tank/paperless/export`. Both Cloud Sync tasks then ran once: SUCCESS, 12/12 files, 550 KiB;
+`cloudsync.list_directory` on each destination lists 12 files, 563,595 bytes, `manifest.json` included. In the
+cluster, the user-workload Prometheus returns `truenas_paperless_export_documents` = 5. The alert rule went in as
+ba39e3f after `promtool check rules` (SUCCESS, 20 rules) and an `oc diff` that added only the `truenas-paperless`
+group; ArgoCD synced at 13:00:12Z and Thanos Ruler reports all three rules `health=ok state=inactive`.
+
+One thing for the review pass: an exported file name starts with `2026-01-11` (the created date, from
+`PAPERLESS_FILENAME_FORMAT`) while the original's own name carries `20261101`, which looks like day and month swapped
+by the date parser. To check on the document itself before drawing a conclusion.
