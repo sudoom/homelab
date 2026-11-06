@@ -3340,3 +3340,42 @@ expired 2026-09-22 05:30:06Z and never purged. README TODO "PV cleanup when stuc
 
 Still open for stage 1: the s1 fio point (three runs in the 2026-11-06 12:00-14:00Z slot) and
 `ceph-latency.sh --end <>= 2026-11-06T17:22Z> --window 24h --label s1`.
+
+## 2026-11-06 — Stage 1 fio point (s1)
+
+The measurement after stage 1, in the same 12:00-14:00Z slot and with the same commands as the baseline (runbook
+"Stage M", label `s1`). Readonly gates at 11:58Z: sweep clean (3/3 nodes, CV/CO clean, 54/54 apps, CNPG ×3 2/2
+archiving, HEALTH_OK); CSI pre-flight clean (every PV and PVC Bound, no VolumeAttachment without its PV, MCPs idle, no
+leftover bench PVC).
+
+```
+bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s1          # evidence ceph-reads-s1-20261106T115932Z.txt, 0 failed
+nvme-replicated  STORED 149 GiB  USED 438 GiB  32.30%  MAX AVAIL 306 GiB   -> 25% = 76.5 GiB >= 32Gi
+KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 \
+BENCH_LAYOUT_NOTE='shared-bulk BENCH_ALLOW_SMALL=1 rep=<n>/3 stage=s1' \
+  ./tests/storage-benchmark/run.sh --backend ceph-nvme-block [--dry-run]
+```
+
+STORED was back at 149 GiB. During stage 1 it had read 150 → 160 → 164 GiB without an attribution; the 05:30
+snapshot retention and the trim afterwards are the likely reason it came down, not checked.
+
+The dry run agreed with `ceph df` (306.26 vs 306 GiB). Runs: `bench-20261106-130744` (12:07:44Z, with the layout),
+`-132917` (12:29:17Z) and `-134957` (12:49:57Z), all exit 0 on node4. `BLUESTORE_SLOW_OP_ALERT` latched on all three
+OSDs at 12:10:04Z, during run 1's sequential write, as at the baseline; the harness accepts it as known-benign.
+
+| workload | s1 runs | s1 mean | baseline mean | change |
+|---|---|---|---|---|
+| seq-read 1M | 409.9 / 362.1 / 399.1 MiB/s | 390.4 | 400.2 | −2.5% |
+| seq-write 1M | 62.3 / 64.9 / 64.7 MiB/s | 64.0 | 62.7 | +2.0% |
+| rand-read 4K | 15,262 / 14,090 / 16,642 iops | 15,331 | 16,559 | −7.4% |
+| rand-write 4K | 2,288 / 2,352 / 2,319 iops | 2,320 | 2,280 | +1.7% |
+
+Writes did not move. The read dip comes mostly from run 2, which is below every baseline run; runs 1 and 3 are at or
+inside the baseline range. I could not attribute it: the readonly account cannot query Prometheus history. Run 2 also
+had the highest share of its reads crossing node4's backnet port (101% and 97%, against 76-88% for the other seq-read
+runs), which other traffic into that port would explain, but that was not checked either. The series is record-only,
+so nothing follows from it. Full rows in `data/storage-benchmark-results.tsv`, summary in `data/storage-throughput.md`.
+
+Cleanup at 13:07Z: `run.sh --clean` (25G layout removed), `oc -n default delete pvc storage-bench-ceph-nvme-block`;
+no PV or bench Job left. Still open for stage 1: the 24 h OSD-latency window, read after 17:22Z
+(`ceph-latency.sh --label s1`).
