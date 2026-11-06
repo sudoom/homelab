@@ -437,7 +437,7 @@ noticed bad results on photographed invoices. One of them (`IMG_5815.pdf`, 24.1 
 an iSpot invoice wrapped in a PDF) had five lines of content: the issue and sale dates, one VAT line and a fragment of
 the signature box. No seller, NIP, invoice number or total, all perfectly legible in the image.
 
-Cause, from paperless 3.4.2's `docs/configuration.md`: `PAPERLESS_OCR_MODE` defaults to `auto`, which runs
+(Retracted below: the PDF had no text layer; the cause was Tesseract's global thresholding.) Cause, from paperless 3.4.2's `docs/configuration.md`: `PAPERLESS_OCR_MODE` defaults to `auto`, which runs
 `pdftotext` first and skips OCR for the whole document when it finds embedded text. These PDFs carry a partial
 invisible text layer from the app that made them, so paperless kept those fragments and never ran Tesseract; Suggest
 then works from five lines. About 40 such PDFs are in the pile and the original photos are gone (operator: "i dont

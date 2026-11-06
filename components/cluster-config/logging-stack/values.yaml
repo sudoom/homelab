@@ -29,7 +29,7 @@ namespace: openshift-logging
 # (loki.s3.homelab.sudops.pl, the generated config has no forcepathstyle), which
 # the *.s3 wildcard record, certificate SAN and garage's s3_api.root_domain
 # cover. Loki now depends on the LAN DNS (operator decision, 2026-11-06): a DNS
-# outage longer than CoreDNS's cache (the records' 3600 s TTL) stalls the
+# outage longer than CoreDNS's cache (about 15 minutes: `cache 900`; the record TTL is 3600 s) stalls the
 # ingesters' flushes, so the WAL on Ceph grows until DNS returns. The plain
 # port stays open on the NAS as a fallback: set endpoint back to it if DNS is
 # down.

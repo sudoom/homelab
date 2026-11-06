@@ -831,7 +831,8 @@ truenas_traefik_dashboard_enabled: >-
 # acme.storage (the template sets <acme>/<resolver>-acme.json) and never
 # entrypoints.*.address (set from the network section); the template fails the
 # render on either, and on the reserved flags in ix_values.yaml. Lowercase,
-# because the template lowercases them and app.config keeps what was sent.
+# because the template lowercases them: git then matches what Traefik receives
+# (an upper-case flag would not drift, it would just differ from the running one).
 truenas_traefik_args:
   common:
     - { flag: "log.level", value: "INFO" }

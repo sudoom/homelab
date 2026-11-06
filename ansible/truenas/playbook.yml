@@ -26,11 +26,13 @@
 
   roles:
     - role: truenas-storage   # assert pool, converge datasets  (run FIRST: everything else needs paths)
-    - role: truenas-system    # hostname/timezone/NTP/alert email
+    - role: truenas-system    # hostname/timezone/NTP/alert email; moves the web UI to 8080/8443
     - role: truenas-shares    # NFS exports to the OKD nodes
     - role: truenas-smb       # SMB Time Machine targets for the Macs
     - role: truenas-tasks     # scrub, SMART, periodic snapshots
-    - role: truenas-apps      # garage S3 server backing the Velero BSL
+    - role: truenas-apps      # garage, node_exporter, syncthing, paperless, Traefik
+    # Order is load-bearing: truenas-system moves the UI off 443 before truenas-apps
+    # lets Traefik bind it, so keep truenas-system before truenas-apps.
 
   # -------------------------------------------------------------------------
   # WHY THIS EXISTS: `--check` is structurally BLIND for this playbook.

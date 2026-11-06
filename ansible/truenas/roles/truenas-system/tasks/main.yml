@@ -130,14 +130,16 @@
     timeout: 60
   when: truenas_ui_restarted is changed
 
-# 443 must be free for Traefik, which binds it later in this same run.
+# 443 must be free for Traefik, which binds it later in this same run. Only when
+# this run moved the UI: on a converged box a probe-triggered restart leaves 443
+# to Traefik, which owns it by design (Ruling T2-1).
 - name: Wait for the old HTTPS port to close
   ansible.builtin.wait_for:
     host: 192.168.1.25
     port: 443
     state: stopped
     timeout: 60
-  when: truenas_ui_restarted is changed
+  when: truenas_ui_moved is changed
 
 # Clock correctness is not cosmetic here. Scrub schedules, snapshot retention
 # and every log timestamp depend on it -- and this homelab has already had one

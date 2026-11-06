@@ -482,7 +482,7 @@ chronology: `blog/blog-paperless-draft.md`.
 | Run as | uid/gid **1000**, the image's own `paperless` user, not the `apps` account (568): any other value makes the image's init `usermod --uid` the whole home on every container recreate, over 30 minutes on this HDD-backed Docker storage (2026-11-06). `data`, `media`, `consume` and `export` are owned 1000:1000 |
 | Ownership | the role chowns `data`, `media`, `consume`, `export` to 568:568; `postgres` is fixed by the catalog's `auto_permissions` |
 | Export mount | `paperless/export` at `/paperless/export` in the container (`additional_storage`) |
-| OCR / dates | `PAPERLESS_OCR_LANGUAGES=pol`, `PAPERLESS_OCR_LANGUAGE=pol+eng`, `PAPERLESS_OCR_USER_ARGS={"tesseract_thresholding": 2}` (Sauvola binarisation: the default global threshold lost almost all text on phone photos with uneven light, 48 words against 173 on the same page), `PAPERLESS_OCR_CLEAN=none`; OCR mode stays the default `auto`; Actions -> Reprocess re-OCRs documents consumed before, `PAPERLESS_DATE_PARSER_LANGUAGES=pl+en`; `PAPERLESS_SEARCH_LANGUAGE` stays unset (no Polish stemmer; a bad value fails startup) |
+| OCR / dates | `PAPERLESS_OCR_LANGUAGES=pol`, `PAPERLESS_OCR_LANGUAGE=pol+eng`; `PAPERLESS_OCR_USER_ARGS={"tesseract_thresholding": 2}` (Sauvola binarisation: the default global threshold lost almost all text on phone photos with uneven light, 48 words against 173 on the same page); `PAPERLESS_OCR_CLEAN=none`; OCR mode stays the default `auto`; `PAPERLESS_DATE_PARSER_LANGUAGES=pl+en`; Actions -> Reprocess re-OCRs documents consumed before; `PAPERLESS_SEARCH_LANGUAGE` stays unset (no Polish stemmer; a bad value fails startup) |
 | File layout | `PAPERLESS_FILENAME_FORMAT` is `!unsafe` so Ansible does not render paperless's own `{{ ... }}` placeholders |
 
 - **Secrets.** `db_password`, `redis_password` and `secret_key` are generated on the box at create time (garage
@@ -713,7 +713,7 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `group_vars/all.yml` | All declarative inputs: pool name, datasets, NFS clients, NTP, schedules |
 | `vars/vault.yml.example` | Committed template (no secrets) |
 | `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, the Synology account for the Cloud Sync backup, the Hetzner Storage Box sub-account for the offsite one, the paperless admin password (`truenas_paperless_admin_password`, first install only), and Traefik's Cloudflare token and dashboard basic-auth line (`truenas_traefik_cf_dns_api_token`, `truenas_traefik_dashboard_users`) |
-| `playbook.yml` | Full convergence (needs `--ask-vault-pass` since 2026-08-31, when `vars/vault.yml` was created; six things use it — SMTP, the two SMB Time Machine passwords, the Synology account, the Storage Box sub-account, the paperless admin password, Traefik's Cloudflare token and dashboard line — and each is skipped, not failed, if its variables are absent) |
+| `playbook.yml` | Full convergence (needs `--ask-vault-pass` since 2026-08-31, when `vars/vault.yml` was created; seven things use it — SMTP, the two SMB Time Machine passwords, the Synology account, the Storage Box sub-account, the paperless admin password, Traefik's Cloudflare token and dashboard line — and each is skipped, not failed, if its variables are absent) |
 | `check.yml` | Read-only state report (no vault) |
 | `roles/truenas-storage/` | Assert pool, converge datasets |
 | `roles/truenas-system/` | Timezone, NTP, alert email |

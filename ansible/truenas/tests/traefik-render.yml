@@ -72,7 +72,8 @@
         fail_msg: "a flag would fail the catalog render: {{ _flags }}"
 
     # The template lowercases each flag (docker-compose.yaml line 56) while the
-    # live app.config keeps what was sent, so an upper-case flag would drift forever.
+    # live app.config keeps what was sent. Both sides of the signature keep the sent
+    # spelling, so nothing would drift; lowercase is so git matches what Traefik gets.
     - name: Flags are lowercase and unique
       ansible.builtin.assert:
         that:

@@ -89,7 +89,7 @@ token (one key per consumer, as with the garage keys).
 - *Docker socket accepted* (see above); *read timeout 300 s* because the 60 s default can cut a large Velero upload.
 - *Plain ports stay open* (operator decision): the fallback if Traefik breaks. Encryption of the S3 traffic therefore
   rests on the consumers being configured for `https://`, which was verified after each switch.
-- *Velero and Loki may depend on the LAN DNS* (operator decision): an outage longer than CoreDNS's cache (3600 s TTL)
+- *Velero and Loki may depend on the LAN DNS* (operator decision): an outage longer than CoreDNS's cache (about 15 minutes: `cache 900`; the record TTL is 3600 s)
   stalls Loki's flushes (the WAL grows on Ceph) and marks the BSL unavailable until DNS returns.
 - *The probe covers the Synology's :5001 too* (the endpoint of the 2026-08-26 expiry) and lands before the consumers
   move; warnings are routed to mail because Alertmanager mails only `critical` and listed names.
@@ -114,6 +114,15 @@ ansible-playbook -i localhost, -c local <scratch>/t1.yml --syntax-check     # im
 Both ansible runs needed `ANSIBLE_LOCAL_TEMP`/`ANSIBLE_HOME` pointed at a writable directory, and the ad-hoc `debug` run needs a local RPC socket, which the Bash sandbox refuses.
 
 **Next.** The operator runs `ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --limit dns-master`; the slave gets the records by zone transfer. Then `dig +short @192.168.1.12 truenas.homelab.sudops.pl` and the same on `.13` for each name, plus `nas.homelab.sudops.pl` still `192.168.1.2`.
+
+Applied the same evening (operator run of `ansible/technitium/playbook.yml`: `dns-master ok=49 changed=2`,
+`dns-slave ok=37 changed=1`, `failed=0`). Both servers answer for every name, the slave by zone transfer:
+
+```
+$ for s in 192.168.1.12 192.168.1.13; do for n in truenas paperless syncthing garage s3 traefik loki.s3 velero.s3 nas; do dig +short @$s $n.homelab.sudops.pl A; done; done
+192.168.1.25   (× 8 names, both servers; loki.s3 and velero.s3 through the *.s3 wildcard)
+192.168.1.2    (nas, unchanged)
+```
 
 ## 2026-11-06 — the TrueNAS UI moves to 8080/8443
 
@@ -147,15 +156,6 @@ new:       Paperless https://paperless.homelab.sudops.pl, Garage https://garage.
 
 **Next.** Playbook run #1 (after Task 4): `https://192.168.1.25:8443` (self-signed warning) and `http://192.168.1.25:8080` open; `midclt call system.general.config | jq '{ui_port, ui_httpsport}'` reads 8080 and 8443. The Homepage links are pushed right after, with the staging-certificate warning accepted until the production cert lands.
 
-Applied the same evening (operator run of `ansible/technitium/playbook.yml`: `dns-master ok=49 changed=2`,
-`dns-slave ok=37 changed=1`, `failed=0`). Both servers answer for every name, the slave by zone transfer:
-
-```
-$ for s in 192.168.1.12 192.168.1.13; do for n in truenas paperless syncthing garage s3 traefik loki.s3 velero.s3 nas; do dig +short @$s $n.homelab.sudops.pl A; done; done
-192.168.1.25   (× 8 names, both servers; loki.s3 and velero.s3 through the *.s3 wildcard)
-192.168.1.2    (nas, unchanged)
-```
-
 ## 2026-11-06 — the Traefik app (staging certificate)
 
 **What changed.** `ansible/truenas` now declares the community-train catalog app `traefik` (catalog 1.0.38, Traefik v3.7.17) and the file it routes from. Three datasets in `truenas_datasets`: `apps/traefik`, `apps/traefik/config` (owner 950, `truenas_admin`, so Ansible writes the routing file without `become`, the `monitoring/bin` precedent) and `apps/traefik/acme` (owner 568, the uid Traefik runs as). In `group_vars/all.yml`: `truenas_traefik` (the inputs), top-level `truenas_traefik_acme_resolver: lestaging`, and three computed variables the role sends as they are: `truenas_traefik_additional_args`, `truenas_traefik_app_values` (everything except the token) and `truenas_traefik_dashboard_enabled` (a boolean from the vault line). The role section in `truenas-apps` comes after paperless: assert the resolver is `lestaging` or `le`, write `/mnt/tank/apps/traefik/config/homelab.yml` from `templates/traefik-homelab.yml.j2` (0644, `no_log`), create the app only when the vault holds the Cloudflare token, otherwise warn on every run; on an existing app, compare a signature against `app.config` and send `app.update` with the whole declared values on drift. Two new vault variables in `vars/vault.yml.example`: `truenas_traefik_cf_dns_api_token` (a new Cloudflare token, Zone:Read + DNS:Edit on `sudops.pl`) and `truenas_traefik_dashboard_users` (one `htpasswd -nbB admin '<password>'` line).
@@ -185,7 +185,7 @@ Only the active resolver is declared. With `le` the last line goes and the other
 **What I checked against the catalog sources** (local copies of `traefik` 1.0.38 and ix library 2.3.18, fetched the same day):
 
 - `templates/docker-compose.yaml` line 9, `c1.add_docker_socket()`, and library `container.py` lines 295-297 (it adds group 999 and mounts `/var/run/docker.sock`); `app.yaml` lines 9-11 list the socket under `host_mounts`. Line 19 hard-codes `--providers.docker=true`. Neither can be switched off through values, so the socket is an accepted cost and `providers.docker.exposedbydefault=false` keeps container labels from creating routes.
-- Line 56: each flag is `lstrip("-")|lower`, so flags go in lowercase, otherwise `app.config` would keep a spelling the signature never matches. Line 58: `=` in a flag fails the render. Line 59: the flag must not be in `consts.reserved_flags` (`ix_values.yaml` lines 17-27: `ping`, `ping.entrypoint`, `entrypoints.ping.address`, `providers.docker`, `providers.file.watch`, `providers.file.directory`, `api.basepath`, `api.insecure`, `api.dashboard`, `entrypoints.traefik.address`).
+- Line 56: each flag is `lstrip("-")|lower`, so flags go in lowercase: both sides of the signature keep the sent spelling, so nothing would drift, but git then matches what Traefik actually receives. Line 58: `=` in a flag fails the render. Line 59: the flag must not be in `consts.reserved_flags` (`ix_values.yaml` lines 17-27: `ping`, `ping.entrypoint`, `entrypoints.ping.address`, `providers.docker`, `providers.file.watch`, `providers.file.directory`, `api.basepath`, `api.insecure`, `api.dashboard`, `entrypoints.traefik.address`).
 - Lines 62-73 and 100-102: any `certificatesresolvers.<r>.*` flag registers `<r>`, `.acme.storage` fails, and the template appends `--certificatesresolvers.<r>.acme.storage=/acme/<r>-acme.json` (`consts.acme_base_path: /acme`, `acme_file_suffix: acme.json`, `ix_values.yaml` lines 13-14).
 - Lines 76-94: an `entrypoints.<name>.*` flag must name an entry point from the network section (or `ping`/`traefik`), `.address` fails, and http3 flags need the entry point's http3 option. Line 43 sets `--entrypoints.<name>.address=:<port>/<protocol>`, line 45 publishes the port.
 - Line 96: `--flag=value`, or `--flag` alone when the value is empty, so `entrypoints.websecure.http.tls` carries the value `true`.
@@ -274,9 +274,9 @@ python3 -m unittest bin/test_paperless_costs.py                                 
 
 Not run against the box; that is playbook run #2 (traefik args, paperless envs).
 
-### Run #2 applied and verified (2026-11-06 23:15Z)
+### Run #2 applied and verified (2026-11-06 22:15Z)
 
-Operator run: `ok=89 changed=2 failed=0` (traefik app update to resolver `le`, paperless envs). Traefik's log:
+Operator run: `ok=89 changed=2 failed=0` (traefik app update to resolver `le`, paperless envs). Traefik's log (the timestamps below are CET, +0100; 23:15 CET is 22:15Z):
 
 ```
 23:15:11 INF Testing certificate renew... acmeCA=https://acme-v02.api.letsencrypt.org/directory providerName=le.acme
@@ -286,7 +286,7 @@ Operator run: `ok=89 changed=2 failed=0` (traefik app update to resolver `le`, p
 23:15:35 INF Server responded with a certificate.
 ```
 
-The store is saved: `le-acme.json` 16,084 bytes, uid 568, mode `0600`, written 23:15:35.13 (a listing taken a few
+The store is saved: `le-acme.json` 16,084 bytes, uid 568, mode `0600`, written 23:15:35.13 CET (22:15:35Z) (a listing taken a few
 seconds earlier caught the 3,431-byte account-only file between registration and issuance). Every name verifies
 against the system trust store, no `-k`:
 
@@ -378,6 +378,10 @@ phase=Completed items=37/37 errors= warnings= start=2026-11-06T22:39:09Z done=20
 `oc get backup` alone resolves to CNPG's `backups.postgresql.cnpg.io` on this cluster; the Velero kind needs its full
 name.
 
+Residual risk: the check backup was metadata only (37 items, no volume data), so no kopia volume upload has crossed
+Traefik yet. The 300 s read timeout is covered only by the render test until the first real data backup (the daily
+Schedule stays paused).
+
 ## 2026-11-06 — Loki to garage over HTTPS by name
 
 Loki's chunks and index crossed the LAN to garage in plain HTTP (`http://192.168.1.25:30188`). `garage.endpoint` in
@@ -385,8 +389,8 @@ Loki's chunks and index crossed the LAN to garage in plain HTTP (`http://192.168
 `loki-secret-translator` Job writes it into Secret `loki-storage`; the Loki operator re-renders `logging-loki-config`
 and rolls the Loki pods. Loki addresses the bucket virtual-host style (`loki.s3.homelab.sudops.pl`; the generated
 config has no `forcepathstyle`), which the `*.s3` record, the certificate SAN and garage's `s3_api.root_domain` cover.
-Consequence accepted by the operator: Loki now depends on the LAN DNS. An outage longer than CoreDNS's cache (3600 s
-record TTL) stalls the ingesters' flushes and the WAL on Ceph grows until DNS returns. The plain port stays open as
+Consequence accepted by the operator: Loki now depends on the LAN DNS. An outage longer than CoreDNS's cache (about 15 minutes:
+`cache 900` in openshift-dns/dns-default; the record TTL is 3600 s) stalls the ingesters' flushes and the WAL on Ceph grows until DNS returns. The plain port stays open as
 the fallback (revert the value).
 
 ```
@@ -412,7 +416,7 @@ but its last sync operation had finished on 2026-10-21, and Secret `loki-storage
 `secret-translator-job.yaml` is an Argo CD Sync hook. Hooks are not part of the app's diff, so a change that only
 touches the hook's inputs never makes the app OutOfSync, auto-sync never runs and the hook never rewrites the Secret.
 Fix: a non-hook carrier, the LokiStack annotation `sudops.pl/storage-secret-inputs`, a 16-char sha256 over
-endpoint, bucket, region, credentialsSecret and destinationSecretName joined with `|`. Render diff against 39afe05:
+endpoint, bucket, region, credentialsSecret and destinationSecretName joined with `|`. (2026-11-07 final review: replaced by a hash of the whole rendered Job, so a script, image or env change also syncs; same annotation name.) Render diff against 39afe05:
 
 ```
 +    sudops.pl/storage-secret-inputs: "1640263e1e5d2991"      (LokiStack metadata.annotations, plus its comment)
