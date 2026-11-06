@@ -9,9 +9,47 @@ rook-ceph:
   useOperatorHostNetwork: true
   monitoring:
     enabled: true
+  csi:
+    # Explicit: the v1.21.1 chart dropped this key from its values but still
+    # renders ROOK_CREATE_CSI_OPERATOR_RESOURCES from it, so without it the
+    # operator ConfigMap gets that key with no value. Read as an empty string,
+    # that makes Rook delete the CephConnection and ClientProfile, which breaks
+    # all new provisioning and mounts. Rook v1.20.9's chart default was true.
+    createCsiOperatorResources: true
+    # The CSI images in rook-csi-operator-image-set-configmap, set to
+    # ceph-csi-operator 1.1.0's built-ins (internal/controller/defaults.go@v1.1.0).
+    # The v1.21.1 chart leaves them empty so that the operator falls back to its
+    # built-ins, but the outgoing ceph-csi-operator 1.0.4 copies empty values
+    # over its own defaults: a Driver reconcile by it during the hop would give
+    # every plugin container an empty image. The chart's image set has no key
+    # for csi-snapshot-metadata; that sidecar keeps each operator's built-in and
+    # is not deployed here (no SnapshotMetadataService API). Drop these pins
+    # after stage 2 settles: from then on the outgoing operator is >= 1.1.0,
+    # which skips empty values, and the empty set renders the same built-ins.
+    cephcsi:
+      repository: quay.io/cephcsi/cephcsi
+      tag: v3.18.1
+    registrar:
+      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+      tag: v2.18.0
+    provisioner:
+      repository: registry.k8s.io/sig-storage/csi-provisioner
+      tag: v6.3.0
+    snapshotter:
+      repository: registry.k8s.io/sig-storage/csi-snapshotter
+      tag: v8.6.0
+    attacher:
+      repository: registry.k8s.io/sig-storage/csi-attacher
+      tag: v4.13.0
+    resizer:
+      repository: registry.k8s.io/sig-storage/csi-resizer
+      tag: v2.2.1
+    csiAddons:
+      repository: quay.io/csiaddons/k8s-sidecar
+      tag: v0.15.1
   ceph-csi-operator:
     serviceAccount:
-      # Permanent. The ceph-csi-operator 1.0.4 subchart (Rook v1.20) would
+      # Permanent. The ceph-csi-operator subchart (1.0.4 and 1.1.0) would
       # rename the operator's ServiceAccount from ceph-csi-controller-manager to
       # ceph-csi. Keeping the existing name means the manager, metrics-auth and
       # leader-election bindings never point at a missing or new SA while the
@@ -21,7 +59,7 @@ rook-ceph:
 # Values passed to the ceph-csi-drivers subchart (prefixed with ceph-csi-drivers:).
 # Since Rook v1.20 this chart owns the CSI Driver and OperatorConfig CRs and the
 # CSI plugin ServiceAccounts and RBAC. Base: Rook's recommended values
-# (rook/rook deploy/charts/ceph-csi-drivers/values.yaml@v1.20.9), plus the
+# (rook/rook deploy/charts/ceph-csi-drivers/values.yaml@v1.21.1), plus the
 # overrides this cluster needs.
 ceph-csi-drivers:
   operatorConfig:
