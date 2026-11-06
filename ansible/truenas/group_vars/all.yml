@@ -401,6 +401,11 @@ truenas_hostname: truenas
 truenas_domain: homelab.sudops.pl
 truenas_timezone: Europe/Warsaw
 
+# Web UI ports. Moved off 80/443 so the Traefik app can bind them (spec:
+# docs/superpowers/specs/2026-11-06-truenas-https-design.md, section 2). The
+# `truenas` route in Traefik uses https as its backend port.
+truenas_ui_ports: {http: 8080, https: 8443}
+
 # NTP as IPs, never hostnames. Direct lesson from the 2026-07-25 DNS outage:
 # a box whose clock is wrong cannot validate DNSSEC, and a box that needs DNS
 # to find its time source cannot recover on its own. Same list as dns-master.

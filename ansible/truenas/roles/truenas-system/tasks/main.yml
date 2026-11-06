@@ -17,12 +17,24 @@
 #     playbook connects as. Verified in check.yml instead of enforced here.
 # ---------------------------------------------------------------------------
 
+# no_log: system.general.config can carry the UI certificate's key (trap 8).
 - name: Read current system general config
   ansible.builtin.command:
     argv: [midclt, call, system.general.config]
   register: truenas_sysgen
   changed_when: false
   check_mode: false
+  no_log: true
+
+# Only the fields later tasks print or compare; timezone stays for the task below.
+- name: Derive the UI port facts
+  ansible.builtin.set_fact:
+    truenas_ui_live: >-
+      {{ (truenas_sysgen.stdout | from_json)
+         | dict2items
+         | selectattr('key', 'in', ['ui_port', 'ui_httpsport', 'ui_httpsredirect'])
+         | items2dict }}
+  no_log: true
 
 - name: Set timezone
   ansible.builtin.command:
@@ -32,6 +44,81 @@
       - system.general.update
       - "{{ {'timezone': truenas_timezone} | to_json }}"
   when: (truenas_sysgen.stdout | from_json).timezone != truenas_timezone
+  no_log: true
+
+# ---------------------------------------------------------------------------
+# Web UI ports: 80/443 -> 8080/8443, so Traefik (truenas-apps role) can bind
+# 80/443. Method facts (core.get_methods, TrueNAS 25.10.7, 2026-11-06):
+#   system.general.update      job=False  -> plain `midclt call` (trap 1 checked)
+#   system.general.ui_restart  job=False, optional `delay` argument
+#   port.in_use                does NOT exist here -> app.used_ports (job=False)
+#                              plus the live UI ports stand in for it.
+# The restart is asynchronous. The playbook runs over SSH, not the UI, so the
+# restart does not cut its own connection.
+# ---------------------------------------------------------------------------
+- name: Read the ports used by apps
+  ansible.builtin.command:
+    argv: [midclt, call, app.used_ports]
+  register: truenas_used_ports
+  changed_when: false
+  check_mode: false
+
+- name: Refuse the new UI ports when something else already uses one
+  ansible.builtin.assert:
+    that:
+      - (truenas_ui_ports.http | int) not in _taken
+      - (truenas_ui_ports.https | int) not in _taken
+    fail_msg: >-
+      UI port {{ truenas_ui_ports.http }} or {{ truenas_ui_ports.https }} is already in use
+      (app ports + live UI ports: {{ _taken | sort }})
+    quiet: true
+  vars:
+    _apps: "{{ truenas_used_ports.stdout | from_json }}"
+    _live_ui:
+      - "{{ truenas_ui_live.ui_port | int }}"
+      - "{{ truenas_ui_live.ui_httpsport | int }}"
+    # The UI's own current ports are not conflicts when they already equal the targets.
+    _taken: >-
+      {{ (_apps | map('int') | list)
+         + (_live_ui | reject('in', [truenas_ui_ports.http | int, truenas_ui_ports.https | int]) | list) }}
+  when: >-
+    truenas_ui_live.ui_port | int != truenas_ui_ports.http | int
+    or truenas_ui_live.ui_httpsport | int != truenas_ui_ports.https | int
+
+- name: Move the web UI to the configured ports
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - system.general.update
+      - "{{ {'ui_port': truenas_ui_ports.http | int, 'ui_httpsport': truenas_ui_ports.https | int} | to_json }}"
+  register: truenas_ui_moved
+  when: >-
+    truenas_ui_live.ui_port | int != truenas_ui_ports.http | int
+    or truenas_ui_live.ui_httpsport | int != truenas_ui_ports.https | int
+  no_log: true
+
+- name: Restart the web UI
+  ansible.builtin.command:
+    argv: [midclt, call, system.general.ui_restart]
+  when: truenas_ui_moved is changed
+
+- name: Wait for the UI on the new HTTPS port
+  ansible.builtin.wait_for:
+    host: 192.168.1.25
+    port: "{{ truenas_ui_ports.https | int }}"
+    state: started
+    timeout: 60
+  when: truenas_ui_moved is changed
+
+# 443 must be free for Traefik, which binds it later in this same run.
+- name: Wait for the old HTTPS port to close
+  ansible.builtin.wait_for:
+    host: 192.168.1.25
+    port: 443
+    state: stopped
+    timeout: 60
+  when: truenas_ui_moved is changed
 
 # Clock correctness is not cosmetic here. Scrub schedules, snapshot retention
 # and every log timestamp depend on it -- and this homelab has already had one
