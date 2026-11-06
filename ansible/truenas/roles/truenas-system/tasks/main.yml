@@ -98,18 +98,37 @@
     or truenas_ui_live.ui_httpsport | int != truenas_ui_ports.https | int
   no_log: true
 
+# The restart is gated on the real listening state, not only on the update's
+# changed status: the new ports take effect only after ui_restart. If the update
+# succeeded and the restart then failed (or a wait timed out, or SSH dropped), a
+# rerun reads 8080/8443 from the live config, skips the update, and nginx may
+# still listen on 80/443. Probing 8443 catches that: closed -> restart again.
+- name: Probe whether the UI listens on the new HTTPS port
+  ansible.builtin.wait_for:
+    host: 192.168.1.25
+    port: "{{ truenas_ui_ports.https | int }}"
+    state: started
+    timeout: 5
+  register: truenas_ui_probe
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
 - name: Restart the web UI
   ansible.builtin.command:
     argv: [midclt, call, system.general.ui_restart]
-  when: truenas_ui_moved is changed
+  register: truenas_ui_restarted
+  # failed_when: false hides the failure from `is failed`; a closed port leaves no `state`.
+  when: truenas_ui_moved is changed or (truenas_ui_probe.state | default('')) != 'started'
 
+# Only after a restart in THIS run: on later runs Traefik owns 443 by design.
 - name: Wait for the UI on the new HTTPS port
   ansible.builtin.wait_for:
     host: 192.168.1.25
     port: "{{ truenas_ui_ports.https | int }}"
     state: started
     timeout: 60
-  when: truenas_ui_moved is changed
+  when: truenas_ui_restarted is changed
 
 # 443 must be free for Traefik, which binds it later in this same run.
 - name: Wait for the old HTTPS port to close
@@ -118,7 +137,7 @@
     port: 443
     state: stopped
     timeout: 60
-  when: truenas_ui_moved is changed
+  when: truenas_ui_restarted is changed
 
 # Clock correctness is not cosmetic here. Scrub schedules, snapshot retention
 # and every log timestamp depend on it -- and this homelab has already had one
