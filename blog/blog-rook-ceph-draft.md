@@ -3402,3 +3402,38 @@ around 1 ms either way. Rook v1.20.9 does not change the OSD data path (Ceph is 
 windows' different background load is the more likely reason than the upgrade. With the fio point (writes ±2%, reads
 −2.5%/−7.4% carried by one run) this closes stage 1's measurements. Stage 2 (Rook v1.21.1) is next; its patches are
 not written yet.
+
+## 2026-11-06 (evening) — Stage 2 patches prepared (Task 10)
+
+Prepared by an implementer subagent in a scratch clone, reviewed by a second one; nothing applied. Files under
+`.superpowers/sdd/2026-11-03-rook-ceph-upgrade/work/patches/` (local): `s2-c2-operator.patch` (operator wrapper to Rook
+`1.21.1` with `ceph-csi-drivers` `1.1.0`, `rook-ceph.csi.createCsiOperatorResources: true`), `s2-c3-cluster.patch`
+(cluster wrapper to `1.21.1`; its render is byte-identical to stage 1's, so the push applies nothing), and
+`s2-recovery.patch`. The runbook part went in separately so its gates are readable before the window (0cf20fd).
+
+What the renders turned up:
+
+- **An unconditional NetworkPolicy.** ceph-csi-operator 1.1.0 renders `ceph-csi-ceph-csi-controller-manager`: deny all
+  ingress, allow all egress, selecting `control-plane=ceph-csi-op-controller-manager` (the CSI operator pod only; the
+  plugin pods are hostNetwork and unselected). The template has no condition. The operator needs no ingress (metrics
+  off, no webhook, no Service); kubelet probes are not affected (OpenShift's catalogd pods run under a deny-all policy).
+  Accepted; the runbook's stage-2 verify gained "CSI operator pod Ready, `driver-generation` stable".
+- **Empty image values are a trap at the hop.** The outgoing ceph-csi-operator 1.0.4 copies image-set values over its
+  defaults with `maps.Copy` (`driver_controller.go:355,374`), empty ones included. Had the chart's empty image set
+  reached a 1.0.4 reconcile, the plugins would have rendered with empty images. c2 therefore pins the seven keys to the
+  1.1.0 built-ins (`internal/controller/defaults.go@v1.1.0`: cephcsi `v3.18.1`, csi-provisioner `v6.3.0`, attacher
+  `v4.13.0`, resizer `v2.2.1`, snapshotter `v8.6.0`, node-driver-registrar `v2.18.0`, csiaddons `k8s-sidecar v0.15.1`;
+  `csi-snapshot-metadata` has no key in Rook's ConfigMap). The pins go once stage 2 has settled.
+- **The stage-1 race cannot recur.** Rook v1.20.9 never writes `rook-csi-operator-image-set-configmap` (v1.19.5 did),
+  and ceph-csi-operator 1.1.0 does not watch it.
+- **A plain revert is not a safe recovery.** It would remove 20 grants that 1.1.0-era pods use (operator:
+  networkpolicies, clientprofilereplications; plugins: `volumesnapshots update`, `pvc patch`). `s2-recovery.patch` puts
+  the operator wrapper back to v1.20.9/1.0.4 and keeps those rules in a temporary template at sync-wave `-1`, so the
+  rollback roles exist before the chart's roles shrink; a follow-up removes it once the old pods are back.
+- **One grant dropped deliberately at c2:** `cbt.storage.k8s.io snapshotmetadataservices` leaves `ceph-csi-manager-role`
+  while the 1.0.4 pod still runs. The group is not served here (`oc api-resources --api-group=cbt.storage.k8s.io` prints
+  only the header) and v1.0.4 ignores the NoMatch; that read is now a c2 pre-push gate.
+
+Rook v1.21.2 and v1.20.10 appeared on 2026-11-05. v1.21.2 includes #18557, which switches msgr1 off on OSDs, mgrs and
+MDSes when msgr2 is required: that changes stage 3's assumption that existing kRBD mappings on v1 keep working. Stage 2
+stays on v1.21.1 (operator: "v1.21.1 ok"); v1.21.2 is decided before stage 3.
