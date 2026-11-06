@@ -3,7 +3,8 @@
 
 Month = the document's `created` date. Category = the document's one tag whose
 parent is the tag named "Category". Amounts come from the Monetary custom field
-"Amount"; currencies are never converted or mixed.
+"Amount"; currencies are never converted or mixed. Documents of type "Invoice (issued)"
+are income, not costs: they are skipped entirely (neither counted nor listed as excluded).
 
 The API token is read from the macOS Keychain (security find-generic-password)
 and is never printed.
@@ -22,6 +23,7 @@ from decimal import Decimal, InvalidOperation
 DEFAULT_URL = "http://192.168.1.25:30070"
 AMOUNT_FIELD = "Amount"
 CATEGORY_TAG = "Category"
+ISSUED_TYPE = "Invoice (issued)"
 # paperless stores "PLN123.45", "PLN-12.50", or (legacy) a bare "123.45".
 _MONETARY = re.compile(r"^([A-Z]{3})?(-?\d+(?:\.\d+)?)$")
 
@@ -46,8 +48,16 @@ def category_of(tag_ids, category_ids):
     return found.pop() if len(found) == 1 else None
 
 
-def aggregate(docs, amount_field_id, category_ids, default_currency):
-    """-> (totals[currency][YYYY-MM][category_id] = Decimal, excluded list of dicts)."""
+def type_ids_named(doc_types, name):
+    """Ids of the document types called `name` (case and surrounding spaces ignored)."""
+    want = name.strip().lower()
+    return {t["id"] for t in doc_types if (t.get("name") or "").strip().lower() == want}
+
+
+def aggregate(docs, amount_field_id, category_ids, default_currency, skip_type_ids=frozenset()):
+    """-> (totals[currency][YYYY-MM][category_id] = Decimal, excluded list of dicts).
+
+    Documents whose document_type is in skip_type_ids are ignored before any check."""
     totals = {}
     excluded = []
 
@@ -55,6 +65,8 @@ def aggregate(docs, amount_field_id, category_ids, default_currency):
         excluded.append({"id": doc.get("id"), "title": doc.get("title"), "reason": reason})
 
     for doc in docs:
+        if doc.get("document_type") in skip_type_ids:
+            continue  # issued invoice: income, not a cost
         values = [cf.get("value") for cf in doc.get("custom_fields", [])
                   if cf.get("field") == amount_field_id]
         if not values:
@@ -204,11 +216,16 @@ def main(argv=None, opener=_default_opener):
         sys.exit(f"parent tag {CATEGORY_TAG!r} not found")
     category_ids = {t["id"] for t in tags if t.get("parent") in parents}
 
+    doc_types = fetch_all(q("/api/document_types/", page_size=100), token, opener)
+    skip_type_ids = type_ids_named(doc_types, ISSUED_TYPE)
+    if not skip_type_ids:
+        print(f"note: no document type {ISSUED_TYPE!r}; nothing is skipped as income", file=sys.stderr)
+
     docs = fetch_all(q("/api/documents/", page_size=100,
                        custom_field_query=json.dumps([AMOUNT_FIELD, "exists", True]),
                        created__date__gte=f"{a.start}-01",
                        created__date__lt=f"{next_month(a.end)}-01"), token, opener)
-    totals, excluded = aggregate(docs, field["id"], category_ids, default_currency)
+    totals, excluded = aggregate(docs, field["id"], category_ids, default_currency, skip_type_ids)
     print(render(totals, tag_names) or "No documents with an amount in range.\n")
     print(render_excluded(excluded), end="")
 

@@ -24,8 +24,11 @@ AMOUNT = 7
 CATS = {10, 11}  # 10 electricity, 11 water; 9 is the parent "Category"
 
 
-def doc(i, created, tags, value, title="d"):
-    return {"id": i, "title": f"{title}{i}", "created": created, "tags": tags,
+ISSUED = 5  # document type "Invoice (issued)"
+
+
+def doc(i, created, tags, value, title="d", doc_type=None):
+    return {"id": i, "title": f"{title}{i}", "created": created, "tags": tags, "document_type": doc_type,
             "custom_fields": [{"field": AMOUNT, "value": value}, {"field": 99, "value": "x"}]}
 
 
@@ -69,6 +72,23 @@ class Tests(unittest.TestCase):
         self.assertEqual(totals, {"PLN": {"2024-11": {10: Decimal("10.00")}}})
         self.assertEqual([e["id"] for e in excluded], [2, 3, 4])
         self.assertIn("category", excluded[0]["reason"])
+
+    def test_aggregate_skips_issued_invoices(self):
+        # Issued invoices carry an Amount (gross, any currency) and no category; they are income,
+        # so they are neither counted nor listed as excluded, even if a category tag slips on.
+        docs = [doc(1, "2024-11-05", [9, 10], "PLN10.00"),
+                doc(2, "2024-11-05", [], "EUR500.00", doc_type=ISSUED),
+                doc(3, "2024-11-05", [9, 10], "PLN900.00", doc_type=ISSUED),
+                doc(4, "2024-11-05", [3], "PLN99.00", doc_type=2)]
+        totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN", skip_type_ids={ISSUED})
+        self.assertEqual(totals, {"PLN": {"2024-11": {10: Decimal("10.00")}}})
+        self.assertEqual([e["id"] for e in excluded], [4])
+
+    def test_type_ids_named(self):
+        types = [{"id": 2, "name": "Invoice (received)"}, {"id": ISSUED, "name": "Invoice (issued)"},
+                 {"id": 8, "name": "invoice (ISSUED) "}]
+        self.assertEqual(pc.type_ids_named(types, pc.ISSUED_TYPE), {ISSUED, 8})
+        self.assertEqual(pc.type_ids_named([], pc.ISSUED_TYPE), set())
 
     def test_currencies_not_mixed(self):
         docs = [doc(1, "2024-11-05", [9, 10], "PLN10.00"), doc(2, "2024-11-06", [9, 10], "EUR3.00"),

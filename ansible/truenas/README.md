@@ -501,6 +501,22 @@ chronology: `blog/blog-paperless-draft.md`.
   environment. The render test is `ansible-playbook -i localhost, -c local tests/paperless-render.yml` (once more
   with `-e truenas_paperless_ai_enabled=true`).
 
+### Document model
+
+Paperless data, created by hand in the UI (no code path manages it); the export carries it, so a restore brings it
+back and this list is for a rebuild from scratch. Decided 2026-11-05/06 (`blog/blog-paperless-draft.md`).
+
+| Object | Values |
+|---|---|
+| Document types | Bill, Invoice (received), Invoice (issued), Receipt, Tax document |
+| Tags | `Category` with one child per cost category (exactly one on every expense); `Tax` with children `PIT`, `VAT`, `ZUS`, `Other` (on tax documents); the inbox tag (assigned to every new document, removed at review) |
+| Custom fields | `Amount`: Monetary, default currency PLN; on expenses the amount paid, on issued invoices the gross amount in the invoice's currency. `Period`: Date, the first day of the month the document belongs to (a January invoice dated in February, a January VAT return filed in February) |
+| Correspondents | who issued the document (the client, on issued invoices); matching "Exact" on the NIP where there is one |
+| Saved views | Inbox; Expenses by month; Issued invoices by month; No category; Expense without Amount; Tax documents by year |
+
+`bin/paperless-costs` reads `Category`, `Amount` and the document type: "Invoice (issued)" documents are never
+counted as costs.
+
 ### Restore
 
 From the export, into a throwaway app next to the live one: `tests/paperless-restore/README.md` (`create-app.sh`

@@ -324,3 +324,25 @@ Cleanup 17:42Z: `midclt call --job app.delete paperless-restore '{"remove_ix_vol
 `tank/ix-apps/app_mounts/paperless-restore/*` datasets are gone, the live app RUNNING. So the nightly export restores
 into a working paperless with the same originals, and since both Cloud Sync legs copy that same folder (12 files,
 563,595 bytes on each), the offsite copies are restorable the same way.
+
+## 2026-11-06 — document model amended: issued invoices, `Period`, `Tax/*`
+
+The operator showed the folder tree used so far for the business paperwork: `JDG/<year>/<MM-Month>/` with
+`Invoices-Expense`, `Invoices-Income`, `PIT`, `VAT` (returns, JPK, UPO confirmations, the sales/purchase registers),
+`ZUS` (DRA) and `Other-Tax`. Two things in it the design had not covered: issued invoices, and filing by the month
+a document belongs to rather than its date (an invoice dated 2022-02-04 for January sits under January; a January
+VAT return is filed in February).
+
+Decisions: issued invoices go in ("invoices as well"); types become Bill, Invoice (received), Invoice (issued),
+Receipt, Tax document; a `Tax` parent tag with `PIT`, `VAT`, `ZUS`, `Other` mirrors the tax folders; a Date custom
+field `Period` ("yes") carries the month; `Amount` on an issued invoice is the gross amount in its currency
+("gross"). No income table in the totals script, "as invoices in different currencies". The model list is in
+`ansible/truenas/README.md` ("Document model") for a rebuild; the export carries it in a restore.
+
+`bin/paperless-costs` now skips documents of type "Invoice (issued)" before any other check, so an issued invoice
+is neither counted as a cost nor listed as excluded, even if a category tag slips onto it. The type is found by
+name through `/api/document_types/`; if it does not exist the script says so on stderr and skips nothing. Tests
+first: two new cases (`test_aggregate_skips_issued_invoices`, `test_type_ids_named`) failed on the missing argument
+and helper, then 16/16 passed; a `main()` run against a fake API counted a PLN 245.30 electricity bill and ignored a
+EUR 5,000 issued invoice. Household bills (electricity, water, mortgage, insurance) will come in too, as further
+`Category` children.
