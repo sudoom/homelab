@@ -156,6 +156,7 @@
   register: truenas_garage_job
   changed_when: false
   when: (truenas_garage_deploy.rc | default(0)) != 0
+  no_log: true       # the job record carries the call's arguments, secrets included
 
 - name: Fail with the real reason (payload stays hidden)
   ansible.builtin.fail:
@@ -247,6 +248,7 @@
   register: truenas_garage_opts_job
   changed_when: false
   when: (truenas_garage_opts.rc | default(0)) != 0
+  no_log: true       # the job record carries the call's arguments, secrets included
 
 - name: Fail with the real reason (payload stays hidden)
   ansible.builtin.fail:

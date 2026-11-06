@@ -48,3 +48,21 @@
           - _role_tasks | map(attribute='name') | select('search', 'garage s3 root domain') | list | length == 1
           - _role_tasks | map('to_json') | select('search', 'core\.get_jobs') | select('search', 'app\.update') | list | length >= 2
         fail_msg: "not no_log or missing: {{ _g_tasks | default([]) | map(attribute='name') | list }}"
+
+    # core.get_jobs records carry the job's arguments (the app payload, with
+    # admin_token, rpc_secret, web_ui_password), so the two garage readers need no_log.
+    - name: Select the garage core.get_jobs reader tasks
+      ansible.builtin.set_fact:
+        _g_jobs: "{{ (_g_jobs | default([])) + [item] }}"
+      loop: "{{ _role_tasks }}"
+      loop_control: { label: "{{ item.name }}" }
+      when:
+        - (item | to_json) is search('core\.get_jobs')
+        - (item | to_json) is search('truenas_garage_job|truenas_garage_opts_job')
+
+    - name: Both garage job readers (create, update) are no_log
+      ansible.builtin.assert:
+        that:
+          - _g_jobs | default([]) | length == 2
+          - _g_jobs | default([]) | selectattr('no_log', 'defined') | selectattr('no_log') | list | length == 2
+        fail_msg: "garage job readers: {{ _g_jobs | default([]) | map(attribute='name') | list }}, not all no_log"
