@@ -24,9 +24,10 @@ cluster's S3 consumers (Velero BSL, Loki) use `https://s3.homelab.sudops.pl`. A 
 
 **Verification.** Staging order first, production in run #2: every name verifies against the system trust store without
 `-k`, `loki.s3` proves the `*.s3` SAN. Velero: BSL `Available` on the HTTPS URL, one-off Backup `truenas-https-check`
-`Completed` 37/37, no errors. Loki: endpoint moved at 2026-11-06 23:12Z; its final log check and a 3-hour read-back were
-still in progress when this summary was written (the Loki section below carries the result). The probe's live checks
-(DNS from pods, negative controls) are recorded in its own section only as far as they were run when it was written.
+`Completed` 37/37, no errors. Loki: on `https://s3.homelab.sudops.pl` (virtual-host) since 2026-11-06 23:12Z, all pods
+rolled, 0 S3/TLS/flush errors on the three ingesters 30 minutes later; a 3-hour read-back from Grafana is the last
+open check. The probe passes on all eight targets and fails, as it must, on Traefik's default certificate and the
+TrueNAS self-signed one; the full record is in "Live verification record" at the end.
 
 **Found along the way.**
 
@@ -508,3 +509,14 @@ pods: distributors, queriers, query-frontends, compactor restarted 23:12; ingest
       ingester-0 23:15:30; index-gateway, ingester and compactor StatefulSets fully rolled (current == update revision)
 ingester logs, first 15 minutes: 0 lines matching error.*(s3|putobject|flush|x509|no such host|tls)
 ```
+```
+check at 23:46:08Z (30 min after the last ingester restart)
+pod/logging-loki-ingester-0 errors_30m=0
+pod/logging-loki-ingester-1 errors_30m=0
+pod/logging-loki-ingester-2 errors_30m=0
+all Loki pods Ready, 0 restarts (including after f5ccb63's carrier-hash change, which synced once and rolled nothing:
+the hook rewrote the Secret with identical content)
+```
+
+Left: a Grafana read-back of logs older than the ingesters' in-memory window (about 3 h after the roll), which proves
+chunks written through `loki.s3.homelab.sudops.pl` read back.
