@@ -3437,3 +3437,61 @@ What the renders turned up:
 Rook v1.21.2 and v1.20.10 appeared on 2026-11-05. v1.21.2 includes #18557, which switches msgr1 off on OSDs, mgrs and
 MDSes when msgr2 is required: that changes stage 3's assumption that existing kRBD mappings on v1 keep working. Stage 2
 stays on v1.21.1 (operator: "v1.21.1 ok"); v1.21.2 is decided before stage 3.
+
+## 2026-11-06 (evening) — Stage 2: Rook v1.21.1, ceph-csi-operator v1.1.0, cephcsi v3.18.1
+
+Operator: "go for rook" (19:07Z). Gates at 19:10Z: 3/3 nodes Ready, ClusterVersion and ClusterOperators clean, 54/54 apps
+Synced/Healthy, MCPs idle, no node cordoned, CNPG ×3 2/2 with `ContinuousArchiving=True`, Ceph `HEALTH_WARN`
+(`BLUESTORE_SLOW_OP_ALERT` only), Friday. Pre-hop: `csi-state.sh --expect stage1` `RESULT PASS stage1`, Driver uid
+`74e97a34…` generation 79; mon/mgr/osd 0 restarts; `oc api-resources --api-group=cbt.storage.k8s.io` header only
+(the rule c2 drops is unused). `images-check.sh` on the ten stage-2 images: `quay.io/cephcsi/cephcsi:v3.18.1` read
+`IMAGE MISSING` on the cold first pass and `IMAGE OK` on the second, as three images did before stage 1 (zot fetches on
+the first manifest request). Operator `ceph-reads.sh pre-s2`: 0 reads failed, 129 active+clean, 8/8 daemons 19.2.4,
+`nvme-replicated` 27.60 % with 327 GiB MAX AVAIL, client 1.3 MiB/s.
+
+**c2** (`7e0c70d rook-ceph: operator to v1.21.1 with ceph-csi-drivers 1.1.0`). The re-render from the applied patch
+was byte-identical to the Task 10 evidence (36,626 lines), kubeconform 82 valid / 29 skipped / 0 invalid. The live
+`oc diff -n rook-ceph` had to run on the operator kubeconfig: the readonly SA cannot dry-run-create the new
+NetworkPolicy (`networkpolicies.networking.k8s.io is forbidden … cannot create resource`). Of 92 objects in the diff,
+34 carried more than the chart label: 5 added (the NetworkPolicy, CRD `clientprofilereplications.csi.ceph.io`, three
+clientprofilereplication ClusterRoles) and 29 changed (CRDs, `ceph-csi-manager-role`, `update` on volumesnapshots for
+the ctrlplugin, `patch` on PVCs for the nodeplugin, the two Deployment images, the image-set ConfigMap); nothing
+pruned, matching the evidence. `ROOK_CREATE_CSI_OPERATOR_RESOURCES` was already `"true"` live.
+
+Pushed at 19:14:58Z (window start). Timeline from the watcher (readonly loop + Monitor):
+
+| Time (Z) | Event |
+|---|---|
+| 19:17:51-19:18:36 | ArgoCD syncs `rook-ceph-operator` to 7e0c70d |
+| 19:18:36 | ceph-csi-operator v1.1.0 Ready |
+| 19:18:38 | image-set ConfigMap `plugin` = `quay.io/cephcsi/cephcsi:v3.18.1` (no stage-1-style race: v1.20.9 never writes it) |
+| 19:18:54 | Rook operator v1.21.1 Ready; CephCluster `Progressing` |
+| 19:19:11-19:19:28 | mons on v1.21.1 |
+| 19:20:02 | 5/5 plugin pods Ready on cephcsi v3.18.1 |
+| 19:20:18-19:21:09 | mgrs |
+| 19:21:09-19:21:15 | osd-prepare on node4/5/6 (NEW) |
+| 19:21-19:24:47 | OSDs one at a time, 33.3 % of objects degraded during each, recovered before the next |
+| 19:25:04 | `HEALTH_OK` (the OSD restarts cleared the slow-op latch) |
+| 19:25:55 | watcher DONE |
+
+One oddity: `rook-ceph-operator` stayed `OutOfSync` on its CRDs across three self-heal syncs (18 CRDs, then 6, then
+`Synced/Healthy` at 19:22:50Z, one listed as `Missing` although it existed since 19:18:29Z), while `oc diff` of the
+27 rendered CRDs against live was empty throughout. ArgoCD's resource tree lagged the cluster; nothing to fix.
+
+Verify after c2, all nine items PASS: `RESULT PASS stage2` with Driver generation still 79 (the plugin images come from
+the image set, not the Driver spec) and again 10 minutes later; CephConnection and ClientProfile `rook-ceph` present
+(plus a hash-named ClientProfile from 2026-06-12, the v1.20.0 episode); smoke sha256 `eb64413a…` ×3 on node6, snapshot
+ready in ~3 s, both images gone from the pool afterwards; FailedMount 0, FailedAttachVolume 0; CNPG pods untouched;
+prepare ×3 NEW; operator `ceph-reads.sh s2` 0 reads failed, `HEALTH_OK`, caps equal to the caps-fix set, mons still
+`[v2:…:3300, v1:…:6789]`; CSI operator pod v1.1.0 Ready, 0 restarts, NetworkPolicy present.
+
+**c3** (`d72fc63 rook-ceph-cluster: chart to v1.21.1`), pushed 19:36:36Z. Render byte-identical to the evidence and to
+the v1.20.9 render; the only values change is the msgr2 stage-order comment; live diff empty; kubeconform 13 valid plus
+the known-stale datree CephCluster schema (`cephx.csi.keyType`). Synced 19:38:19Z with no daemon, toolbox, Job or
+prepare re-run (CephCluster generation = observedGeneration). After c3: `RESULT PASS stage2` twice (19:39:15Z and
+19:49:22Z, generation 79), volume errors 0, CNPG untouched, CSI operator Ready. The smoke, prepare and ceph-reads
+items were not repeated after c3 (ruling 11b): c3 applied nothing, so the c2 results describe the same state.
+
+Stage 2 took 35 minutes from push to the last read, 11 of them the daemon roll. The s2 fio point runs in the
+2026-11-07 12:00-14:00Z slot and the latency window closes at 2026-11-07 19:15Z or later. Then the image-pin cleanup
+(README TODO) and the Rook v1.21.2 decision before stage 3 (msgr2 required).
