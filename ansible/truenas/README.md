@@ -492,7 +492,7 @@ chronology: `blog/blog-paperless-draft.md`.
 - **Reconcile.** The role compares run_as, port, every storage path, the environment and the trash/Tika/Postgres
   values against `app.config`; on drift it sends `app.update` with the live `paperless` dict merged with the declared
   one minus the six keys above, so the generated secrets survive. A failure shows its reason through `core.get_jobs`.
-- **AI is environment-only.** `truenas_paperless_ai_enabled` (`true` since 2026-11-06) adds the eight `PAPERLESS_AI_*`
+- **AI is environment-only.** `truenas_paperless_ai_enabled` (`true` since 2026-11-06) adds the seven `PAPERLESS_AI_*`
   settings (Ollama on `192.168.1.3`). Prerequisites on the Mac mini, by hand: `launchctl setenv OLLAMA_HOST
   0.0.0.0:11434` and an Ollama restart (it listens on localhost otherwise), `ollama pull gemma4:26b` and `ollama pull
   bge-m3`, and the MikroTik DHCP reservation for `192.168.1.3`. Check from the box:

@@ -43,7 +43,7 @@
     - name: AI envs follow the switch
       ansible.builtin.assert:
         that:
-          - (_names | select('match', '^PAPERLESS_AI_') | list | length) == (8 if (truenas_paperless_ai_enabled | bool) else 0)
+          - (_names | select('match', '^PAPERLESS_AI_') | list | length) == (7 if (truenas_paperless_ai_enabled | bool) else 0)
         fail_msg: "AI env count wrong for truenas_paperless_ai_enabled={{ truenas_paperless_ai_enabled }}"
 
     - name: Show the render

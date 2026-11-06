@@ -677,7 +677,10 @@ truenas_paperless:
     - { name: PAPERLESS_AI_LLM_EMBEDDING_BACKEND, value: "ollama", container: paperless }
     - { name: PAPERLESS_AI_LLM_EMBEDDING_MODEL, value: "bge-m3", container: paperless }
     - { name: PAPERLESS_AI_LLM_OUTPUT_LANGUAGE, value: "Polish", container: paperless }
-    - { name: PAPERLESS_AI_LLM_EXTRA_PARAMS, value: '{"think": false}', container: paperless }
+    # No PAPERLESS_AI_LLM_EXTRA_PARAMS {"think": false}: it cannot switch thinking off on paperless 3.4.2.
+    # paperless passes extra params to llama-index's Ollama client as additional_kwargs, which end up in
+    # the request's `options`, while `think` is a top-level field taken from `thinking` (never set by
+    # paperless); even a call-time think=False is lost to `False or None`. Removed 2026-11-06, blog.
 
 truenas_paperless_ai_enabled: true          # since 2026-11-06 (plan Task 4); prerequisites: README, Paperless
 truenas_paperless_additional_envs: "{{ truenas_paperless.envs + (truenas_paperless.ai_envs if truenas_paperless_ai_enabled | bool else []) }}"

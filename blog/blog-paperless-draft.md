@@ -358,3 +358,24 @@ cases (month from `Period` else `created`, a malformed `Period` excluded, range 
 exclusions) plus the existing ones re-keyed by (currency, scope); 19/19 pass. A `main()` run against a fake API put a
 power bill dated 3 November with `Period` October into October under Home, an IDE licence under JDG, and skipped the
 issued invoice and the November document.
+
+## 2026-11-06 — Task 4: AI on, suggestions in Polish, `think: false` removed
+
+`truenas_paperless_ai_enabled: true` (0f1121b) after the Mac mini prerequisites: TrueNAS reaches
+`http://192.168.1.3:11434/api/tags` and lists `gemma4:26b` and `bge-m3`; the Mac mini has a static lease; the admin UI's
+AI fields were reset so the environment is what counts. The playbook run made one change; `app.config` carried the AI
+variables and the app came back RUNNING.
+
+"Suggest" on a KSeF invoice: nine suggestions, all Polish (tags, type, correspondents, title). It took about 20 s;
+Ollama's log has the request at 22.73 s, 16.75 GiB peak, and speculative-decode stats implying roughly 1,950 generated
+tokens for a short JSON answer. The suggested date was the payment due date, while the stored created date had come
+out as 2026-01-11 for an invoice issued 2026-11-01: the date parser swapped day and month on that document; the AI's
+other date suggestion was right. With Ollama stopped, a sixth document was consumed and searchable and Suggest failed
+cleanly (operator: "all good").
+
+`PAPERLESS_AI_LLM_EXTRA_PARAMS={"think": false}` never reached Ollama. `src/paperless_ai/client.py` (v3.4.2) builds
+`llama_index.llms.ollama.Ollama(..., additional_kwargs=self.settings.llm_extra_params)`; in that client
+`_model_kwargs` merges `additional_kwargs` into `options=`, and the top-level `think` is
+`kwargs.pop("think", None) or self.thinking` (read on llama_index main; paperless never sets `thinking`, and a
+call-time `think=False` would be lost to `False or None`). The setting is removed with a comment saying why; the
+render test now expects seven AI variables. The cost of thinking is latency only.
