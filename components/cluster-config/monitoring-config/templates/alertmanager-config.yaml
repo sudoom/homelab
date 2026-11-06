@@ -127,6 +127,14 @@ stringData:
         - receiver: "Critical"
           matchers: ["alertname = TechnitiumHostUpgradeDue"]
           repeat_interval: 168h
+        # In-cluster HTTPS probe of the TrueNAS app names and the Synology
+        # (homelab-tls-probe chart). All three are `warning`: a certificate
+        # under 14 days left, a name not answering over verified HTTPS for 15m,
+        # and the probe itself gone. Each is actionable when it arrives and none
+        # stands in normal operation; without this route an expiring wildcard
+        # would repeat the Synology's silent 2026-08-26 expiry.
+        - receiver: "Critical"
+          matchers: ["alertname =~ HomelabTLS.*"]
     receivers:
       - name: "Default"
       - name: "Watchdog"
