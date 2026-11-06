@@ -46,6 +46,7 @@ Pin these when generating manifests or commands — mismatched versions are the 
 │   ├── CLAUDE.md            # ansible rules; Claude Code loads it when a file under ansible/ is read
 │   ├── technitium/          # Technitium DNS Server — dns-master + dns-slave (2× RPi 3B+), CLUSTERED
 │   └── truenas/             # TrueNAS SCALE NAS config via midclt over SSH (replacing the Synology)
+├── macmini/                 # Mac mini (192.168.1.3) helpers installed by hand with their own install.sh (ollama-think-proxy)
 ├── blog/                    # Working notes / draft posts — see "Blog notes" rule below
 ├── bugs/                    # Drafted upstream-issue bodies (filing-ready)
 ├── tests/                   # Manual-apply test artifacts not yet promoted to a chart

@@ -389,3 +389,43 @@ Confirmed from Ollama's side the same evening: after every paperless request the
 `level=WARN source=types.go:1131 msg="invalid option provided" option=think`, i.e. `think` arrived inside `options`, as
 the client code says, and Ollama discarded it. The chat question above cost four model calls (23.1 s, 31.0 s, 7.1 s,
 33.9 s; peaks 16.0-17.2 GiB). The warning stops once the playbook applies 7dd0c1c.
+
+## 2026-11-06 — thinking costs 4x: a `think: false` proxy on the Mac mini
+
+The operator found the suggestions too slow. The Mac mini's view of the model:
+
+```
+$ ollama show gemma4:26b --modelfile | grep -E '^(FROM|RENDERER|PARSER|PARAMETER)'
+FROM gemma4:26b
+RENDERER gemma4
+PARSER gemma4
+PARAMETER temperature 1
+...
+$ ollama show gemma4:26b | sed -n '/Capabilities/,/^$/p'
+  Capabilities
+    completion
+    vision
+    tools
+    thinking
+        levels     false, true
+        default    true
+```
+
+`ollama show --template` prints only `{{ .Prompt }}`: the prompt is built by Ollama's built-in `gemma4` renderer, not
+a template, and thinking is on unless the request's top-level `think` is false. `think` is not a model option (the
+`invalid option provided option=think` warning above), so no Modelfile `PARAMETER` can change the default. Measured
+on the Mac mini with a suggestion-sized Polish prompt, same model, `stream: false`:
+
+```
+think=true  total=20s tokens=1508
+think=false total=5s tokens=422
+```
+
+Options weighed: a proxy that sets `think: false` on chat and generate requests (keeps gemma4, which the operator chose
+for its Polish); a model without thinking (no extra service, quality unknown); a paperless fix upstream (slow). Chosen:
+the proxy (operator: "yes build the proxy"). `macmini/ollama-think-proxy/`: a standard-library Python proxy on
+`:11435` forwarding to `127.0.0.1:11434`, rewriting only `/api/chat` and `/api/generate` bodies that are JSON objects,
+relaying streamed replies chunk by chunk, with a launchd agent and an idempotent `install.sh`. Tests run it against a
+fake Ollama: the chat body arrives with `think: false`, an embed body arrives byte-identical, the first streamed line
+reaches the client while the fake upstream still holds the rest, and a dead upstream gives 502 (8/8 on Python 3.9.6).
+Paperless moves to `http://192.168.1.3:11435` once the proxy answers on the Mini, after the Rook stage-2 window.
