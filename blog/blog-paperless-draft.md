@@ -281,3 +281,46 @@ group; ArgoCD synced at 13:00:12Z and Thanos Ruler reports all three rules `heal
 One thing for the review pass: an exported file name starts with `2026-01-11` (the created date, from
 `PAPERLESS_FILENAME_FORMAT`) while the original's own name carries `20261101`, which looks like day and month swapped
 by the date parser. To check on the document itself before drawing a conclusion.
+
+## 2026-11-06 — Task 3 Step 5: the restore test passes
+
+Procedure and scripts: `tests/paperless-restore/` (5999fd3, fix 1d20d39). Fresh export first (13:14:35Z, documents =
+5), then `create-app.sh` built `paperless-restore` on port 30071: catalog version read at run time (1.6.79),
+ix_volume storage, run_as 1000:1000, bootstrap account `restore-admin`, and the live export mounted read-only at
+`/restore`. The script reads the bootstrap password with a hidden prompt, so it needs a real terminal: run through
+Claude Code's `!`, `read` gets end-of-input and `set -e` stops the script before anything is created (it happened
+twice; nothing was created).
+
+The importer, from the TrueNAS UI shell of the throwaway's `paperless` container:
+
+```
+# document_importer /restore
+Found existing user(s), this might indicate a non-empty installation
+Checking the manifest
+Copy files into paperless...
+  Copying files... 5/?
+Updating search index...
+  Indexing documents... 5/5
+```
+
+The bootstrap account only produced that warning; nothing had to be worked around. The import carries the live
+`admin` account with its password hash: logging in to :30071 as `admin` with the live password worked, and the
+dashboard showed 5 documents, 9,434 characters.
+
+`compare.sh` logs in to both APIs and compares the document count and the set of `original_checksum` values from
+`/api/documents/<id>/metadata/`. Its first run got a 401 on the live side, before touching the restore: my bug. The
+script hands the password to curl as `user = "<user>:<password>"` on a config read from stdin (to keep it out of
+`ps`), and inside a double-quoted curl config value `\` and `"` are escapes, so a password containing either reaches
+the server altered. Escaping both (tested under macOS `/bin/bash` 3.2) fixed it:
+
+```
+documents: live=5 restore=5
+checksums read: live=5 restore=5
+checksums only on live: 0, only on restore: 0
+PASS: same count, identical original_checksum sets
+```
+
+Cleanup 17:42Z: `midclt call --job app.delete paperless-restore '{"remove_ix_volumes": true}'`; the app and its five
+`tank/ix-apps/app_mounts/paperless-restore/*` datasets are gone, the live app RUNNING. So the nightly export restores
+into a working paperless with the same originals, and since both Cloud Sync legs copy that same folder (12 files,
+563,595 bytes on each), the offsite copies are restorable the same way.
