@@ -248,3 +248,25 @@ bytecode in 7 s, applied migrations, and served (`Paperless-ngx version: v3.4.2`
 `init-superuser` reported "a user admin already exists": the uid-568 container must have finished its `usermod` and
 run migrations and the superuser step before `app.update` replaced it, with the same vault password. `data`, `media`,
 `consume` and `export` read 1000:1000; app state RUNNING.
+
+## 2026-11-06 — Task 3 Steps 2-4: login, reconcile check, first documents
+
+Login with the vault password works. The second playbook run reported `changed=0` and the converge assert passed. The
+reconcile check (Step 3) set `PAPERLESS_DATE_PARSER_LANGUAGES` to `en+pl` in git (875ad6a), and the next run made one
+change: `app.config` read `en+pl` and the container was recreated (`No UID changes`, RUNNING about 40 s later). The
+revert (851d6f0) went the same way back to `pl+en`. Declared values reach the live app in both directions through
+`app.update`.
+
+Step 4: five real PDFs uploaded through the UI, all five consumed (`consumption finished` ×5, no other ERROR lines).
+Each was then uploaded a second time, and all five were refused:
+
+```
+[WARNING] [paperless.consumer] Consuming duplicate <file>.pdf: 1 existing document(s) share the same content.
+[ERROR] [paperless.consumer] Not consuming <file>.pdf: It is a duplicate of <title> (#2)
+[INFO] [paperless.tasks] ConsumerPreflightPlugin rejected duplicate: ...
+... succeeded in 0.17s: {'duplicate_of': 2, 'duplicate_in_trash': False}
+```
+
+So `PAPERLESS_CONSUMER_DELETE_DUPLICATES=true` also applies to uploads through the UI, which the docs describe only for
+the consume directory. The log stream is read with `midclt subscribe -n <count> -t <s>
+'app.container_log_follow:{...}'`; file names are not reproduced here.
