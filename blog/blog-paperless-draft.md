@@ -171,3 +171,34 @@ stages gate on.
 
 Checks: `ansible-playbook -i inventory.yml playbook.yml --syntax-check` rc 0; `helm lint` clean; `helm template |
 kubeconform -strict -ignore-missing-schemas` 5 valid, 0 invalid. Nothing ran against the box or the cluster.
+
+## 2026-11-06 — Task 3, first playbook run: vault quoting, then a catalog version that no longer exists
+
+The first run stopped in the `pre_tasks` vault load: `include_vars` failed, and `no_log: true` hid why. To get the
+reason without showing a value, the decrypted vault went through a checker that prints only the YAML error and its
+position, redacting the fragments PyYAML quotes in its messages:
+
+```
+ansible-vault view vars/vault.yml | /opt/homebrew/Cellar/ansible/14.5.0_3/libexec/bin/python -I vaultcheck.py
+YAML ERROR: while scanning for the next token | found character '<redacted>' that cannot start any token | line 69, column 39
+```
+
+The new `truenas_paperless_admin_password` value was in double quotes and contained characters that ended the
+scalar early. Single quotes fixed it (inside them only `'` needs escaping, as `''`). The role passes the password
+through `to_json` inside an argv list, with no shell, so any character is safe once the YAML parses.
+
+The second run created the datasets (`tank/paperless/{data,media,consume,postgres,export}`), the export cron job
+(id 5, 04:15 daily), both Cloud Sync tasks (ids 3 and 4, not run yet) and the 6-hourly snapshot task on
+`tank/paperless` (90 days), but no app. The middleware job log had the reason:
+
+```
+midclt call core.get_jobs '[["method","^","app."]]' '{"order_by": ["-id"], "limit": 5}'
+app.create FAILED: [ENOENT] Version 1.6.78 not found in paperless-ngx app
+```
+
+`catalog.get_app_details paperless-ngx` offers one version only: `1.6.79` (app version 3.4.2), published
+2026-11-05 17:13Z by truenas/apps `fe7f2337fd`, about two hours after Task 1 pinned 1.6.78. That commit changes the
+chart version and one image tag (`8.39.0` → `8.40.0`), nothing in the schema. The catalog keeps only the newest
+version of each app, so a pinned version breaks the next fresh create whenever the catalog moves. The pin is now
+`1.6.79`. The same holds for Task 3 Step 5: the throwaway restore app must be created with whatever version the
+catalog offers on that day.

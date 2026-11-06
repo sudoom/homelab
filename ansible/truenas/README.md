@@ -469,7 +469,7 @@ button, not by hand.
 
 ## Paperless
 
-paperless-ngx 3.4.2 as the community-train catalog app `paperless-ngx` (app `paperless`, catalog version `1.6.78`),
+paperless-ngx 3.4.2 as the community-train catalog app `paperless-ngx` (app `paperless`, catalog version `1.6.79`; the catalog offers only its newest version, so bump the pin before a fresh create),
 declared in `truenas_paperless` (`group_vars/all.yml`) and deployed by `roles/truenas-apps`. Design record and
 chronology: `blog/blog-paperless-draft.md`.
 

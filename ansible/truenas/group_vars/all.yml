@@ -637,7 +637,7 @@ truenas_paperless:
   app_name: paperless
   catalog_app: paperless-ngx
   train: community
-  version: "1.6.78"          # paperless-ngx 3.4.2
+  version: "1.6.79"          # paperless-ngx 3.4.2; the catalog keeps only its newest version, so a fresh create needs the current one
   admin_user: admin
   admin_mail: paperless@homelab.sudops.pl   # required by the schema; no mail is sent
   run_as_uid: 568
