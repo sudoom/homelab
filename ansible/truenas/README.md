@@ -476,7 +476,7 @@ chronology: `blog/blog-paperless-draft.md`.
 
 | What | Value |
 |---|---|
-| UI | `http://192.168.1.25:30070/` (plain HTTP; all interfaces, so also on the storage backnet, as garage and Syncthing) |
+| UI | `https://paperless.homelab.sudops.pl` (Traefik, below) and the plain fallback `http://192.168.1.25:30070/` (all interfaces, so also on the storage backnet, as garage and Syncthing). `PAPERLESS_URL` is the HTTPS name and `PAPERLESS_PROXY_SSL_HEADER` is `["HTTP_X_FORWARDED_PROTO", "https"]`, without which login through the name fails with `403 CSRF verification failed`; the plain port still works (same-origin check). `bin/paperless-costs` defaults to the HTTPS name |
 | Database | the app's own Postgres 18 container, never SQLite; Valkey broker; Tika/Gotenberg off; in-app trash off |
 | Datasets | `tank/paperless` (parent) with `data`, `media`, `consume`, `postgres` (16K) and `export`; all `host_path`. `consume` exists only because the app requires it: documents go in through the UI |
 | Run as | uid/gid **1000**, the image's own `paperless` user, not the `apps` account (568): any other value makes the image's init `usermod --uid` the whole home on every container recreate, over 30 minutes on this HDD-backed Docker storage (2026-11-06). `data`, `media`, `consume` and `export` are owned 1000:1000 |
@@ -569,8 +569,8 @@ chronology: `blog/blog-truenas-https-draft.md`.
   proxy is never the only way into the UI. If Traefik is down, use the ports.
 - **Certificate.** `*.homelab.sudops.pl` with the SAN `*.s3.homelab.sudops.pl` (Loki's virtual-host buckets), declared
   once on the `websecure` entry point; the routers carry no `tls` key, so every name gets the wildcard by SNI. The
-  resolver is `truenas_traefik_acme_resolver`: `lestaging` (Let's Encrypt staging, browsers warn) until the first order
-  is proven, then `le`. Only the active resolver is declared, because a defined but unused one would still renew its
+  resolver is `truenas_traefik_acme_resolver`: `le` (Let's Encrypt production) since run #2; `lestaging` (staging,
+  browsers warn) was used for the first order and is the way back. Only the active resolver is declared, because a defined but unused one would still renew its
   stored certificate. DNS-01 uses the `cloudflare` provider with a token of its own (never cert-manager's), passed as
   the env var `CF_DNS_API_TOKEN`; the propagation check asks `1.1.1.1` and `8.8.8.8`, because `homelab.sudops.pl` is
   authoritative on Technitium inside the LAN.
@@ -614,7 +614,7 @@ chronology: `blog/blog-truenas-https-draft.md`.
   leaves those owners alone.
 - **Render test** (no box): `ansible-playbook -i localhost, -c local tests/traefik-render.yml -e
   truenas_traefik_cf_dns_api_token=dummy -e "truenas_traefik_dashboard_users='admin:\$2y\$05\$dummy'"`, once more
-  with `-e truenas_traefik_acme_resolver=le`, and once without the dashboard users. It checks the flags against the
+  with `-e truenas_traefik_acme_resolver=lestaging` (the test asserts the committed default is `le`), and once without the dashboard users. It checks the flags against the
   catalog's reserved list, the routing file's routers, rules and backends, and `no_log` on every task that carries a
   Traefik secret.
 

@@ -161,3 +161,21 @@ ansible-playbook -i inventory.yml playbook.yml --syntax-check   -> playbook: pla
 ```
 
 The drift expression, run against a fake live dict holding only the default: have `[.s3_web.root_domain=]`, want `[.s3_api.root_domain=.s3.homelab.sudops.pl, .s3_web.root_domain=]`, differs. Not run against the box; that is playbook run #1.
+
+## 2026-11-06 — production certificate and paperless on its name
+
+Run #1 proved the staging order, so the committed resolver moves to `le` (`truenas_traefik_acme_resolver` in `group_vars/all.yml`). The staging account and `lestaging-acme.json` stay on disk, unused.
+
+Observed after run #1: logging in to paperless through `https://paperless.homelab.sudops.pl` failed with `403 CSRF verification failed`. `PAPERLESS_URL` was still `http://192.168.1.25:30070`, and Django sees plain HTTP from Traefik, so the Origin (`https://…`) never matched. Fix: `PAPERLESS_URL=https://paperless.homelab.sudops.pl` plus the new env `PAPERLESS_PROXY_SSL_HEADER='["HTTP_X_FORWARDED_PROTO", "https"]'` (a YAML string, single-quoted). The plain `http://192.168.1.25:30070` keeps working: Django's same-origin check passes when the Origin matches the request host. `bin/paperless-costs` `DEFAULT_URL` now points at the name (`bin/test_paperless_costs.py` does not assert the URL).
+
+`tests/traefik-render.yml` now asserts the committed default (read from the group_vars file, so a `-e` override cannot mask it) is `le`; the staging run still checks the `caserver` flag.
+
+```
+ansible-playbook -i localhost, -c local tests/traefik-render.yml -e …dummy…                                  -> ok=21 failed=0
+ansible-playbook -i localhost, -c local tests/traefik-render.yml -e …dummy… -e truenas_traefik_acme_resolver=lestaging -> ok=21 failed=0
+ansible-playbook -i localhost, -c local tests/paperless-render.yml                                           -> ok=8 failed=0
+ansible-playbook -i inventory.yml playbook.yml --syntax-check                                                -> playbook: playbook.yml
+python3 -m unittest bin/test_paperless_costs.py                                                              -> Ran 19 tests, OK
+```
+
+Not run against the box; that is playbook run #2 (traefik args, paperless envs).

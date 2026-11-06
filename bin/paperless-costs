@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 from decimal import Decimal, InvalidOperation
 
-DEFAULT_URL = "http://192.168.1.25:30070"
+DEFAULT_URL = "https://paperless.homelab.sudops.pl"
 AMOUNT_FIELD = "Amount"
 CATEGORY_TAG = "Category"
 SCOPE_TAG = "Scope"

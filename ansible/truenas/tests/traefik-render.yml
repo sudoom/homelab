@@ -6,7 +6,7 @@
 #   cd ansible/truenas
 #   ansible-playbook -i localhost, -c local tests/traefik-render.yml \
 #     -e truenas_traefik_cf_dns_api_token=dummy -e "truenas_traefik_dashboard_users='admin:\$2y\$05\$dummy'"
-#   ... the same with -e truenas_traefik_acme_resolver=le      (production resolver)
+#   ... the same with -e truenas_traefik_acme_resolver=lestaging (staging resolver)
 #   ... the same without the dashboard users -e                (no dashboard router)
 - name: Traefik app values and routing file render
   hosts: localhost
@@ -27,6 +27,8 @@
       - api.insecure
       - api.dashboard
       - entrypoints.traefik.address
+    # The default as committed in group_vars (a -e override does not touch it).
+    _committed: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../group_vars/all.yml') | regex_search('(?m)^truenas_traefik_acme_resolver: *(\\S+)', '\\1') | first }}"
     _staging_ca: https://acme-staging-v02.api.letsencrypt.org/directory
     _tasks_file: "{{ playbook_dir }}/../roles/truenas-apps/tasks/main.yml"
     _template_file: "{{ playbook_dir }}/../roles/truenas-apps/templates/traefik-homelab.yml.j2"
@@ -51,10 +53,12 @@
         _by_flag: "{{ dict(_args | map(attribute='flag') | zip(_args | map(attribute='value'))) }}"
         _ep_names: "{{ _v.network.entry_points | map(attribute='entrypoint_name') | list }}"
 
-    - name: The resolver is one of the two declared ones
+    - name: The resolver is one of the two declared ones, and the committed default is production
       ansible.builtin.assert:
-        that: _r in ['lestaging', 'le']
-        fail_msg: "truenas_traefik_acme_resolver is {{ _r }}"
+        that:
+          - _r in ['lestaging', 'le']
+          - _committed == 'le'
+        fail_msg: "resolver {{ _r }}, committed default {{ _committed }}"
 
     - name: No flag is one the catalog reserves or sets itself
       ansible.builtin.assert:

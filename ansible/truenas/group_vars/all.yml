@@ -700,7 +700,13 @@ truenas_paperless:
   container_paths:
     export: /paperless/export
   envs:
-    - { name: PAPERLESS_URL, value: "http://192.168.1.25:30070", container: paperless }
+    # PAPERLESS_URL is the HTTPS name behind Traefik. Without it (and the proxy
+    # header below) Django saw http on https://paperless.homelab.sudops.pl and
+    # login failed with "403 CSRF verification failed". The plain fallback
+    # http://192.168.1.25:30070 keeps working: Django's same-origin CSRF check
+    # passes when the Origin matches the request host.
+    - { name: PAPERLESS_URL, value: "https://paperless.homelab.sudops.pl", container: paperless }
+    - { name: PAPERLESS_PROXY_SSL_HEADER, value: '["HTTP_X_FORWARDED_PROTO", "https"]', container: paperless }
     - { name: PAPERLESS_OCR_LANGUAGES, value: "pol", container: paperless }
     - { name: PAPERLESS_OCR_LANGUAGE, value: "pol+eng", container: paperless }
     - { name: PAPERLESS_DATE_PARSER_LANGUAGES, value: "pl+en", container: paperless }
@@ -803,11 +809,12 @@ truenas_traefik:
   cpus: 1
   memory_mb: 512
 
-# lestaging (Let's Encrypt staging) until the first order is proven, then le.
+# le (Let's Encrypt production) since run #2: the staging order was proven in
+# run #1. Set lestaging to go back to the staging CA.
 # Top level so the render test can override it with -e. Only the active
 # resolver is declared: a defined but unused one would still renew its stored
 # certificate every ~60 days.
-truenas_traefik_acme_resolver: lestaging
+truenas_traefik_acme_resolver: le
 
 # The dashboard router is rendered only when the vault holds its basic-auth
 # line (empty or CHANGEME counts as missing). A boolean, so printing it shows
