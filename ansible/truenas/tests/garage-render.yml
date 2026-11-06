@@ -1,0 +1,50 @@
+---
+# Render test for garage's additional_options (no TrueNAS host). Asserts the
+# declared list and that every role task that reads or sends the garage config
+# is no_log (the live dict carries admin_token, rpc_secret, web_ui_password).
+#   cd ansible/truenas
+#   ansible-playbook -i localhost, -c local tests/garage-render.yml
+- name: garage additional_options render
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+  vars:
+    _tasks_file: "{{ playbook_dir }}/../roles/truenas-apps/tasks/main.yml"
+  tasks:
+    - name: Index the declared options
+      ansible.builtin.set_fact:
+        _opts: "{{ truenas_garage.additional_options }}"
+        _by_path: "{{ dict(truenas_garage.additional_options | map(attribute='path') | zip(truenas_garage.additional_options | map(attribute='value'))) }}"
+
+    - name: Both entries are declared, strings, with the exact values
+      ansible.builtin.assert:
+        that:
+          - _opts | length == 2
+          - _opts | map(attribute='type') | unique | list == ['string']
+          - _by_path['.s3_web.root_domain'] == ''
+          - _by_path['.s3_api.root_domain'] == '.s3.homelab.sudops.pl'
+          - _opts | map(attribute='path') | select('match', '^\..+$') | list | length == 2
+
+    - name: Load the role tasks
+      ansible.builtin.set_fact:
+        _role_tasks: "{{ lookup('ansible.builtin.file', _tasks_file) | from_yaml }}"
+
+    - name: Select the tasks that touch the garage config
+      ansible.builtin.set_fact:
+        _g_tasks: "{{ (_g_tasks | default([])) + [item] }}"
+      loop: "{{ _role_tasks }}"
+      loop_control: { label: "{{ item.name }}" }
+      when: >-
+        ((item | to_json) is search('truenas_garage_live|truenas_garage\.additional_options'))
+        or (((item | to_json) is search('app\.config')) and ((item | to_json) is search('truenas_garage\.app_name')))
+
+    - name: The additional_options reconcile exists and every garage config task is no_log
+      ansible.builtin.assert:
+        that:
+          - _g_tasks | default([]) | selectattr('no_log', 'defined') | selectattr('no_log') | list | length == (_g_tasks | default([]) | length)
+          - _g_tasks | default([]) | map('to_json') | select('search', 'additional_options') | list | length >= 1
+          - _g_tasks | default([]) | map('to_json') | select('search', 'app\.update') | select('search', 'additional_options') | list | length == 1
+          - _role_tasks | map(attribute='name') | select('search', 'garage s3 root domain') | list | length == 1
+          - _role_tasks | map('to_json') | select('search', 'core\.get_jobs') | select('search', 'app\.update') | list | length >= 2
+        fail_msg: "not no_log or missing: {{ _g_tasks | default([]) | map(attribute='name') | list }}"

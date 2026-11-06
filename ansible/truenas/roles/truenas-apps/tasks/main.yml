@@ -217,6 +217,42 @@
     != ([] if truenas_garage.bind_ip == '0.0.0.0' else [truenas_garage.bind_ip])
   no_log: true
 
+# garage s3 root domain. The create task sends no additional_options, so the live
+# config carries the catalog default. app.update replaces a sent top-level key
+# whole, so send the whole live garage dict (it carries admin_token, rpc_secret and
+# web_ui_password, which must survive) with only additional_options swapped. The
+# garage container restarts: Velero and Loki see seconds of S3 errors and retry.
+- name: Reconcile the garage s3 root domain (additional_options)
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.update
+      - "{{ truenas_garage.app_name }}"
+      - "{{ {'values': {'garage': _live.garage | combine({'additional_options': truenas_garage.additional_options})}} | to_json }}"
+  vars:
+    _live: "{{ truenas_garage_live.stdout | from_json }}"
+    _have: "{{ _live.garage.additional_options | default([]) | map(attribute='path') | zip(_live.garage.additional_options | default([]) | map(attribute='value')) | map('join', '=') | sort | list }}"
+    _want: "{{ truenas_garage.additional_options | map(attribute='path') | zip(truenas_garage.additional_options | map(attribute='value')) | map('join', '=') | sort | list }}"
+  when: _have != _want
+  register: truenas_garage_opts
+  failed_when: false
+  changed_when: truenas_garage_opts.rc | default(0) == 0
+  no_log: true
+
+- name: Read the app.update job record if the garage options update failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.update"]]']
+  register: truenas_garage_opts_job
+  changed_when: false
+  when: (truenas_garage_opts.rc | default(0)) != 0
+
+- name: Fail with the real reason (payload stays hidden)
+  ansible.builtin.fail:
+    msg: "garage additional_options app.update failed: {{ (truenas_garage_opts_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_garage_opts.rc | default(0)) != 0
+
 - name: Read the garage admin token
   ansible.builtin.command:
     argv: [midclt, call, app.config, "{{ truenas_garage.app_name }}"]

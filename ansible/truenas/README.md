@@ -76,7 +76,7 @@ check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
 | SMB Time Machine targets for the Macs | `truenas-smb` | global flag + groups/users/shares matched on name; dataset ACLs on owner/acltype/ACE drift |
 | Scrub, SMART cron jobs, periodic snapshots | `truenas-tasks` | scrub/snapshots on pool+dataset, SMART on cron `description` |
 | Cloud Sync backup tasks (Immich → Synology and → Hetzner Storage Box, both over SFTP) | `truenas-tasks` | credential matched on `name`, task on `description`; declared fields reconciled on drift; skipped, loudly, while the vault lacks the secret |
-| garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings reconciled; layout+key+bucket bootstrapped over the admin API |
+| garage S3 app (backs the Velero BSL) | `truenas-apps` | app name; ports/bindings and `additional_options` (`s3_api.root_domain` `.s3.homelab.sudops.pl`, virtual-host buckets) reconciled; layout+key+bucket bootstrapped over the admin API |
 | node_exporter custom app | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
 | Syncthing catalog app (Mac ↔ Mac sync of the projects tree, plus the mini's `~/Documents` mirror) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
 | paperless-ngx catalog app (freelance paperwork archive) and its `paperless/*` datasets | `truenas-apps`, `truenas-storage` | app name; declared values reconciled against `app.config` (generated secrets and the first-install admin fields never re-sent); skipped, loudly, while the vault lacks the admin password |

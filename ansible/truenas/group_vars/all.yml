@@ -482,6 +482,16 @@ truenas_garage:
     s3: 30188
     s3_web: 30189
     admin: 30190
+  # Options written into garage.toml by the catalog's config container on every
+  # start ({type, path, value}; path starts with a dot). The first entry is the
+  # catalog's own default, kept so the list stays a superset of it. With
+  # s3_api.root_domain set garage serves virtual-host style for
+  # <bucket>.s3.homelab.sudops.pl (Loki uses that style) and still serves path
+  # style (Velero). A request whose Host does not end in the root domain, such as
+  # s3.homelab.sudops.pl itself or 192.168.1.25:30188, stays path style.
+  additional_options:
+    - { type: string, path: .s3_web.root_domain, value: "" }
+    - { type: string, path: .s3_api.root_domain, value: ".s3.homelab.sudops.pl" }
   zone: truenas
   capacity_bytes: 8000000000000     # 8 TB advertised; ~7.3 TiB effective at replication_factor 1
   # ---- S3 tenants: one key + one bucket per consumer -----------------------

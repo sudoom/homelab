@@ -142,3 +142,22 @@ resolver typo (lestagin)       -> assert fails before anything else runs
 **Not done here.** I did not run `check.yml` or `playbook.yml`: both connect to the box, and the playbook needs the operator's vault. The catalog version is the `app.yaml` of the local copy (1.0.38), not a fresh `catalog.get_app_details` read, so it has to be checked again just before run #1.
 
 **Next.** Task 4 (garage `root_domain` for virtual-host buckets), then playbook run #1: the UI ports, the three datasets, the routing file, the traefik create with the staging resolver, and the garage update in one run.
+
+## 2026-11-06 — garage answers virtual-host S3 requests
+
+Loki talks to garage in virtual-host style (`<bucket>.s3.homelab.sudops.pl`), Velero in path style. garage serves virtual-host style only when `s3_api.root_domain` is set, and then serves both. The catalog garage app takes arbitrary garage.toml keys through `additional_options` (`{type, path, value}`, path matching `^\..+$`), which its config container writes into garage.toml on every start. The create task sent none, so the live config carries the catalog default `{string, .s3_web.root_domain, ""}`.
+
+Declared (`truenas_garage.additional_options` in `group_vars/all.yml`): that default plus `{string, .s3_api.root_domain, ".s3.homelab.sudops.pl"}` (leading dot, as garage's reference manual shows). `s3.homelab.sudops.pl` itself does not end in `.s3.homelab.sudops.pl`, so it stays path style, as does `192.168.1.25:30188` (Host does not match).
+
+Role: new task "Reconcile the garage s3 root domain" after the port-binding reconcile. It compares the live `garage.additional_options` and the declared list as sorted `path=value` pairs and, on drift, calls `app.update` with the whole live `garage` dict combined with the declared list: `app.update` replaces a sent top-level key whole, and the live dict carries `admin_token`, `rpc_secret` and `web_ui_password`, which must survive. All tasks that read or send the config are `no_log`; a failure reason comes from `core.get_jobs`. The update restarts garage, so Velero and Loki see seconds of S3 errors and retry.
+
+Test first, `tests/garage-render.yml` (declared list, `no_log` on every garage config task, the reconcile exists):
+
+```
+ansible-playbook -i localhost, -c local tests/garage-render.yml
+  -> fatal: object of type 'dict' has no attribute 'additional_options'      (before)
+  -> All assertions passed, ok=5 failed=0                                    (after)
+ansible-playbook -i inventory.yml playbook.yml --syntax-check   -> playbook: playbook.yml
+```
+
+The drift expression, run against a fake live dict holding only the default: have `[.s3_web.root_domain=]`, want `[.s3_api.root_domain=.s3.homelab.sudops.pl, .s3_web.root_domain=]`, differs. Not run against the box; that is playbook run #1.
