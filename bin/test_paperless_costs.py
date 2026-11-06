@@ -21,15 +21,21 @@ pc = util.module_from_spec(_spec)
 _loader.exec_module(pc)
 
 AMOUNT = 7
+PERIOD = 8
 CATS = {10, 11}  # 10 electricity, 11 water; 9 is the parent "Category"
+SCOPES = {20, 21}  # 20 JDG, 21 Home; 19 is the parent "Scope"
+JDG, HOME = 20, 21
 
 
 ISSUED = 5  # document type "Invoice (issued)"
 
 
-def doc(i, created, tags, value, title="d", doc_type=None):
+def doc(i, created, tags, value, title="d", doc_type=None, period=None):
+    cfs = [{"field": AMOUNT, "value": value}, {"field": 99, "value": "x"}]
+    if period is not None:
+        cfs.append({"field": PERIOD, "value": period})
     return {"id": i, "title": f"{title}{i}", "created": created, "tags": tags, "document_type": doc_type,
-            "custom_fields": [{"field": AMOUNT, "value": value}, {"field": 99, "value": "x"}]}
+            "custom_fields": cfs}
 
 
 class FakeResp(io.BytesIO):
@@ -59,8 +65,8 @@ class Tests(unittest.TestCase):
     def test_aggregate_month_from_created(self):
         docs = [doc(1, "2024-11-30", [9, 10], "PLN10.00"), doc(2, "2024-12-01", [9, 10], "PLN5.00")]
         totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN")
-        self.assertEqual(totals["PLN"]["2024-11"][10], Decimal("10.00"))
-        self.assertEqual(totals["PLN"]["2024-12"][10], Decimal("5.00"))
+        self.assertEqual(totals[("PLN", None)]["2024-11"][10], Decimal("10.00"))
+        self.assertEqual(totals[("PLN", None)]["2024-12"][10], Decimal("5.00"))
         self.assertEqual(excluded, [])
 
     def test_aggregate_excludes_and_lists(self):
@@ -69,7 +75,7 @@ class Tests(unittest.TestCase):
                 doc(3, "2024-11-05", [9, 10, 11], "PLN77.00"),
                 doc(4, "2024-11-05", [9, 10], "")]
         totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN")
-        self.assertEqual(totals, {"PLN": {"2024-11": {10: Decimal("10.00")}}})
+        self.assertEqual(totals, {("PLN", None): {"2024-11": {10: Decimal("10.00")}}})
         self.assertEqual([e["id"] for e in excluded], [2, 3, 4])
         self.assertIn("category", excluded[0]["reason"])
 
@@ -81,7 +87,7 @@ class Tests(unittest.TestCase):
                 doc(3, "2024-11-05", [9, 10], "PLN900.00", doc_type=ISSUED),
                 doc(4, "2024-11-05", [3], "PLN99.00", doc_type=2)]
         totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN", skip_type_ids={ISSUED})
-        self.assertEqual(totals, {"PLN": {"2024-11": {10: Decimal("10.00")}}})
+        self.assertEqual(totals, {("PLN", None): {"2024-11": {10: Decimal("10.00")}}})
         self.assertEqual([e["id"] for e in excluded], [4])
 
     def test_type_ids_named(self):
@@ -94,10 +100,50 @@ class Tests(unittest.TestCase):
         docs = [doc(1, "2024-11-05", [9, 10], "PLN10.00"), doc(2, "2024-11-06", [9, 10], "EUR3.00"),
                 doc(3, "2024-11-07", [9, 10], "4.00")]
         totals, _ = pc.aggregate(docs, AMOUNT, CATS, "PLN")
-        self.assertEqual(totals["PLN"]["2024-11"][10], Decimal("14.00"))
-        self.assertEqual(totals["EUR"]["2024-11"][10], Decimal("3.00"))
+        self.assertEqual(totals[("PLN", None)]["2024-11"][10], Decimal("14.00"))
+        self.assertEqual(totals[("EUR", None)]["2024-11"][10], Decimal("3.00"))
         out = pc.render(totals, {10: "electricity"})
         self.assertLess(out.index("== PLN =="), out.index("== EUR =="))
+
+    def test_month_from_period_else_created(self):
+        # Period (the month a document belongs to) wins over created; without it, created.
+        docs = [doc(1, "2024-11-03", [9, 10], "PLN10.00", period="2024-10-01"),
+                doc(2, "2024-11-04", [9, 10], "PLN5.00", period=None),
+                doc(3, "2024-11-05", [9, 10], "PLN7.00", period="")]
+        totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN", period_field_id=PERIOD)
+        self.assertEqual(totals[("PLN", None)]["2024-10"][10], Decimal("10.00"))
+        self.assertEqual(totals[("PLN", None)]["2024-11"][10], Decimal("12.00"))
+        self.assertEqual(excluded, [])
+
+    def test_bad_period_excluded(self):
+        docs = [doc(1, "2024-11-03", [9, 10], "PLN10.00", period="Oct 2024")]
+        totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN", period_field_id=PERIOD)
+        self.assertEqual(totals, {})
+        self.assertEqual([e["id"] for e in excluded], [1])
+        self.assertIn("Period", excluded[0]["reason"])
+
+    def test_range_uses_the_effective_month(self):
+        # In range by created but Period outside: skipped silently; the reverse: counted.
+        docs = [doc(1, "2024-11-03", [9, 10], "PLN10.00", period="2024-09-01"),
+                doc(2, "2024-12-02", [9, 10], "PLN5.00", period="2024-11-01"),
+                doc(3, "2024-12-02", [3], "PLN99.00")]  # out of range: not even listed as excluded
+        totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN", period_field_id=PERIOD,
+                                        start="2024-10", end="2024-11")
+        self.assertEqual(totals, {("PLN", None): {"2024-11": {10: Decimal("5.00")}}})
+        self.assertEqual(excluded, [])
+
+    def test_scope_split_and_exclusions(self):
+        docs = [doc(1, "2024-11-03", [9, 10, 19, JDG], "PLN10.00"),
+                doc(2, "2024-11-03", [9, 10, 19, HOME], "PLN20.00"),
+                doc(3, "2024-11-03", [9, 10], "PLN30.00"),
+                doc(4, "2024-11-03", [9, 10, 19, JDG, HOME], "PLN40.00")]
+        totals, excluded = pc.aggregate(docs, AMOUNT, CATS, "PLN", scope_ids=SCOPES)
+        self.assertEqual(totals, {("PLN", JDG): {"2024-11": {10: Decimal("10.00")}},
+                                  ("PLN", HOME): {"2024-11": {10: Decimal("20.00")}}})
+        self.assertEqual([e["id"] for e in excluded], [3, 4])
+        self.assertIn("scope", excluded[0]["reason"])
+        out = pc.render(totals, {10: "electricity", JDG: "JDG", HOME: "Home"})
+        self.assertLess(out.index("== PLN · Home =="), out.index("== PLN · JDG =="))
 
     def test_paging_follows_next(self):
         base = "http://pl.test"
@@ -178,10 +224,6 @@ class Tests(unittest.TestCase):
             pc.fetch_all("http://pl.test/api/x/", "SECRET", opener)
         self.assertIn("not valid JSON", str(cm.exception))
         self.assertIn("http://pl.test/api/x/", str(cm.exception))
-
-    def test_next_month(self):
-        self.assertEqual(pc.next_month("2024-12"), "2025-01")
-        self.assertEqual(pc.next_month("2024-02"), "2024-03")
 
 
 if __name__ == "__main__":

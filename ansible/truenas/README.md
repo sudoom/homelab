@@ -509,13 +509,14 @@ back and this list is for a rebuild from scratch. Decided 2026-11-05/06 (`blog/b
 | Object | Values |
 |---|---|
 | Document types | Bill, Invoice (received), Invoice (issued), Receipt, Tax document |
-| Tags | `Category` with one child per cost category (exactly one on every expense); `Tax` with children `PIT`, `VAT`, `ZUS`, `Other` (on tax documents); the inbox tag (assigned to every new document, removed at review) |
+| Tags | `Category` with one child per cost category (exactly one on every expense; household ones too: electricity, water, mortgage, insurance, …); `Scope` with children `JDG` (the business) and `Home` (the household), exactly one on every expense; `Tax` with children `PIT`, `VAT`, `ZUS`, `Other` (on tax documents); the inbox tag (assigned to every new document, removed at review) |
 | Custom fields | `Amount`: Monetary, default currency PLN; on expenses the amount paid, on issued invoices the gross amount in the invoice's currency. `Period`: Date, the first day of the month the document belongs to (a January invoice dated in February, a January VAT return filed in February) |
 | Correspondents | who issued the document (the client, on issued invoices); matching "Exact" on the NIP where there is one |
 | Saved views | Inbox; Expenses by month; Issued invoices by month; No category; Expense without Amount; Tax documents by year |
 
-`bin/paperless-costs` reads `Category`, `Amount` and the document type: "Invoice (issued)" documents are never
-counted as costs.
+`bin/paperless-costs` prints one month × category table per currency and scope (`JDG`, `Home`). The month is
+`Period` when set, else the document's date; "Invoice (issued)" documents are never counted as costs; an expense
+without exactly one `Category` and one `Scope` tag is listed as excluded.
 
 ### Restore
 

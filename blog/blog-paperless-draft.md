@@ -346,3 +346,15 @@ first: two new cases (`test_aggregate_skips_issued_invoices`, `test_type_ids_nam
 and helper, then 16/16 passed; a `main()` run against a fake API counted a PLN 245.30 electricity bill and ignored a
 EUR 5,000 issued invoice. Household bills (electricity, water, mortgage, insurance) will come in too, as further
 `Category` children.
+
+Two more decisions the same evening: cost months come from `Period` when it is set, else the document date ("yes"),
+and business and household costs are separable ("yes"), since house bills (electricity, water, mortgage, insurance)
+join the business paperwork. The split is a `Scope` parent tag with `JDG` and `Home`, exactly one per expense, the
+same shape as `Category` (my call on the names). `bin/paperless-costs` now prints one table per currency and scope,
+lists an expense without exactly one scope as excluded, and filters the month range itself: the API cannot filter on
+"`Period`, else `created`", so the documents query only asks for documents with an `Amount` and `aggregate()` drops
+the ones outside the range without listing them. `next_month()` lost its last caller and went. Tests first: four new
+cases (month from `Period` else `created`, a malformed `Period` excluded, range by effective month, scope split and
+exclusions) plus the existing ones re-keyed by (currency, scope); 19/19 pass. A `main()` run against a fake API put a
+power bill dated 3 November with `Period` October into October under Home, an IDE licence under JDG, and skipped the
+issued invoice and the November document.

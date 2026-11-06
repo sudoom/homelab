@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Monthly cost totals per category from a paperless-ngx instance (read-only).
 
-Month = the document's `created` date. Category = the document's one tag whose
-parent is the tag named "Category". Amounts come from the Monetary custom field
-"Amount"; currencies are never converted or mixed. Documents of type "Invoice (issued)"
-are income, not costs: they are skipped entirely (neither counted nor listed as excluded).
+Month = the Date custom field "Period" (the month a document belongs to) when set,
+else the document's `created` date. Category = the document's one tag whose parent is
+the tag named "Category"; scope = its one tag whose parent is "Scope" (JDG or Home),
+and each currency and scope gets its own table. Amounts come from the Monetary custom
+field "Amount"; currencies are never converted or mixed. Documents of type
+"Invoice (issued)" are income, not costs: they are skipped entirely (neither counted
+nor listed as excluded).
 
 The API token is read from the macOS Keychain (security find-generic-password)
 and is never printed.
@@ -23,6 +26,8 @@ from decimal import Decimal, InvalidOperation
 DEFAULT_URL = "http://192.168.1.25:30070"
 AMOUNT_FIELD = "Amount"
 CATEGORY_TAG = "Category"
+SCOPE_TAG = "Scope"
+PERIOD_FIELD = "Period"
 ISSUED_TYPE = "Invoice (issued)"
 # paperless stores "PLN123.45", "PLN-12.50", or (legacy) a bare "123.45".
 _MONETARY = re.compile(r"^([A-Z]{3})?(-?\d+(?:\.\d+)?)$")
@@ -54,10 +59,22 @@ def type_ids_named(doc_types, name):
     return {t["id"] for t in doc_types if (t.get("name") or "").strip().lower() == want}
 
 
-def aggregate(docs, amount_field_id, category_ids, default_currency, skip_type_ids=frozenset()):
-    """-> (totals[currency][YYYY-MM][category_id] = Decimal, excluded list of dicts).
+def field_value(doc, field_id):
+    """The value of custom field field_id on doc; None when absent or empty."""
+    for cf in doc.get("custom_fields", []):
+        if cf.get("field") == field_id:
+            v = cf.get("value")
+            return None if v is None or str(v).strip() == "" else str(v).strip()
+    return None
 
-    Documents whose document_type is in skip_type_ids are ignored before any check."""
+
+def aggregate(docs, amount_field_id, category_ids, default_currency, skip_type_ids=frozenset(),
+              scope_ids=None, period_field_id=None, start=None, end=None):
+    """-> (totals[(currency, scope_id)][YYYY-MM][category_id] = Decimal, excluded list of dicts).
+
+    Documents whose document_type is in skip_type_ids are ignored before any check. The month is
+    the Period field when set, else created; documents whose month is outside [start, end] are
+    skipped silently. scope_ids=None means no scope split (scope_id None in the key)."""
     totals = {}
     excluded = []
 
@@ -71,6 +88,20 @@ def aggregate(docs, amount_field_id, category_ids, default_currency, skip_type_i
                   if cf.get("field") == amount_field_id]
         if not values:
             continue  # no Amount field on this document
+        period = field_value(doc, period_field_id) if period_field_id is not None else None
+        if period is not None:
+            if not re.match(r"^\d{4}-\d{2}(-\d{2})?$", period):
+                exclude(doc, f"bad Period {period!r}")
+                continue
+            month = period[:7]
+        else:
+            created = doc.get("created") or ""
+            if not re.match(r"^\d{4}-\d{2}", created):
+                exclude(doc, f"bad created date {created!r}")
+                continue
+            month = created[:7]
+        if (start and month < start) or (end and month > end):
+            continue  # outside the requested months
         try:
             parsed = parse_monetary(values[0], default_currency)
         except ValueError as e:
@@ -84,20 +115,30 @@ def aggregate(docs, amount_field_id, category_ids, default_currency, skip_type_i
         if len(cats) != 1:
             exclude(doc, "no category tag" if not cats else f"{len(cats)} category tags")
             continue
-        created = doc.get("created") or ""
-        if not re.match(r"^\d{4}-\d{2}", created):
-            exclude(doc, f"bad created date {created!r}")
-            continue
+        scope = None
+        if scope_ids is not None:
+            scopes = [t for t in set(tags) if t in scope_ids]
+            if len(scopes) != 1:
+                exclude(doc, "no scope tag" if not scopes else f"{len(scopes)} scope tags")
+                continue
+            scope = scopes[0]
         currency, amount = parsed
-        cell = totals.setdefault(currency, {}).setdefault(created[:7], {})
+        cell = totals.setdefault((currency, scope), {}).setdefault(month, {})
         cell[cats[0]] = cell.get(cats[0], Decimal(0)) + amount
     return totals, excluded
 
 
 def render(totals, tag_names):
+    """One table per (currency, scope): PLN first, then other currencies; scopes by name."""
     out = []
-    for currency in sorted(totals, key=lambda c: (c != "PLN", c)):
-        months = totals[currency]
+
+    def order(key):
+        currency, scope = key
+        return (currency != "PLN", currency, "" if scope is None else tag_names.get(scope, str(scope)).lower())
+
+    for key in sorted(totals, key=order):
+        currency, scope = key
+        months = totals[key]
         cat_ids = sorted({c for m in months.values() for c in m},
                          key=lambda c: tag_names.get(c, str(c)).lower())
         header = ["Month"] + [tag_names.get(c, f"tag {c}") for c in cat_ids] + ["Total"]
@@ -109,7 +150,8 @@ def render(totals, tag_names):
             rows.append([month] + [f"{v:.2f}" for v in vals] + [f"{sum(vals):.2f}"])
         rows.append(["Total"] + [f"{v:.2f}" for v in col_sums] + [f"{sum(col_sums):.2f}"])
         widths = [max(len(r[i]) for r in [header] + rows) for i in range(len(header))]
-        out.append(f"== {currency} ==")
+        title = currency if scope is None else f"{currency} · {tag_names.get(scope, f'tag {scope}')}"
+        out.append(f"== {title} ==")
         for r in [header] + rows:
             out.append("  ".join(c.ljust(widths[0]) if i == 0 else c.rjust(widths[i])
                                  for i, c in enumerate(r)).rstrip())
@@ -182,11 +224,6 @@ def month_arg(s):
     return s
 
 
-def next_month(s):
-    y, m = int(s[:4]), int(s[5:])
-    return f"{y + (m == 12)}-{1 if m == 12 else m + 1:02d}"
-
-
 def main(argv=None, opener=_default_opener):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--from", dest="start", required=True, type=month_arg, metavar="YYYY-MM")
@@ -208,6 +245,11 @@ def main(argv=None, opener=_default_opener):
         sys.exit(f"custom field {AMOUNT_FIELD!r} not found")
     field = fields[0]
     default_currency = (field.get("extra_data") or {}).get("default_currency") or "PLN"
+    periods = fetch_all(q("/api/custom_fields/", name__iexact=PERIOD_FIELD, page_size=100),
+                        token, opener)
+    period_field_id = periods[0]["id"] if periods else None
+    if period_field_id is None:
+        print(f"note: no custom field {PERIOD_FIELD!r}; months come from the created date", file=sys.stderr)
 
     tags = fetch_all(q("/api/tags/", page_size=100), token, opener)
     tag_names = {t["id"]: t["name"] for t in tags}
@@ -215,17 +257,23 @@ def main(argv=None, opener=_default_opener):
     if not parents:
         sys.exit(f"parent tag {CATEGORY_TAG!r} not found")
     category_ids = {t["id"] for t in tags if t.get("parent") in parents}
+    scope_parents = [t["id"] for t in tags if t["name"] == SCOPE_TAG and not t.get("parent")]
+    if not scope_parents:
+        sys.exit(f"parent tag {SCOPE_TAG!r} not found (children JDG and Home)")
+    scope_ids = {t["id"] for t in tags if t.get("parent") in scope_parents}
 
     doc_types = fetch_all(q("/api/document_types/", page_size=100), token, opener)
     skip_type_ids = type_ids_named(doc_types, ISSUED_TYPE)
     if not skip_type_ids:
         print(f"note: no document type {ISSUED_TYPE!r}; nothing is skipped as income", file=sys.stderr)
 
+    # No date filter here: the month is Period-or-created, which the API cannot filter on,
+    # so aggregate() applies the range. A few hundred documents a year make this cheap.
     docs = fetch_all(q("/api/documents/", page_size=100,
-                       custom_field_query=json.dumps([AMOUNT_FIELD, "exists", True]),
-                       created__date__gte=f"{a.start}-01",
-                       created__date__lt=f"{next_month(a.end)}-01"), token, opener)
-    totals, excluded = aggregate(docs, field["id"], category_ids, default_currency, skip_type_ids)
+                       custom_field_query=json.dumps([AMOUNT_FIELD, "exists", True])), token, opener)
+    totals, excluded = aggregate(docs, field["id"], category_ids, default_currency, skip_type_ids,
+                                 scope_ids=scope_ids, period_field_id=period_field_id,
+                                 start=a.start, end=a.end)
     print(render(totals, tag_names) or "No documents with an amount in range.\n")
     print(render_excluded(excluded), end="")
 
