@@ -679,7 +679,7 @@ truenas_paperless:
     - { name: PAPERLESS_AI_LLM_OUTPUT_LANGUAGE, value: "Polish", container: paperless }
     - { name: PAPERLESS_AI_LLM_EXTRA_PARAMS, value: '{"think": false}', container: paperless }
 
-truenas_paperless_ai_enabled: false
+truenas_paperless_ai_enabled: true          # since 2026-11-06 (plan Task 4); prerequisites: README, Paperless
 truenas_paperless_additional_envs: "{{ truenas_paperless.envs + (truenas_paperless.ai_envs if truenas_paperless_ai_enabled | bool else []) }}"
 
 # ---- Pool properties ------------------------------------------------------
