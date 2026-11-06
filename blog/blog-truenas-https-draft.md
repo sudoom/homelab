@@ -425,3 +425,86 @@ endpoint, bucket, region, credentialsSecret and destinationSecretName joined wit
 
 `helm lint`: 0 failed. kubeconform: 12 resources, 10 valid, 0 invalid, 0 errors, 2 skipped. The Job's rendered
 fields are unchanged. The stale values.yaml sentence about the Velero BSL address is now past tense.
+
+## Live verification record (2026-11-06 / 07)
+
+The per-step evidence, collected while the plan ran. Times are UTC unless marked CET.
+
+### Run #1: UI move, Traefik with the staging resolver, garage root_domain (22:05Z)
+
+Operator `playbook.yml` run: `ok=96 changed=8 failed=0`, convergence assert passed. Read back from the box
+(`midclt`, selected fields only):
+
+```
+ui: {'ui_port': 8080, 'ui_httpsport': 8443, 'ui_httpsredirect': False}
+traefik 1.0.38 RUNNING  80 and 443 on 0.0.0.0 and ::
+garage 1.2.17 RUNNING; paperless 1.6.79 RUNNING
+/mnt/tank/apps/traefik/acme/:   -rw------- 1 568 568 16350 lestaging-acme.json
+/mnt/tank/apps/traefik/config/: -rw-r--r-- 1 950 950  2026 homelab.yml
+```
+
+Traefik's log (CET): `23:05:59 Register... providerName=lestaging.acme`, `23:06:21 Validations succeeded`,
+`23:06:24 Server responded with a certificate`: an account-owned Cloudflare token works with lego. No error lines,
+no "Unable to save"; the only warnings are Traefik v3.7's informational notes on encoded path characters and alias
+headers. From the workstation: `curl -sI http://paperless.homelab.sudops.pl` → `Location: https://paperless.homelab.sudops.pl/`;
+with `-k`, every name answered (paperless 302, syncthing 200, garage 200, truenas 302, s3 403, loki.s3 403, traefik
+401), and `loki.s3` showed `subject: CN=*.homelab.sudops.pl`, `issuer: … (STAGING) Dastardly Durum YR1`. Logging in to
+paperless through its name failed with `403 CSRF verification failed`, which Task 5 fixed (PAPERLESS_URL still the IP).
+
+### Logins after run #2 (operator)
+
+- paperless: `https://paperless.homelab.sudops.pl` and the plain fallback `http://192.168.1.25:30070` both log in.
+- garage web UI: login works (password read by the operator on the box; it never leaves it).
+- TrueNAS UI: `https://192.168.1.25:8443` (direct fallback) and `https://truenas.homelab.sudops.pl` (through Traefik,
+  websocket dashboard loads) both log in. That closes the design's first anti-goal (no lockout).
+
+### Run #3 converges
+
+The paperless OCR change ran the playbook again (`ok=88 changed=1`, the paperless env only): Traefik's signature,
+garage's options, the UI move and the routing file all converged on an unchanged box.
+
+### The probe, live (22:25-22:27Z)
+
+`homelab-tls-probe` Synced/Healthy at 22:25:54Z, pod Running under `restricted-v2`, 0 restarts (blackbox needs no
+writable directory). Read through the API server proxy with the readonly account:
+
+```
+$ oc get --raw '/api/v1/namespaces/homelab-tls-probe/services/http:homelab-tls-probe:9115/proxy/probe?module=https_answers&target=https://s3.homelab.sudops.pl/&debug=true'
+probe_ssl_earliest_cert_expiry 1.801775822e+09
+probe_success 1
+```
+
+That is the DNS gate: a pod resolves `homelab.sudops.pl` through the node resolvers (the MikroTik hands the nodes
+the two Technitium servers) and verifies the certificate, so no CoreDNS forward zone was needed. All targets:
+
+```
+https://paperless.homelab.sudops.pl/   success=1 http=200 cert_days=89
+https://syncthing.homelab.sudops.pl/   success=1 http=200 cert_days=89
+https://garage.homelab.sudops.pl/      success=1 http=200 cert_days=89
+https://s3.homelab.sudops.pl/          success=1 http=403 cert_days=89
+https://loki.s3.homelab.sudops.pl/     success=1 http=403 cert_days=89
+https://truenas.homelab.sudops.pl/     success=1 http=200 cert_days=89
+https://traefik.homelab.sudops.pl/     success=1 http=401 cert_days=89
+https://nas.homelab.sudops.pl:5001/    success=1 http=200 cert_days=43
+https://192.168.1.25/                  success=0   (Traefik's default certificate: "tls: failed to verify certificate")
+https://192.168.1.25:8443/             success=0   (TrueNAS self-signed)
+```
+
+The two negative controls are the point: a failed ACME order, where Traefik falls back to its own certificate, trips
+the probe instead of passing. Thanos Ruler (operator exec, `thanos-ruler-user-workload-0`, `/api/v1/rules`):
+`HomelabTLSCertExpiringSoon ok inactive`, `HomelabTLSEndpointDown ok inactive`, `HomelabTLSProbeAbsent ok inactive`.
+
+### Loki, the second push (23:06-23:15Z)
+
+Before the push, `oc diff -n openshift-logging` (operator kubeconfig) on the re-rendered chart showed the hook Job
+`loki-secret-translator` with `ENDPOINT: https://s3.homelab.sudops.pl` and, after the carrier fix, the LokiStack gaining
+`sudops.pl/storage-secret-inputs: 1640263e1e5d2991`. Pushed 23:06:37Z; then:
+
+```
+logging-stack: sync op Succeeded, finished 23:12:25Z, revision aa56d4b
+Secret loki-storage written 23:12:19Z (metadata only read)
+logging-loki-config:  endpoint: s3.homelab.sudops.pl        (no insecure, no forcepathstyle: virtual-host)
+pods: distributors, queriers, query-frontends, compactor restarted 23:12; ingester-2 23:12:52, ingester-1 23:14:12,
+      ingester-0 23:15:30; index-gateway, ingester and compactor StatefulSets fully rolled (current == update revision)
+ingester logs, first 15 minutes: 0 lines matching error.*(s3|putobject|flush|x509|no such host|tls)
+```
