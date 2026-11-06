@@ -503,7 +503,7 @@ chronology: `blog/blog-paperless-draft.md`.
 collector) is run by the root cron job `paperless export (managed by ansible/truenas)` at **04:15**
 (`truenas_paperless_export`). It finds the one container labelled `com.docker.compose.project=ix-paperless` and
 `com.docker.compose.service=paperless`, runs `document_exporter /paperless/export -d --no-progress-bar` in it (no
-`-u`: the image drops to uid 568 itself, so the files are 568-owned like the dataset), counts the
+`-u`: the image drops to the run_as uid 1000 itself, so the files are owned like the dataset), counts the
 `documents.document` records in `manifest.json` and writes `paperless-export.prom` into the textfile directory
 (`truenas_paperless_export_last_success_timestamp_seconds`, `truenas_paperless_export_documents`) through a temp file
 and `os.replace`. It is silent on success; on failure it prints one line to stderr, exits non-zero and leaves the
