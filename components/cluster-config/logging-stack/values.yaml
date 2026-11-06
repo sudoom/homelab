@@ -19,9 +19,22 @@ namespace: openshift-logging
 # Endpoint is the FRONTNET address. Pods cannot reach the storage backnet
 # (192.168.10.0/24) -- see CLAUDE.md -- and Loki's ingesters and queriers are
 # ordinary pod-network pods, unlike the hostNetwork CSI daemons that mount NFS.
-# This is the same address and port the proven Velero truenas-garage BSL uses.
+# This is the same address the proven Velero truenas-garage BSL uses.
+#
+# HTTPS by name since 2026-11-06: Traefik on TrueNAS terminates TLS for
+# s3.homelab.sudops.pl with the Let's Encrypt wildcard and forwards to garage.
+# Until then Loki's chunks crossed the LAN in plain HTTP
+# (http://192.168.1.25:30188). The name resolves through Technitium to the same
+# frontnet 192.168.1.25. Loki addresses the bucket virtual-host style
+# (loki.s3.homelab.sudops.pl, the generated config has no forcepathstyle), which
+# the *.s3 wildcard record, certificate SAN and garage's s3_api.root_domain
+# cover. Loki now depends on the LAN DNS (operator decision, 2026-11-06): a DNS
+# outage longer than CoreDNS's cache (the records' 3600 s TTL) stalls the
+# ingesters' flushes, so the WAL on Ceph grows until DNS returns. The plain
+# port stays open on the NAS as a fallback: set endpoint back to it if DNS is
+# down.
 garage:
-  endpoint: http://192.168.1.25:30188
+  endpoint: https://s3.homelab.sudops.pl
   bucket: loki
   region: garage
   # SealedSecret supplying ONLY access_key_id + access_key_secret. The

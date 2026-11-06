@@ -283,3 +283,29 @@ phase=Completed items=37/37 errors= warnings= start=2026-11-06T22:39:09Z done=20
 
 `oc get backup` alone resolves to CNPG's `backups.postgresql.cnpg.io` on this cluster; the Velero kind needs its full
 name.
+
+## 2026-11-06 — Loki to garage over HTTPS by name
+
+Loki's chunks and index crossed the LAN to garage in plain HTTP (`http://192.168.1.25:30188`). `garage.endpoint` in
+`components/cluster-config/logging-stack/values.yaml` is now `https://s3.homelab.sudops.pl`. The pre-sync
+`loki-secret-translator` Job writes it into Secret `loki-storage`; the Loki operator re-renders `logging-loki-config`
+and rolls the Loki pods. Loki addresses the bucket virtual-host style (`loki.s3.homelab.sudops.pl`; the generated
+config has no `forcepathstyle`), which the `*.s3` record, the certificate SAN and garage's `s3_api.root_domain` cover.
+Consequence accepted by the operator: Loki now depends on the LAN DNS. An outage longer than CoreDNS's cache (3600 s
+record TTL) stalls the ingesters' flushes and the WAL on Ceph grows until DNS returns. The plain port stays open as
+the fallback (revert the value).
+
+```
+$ helm lint components/cluster-config/logging-stack
+1 chart(s) linted, 0 chart(s) failed
+$ helm template ls components/cluster-config/logging-stack -n openshift-logging -f .../values.yaml   # before and after, diffed
+156c156
+<               value: http://192.168.1.25:30188
+---
+>               value: https://s3.homelab.sudops.pl
+$ helm template ... | kubeconform -strict -ignore-missing-schemas -schema-location default -schema-location '<datreeio CRDs-catalog>' -summary
+Summary: 12 resources found parsing stdin - Valid: 10, Invalid: 0, Errors: 0, Skipped: 2
+```
+
+The only rendered change is the secret-translator Job's `ENDPOINT` value. (kubeconform needed the sandbox off for the
+schema download: TLS verification failed inside it.)
