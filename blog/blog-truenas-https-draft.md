@@ -179,3 +179,33 @@ python3 -m unittest bin/test_paperless_costs.py                                 
 ```
 
 Not run against the box; that is playbook run #2 (traefik args, paperless envs).
+
+### Run #2 applied and verified (2026-11-06 23:15Z)
+
+Operator run: `ok=89 changed=2 failed=0` (traefik app update to resolver `le`, paperless envs). Traefik's log:
+
+```
+23:15:11 INF Testing certificate renew... acmeCA=https://acme-v02.api.letsencrypt.org/directory providerName=le.acme
+23:15:13 INF Register... providerName=le.acme
+23:15:13 INF Obtaining bundled SAN certificate.
+23:15:32 INF Validations succeeded; requesting certificates.
+23:15:35 INF Server responded with a certificate.
+```
+
+The store is saved: `le-acme.json` 16,084 bytes, uid 568, mode `0600`, written 23:15:35.13 (a listing taken a few
+seconds earlier caught the 3,431-byte account-only file between registration and issuance). Every name verifies
+against the system trust store, no `-k`:
+
+```
+$ for n in paperless syncthing garage truenas s3 loki.s3 traefik; do printf '%-10s ' $n; curl -s -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://$n.homelab.sudops.pl/; done
+paperless  302 0
+syncthing  200 0
+garage     200 0
+truenas    302 0
+s3         403 0
+loki.s3    403 0
+traefik    401 0
+```
+
+`loki.s3` verifying proves the `*.s3.homelab.sudops.pl` SAN; 403 on both S3 names is garage refusing an anonymous
+request, by path and by bucket host.
