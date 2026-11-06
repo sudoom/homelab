@@ -384,3 +384,8 @@ Task 4 Step 4: `document_llmindex rebuild` in the paperless container (`Rebuildi
 in the chat, in Polish, how much the November accounting services cost, it answered with the line item (246,00 PLN
 gross) and the invoice total (338,25 PLN), and listed the invoice first among three linked sources. Task 4 done; the
 nightly index update (`PAPERLESS_LLM_INDEX_TASK_CRON`, 02:10 by default) keeps it current from here.
+
+Confirmed from Ollama's side the same evening: after every paperless request the server logs
+`level=WARN source=types.go:1131 msg="invalid option provided" option=think`, i.e. `think` arrived inside `options`, as
+the client code says, and Ollama discarded it. The chat question above cost four model calls (23.1 s, 31.0 s, 7.1 s,
+33.9 s; peaks 16.0-17.2 GiB). The warning stops once the playbook applies 7dd0c1c.
