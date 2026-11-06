@@ -857,3 +857,37 @@ Disabled again after the test (operator, 21:41:21Z). `spec.plugins` is back to `
 `networking-console-plugin`, `nmstate-console-plugin`. The console rolled to 2/2 ready at 21:41:52Z, and ClusterOperator
 `console` reads Available=True, Progressing=False, Degraded=False. The `gitops-plugin` ConsolePlugin and its pod stay
 in place, so enabling it later is the same toggle. #39's verification list carries the result.
+
+## 2026-11-05: #39-#41 merged, the deploy runs fail at the quay push
+
+AgentK20 approved and merged #39 (`main`, 20:57Z), #40 (`release-4.22`, 22:08Z) and #41 (`release-4.21`, 22:09Z).
+#42 (`release-4.20`) is open with no review. Each merge started `Deploy GitOps`:
+
+| Branch | Run | Duration | Result |
+|---|---|---|---|
+| `main` | 42108121945 | 20:57-21:30Z | build OK, push failed |
+| `release-4.22` | 42118931495 | 22:08-22:45Z | build OK, push failed |
+| `release-4.21` | 42119016110 | 22:09-22:49Z | build OK, push failed |
+
+All three built every image and then failed on the first command of `push_containers`:
+
+```
++ podman push quay.io/okderators/gitops/rollouts:1.22.0-2026-11-05-205748
+Error: writing blob: initiating layer upload to /v2/okderators/gitops/rollouts/blobs/uploads/ in quay.io: unauthorized: access to the requested resource is not authorized
+##[error]Process completed with exit code 125.
+```
+
+`gh run view --log-failed` cuts the log off at the start of `build.sh`. The error is only in the full job log:
+`gh api --allow-escape-sequences repos/okd-project/okd-operator-pipeline/actions/jobs/<job>/logs`. On `main` and
+`release-4.22` the `Catalog Index PR` job was skipped, so the deploy bot opened no catalog PR.
+
+The repository exists. `skopeo list-tags docker://quay.io/okderators/gitops/rollouts` lists 8 tags, the last
+`1.19.0-2026-02-07-151505`, so the CI push credential has no write permission on it. This is the same error #45
+reports for `quay.io/okderators/nmstate/*`. cert-manager's push from `release-4.21` on 2026-10-22 succeeded, so the
+credential itself works; the permission is per repository. The 1.22 build pushes 13 repositories under
+`quay.io/okderators/gitops/`: `agent`, `argocd`, `backend`, `console-plugin`, `dex`, `extensions`, `image-updater`,
+`must-gather`, `operator`, `operator-bundle` and `rollouts` exist, and `promoter` and `promoter-extension` (new in
+1.22) answer `unauthorized` to an anonymous tag list, so they are absent or private.
+
+Nothing is published and Task 11 (catalog PRs) stays blocked. The fix is the maintainers': write on all 13
+repositories, then a re-run of the three runs. The cluster stays on the zot test build.
