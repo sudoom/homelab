@@ -1,0 +1,14 @@
+# One-off check for the HTTPS BackupStorageLocation (truenas-garage over
+# https://s3.homelab.sudops.pl). Applied by the controller with the operator's
+# approval (`oc create -f`), deleted by its TTL after 24 h.
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: truenas-https-check
+  namespace: openshift-adp
+spec:
+  includedNamespaces:
+    - homelab-tls-probe
+  storageLocation: truenas-garage
+  ttl: 24h0m0s
+  snapshotVolumes: false

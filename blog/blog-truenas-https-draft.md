@@ -242,3 +242,15 @@ $ helm template root-app bootstrap/root-app/ -f bootstrap/root-app/values.yaml  
 
 kubeconform needed the sandbox off (TLS to raw.githubusercontent.com failed under it). The live checks (DNS from
 pods, eight probes, negative controls) follow after the push.
+
+## 2026-11-06 — Velero to garage over HTTPS by name
+
+The OADP BackupStorageLocation `truenas-garage` moves from `http://192.168.1.25:30188` to
+`https://s3.homelab.sudops.pl` (`components/cluster-config/oadp/values.yaml`, `garageBsl.s3Url`). Why: Velero
+backups contain Kubernetes Secrets, and they crossed the LAN in plain HTTP. The name resolves through Technitium to
+the same frontnet address; Velero now depends on the LAN DNS (operator accepted this), and the plain port stays open
+as a fallback. `s3ForcePathStyle: "true"` is unchanged and the Schedule `daily` stays paused.
+
+Render diff (`helm template oadp components/cluster-config/oadp -n openshift-adp -f .../values.yaml`, before vs after):
+the only change is the DPA's `s3Url`. A one-off Backup `truenas-https-check` (`tests/truenas-https/backup-check.yaml`,
+namespace `homelab-tls-probe`, TTL 24 h) proves a real upload after the push.

@@ -44,11 +44,19 @@ garageBsl:
   bucket: velero
   prefix: velero
   region: garage                       # garage's configured region name
-  # FRONTNET, deliberately -- not the 10G backnet.
+  # HTTPS by name since 2026-11-06: Traefik on TrueNAS terminates TLS for
+  # s3.homelab.sudops.pl with the Let's Encrypt wildcard and forwards to garage.
+  # Velero backups contain Kubernetes Secrets, and until now they crossed the
+  # LAN in plain HTTP. s3ForcePathStyle stays "true" (garage).
   #
-  # 192.168.10.10:30188 was tried first and failed: BSL Unavailable with
-  # `dial tcp 192.168.10.10:30188: i/o timeout`, and a 90 s socket watch on the
-  # NAS saw ZERO inbound SYNs -- the packets never arrived.
+  # The name resolves through Technitium to the FRONTNET address 192.168.1.25,
+  # deliberately -- not the 10G backnet. Velero now depends on the LAN DNS
+  # (operator decision, 2026-11-06). The plain port http://192.168.1.25:30188
+  # stays open on the NAS as a fallback: set s3Url back to it if DNS is down.
+  #
+  # Why frontnet: 192.168.10.10:30188 was tried first and failed: BSL
+  # Unavailable with `dial tcp 192.168.10.10:30188: i/o timeout`, and a 90 s
+  # socket watch on the NAS saw ZERO inbound SYNs -- the packets never arrived.
   #
   # **Pod-network -> storage-backnet egress does not work on this cluster.**
   # Everything that reaches 192.168.10.0/24 today does so from the HOST stack:
@@ -62,7 +70,7 @@ garageBsl:
   # Measured figures live in data/storage-throughput.md; quote the DATE with
   # any number from it, and verify with the benchmark before planning around
   # one -- a parallel copier may exceed the single-stream figure.
-  s3Url: http://192.168.1.25:30188
+  s3Url: https://s3.homelab.sudops.pl
   credentialSecret: garage-credentials
   # Sealed 2026-08-28 against sealed-secrets-pub.pem (valid to 2036). Strict
   # scope: bound to name garage-credentials in ns openshift-adp -- renaming
