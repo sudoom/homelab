@@ -1,0 +1,243 @@
+---
+# Render test for the Traefik catalog app (no TrueNAS host). It asserts the data
+# the role sends -- truenas_traefik_additional_args and truenas_traefik_app_values
+# from group_vars, the routing file from the role's template -- and that every
+# role task carrying a Traefik secret is no_log. Dummy vault values come by -e.
+#   cd ansible/truenas
+#   ansible-playbook -i localhost, -c local tests/traefik-render.yml \
+#     -e truenas_traefik_cf_dns_api_token=dummy -e "truenas_traefik_dashboard_users='admin:\$2y\$05\$dummy'"
+#   ... the same with -e truenas_traefik_acme_resolver=le      (production resolver)
+#   ... the same without the dashboard users -e                (no dashboard router)
+- name: Traefik app values and routing file render
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+  vars:
+    # Catalog traefik 1.0.38, ix_values.yaml consts.reserved_flags: the template
+    # fails the render on any of these (docker-compose.yaml line 59).
+    _reserved:
+      - ping
+      - ping.entrypoint
+      - entrypoints.ping.address
+      - providers.docker
+      - providers.file.watch
+      - providers.file.directory
+      - api.basepath
+      - api.insecure
+      - api.dashboard
+      - entrypoints.traefik.address
+    _staging_ca: https://acme-staging-v02.api.letsencrypt.org/directory
+    _tasks_file: "{{ playbook_dir }}/../roles/truenas-apps/tasks/main.yml"
+    _template_file: "{{ playbook_dir }}/../roles/truenas-apps/templates/traefik-homelab.yml.j2"
+    # Computed from the input, not from group_vars, so a wrong guard there fails here.
+    _dash_users_in: "{{ truenas_traefik_dashboard_users | default('') }}"
+    _dash_expected: "{{ (_dash_users_in | length > 0) and (_dash_users_in != 'CHANGEME') }}"
+    # Task patterns that carry a secret: the token, the htpasswd line, the
+    # routing file (it holds that line), the values fact with the token, the
+    # app.config read, and the job records (they carry the call's arguments).
+    _secret_re: 'truenas_traefik_cf_dns_api_token|truenas_traefik_dashboard_users|traefik-homelab\.yml|_tf_values'
+  tasks:
+    - name: Read the declared values (the same variables the role sends)
+      ansible.builtin.set_fact:
+        _v: "{{ truenas_traefik_app_values }}"
+        _args: "{{ truenas_traefik_additional_args }}"
+        _r: "{{ truenas_traefik_acme_resolver }}"
+
+    - name: Index the additional args
+      ansible.builtin.set_fact:
+        _flags: "{{ _args | map(attribute='flag') | list }}"
+        _pairs: "{{ _args | map(attribute='flag') | zip(_args | map(attribute='value')) | map('join', '=') | list }}"
+        _by_flag: "{{ dict(_args | map(attribute='flag') | zip(_args | map(attribute='value'))) }}"
+        _ep_names: "{{ _v.network.entry_points | map(attribute='entrypoint_name') | list }}"
+
+    - name: The resolver is one of the two declared ones
+      ansible.builtin.assert:
+        that: _r in ['lestaging', 'le']
+        fail_msg: "truenas_traefik_acme_resolver is {{ _r }}"
+
+    - name: No flag is one the catalog reserves or sets itself
+      ansible.builtin.assert:
+        that:
+          - _flags | intersect(_reserved) | length == 0
+          - _flags | select('search', '\.address$') | list | length == 0
+          - _flags | select('search', '\.acme\.storage$') | list | length == 0
+          - _flags | select('search', '=') | list | length == 0
+          - _flags | select('search', '^-') | list | length == 0
+          - _flags | select('search', 'http3') | list | length == 0
+        fail_msg: "a flag would fail the catalog render: {{ _flags }}"
+
+    # The template lowercases each flag (docker-compose.yaml line 56) while the
+    # live app.config keeps what was sent, so an upper-case flag would drift forever.
+    - name: Flags are lowercase and unique
+      ansible.builtin.assert:
+        that:
+          - _flags | select('search', '[A-Z]') | list | length == 0
+          - _flags | length == (_flags | unique | length)
+
+    # docker-compose.yaml lines 76-80: an entrypoints.<name>.* flag must name an
+    # entry point the network section defines.
+    - name: Every entrypoints flag names a declared entry point
+      ansible.builtin.assert:
+        that: (_flags | select('match', '^entrypoints\.') | map('split', '.') | map(attribute=1) | unique | difference(_ep_names)) | length == 0
+        fail_msg: "entry point flag without a declared entry point (declared: {{ _ep_names }})"
+
+    - name: The certificate resolver follows truenas_traefik_acme_resolver
+      ansible.builtin.assert:
+        that:
+          - _by_flag['entrypoints.websecure.http.tls.certresolver'] == _r
+          - (_flags | select('match', '^certificatesresolvers\.') | map('split', '.') | map(attribute=1) | unique | list) == [_r]
+          - ('certificatesresolvers.' ~ _r ~ '.acme.dnschallenge.provider=cloudflare') in _pairs
+          - ('certificatesresolvers.' ~ _r ~ '.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53') in _pairs
+          - (_by_flag['certificatesresolvers.' ~ _r ~ '.acme.email'] | default('')) is search('@')
+        fail_msg: "resolver flags do not all name {{ _r }}: {{ _flags | select('match', '^certificatesresolvers') | list }}"
+
+    - name: Staging resolver carries the staging CA, production none
+      ansible.builtin.assert:
+        that: >-
+          (('certificatesresolvers.lestaging.acme.caserver=' ~ _staging_ca) in _pairs
+           and (_flags | select('match', '^certificatesresolvers\.le\.') | list | length == 0))
+          if _r == 'lestaging' else
+          (_flags | select('search', '\.acme\.caserver$') | list | length == 0)
+        fail_msg: "caserver flags wrong for resolver {{ _r }}"
+
+    - name: Redirect, TLS, wildcard, read timeout and Docker provider flags
+      ansible.builtin.assert:
+        that:
+          - "'providers.docker.exposedbydefault=false' in _pairs"
+          - "'entrypoints.web.http.redirections.entrypoint.to=websecure' in _pairs"
+          - "'entrypoints.web.http.redirections.entrypoint.scheme=https' in _pairs"
+          - "'entrypoints.websecure.http.tls=true' in _pairs"
+          - "'entrypoints.websecure.http.tls.domains[0].main=*.homelab.sudops.pl' in _pairs"
+          - "'entrypoints.websecure.http.tls.domains[0].sans=*.s3.homelab.sudops.pl' in _pairs"
+          - "'entrypoints.websecure.transport.respondingtimeouts.readtimeout=300s' in _pairs"
+        fail_msg: "missing flag: {{ _pairs }}"
+
+    - name: API, dashboard, ports, run_as and storage values
+      ansible.builtin.assert:
+        that:
+          - _v.traefik.api_insecure is sameas false
+          - _v.traefik.dashboard is sameas true
+          - _v.network.api_port.bind_mode == ''
+          - (_v.network.entry_points | map(attribute='port_number') | map('int') | sort | list) == [80, 443]
+          - (_ep_names | sort | list) == ['web', 'websecure']
+          - _v.network.entry_points | rejectattr('bind_mode', 'equalto', 'published') | list | length == 0
+          - _v.network.entry_points | rejectattr('protocol', 'equalto', 'tcp') | list | length == 0
+          - _v.network.entry_points | selectattr('http3') | list | length == 0
+          - (_v.run_as.user | int) == 568 and (_v.run_as.group | int) == 568
+          - _v.storage.config.type == 'host_path' and _v.storage.config.host_path_config.path == '/mnt/tank/apps/traefik/config'
+          - _v.storage.acme.type == 'host_path' and _v.storage.acme.host_path_config.path == '/mnt/tank/apps/traefik/acme'
+          - _v.storage.config.host_path_config.auto_permissions is not defined
+          - _v.storage.acme.host_path_config.auto_permissions is not defined
+
+    - name: The token stays out of the group_vars values
+      ansible.builtin.assert:
+        that:
+          - _v.traefik.additional_envs is not defined
+          - truenas_traefik.token_env == 'CF_DNS_API_TOKEN'
+          - (truenas_traefik_cf_dns_api_token | default('')) | length == 0 or truenas_traefik_cf_dns_api_token not in (_v | to_json)
+
+    - name: Render the routing file (the role's template)
+      ansible.builtin.set_fact:
+        _cfg: "{{ lookup('ansible.builtin.template', _template_file) | from_yaml }}"
+
+    - name: Index routers and services
+      ansible.builtin.set_fact:
+        _routers: "{{ _cfg.http.routers }}"
+        _services: "{{ _cfg.http.services }}"
+        _urls: "{{ dict(_cfg.http.services | dict2items | map(attribute='key') | zip(_cfg.http.services | dict2items | map(attribute='value.loadBalancer.servers.0.url'))) }}"
+        _s3_re: "{{ _cfg.http.routers.s3.rule | default('') | regex_search('HostRegexp\\(`([^`]+)`\\)', '\\1') | default(['^$'], true) | first }}"
+
+    - name: Routers, rules and entry points
+      ansible.builtin.assert:
+        that:
+          - (_routers.keys() | sort | list) == ((['garage', 'paperless', 's3', 'syncthing', 'truenas'] + (['dashboard'] if _dash_expected | bool else [])) | sort | list)
+          - _routers | dict2items | selectattr('value.tls', 'defined') | list | length == 0
+          - _routers | dict2items | rejectattr('value.entryPoints', 'equalto', ['websecure']) | list | length == 0
+          - _routers.paperless.rule == 'Host(`paperless.homelab.sudops.pl`)'
+          - _routers.syncthing.rule == 'Host(`syncthing.homelab.sudops.pl`)'
+          - _routers.garage.rule == 'Host(`garage.homelab.sudops.pl`)'
+          - _routers.truenas.rule == 'Host(`truenas.homelab.sudops.pl`)'
+          - "'Host(`s3.homelab.sudops.pl`)' in _routers.s3.rule"
+          - "'HostRegexp(' in _routers.s3.rule"
+        fail_msg: "routers wrong: {{ _routers }}"
+
+    # Review focus 3: virtual-host S3 (loki.s3...) must reach the S3 port with the
+    # Host header unchanged; Python re and Go regexp agree on this pattern.
+    - name: The s3 HostRegexp matches one bucket label and nothing else
+      ansible.builtin.assert:
+        that:
+          - "'loki.s3.homelab.sudops.pl' is match(_s3_re)"
+          - "'velero.s3.homelab.sudops.pl' is match(_s3_re)"
+          - "'a.b.s3.homelab.sudops.pl' is not match(_s3_re)"
+          - "'loki.s3.homelab.sudops.pl.example.com' is not match(_s3_re)"
+          - "'s3.homelab.sudops.pl' is not match(_s3_re)"
+          - "'loki.s3xhomelab.sudops.pl' is not match(_s3_re)"
+        fail_msg: "s3 HostRegexp {{ _s3_re }} matches the wrong names"
+
+    - name: Backends, Host header and the one insecure transport
+      ansible.builtin.assert:
+        that:
+          - _urls.paperless == 'http://192.168.1.25:30070'
+          - _urls.syncthing == 'http://192.168.1.25:8384'
+          - _urls.garage == 'http://192.168.1.25:30186'
+          - _urls.s3 == 'http://192.168.1.25:30188'
+          - _urls.truenas == 'https://192.168.1.25:8443'
+          - (_services | dict2items | selectattr('value.loadBalancer.serversTransport', 'defined') | map(attribute='key') | list) == ['truenas']
+          - _services.truenas.loadBalancer.serversTransport == 'truenas-selfsigned'
+          - (_cfg.http.serversTransports.keys() | list) == ['truenas-selfsigned']
+          - _cfg.http.serversTransports['truenas-selfsigned'].insecureSkipVerify is sameas true
+          - _services | dict2items | selectattr('value.loadBalancer.passHostHeader', 'defined') | list | length == 0
+        fail_msg: "services wrong: {{ _urls }}"
+
+    - name: The dashboard router follows the vault variable
+      ansible.builtin.assert:
+        that: >-
+          (_routers.dashboard.rule == 'Host(`traefik.homelab.sudops.pl`)'
+           and _routers.dashboard.service == 'api@internal'
+           and _routers.dashboard.middlewares == ['dashboard-auth']
+           and _cfg.http.middlewares['dashboard-auth'].basicAuth.users == [_dash_users_in])
+          if _dash_expected | bool else
+          ('dashboard' not in _routers and _cfg.http.middlewares is not defined)
+        fail_msg: "dashboard router or middleware wrong (expected present: {{ _dash_expected }})"
+
+    - name: Parse the role's task list
+      ansible.builtin.set_fact:
+        _role_tasks: "{{ lookup('ansible.builtin.file', _tasks_file) | from_yaml }}"
+
+    - name: Select the role tasks that carry a Traefik secret
+      ansible.builtin.set_fact:
+        _secret_tasks: "{{ (_secret_tasks | default([])) + [item] }}"
+      loop: "{{ _role_tasks }}"
+      loop_control:
+        label: "{{ item.name | default('unnamed') }}"
+      when: >-
+        ((item | to_json) is search(_secret_re))
+        or (((item | to_json) is search('app\.config')) and ((item | to_json) is search('truenas_traefik\.app_name')))
+        or (((item | to_json) is search('core\.get_jobs')) and ((item | to_json) is search('truenas_tf_')))
+
+    # Review focus 4: the Cloudflare token must never reach play output. The
+    # counts keep the check from passing on an empty selection.
+    - name: Every task carrying a Traefik secret is no_log
+      ansible.builtin.assert:
+        that:
+          - _secret_tasks | default([]) | rejectattr('no_log', 'defined') | list | length == 0
+          - _secret_tasks | default([]) | selectattr('no_log', 'defined') | rejectattr('no_log') | list | length == 0
+          - _secret_tasks | default([]) | map('to_json') | select('search', 'truenas_traefik_cf_dns_api_token') | list | length >= 2
+          - _secret_tasks | default([]) | map('to_json') | select('search', 'app\.config') | list | length >= 1
+          - _secret_tasks | default([]) | map('to_json') | select('search', 'traefik-homelab\.yml') | list | length == 1
+          - _secret_tasks | default([]) | map('to_json') | select('search', 'core\.get_jobs') | list | length == 2
+        fail_msg: >-
+          not no_log: {{ _secret_tasks | default([]) | rejectattr('no_log', 'defined') | map(attribute='name') | list
+          + (_secret_tasks | default([]) | selectattr('no_log', 'defined') | rejectattr('no_log') | map(attribute='name') | list) }};
+          selected: {{ _secret_tasks | default([]) | map(attribute='name') | list }}
+
+    - name: Show the render (no secrets in it)
+      ansible.builtin.debug:
+        msg:
+          resolver: "{{ _r }}"
+          args: "{{ _pairs }}"
+          routers: "{{ _routers | dict2items | map(attribute='key') | list }}"
+          backends: "{{ _urls }}"
+          dashboard: "{{ _dash_expected }}"
+          secret_tasks: "{{ _secret_tasks | default([]) | map(attribute='name') | list }}"

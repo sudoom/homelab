@@ -52,3 +52,93 @@ new:       Paperless https://paperless.homelab.sudops.pl, Garage https://garage.
 ```
 
 **Next.** Playbook run #1 (after Task 4): `https://192.168.1.25:8443` (self-signed warning) and `http://192.168.1.25:8080` open; `midclt call system.general.config | jq '{ui_port, ui_httpsport}'` reads 8080 and 8443. The Homepage links are pushed right after, with the staging-certificate warning accepted until the production cert lands.
+
+Applied the same evening (operator run of `ansible/technitium/playbook.yml`: `dns-master ok=49 changed=2`,
+`dns-slave ok=37 changed=1`, `failed=0`). Both servers answer for every name, the slave by zone transfer:
+
+```
+$ for s in 192.168.1.12 192.168.1.13; do for n in truenas paperless syncthing garage s3 traefik loki.s3 velero.s3 nas; do dig +short @$s $n.homelab.sudops.pl A; done; done
+192.168.1.25   (× 8 names, both servers; loki.s3 and velero.s3 through the *.s3 wildcard)
+192.168.1.2    (nas, unchanged)
+```
+
+## 2026-11-06 — the Traefik app (staging certificate)
+
+**What changed.** `ansible/truenas` now declares the community-train catalog app `traefik` (catalog 1.0.38, Traefik v3.7.17) and the file it routes from. Three datasets in `truenas_datasets`: `apps/traefik`, `apps/traefik/config` (owner 950, `truenas_admin`, so Ansible writes the routing file without `become`, the `monitoring/bin` precedent) and `apps/traefik/acme` (owner 568, the uid Traefik runs as). In `group_vars/all.yml`: `truenas_traefik` (the inputs), top-level `truenas_traefik_acme_resolver: lestaging`, and three computed variables the role sends as they are: `truenas_traefik_additional_args`, `truenas_traefik_app_values` (everything except the token) and `truenas_traefik_dashboard_enabled` (a boolean from the vault line). The role section in `truenas-apps` comes after paperless: assert the resolver is `lestaging` or `le`, write `/mnt/tank/apps/traefik/config/homelab.yml` from `templates/traefik-homelab.yml.j2` (0644, `no_log`), create the app only when the vault holds the Cloudflare token, otherwise warn on every run; on an existing app, compare a signature against `app.config` and send `app.update` with the whole declared values on drift. Two new vault variables in `vars/vault.yml.example`: `truenas_traefik_cf_dns_api_token` (a new Cloudflare token, Zone:Read + DNS:Edit on `sudops.pl`) and `truenas_traefik_dashboard_users` (one `htpasswd -nbB admin '<password>'` line).
+
+**The args Traefik gets** (flag without `--`, all lowercase), as the render test prints them for the staging resolver:
+
+```
+log.level=INFO
+providers.docker.exposedbydefault=false
+entrypoints.web.http.redirections.entrypoint.to=websecure
+entrypoints.web.http.redirections.entrypoint.scheme=https
+entrypoints.websecure.http.tls=true
+entrypoints.websecure.http.tls.certresolver=lestaging
+entrypoints.websecure.http.tls.domains[0].main=*.homelab.sudops.pl
+entrypoints.websecure.http.tls.domains[0].sans=*.s3.homelab.sudops.pl
+entrypoints.websecure.transport.respondingtimeouts.readtimeout=300s
+certificatesresolvers.lestaging.acme.email=<the ClusterIssuer's address>
+certificatesresolvers.lestaging.acme.dnschallenge.provider=cloudflare
+certificatesresolvers.lestaging.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+certificatesresolvers.lestaging.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+```
+
+Only the active resolver is declared. With `le` the last line goes and the other three name `le`. A resolver left defined but unused would keep renewing its stored certificate.
+
+**The routing file** has one router and one service per name on `websecure`, no `tls` key on any router (the entry point's `http.tls` gives each one the wildcard by SNI), `passHostHeader` at its default, and one serversTransport, `truenas-selfsigned` with `insecureSkipVerify: true`, used only by the `truenas` service (`https://192.168.1.25:8443`). The `s3` rule is `Host(`s3.homelab.sudops.pl`) || HostRegexp(`^[a-z0-9-]+\.s3\.homelab\.sudops\.pl$`)`, a single-quoted YAML scalar so the backslashes stay literal. The `dashboard` router (`api@internal`, middleware `dashboard-auth` with the vault's htpasswd line) is rendered only when that vault variable is set and is not `CHANGEME`.
+
+**What I checked against the catalog sources** (local copies of `traefik` 1.0.38 and ix library 2.3.18, fetched the same day):
+
+- `templates/docker-compose.yaml` line 9, `c1.add_docker_socket()`, and library `container.py` lines 295-297 (it adds group 999 and mounts `/var/run/docker.sock`); `app.yaml` lines 9-11 list the socket under `host_mounts`. Line 19 hard-codes `--providers.docker=true`. Neither can be switched off through values, so the socket is an accepted cost and `providers.docker.exposedbydefault=false` keeps container labels from creating routes.
+- Line 56: each flag is `lstrip("-")|lower`, so flags go in lowercase, otherwise `app.config` would keep a spelling the signature never matches. Line 58: `=` in a flag fails the render. Line 59: the flag must not be in `consts.reserved_flags` (`ix_values.yaml` lines 17-27: `ping`, `ping.entrypoint`, `entrypoints.ping.address`, `providers.docker`, `providers.file.watch`, `providers.file.directory`, `api.basepath`, `api.insecure`, `api.dashboard`, `entrypoints.traefik.address`).
+- Lines 62-73 and 100-102: any `certificatesresolvers.<r>.*` flag registers `<r>`, `.acme.storage` fails, and the template appends `--certificatesresolvers.<r>.acme.storage=/acme/<r>-acme.json` (`consts.acme_base_path: /acme`, `acme_file_suffix: acme.json`, `ix_values.yaml` lines 13-14).
+- Lines 76-94: an `entrypoints.<name>.*` flag must name an entry point from the network section (or `ping`/`traefik`), `.address` fails, and http3 flags need the entry point's http3 option. Line 43 sets `--entrypoints.<name>.address=:<port>/<protocol>`, line 45 publishes the port.
+- Line 96: `--flag=value`, or `--flag` alone when the value is empty, so `entrypoints.websecure.http.tls` carries the value `true`.
+- Line 106 `c1.add_port(values.network.api_port)` and line 124 `tpl.portals.add(...)`: `container.py` lines 258-261 return without a port when `bind_mode` is `""`, and `portals.py` lines 20-22 skip anything not `published`. The API entry point still listens inside the container on 30384 (line 28), unreachable from outside.
+- Lines 109-112: `config` at `/file-configs` (`consts.config_dir_path`) and `acme` at `/acme`, each passed to the permissions container; `deps_perms.py` lines 55-61 return `None` for a `host_path` without `auto_permissions`, so the dataset owners above are what the container sees.
+- `container.py` line 268: an empty `host_ips` becomes `["0.0.0.0", "::"]`, both families on 80 and 443.
+- `questions.yaml`: `api_insecure` defaults to true (lines 31-39) and is sent as false; `additional_args` items are `flag`/`value` strings (46-68), `additional_envs` `name`/`value` (69-88); `run_as` minimum 568 (95-110); `api_port.bind_mode` enum includes `""` (123-141), `port_number` default 30384 (142-149); entry point fields `entrypoint_name`, `bind_mode`, `port_number`, `protocol`, `http3`, `host_ips` (165-245); `storage.config` and `storage.acme` are `host_path` or `ix_volume` (348-503); `resources.limits.cpus`/`memory` (696-720).
+
+Traefik's v3.7 option reference (doc.traefik.io, configuration options) lists every flag above; `entrypoints.<name>.transport.respondingtimeouts.readtimeout` defaults to 60 there, which is why it is set to 300s, and `providers.docker.exposedbydefault` defaults to true.
+
+**Test first.** `ansible/truenas/tests/traefik-render.yml` loads `group_vars/all.yml`, renders the role's template with `lookup('ansible.builtin.template')`, parses the role's task list with `from_yaml`, and asserts the flags against the reserved list, the resolver switch, the ports, the routers and backends, and `no_log` on every task that references the token, the htpasswd variable, the routing template, the values fact, the traefik `app.config` read or the job records (their arguments carry the payload). Before any implementation:
+
+```
+$ ansible-playbook -i localhost, -c local tests/traefik-render.yml -e truenas_traefik_cf_dns_api_token=dummy -e "truenas_traefik_dashboard_users='admin:\$2y\$05\$dummy'"
+fatal: [localhost]: FAILED! => {"changed": false, "msg": "Task failed: Finalization of task args for 'ansible.builtin.set_fact' failed: Error while resolving value for '_args': 'truenas_traefik_additional_args' is undefined"}
+localhost : ok=0 changed=0 unreachable=0 failed=1
+```
+
+After:
+
+```
+default (lestaging, dashboard users)   ok=21 changed=0 failed=0
+-e truenas_traefik_acme_resolver=le    ok=21 changed=0 failed=0   (certresolver=le, three certificatesresolvers.le.* flags, no caserver)
+without the dashboard users            ok=21 changed=0 failed=0   (routers: paperless, syncthing, garage, s3, truenas)
+dashboard users = CHANGEME             ok=21 changed=0 failed=0   (dashboard false)
+tests/paperless-render.yml             ok=8  changed=0 failed=0   (also with -e truenas_paperless_ai_enabled=true)
+ansible-playbook -i inventory.yml playbook.yml --syntax-check   -> playbook: playbook.yml
+```
+
+To see that the assertions can fail, I ran the test against twelve broken copies of the files in a scratch directory. Each one failed, at the assertion meant for it: `no_log` dropped from the `app.config` read or from a job-record read, read timeout 60s, the s3 router without `HostRegexp`, a router with `tls: {}`, the reserved flag `api.insecure`, `exposedbydefault` dropped, the API port published, the token inside the group_vars values, the syncthing route on the sync port, the `truenas` backend without its transport, and the staging CA kept with `le`.
+
+**The role logic, against a fake `midclt`.** I extracted the Traefik section into a scratch play with a shell `midclt` that logs its arguments and answers `app.config` from a file. With `-v` the token and htpasswd strings (marker values) appeared 0 times in any output, and 0 times with `-vvv --diff` on a changed routing file.
+
+```
+absent, token + users          -> app.create sent; payload: envs [CF_DNS_API_TOKEN], api_port {bind_mode: '', port_number: 30384, host_ips: []},
+                                  entry points web 80 / websecure 443 published tcp, run_as 568:568, limits 1 CPU / 512 MB, 13 args
+present, live == declared      -> app.config read, no update, changed=0   (live had extra schema keys and no api_port.host_ips)
+present, live args reordered   -> no update
+present, live readtimeout 60s  -> app.update with TZ, network, resources, run_as, storage, traefik
+present, live has another token, or live cpus 2 -> app.update
+present, declared le           -> app.update
+present, no token              -> "traefik NOT UPDATED: the Cloudflare DNS token is missing ...", no midclt call
+absent, token CHANGEME         -> "traefik NOT CREATED: ...", routing file still written, no dashboard router
+create fails / update fails    -> "traefik app.create failed: [EINVAL] boom" / "traefik app.update failed: [EINVAL] boom" (from core.get_jobs)
+resolver typo (lestagin)       -> assert fails before anything else runs
+```
+
+**Not done here.** I did not run `check.yml` or `playbook.yml`: both connect to the box, and the playbook needs the operator's vault. The catalog version is the `app.yaml` of the local copy (1.0.38), not a fresh `catalog.get_app_details` read, so it has to be checked again just before run #1.
+
+**Next.** Task 4 (garage `root_domain` for virtual-host buckets), then playbook run #1: the UI ports, the three datasets, the routing file, the traefik create with the staging resolver, and the garage update in one run.

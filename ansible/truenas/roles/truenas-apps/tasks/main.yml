@@ -930,3 +930,179 @@
       -- UI at http://192.168.1.25:{{ truenas_paperless.port }}/ . The admin
       password is set ONCE, at the first install; change it in paperless, not
       in the vault.
+
+# ---------------------------------------------------------------------------
+# Traefik — TLS for the TrueNAS apps by name (paperless, syncthing, garage,
+# s3 and *.s3, the TrueNAS UI, the dashboard). Catalog app (community train),
+# deployed the way paperless is. What it is sent and why sits above
+# `truenas_traefik` in group_vars; the routing file is
+# templates/traefik-homelab.yml.j2. Datasets and their owners come from
+# truenas-storage. truenas-system, which runs before this role, moves the UI
+# to 8080/8443, so 80/443 are free here and https://192.168.1.25:8443 stays
+# the way in if anything below fails.
+# ---------------------------------------------------------------------------
+
+- name: Check the declared ACME resolver
+  ansible.builtin.assert:
+    that: truenas_traefik_acme_resolver in ['lestaging', 'le']
+    fail_msg: "truenas_traefik_acme_resolver must be lestaging (staging) or le (production), not {{ truenas_traefik_acme_resolver }}"
+    quiet: true
+
+- name: Decide whether the traefik app exists and the vault holds its token
+  ansible.builtin.set_fact:
+    _tf_exists: "{{ truenas_traefik.app_name in truenas_app_names }}"
+    # An empty or CHANGEME (the vault example's placeholder) token counts as missing.
+    _tf_token_ok: "{{ (truenas_traefik_cf_dns_api_token | default('')) | length > 0 and truenas_traefik_cf_dns_api_token | default('') != 'CHANGEME' }}"
+  no_log: true
+
+# Defined ONCE and used by the create and the reconcile: the group_vars values
+# plus the token as the one additional env var.
+- name: Build the traefik app values
+  ansible.builtin.set_fact:
+    _tf_values: >-
+      {{ truenas_traefik_app_values | combine({'traefik': {'additional_envs': [
+           {'name': truenas_traefik.token_env, 'value': truenas_traefik_cf_dns_api_token | default('')}]}}, recursive=true) }}
+  no_log: true       # the fact holds the Cloudflare token
+
+# Written with or without the token (it carries none), before the app exists,
+# so Traefik has its routes at first start. no_log: it carries the dashboard's
+# htpasswd line, and --diff would print it.
+- name: Write the Traefik routing file
+  ansible.builtin.template:
+    src: traefik-homelab.yml.j2
+    dest: "{{ truenas_traefik.paths.config }}/{{ truenas_traefik.routing_file }}"
+    mode: "0644"
+  no_log: true
+
+# Without the token no certificate can be ordered: Traefik would serve its
+# self-signed default on every name. Skip, and say so on every run.
+- name: Warn that traefik is not created or updated without the Cloudflare token
+  ansible.builtin.debug:
+    msg: >-
+      traefik NOT {{ 'UPDATED' if _tf_exists | bool else 'CREATED' }}: the Cloudflare DNS token is
+      missing, empty or CHANGEME in vars/vault.yml (the Traefik entry in vars/vault.yml.example says
+      how to make one). The app is left as it is; the routing file was still written. Add the token
+      (ansible-vault edit vars/vault.yml) and re-run.
+  when: not (_tf_token_ok | bool)
+
+- name: Deploy the traefik catalog app
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.create
+      - "{{ _app | to_json }}"
+  vars:
+    _app:
+      app_name: "{{ truenas_traefik.app_name }}"
+      catalog_app: traefik
+      train: "{{ truenas_traefik.train }}"
+      version: "{{ truenas_traefik.version }}"
+      values: "{{ _tf_values }}"
+  when:
+    - not (_tf_exists | bool)
+    - _tf_token_ok | bool
+  no_log: true       # the payload carries the token
+  register: truenas_tf_deploy
+  failed_when: false
+
+# no_log hides the failure with the payload; the job record has the real
+# error. Its arguments carry the token too, so the read is no_log and only
+# `.error` is shown (same as paperless).
+- name: Read the app.create job record if the traefik deploy failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.create"]]']
+  register: truenas_tf_job
+  changed_when: false
+  no_log: true
+  when: (truenas_tf_deploy.rc | default(0)) != 0
+
+- name: Fail with the real traefik reason (payload stays hidden)
+  ansible.builtin.fail:
+    msg: "traefik app.create failed: {{ (truenas_tf_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_tf_deploy.rc | default(0)) != 0
+
+- name: Read the live traefik app values
+  ansible.builtin.command:
+    argv: [midclt, call, app.config, "{{ truenas_traefik.app_name }}"]
+  register: truenas_tf_live
+  changed_when: false
+  check_mode: false
+  no_log: true       # carries the token
+  when:
+    - _tf_exists | bool
+    - _tf_token_ok | bool
+
+# Signatures over what this role declares, projected the same way on both
+# sides (app.config merges schema defaults in, so a whole-dict compare would
+# drift every run). The token enters only as a sha256. Traefik has no
+# box-generated secrets, so on drift the whole declared values go out.
+- name: Reconcile the traefik app values
+  ansible.builtin.command:
+    argv:
+      - midclt
+      - call
+      - --job
+      - app.update
+      - "{{ truenas_traefik.app_name }}"
+      - "{{ {'values': _tf_values} | to_json }}"
+  vars:
+    _l: "{{ truenas_tf_live.stdout | from_json }}"
+    _v: "{{ _tf_values }}"
+    _la: "{{ _l.traefik.additional_args | default([], true) }}"
+    _le: "{{ _l.traefik.additional_envs | default([], true) }}"
+    _va: "{{ _v.traefik.additional_args }}"
+    _ve: "{{ _v.traefik.additional_envs }}"
+    _want_sig:
+      - "{{ _v.run_as.user | string }}:{{ _v.run_as.group | string }}"
+      - "{{ _v.TZ }}"
+      - "{% for e in _v.network.entry_points | sort(attribute='entrypoint_name') %}{{ e.entrypoint_name }}:{{ e.port_number }}/{{ e.protocol }}:{{ e.bind_mode }}:{{ e.http3 }}={{ e.host_ips | sort | join(',') }};{% endfor %}"
+      - "{{ _v.network.api_port.bind_mode }}:{{ _v.network.api_port.port_number | string }}"
+      - "{{ _v.traefik.api_insecure | string }}:{{ _v.traefik.dashboard | string }}"
+      - "{{ _v.storage.config.type }}={{ _v.storage.config.host_path_config.path }}"
+      - "{{ _v.storage.acme.type }}={{ _v.storage.acme.host_path_config.path }}"
+      - "{{ _va | map(attribute='flag') | zip(_va | map(attribute='value')) | map('join', '=') | sort | join(' ') }}"
+      - "{{ _ve | map(attribute='name') | join(',') }}={{ _ve | map(attribute='value') | join(',') | hash('sha256') }}"
+      - "{{ _v.resources.limits.cpus | string }}:{{ _v.resources.limits.memory | string }}"
+    _live_sig:
+      - "{{ _l.run_as.user | default('') | string }}:{{ _l.run_as.group | default('') | string }}"
+      - "{{ _l.TZ | default('') }}"
+      - "{% for e in _l.network.entry_points | default([], true) | sort(attribute='entrypoint_name') %}{{ e.entrypoint_name }}:{{ e.port_number }}/{{ e.protocol | default('tcp') }}:{{ e.bind_mode | default('') }}:{{ e.http3 | default(false) }}={{ e.host_ips | default([], true) | sort | join(',') }};{% endfor %}"
+      - "{{ _l.network.api_port.bind_mode | default('') }}:{{ _l.network.api_port.port_number | default('') | string }}"
+      - "{{ _l.traefik.api_insecure | default(true) | string }}:{{ _l.traefik.dashboard | default(true) | string }}"
+      - "{{ _l.storage.config.type | default('') }}={{ _l.storage.config.host_path_config.path | default('') }}"
+      - "{{ _l.storage.acme.type | default('') }}={{ _l.storage.acme.host_path_config.path | default('') }}"
+      - "{{ _la | map(attribute='flag') | zip(_la | map(attribute='value', default='')) | map('join', '=') | sort | join(' ') }}"
+      - "{{ _le | map(attribute='name') | join(',') }}={{ _le | map(attribute='value', default='') | join(',') | hash('sha256') }}"
+      - "{{ _l.resources.limits.cpus | default('') | string }}:{{ _l.resources.limits.memory | default('') | string }}"
+  when:
+    - _tf_exists | bool
+    - _tf_token_ok | bool
+    - _live_sig != _want_sig
+  no_log: true       # the payload carries the token
+  register: truenas_tf_update
+  failed_when: false
+
+- name: Read the app.update job record if the traefik update failed
+  ansible.builtin.command:
+    argv: [midclt, call, core.get_jobs, '[["method", "=", "app.update"]]']
+  register: truenas_tf_upd_job
+  changed_when: false
+  no_log: true
+  when: (truenas_tf_update.rc | default(0)) != 0
+
+- name: Fail with the real traefik update reason (payload stays hidden)
+  ansible.builtin.fail:
+    msg: "traefik app.update failed: {{ (truenas_tf_upd_job.stdout | from_json | sort(attribute='id') | last).error | default('no job record found') }}"
+  when: (truenas_tf_update.rc | default(0)) != 0
+
+- name: Report traefik state
+  ansible.builtin.debug:
+    msg: >-
+      traefik {{ ('catalog app present' if _tf_exists | bool else 'DEPLOYED') if _tf_token_ok | bool
+      else ('present, NOT RECONCILED' if _tf_exists | bool else 'NOT CREATED') ~ ' (no Cloudflare token in the vault)' }}
+      -- resolver {{ truenas_traefik_acme_resolver }}{{ " (Let's Encrypt STAGING: browsers warn)" if truenas_traefik_acme_resolver == 'lestaging' else '' }};
+      names {{ truenas_traefik.routes | map(attribute='name') | map('regex_replace', '$', '.' ~ truenas_traefik.domain) | join(', ') }};
+      dashboard {{ ('https://' ~ truenas_traefik.dashboard_host ~ ' (basic auth)') if truenas_traefik_dashboard_enabled | bool else 'NOT ROUTED (no dashboard users in the vault)' }};
+      the TrueNAS UI stays at https://192.168.1.25:{{ truenas_ui_ports.https }} directly.

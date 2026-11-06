@@ -1,0 +1,51 @@
+# Managed by ansible/truenas (roles/truenas-apps/templates/traefik-homelab.yml.j2).
+# Do not edit on the box: the next playbook run rewrites it. Traefik watches
+# this directory (--providers.file.watch=true), so a change needs no restart.
+#
+# Routers carry no tls key: the websecure entry point's http.tls (certresolver
+# and the wildcard domains, set by additional args) applies to every one of
+# them. passHostHeader stays at its default (true): S3 signatures cover Host.
+http:
+  routers:
+{% for r in truenas_traefik.routes %}
+    {{ r.name }}:
+      entryPoints: [websecure]
+{% if r.bucket_wildcard | default(false) | bool %}
+      rule: 'Host(`{{ r.name }}.{{ truenas_traefik.domain }}`) || HostRegexp(`^[a-z0-9-]+\.{{ (r.name ~ '.' ~ truenas_traefik.domain) | regex_escape }}$`)'
+{% else %}
+      rule: 'Host(`{{ r.name }}.{{ truenas_traefik.domain }}`)'
+{% endif %}
+      service: {{ r.name }}
+{% endfor %}
+{% if truenas_traefik_dashboard_enabled | bool %}
+    dashboard:
+      entryPoints: [websecure]
+      rule: 'Host(`{{ truenas_traefik.dashboard_host }}`)'
+      service: api@internal
+      middlewares: [dashboard-auth]
+  middlewares:
+    dashboard-auth:
+      basicAuth:
+        users:
+{% for u in ([truenas_traefik_dashboard_users] if truenas_traefik_dashboard_users is string else truenas_traefik_dashboard_users) %}
+          - {{ u | to_json }}
+{% endfor %}
+{% endif %}
+  services:
+{% for r in truenas_traefik.routes %}
+    {{ r.name }}:
+      loadBalancer:
+{% if r.insecure_backend | default(false) | bool %}
+        serversTransport: {{ r.name }}-selfsigned
+{% endif %}
+        servers:
+          - url: '{{ r.url }}'
+{% endfor %}
+{% set _insecure = truenas_traefik.routes | selectattr('insecure_backend', 'defined') | selectattr('insecure_backend') | list %}
+{% if _insecure | length > 0 %}
+  serversTransports:
+{% for r in _insecure %}
+    {{ r.name }}-selfsigned:
+      insecureSkipVerify: true
+{% endfor %}
+{% endif %}

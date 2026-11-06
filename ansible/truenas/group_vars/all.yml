@@ -96,6 +96,31 @@ truenas_datasets:
     # Since the switch to the catalog app (2026-09-11) the app mounts this at
     # /var/syncthing and Syncthing keeps its state under config/; the files at
     # the dataset root are left over from the custom app and unused.
+  # ---- Traefik (catalog app, host_path config + acme) -------------------
+  # Parent before children. The OWNERS ARE THE MECHANISM here: both are
+  # host_path mounts without auto_permissions, so the catalog's permissions
+  # container skips them (ix library deps_perms.py) and these owners stay.
+  - name: apps/traefik
+    recordsize: 128K
+    comments: "Parent for the Traefik catalog app (TLS for the TrueNAS apps by name). Not exported over NFS or SMB."
+    quota: 0
+  # Owned by truenas_admin (950) so ansible writes the routing file without
+  # become -- the monitoring/bin precedent below. Traefik (568) only reads it.
+  - name: apps/traefik/config
+    recordsize: 128K
+    comments: "Traefik file-provider directory (/file-configs in the container). Ansible writes homelab.yml here; nothing else."
+    quota: 0
+    owner_uid: 950
+    owner_gid: 950
+  # Owned by the apps account Traefik runs as. Holds <resolver>-acme.json:
+  # the ACME account key and the certificate's private key. List it, never
+  # read or copy it.
+  - name: apps/traefik/acme
+    recordsize: 128K
+    comments: "Traefik ACME store (account key and certificate private key). Renewals need nothing from outside the box."
+    quota: 0
+    owner_uid: 568
+    owner_gid: 568
   # ---- garage S3 (Velero BackupStorageLocation) -----------------------
   # Parent MUST be listed before its children: pool.dataset.create will not
   # create intermediate datasets, and this list is applied in order.
@@ -696,6 +721,144 @@ truenas_paperless:
 
 truenas_paperless_ai_enabled: true          # since 2026-11-06 (plan Task 4); prerequisites: README, Paperless
 truenas_paperless_additional_envs: "{{ truenas_paperless.envs + (truenas_paperless.ai_envs if truenas_paperless_ai_enabled | bool else []) }}"
+
+# ---- Traefik (the TrueNAS apps by name over HTTPS) ----------------------------
+# A CATALOG APP (community train), same rule as garage, Syncthing and
+# paperless. It terminates TLS on 80/443 for paperless, syncthing, garage, s3
+# (+ any <bucket>.s3), the TrueNAS UI and its own dashboard, all under
+# homelab.sudops.pl (Technitium A records -> 192.168.1.25). The TrueNAS UI left
+# 80/443 for 8080/8443 in truenas-system, which runs before truenas-apps.
+#
+# ONE WILDCARD, DNS-01 THROUGH CLOUDFLARE: *.homelab.sudops.pl plus
+# *.s3.homelab.sudops.pl (Loki's virtual-host buckets), ordered and renewed by
+# Traefik itself into the acme dataset, so nothing has to copy a certificate
+# onto the box. The token is a vault variable of its own (one key per
+# consumer, never cert-manager's) and reaches the container only as the
+# CF_DNS_API_TOKEN env var, added by the role -- it is not in any value here.
+#
+# THE CATALOG MOUNTS THE DOCKER SOCKET and always passes
+# --providers.docker=true (templates/docker-compose.yaml lines 9 and 19 in
+# catalog 1.0.38). Accepted cost, like Syncthing's SYS_ADMIN: the container
+# joins the socket's group (999), and access to that socket is root on this
+# box; no app value switches either off. The
+# Docker provider is neutralised with providers.docker.exposedbydefault=false,
+# so nothing is routed from container labels; every route is in the file
+# below. A container labelled traefik.enable=true would still be routed --
+# none is.
+#
+# BIND ADDRESS: [] (all interfaces), because app.ip_choices offers only
+# 0.0.0.0, :: and 192.168.10.10, the same limit as every other app here.
+#
+# The API/dashboard port stays unpublished (bind_mode "": the library skips
+# the port and its portal) and api_insecure is false; the dashboard is a
+# basic-auth router on traefik.homelab.sudops.pl instead.
+truenas_traefik:
+  app_name: traefik
+  train: community
+  version: "1.0.38"          # Traefik v3.7.17; the catalog keeps only its newest version (trap 5), so bump before a fresh create
+  run_as_uid: 568            # the catalog's minimum; reads the 0644 routing file, owns the acme dataset
+  run_as_gid: 568
+  ports:
+    web: 80                  # redirects to websecure
+    websecure: 443
+    host_ips: []             # all addresses; see BIND ADDRESS
+  api_port: 30384            # the catalog default; neither published nor exposed
+  paths:
+    config: /mnt/tank/apps/traefik/config   # host paths: the permissions container skips them, so the dataset owners stay
+    acme: /mnt/tank/apps/traefik/acme
+  routing_file: homelab.yml  # written by the role from templates/traefik-homelab.yml.j2
+  token_env: CF_DNS_API_TOKEN               # what lego's cloudflare provider reads
+  acme_email: submenu.prow-1o@icloud.com    # the cert-manager ClusterIssuer's (components/cluster-config/cert-manager-config/values.yaml)
+  domain: homelab.sudops.pl
+  cert_main: "*.homelab.sudops.pl"
+  cert_sans: ["*.s3.homelab.sudops.pl"]
+  # homelab.sudops.pl is authoritative on Technitium inside the LAN, so lego's
+  # propagation check must ask public resolvers to find the sudops.pl zone at
+  # Cloudflare -- the same trap cert-manager's resolver override works around.
+  dns_resolvers: "1.1.1.1:53,8.8.8.8:53"
+  # Traefik v3 reads a whole request (body included) within 60 s by default; a
+  # large Velero upload over 1 GbE can take longer.
+  read_timeout: 300s
+  # One router and one service per route; Host header passed through (S3
+  # signatures depend on it). bucket_wildcard adds <label>.s3.<domain>;
+  # insecure_backend skips verification for that one backend (the UI's
+  # self-signed certificate).
+  routes:
+    - { name: paperless, url: "http://192.168.1.25:{{ truenas_paperless.port }}" }
+    - { name: syncthing, url: "http://192.168.1.25:{{ truenas_syncthing.ports.web }}" }
+    - { name: garage, url: "http://192.168.1.25:{{ truenas_garage.ports.web }}" }
+    - { name: s3, url: "http://192.168.1.25:{{ truenas_garage.ports.s3 }}", bucket_wildcard: true }
+    - { name: truenas, url: "https://192.168.1.25:{{ truenas_ui_ports.https }}", insecure_backend: true }
+  dashboard_host: traefik.homelab.sudops.pl
+  cpus: 1
+  memory_mb: 512
+
+# lestaging (Let's Encrypt staging) until the first order is proven, then le.
+# Top level so the render test can override it with -e. Only the active
+# resolver is declared: a defined but unused one would still renew its stored
+# certificate every ~60 days.
+truenas_traefik_acme_resolver: lestaging
+
+# The dashboard router is rendered only when the vault holds its basic-auth
+# line (empty or CHANGEME counts as missing). A boolean, so printing it shows
+# nothing secret.
+truenas_traefik_dashboard_enabled: >-
+  {{ (truenas_traefik_dashboard_users | default('')) | length > 0
+     and (truenas_traefik_dashboard_users | default('')) != 'CHANGEME' }}
+
+# Traefik's additional args: flag without "--", value as a string. Never
+# acme.storage (the template sets <acme>/<resolver>-acme.json) and never
+# entrypoints.*.address (set from the network section); the template fails the
+# render on either, and on the reserved flags in ix_values.yaml. Lowercase,
+# because the template lowercases them and app.config keeps what was sent.
+truenas_traefik_args:
+  common:
+    - { flag: "log.level", value: "INFO" }
+    - { flag: "providers.docker.exposedbydefault", value: "false" }
+    - { flag: "entrypoints.web.http.redirections.entrypoint.to", value: "websecure" }
+    - { flag: "entrypoints.web.http.redirections.entrypoint.scheme", value: "https" }
+    # Default TLS for every router on websecure: the routers carry no tls key,
+    # so each gets the wildcard by SNI.
+    - { flag: "entrypoints.websecure.http.tls", value: "true" }
+    - { flag: "entrypoints.websecure.http.tls.certresolver", value: "{{ truenas_traefik_acme_resolver }}" }
+    - { flag: "entrypoints.websecure.http.tls.domains[0].main", value: "{{ truenas_traefik.cert_main }}" }
+    - { flag: "entrypoints.websecure.http.tls.domains[0].sans", value: "{{ truenas_traefik.cert_sans | join(',') }}" }
+    - { flag: "entrypoints.websecure.transport.respondingtimeouts.readtimeout", value: "{{ truenas_traefik.read_timeout }}" }
+  resolver:
+    - { flag: "certificatesresolvers.{{ truenas_traefik_acme_resolver }}.acme.email", value: "{{ truenas_traefik.acme_email }}" }
+    - { flag: "certificatesresolvers.{{ truenas_traefik_acme_resolver }}.acme.dnschallenge.provider", value: "cloudflare" }
+    - { flag: "certificatesresolvers.{{ truenas_traefik_acme_resolver }}.acme.dnschallenge.resolvers", value: "{{ truenas_traefik.dns_resolvers }}" }
+  staging:
+    - { flag: "certificatesresolvers.lestaging.acme.caserver", value: "https://acme-staging-v02.api.letsencrypt.org/directory" }
+truenas_traefik_additional_args: >-
+  {{ truenas_traefik_args.common + truenas_traefik_args.resolver
+     + (truenas_traefik_args.staging if truenas_traefik_acme_resolver == 'lestaging' else []) }}
+
+# The app values the role sends to app.create and app.update, WITHOUT the
+# token: the role adds traefik.additional_envs (no_log). Keys from the catalog's
+# questions.yaml; shaped like the paperless and Syncthing values.
+truenas_traefik_app_values:
+  TZ: "{{ truenas_timezone }}"
+  traefik:
+    api_insecure: false
+    dashboard: true
+    additional_args: "{{ truenas_traefik_additional_args }}"
+  run_as:
+    user: "{{ truenas_traefik.run_as_uid | int }}"
+    group: "{{ truenas_traefik.run_as_gid | int }}"
+  network:
+    api_port: { bind_mode: "", port_number: "{{ truenas_traefik.api_port | int }}", host_ips: [] }
+    entry_points:
+      - { entrypoint_name: web, bind_mode: published, port_number: "{{ truenas_traefik.ports.web | int }}", protocol: tcp, http3: false, host_ips: "{{ truenas_traefik.ports.host_ips }}" }
+      - { entrypoint_name: websecure, bind_mode: published, port_number: "{{ truenas_traefik.ports.websecure | int }}", protocol: tcp, http3: false, host_ips: "{{ truenas_traefik.ports.host_ips }}" }
+  storage:
+    config: { type: host_path, host_path_config: { path: "{{ truenas_traefik.paths.config }}" } }
+    acme: { type: host_path, host_path_config: { path: "{{ truenas_traefik.paths.acme }}" } }
+    additional_storage: []
+  resources:
+    limits:
+      cpus: "{{ truenas_traefik.cpus | int }}"
+      memory: "{{ truenas_traefik.memory_mb | int }}"
 
 # ---- Pool properties ------------------------------------------------------
 # Declared here because the box is code-only: a property set through the web UI

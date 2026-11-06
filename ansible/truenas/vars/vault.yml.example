@@ -87,3 +87,21 @@ truenas_backup_hetzner_password: CHANGEME
 # change is made inside paperless, not here. Without it the role skips
 # creating the app and says so on every run. Pick a long random one.
 truenas_paperless_admin_password: CHANGEME
+
+# ---- Traefik (TLS for the TrueNAS apps by name) ---------------------------
+# A NEW Cloudflare API token for Traefik's DNS-01 challenge, never
+# cert-manager's (one key per consumer). Cloudflare dashboard -> My Profile ->
+# API Tokens -> Create Token -> Custom token: permissions Zone / Zone / Read
+# and Zone / DNS / Edit; zone resources Include / Specific zone / sudops.pl.
+# The role passes it to the container as CF_DNS_API_TOKEN. Without it (or
+# CHANGEME) the role neither creates nor updates the traefik app and says so on
+# every run.
+truenas_traefik_cf_dns_api_token: CHANGEME
+
+# The basic-auth line for the dashboard at https://traefik.homelab.sudops.pl:
+# the whole output line of
+#   htpasswd -nbB admin '<password>'
+# (bcrypt; htpasswd ships with macOS), single-quoted here because it contains
+# `$`. Without it (or CHANGEME) the dashboard router is not rendered and the
+# dashboard is unreachable; the rest of Traefik is unaffected.
+truenas_traefik_dashboard_users: CHANGEME

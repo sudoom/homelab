@@ -80,6 +80,7 @@ check `blog/blog-truenas-migration-draft.md` (2026-09-09) before assuming it.
 | node_exporter custom app | `truenas-apps` | app name; compose payload reconciled on image drift (nothing on the box flags a custom app as outdated — see below) |
 | Syncthing catalog app (Mac ↔ Mac sync of the projects tree, plus the mini's `~/Documents` mirror) | `truenas-apps` | app name; declared values reconciled against `app.config`; the pre-catalog custom app is deleted once, only while it is still custom |
 | paperless-ngx catalog app (freelance paperwork archive) and its `paperless/*` datasets | `truenas-apps`, `truenas-storage` | app name; declared values reconciled against `app.config` (generated secrets and the first-install admin fields never re-sent); skipped, loudly, while the vault lacks the admin password |
+| Traefik catalog app (TLS by name for the apps above and the TrueNAS UI), its routing file and its `apps/traefik/*` datasets | `truenas-apps`, `truenas-storage` | app name; declared values reconciled against `app.config`; routing file templated on every run; skipped, loudly, while the vault lacks the Cloudflare token |
 
 ## What it deliberately does NOT manage
 
@@ -544,6 +545,79 @@ previous `.prom` file in place, and TrueNAS mails the stderr. `TrueNASPaperlessE
 Tests: `python3 -m unittest ansible/truenas/tests/test_paperless_export.py -v` (a fake `docker` on `--docker`; no
 Docker needed). `tank/paperless` also has a recursive snapshot task (every 6 h, 90 days).
 
+## Traefik
+
+Traefik v3.7.17 as the community-train catalog app `traefik` (catalog version `1.0.38`; the catalog offers only its
+newest version, so bump the pin before a fresh create), declared in `truenas_traefik` and the computed
+`truenas_traefik_*` variables below it (`group_vars/all.yml`), deployed by `roles/truenas-apps`. It terminates TLS on
+80/443 for the apps on this box with one Let's Encrypt wildcard that it orders and renews itself through Cloudflare
+DNS-01. The names are A records on Technitium (`ansible/technitium`, `homelab_records`), LAN only. Design record and
+chronology: `blog/blog-truenas-https-draft.md`.
+
+| Name | Backend |
+|---|---|
+| `https://paperless.homelab.sudops.pl` | paperless `http://192.168.1.25:30070` |
+| `https://syncthing.homelab.sudops.pl` | Syncthing UI `http://192.168.1.25:8384` |
+| `https://garage.homelab.sudops.pl` | garage web UI `http://192.168.1.25:30186` |
+| `https://s3.homelab.sudops.pl`, `https://<bucket>.s3.homelab.sudops.pl` | garage S3 `http://192.168.1.25:30188` (path style and virtual-host style) |
+| `https://truenas.homelab.sudops.pl` | the TrueNAS UI `https://192.168.1.25:8443` (self-signed; verification is skipped for this backend only) |
+| `https://traefik.homelab.sudops.pl` | Traefik's own dashboard (`api@internal`), basic auth |
+
+- **The fallbacks stay.** The plain-HTTP app ports (`:30070`, `:8384`, `:30186`, `:30188`) stay published (operator
+  decision), and the TrueNAS UI answers directly on `https://192.168.1.25:8443` (and `http://192.168.1.25:8080`):
+  `truenas-system` moves it off 80/443 (`truenas_ui_ports`) before `truenas-apps` runs, so Traefik can bind them. The
+  proxy is never the only way into the UI. If Traefik is down, use the ports.
+- **Certificate.** `*.homelab.sudops.pl` with the SAN `*.s3.homelab.sudops.pl` (Loki's virtual-host buckets), declared
+  once on the `websecure` entry point; the routers carry no `tls` key, so every name gets the wildcard by SNI. The
+  resolver is `truenas_traefik_acme_resolver`: `lestaging` (Let's Encrypt staging, browsers warn) until the first order
+  is proven, then `le`. Only the active resolver is declared, because a defined but unused one would still renew its
+  stored certificate. DNS-01 uses the `cloudflare` provider with a token of its own (never cert-manager's), passed as
+  the env var `CF_DNS_API_TOKEN`; the propagation check asks `1.1.1.1` and `8.8.8.8`, because `homelab.sudops.pl` is
+  authoritative on Technitium inside the LAN.
+- **Renewal.** Traefik renews by itself before expiry and keeps the ACME account key and the certificate in
+  `/mnt/tank/apps/traefik/acme/<resolver>-acme.json` (the catalog sets `acme.storage` itself). No copy step exists,
+  so none can break. That file holds private keys: list it (`ls -ln`), never read or copy it. Losing it means a fresh
+  order at the next start, and production allows five duplicate certificates a week. **A failed order is quiet:**
+  Traefik then serves its self-signed default certificate and every page still loads behind a browser warning. Check
+  the issuer, not the page: `curl -sv https://paperless.homelab.sudops.pl -o /dev/null 2>&1 | grep -E 'issuer|subject:'`.
+- **Routing file.** `roles/truenas-apps/templates/traefik-homelab.yml.j2` is written to
+  `/mnt/tank/apps/traefik/config/homelab.yml` (mode 0644) as `truenas_admin`, which owns `tank/apps/traefik/config`,
+  so no `become` (the `monitoring/bin` precedent). Traefik watches that directory, so a route change needs no app
+  restart. One router and one service per name; the Host header goes to the backend unchanged (S3 SigV4 signs it);
+  the `s3` router also matches `HostRegexp(^[a-z0-9-]+\.s3\.homelab\.sudops\.pl$)`. Never edit it on the box: the next
+  run rewrites it.
+- **Entry points.** `web` :80 redirects to `websecure` :443; both listen on all addresses (`app.ip_choices` offers no
+  frontnet-only bind, as for every app here). The websecure read timeout is 300 s, because Traefik v3's 60 s default
+  can cut off a large Velero upload over 1 GbE.
+- **Dashboard.** `https://traefik.homelab.sudops.pl`, basic auth from the vault variable
+  `truenas_traefik_dashboard_users` (one `htpasswd -nbB admin '<password>'` line, `vars/vault.yml.example`).
+  `api_insecure` is false and the catalog's API port (30384) is neither published nor exposed, so this router is the
+  only way to it. Without the vault line the router is not rendered and the play's last Traefik line says
+  `dashboard NOT ROUTED`.
+- **The Docker socket (accepted cost).** The catalog template mounts `/var/run/docker.sock` into the container, adds
+  the container to the socket's group (999), and always passes `--providers.docker=true` (a reserved flag); none of
+  that can be switched off through the app values. Access to that socket is root on this box. Accepted, like
+  Syncthing's SYS_ADMIN. The Docker provider is neutralised with `providers.docker.exposedbydefault=false`: no
+  container is routed unless it carries the label `traefik.enable=true`, none does, and every route is in the routing
+  file.
+- **Guards.** Without `truenas_traefik_cf_dns_api_token` in the vault (absent, empty or `CHANGEME`) the role neither
+  creates nor updates the app and prints `traefik NOT CREATED: the Cloudflare DNS token is missing, empty or CHANGEME
+  in vars/vault.yml ...` (`NOT UPDATED` for an existing app) on every run; the routing file is still written. A failed
+  create or update fails the play with the job's error from `core.get_jobs`, never the payload. Every task that
+  carries the token, the htpasswd line or the `app.config` read is `no_log`.
+- **Reconcile.** The role compares run_as, TZ, both entry points, the API port, `api_insecure`/`dashboard`, both
+  storage paths, the sorted additional args, the env names with a sha256 of the token, and the resource limits
+  against `app.config`; on drift it sends `app.update` with all declared values (Traefik has no box-generated
+  secrets). An update recreates the container: a few seconds without any of the names.
+- **Datasets.** `tank/apps/traefik` (parent), `config` (owner 950, `truenas_admin`) and `acme` (owner 568, the uid
+  Traefik runs as). Both are `host_path` mounts without `auto_permissions`, so the catalog's permissions container
+  leaves those owners alone.
+- **Render test** (no box): `ansible-playbook -i localhost, -c local tests/traefik-render.yml -e
+  truenas_traefik_cf_dns_api_token=dummy -e "truenas_traefik_dashboard_users='admin:\$2y\$05\$dummy'"`, once more
+  with `-e truenas_traefik_acme_resolver=le`, and once without the dashboard users. It checks the flags against the
+  catalog's reserved list, the routing file's routers, rules and backends, and `no_log` on every task that carries a
+  Traefik secret.
+
 ## Backup tasks (Cloud Sync)
 
 `truenas_cloudsync_credentials` and `truenas_cloudsync_tasks` in `group_vars/all.yml` declare
@@ -635,15 +709,15 @@ effects. Useful for "is anything drifted"; not a substitute for reading the diff
 | `inventory.yml` | Single host `truenas`, mgmt address, `truenas_admin` + sudo |
 | `group_vars/all.yml` | All declarative inputs: pool name, datasets, NFS clients, NTP, schedules |
 | `vars/vault.yml.example` | Committed template (no secrets) |
-| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, the Synology account for the Cloud Sync backup, the Hetzner Storage Box sub-account for the offsite one, and the paperless admin password (`truenas_paperless_admin_password`, first install only) |
-| `playbook.yml` | Full convergence (needs `--ask-vault-pass` since 2026-08-31, when `vars/vault.yml` was created; five things use it — SMTP, the two SMB Time Machine passwords, the Synology account, the Storage Box sub-account, the paperless admin password — and each is skipped, not failed, if its variables are absent) |
+| `vars/vault.yml` | **Gitignored**, vault-encrypted; SMTP credentials, the two SMB Time Machine passwords, the Synology account for the Cloud Sync backup, the Hetzner Storage Box sub-account for the offsite one, the paperless admin password (`truenas_paperless_admin_password`, first install only), and Traefik's Cloudflare token and dashboard basic-auth line (`truenas_traefik_cf_dns_api_token`, `truenas_traefik_dashboard_users`) |
+| `playbook.yml` | Full convergence (needs `--ask-vault-pass` since 2026-08-31, when `vars/vault.yml` was created; six things use it — SMTP, the two SMB Time Machine passwords, the Synology account, the Storage Box sub-account, the paperless admin password, Traefik's Cloudflare token and dashboard line — and each is skipped, not failed, if its variables are absent) |
 | `check.yml` | Read-only state report (no vault) |
 | `roles/truenas-storage/` | Assert pool, converge datasets |
 | `roles/truenas-system/` | Timezone, NTP, alert email |
 | `roles/truenas-shares/` | NFS exports + service enablement |
 | `roles/truenas-smb/` | SMB Time Machine targets: `aapl_extensions`, per-Mac users/groups, dataset ACLs, shares, service |
 | `roles/truenas-tasks/` | Scrub, SMART cron jobs, periodic snapshots, Cloud Sync backup tasks |
-| `roles/truenas-apps/` | garage (Velero BSL), Syncthing and paperless-ngx as catalog apps, node_exporter as a custom app: deploy/update, and garage's layout/key/bucket bootstrap |
+| `roles/truenas-apps/` | garage (Velero BSL), Syncthing, paperless-ngx and Traefik as catalog apps, node_exporter as a custom app: deploy/update, and garage's layout/key/bucket bootstrap; `templates/traefik-homelab.yml.j2` is Traefik's routing file |
 | `files/sync-stignore-shared` | Syncthing ignore list for both folders (`projects`, `documents`). Copied to `<folder root>/.stignore-shared` on every member; not applied by Ansible |
 | `bootstrap-pool.sh` | One-shot gated pool creation (deliberately NOT in the playbook) |
 | `destroy-empty-dataset.sh` | One-shot gated destroy of an **empty** dataset — the only remedy for create-time-only property drift (deliberately NOT in the playbook) |
