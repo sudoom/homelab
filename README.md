@@ -412,7 +412,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   both charts on v1.20.9, the RBD Driver from the `ceph-csi-drivers` subchart under new service accounts, cephcsi
   v3.17.1, `csi-driver-config` retired; every check passed after c2, c3 and c4; its fio point ran 2026-11-06 12:07-13:03Z
   (means seq-read 390.4 / seq-write 64.0 MiB/s, rand-read 15,331 / rand-write 2,320 iops; writes flat, the read dip is
-  mostly one run; `data/storage-throughput.md`), and its 24 h latency window is read after 2026-11-06 17:22Z. The stage-2 patches are not
+  mostly one run; `data/storage-throughput.md`), and its 24 h OSD-latency window (to 2026-11-06 17:27Z) showed no regression (op_w_latency −12 to −16%, kv_commit −2 to −5%, reads about 1 ms, 0 slow ops; `data/ceph-osd-latency.tsv`). Stage 1 is closed. The stage-2 patches are not
   written yet; like stage 1's they stay outside git until their window. Why: v1.19.5 supports Kube 1.30-1.35 (v1.21.1: 1.32-1.37), and Ceph
   Squid reached its target EOL on 2026-10-31. The one-off OADP backup of the app PVCs and zot to garage was taken and
   restore-checked on 2026-11-04 (Backup `pre-rook-upgrade`, kept to 2026-12-04). The fio baseline was

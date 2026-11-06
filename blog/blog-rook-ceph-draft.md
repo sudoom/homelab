@@ -3379,3 +3379,26 @@ so nothing follows from it. Full rows in `data/storage-benchmark-results.tsv`, s
 Cleanup at 13:07Z: `run.sh --clean` (25G layout removed), `oc -n default delete pvc storage-bench-ceph-nvme-block`;
 no PV or bench Job left. Still open for stage 1: the 24 h OSD-latency window, read after 17:22Z
 (`ceph-latency.sh --label s1`).
+
+### Stage 1 OSD latency (24 h window to 2026-11-06 17:27Z)
+
+```
+bash tests/rook-ceph-upgrade/metrics/ceph-latency.sh --end 2026-11-06T17:27:00Z --window 24h --label s1   # 18 rows
+```
+
+The window starts after the stage-1 roll had settled and contains the s1 fio runs, as the baseline window
+(to 2026-11-05 16:21Z) contained the baseline's.
+
+| metric (24 h average) | osd.0 | osd.1 | osd.2 |
+|---|---|---|---|
+| `op_w_latency` | 70.7 → 60.7 ms (−14.1%) | 67.8 → 59.8 (−11.8%) | 64.6 → 54.3 (−16.0%) |
+| `commit_latency` (= `apply_latency`) | 16.3 → 17.5 ms (+7.6%) | 22.0 → 19.3 (−12.3%) | 14.5 → 13.2 (−9.2%) |
+| `kv_commit_lat` | 4.35 → 4.26 ms (−2.1%) | 4.78 → 4.53 (−5.1%) | 4.19 → 4.09 (−2.3%) |
+| `op_r_latency` | 1.00 → 1.09 ms (+9.1%) | 1.13 → 1.01 (−11.1%) | 0.74 → 0.66 (−11.7%) |
+| `slow_ops_max` | 0 → 0 | 0 → 0 | 0 → 0 |
+
+Nothing regressed on the OSD side; OSD write latency is 12-16% lower, kv commit a few percent lower, reads stay
+around 1 ms either way. Rook v1.20.9 does not change the OSD data path (Ceph is still Squid 19.2.4), so the two
+windows' different background load is the more likely reason than the upgrade. With the fio point (writes ±2%, reads
+−2.5%/−7.4% carried by one run) this closes stage 1's measurements. Stage 2 (Rook v1.21.1) is next; its patches are
+not written yet.
