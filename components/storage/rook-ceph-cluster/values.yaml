@@ -82,9 +82,9 @@ rook-ceph-cluster:
           - "192.168.10.0/24"
       connections:
         # Explicit on purpose: msgr2-only stays off through the Rook upgrade
-        # stages and flips to true only in stage 3, after every daemon runs
-        # Tentacle. The chart renders false by default; pinning it here keeps
-        # a subchart default change from flipping it silently.
+        # stages (1 and 2) and flips to true only in stage 3, on Rook v1.21.1
+        # and before the Tentacle stage. The v1.21.1 chart defaults it to true;
+        # this pin keeps it false until then.
         requireMsgr2: false
 
     # Do not roll the next OSD while PGs are unhealthy during an upgrade.
