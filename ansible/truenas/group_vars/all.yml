@@ -663,7 +663,7 @@ truenas_paperless:
     - { name: PAPERLESS_URL, value: "http://192.168.1.25:30070", container: paperless }
     - { name: PAPERLESS_OCR_LANGUAGES, value: "pol", container: paperless }
     - { name: PAPERLESS_OCR_LANGUAGE, value: "pol+eng", container: paperless }
-    - { name: PAPERLESS_DATE_PARSER_LANGUAGES, value: "en+pl", container: paperless }
+    - { name: PAPERLESS_DATE_PARSER_LANGUAGES, value: "pl+en", container: paperless }
     - { name: PAPERLESS_CONSUMER_DELETE_DUPLICATES, value: "true", container: paperless }
     # !unsafe: Ansible must not render paperless's own Jinja placeholders.
     - name: PAPERLESS_FILENAME_FORMAT
