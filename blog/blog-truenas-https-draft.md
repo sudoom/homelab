@@ -251,6 +251,20 @@ backups contain Kubernetes Secrets, and they crossed the LAN in plain HTTP. The 
 the same frontnet address; Velero now depends on the LAN DNS (operator accepted this), and the plain port stays open
 as a fallback. `s3ForcePathStyle: "true"` is unchanged and the Schedule `daily` stays paused.
 
-Render diff (`helm template oadp components/cluster-config/oadp -n openshift-adp -f .../values.yaml`, before vs after):
-the only change is the DPA's `s3Url`. A one-off Backup `truenas-https-check` (`tests/truenas-https/backup-check.yaml`,
-namespace `homelab-tls-probe`, TTL 24 h) proves a real upload after the push.
+Validation (no cluster commands):
+
+```
+$ helm lint components/cluster-config/oadp
+1 chart(s) linted, 0 chart(s) failed
+$ helm template oadp components/cluster-config/oadp -n openshift-adp -f components/cluster-config/oadp/values.yaml   # before and after, diffed
+35c35
+<           s3Url: http://192.168.1.25:30188
+---
+>           s3Url: https://s3.homelab.sudops.pl
+$ (helm template ...; cat tests/truenas-https/backup-check.yaml) | kubeconform -strict -ignore-missing-schemas -schema-location default -schema-location '<datreeio CRDs-catalog>' -summary
+Summary: 5 resources found parsing stdin - Valid: 4, Invalid: 0, Errors: 0, Skipped: 1
+```
+
+The only rendered change is the DPA's `s3Url`. A one-off Backup `truenas-https-check`
+(`tests/truenas-https/backup-check.yaml`, object in `openshift-adp`, backing up the `homelab-tls-probe` namespace,
+TTL 24 h) proves a real upload after the push.

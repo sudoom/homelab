@@ -2,7 +2,7 @@
 
 OADP (OpenShift API for Data Protection: Velero, the node agent and the data mover) installed by OLM. The operands
 are configured by the sibling chart `components/cluster-config/oadp/` (DPA `dpa`, BSL `truenas-garage` on garage at
-`192.168.1.25:30188`, Schedule `daily`, which stays `paused: true`). This chart only installs the operator, so
+`https://s3.homelab.sudops.pl`, Schedule `daily`, which stays `paused: true`). This chart only installs the operator, so
 everything here is about the Subscription: where it reads from, which CSV it runs, and how to move it.
 
 **Status 2026-11-03:** the cluster runs the okderators 1.6 test build, CSV `oadp-operator.v1.6.0-2026-11-02-205027` from
