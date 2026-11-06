@@ -510,3 +510,8 @@ words=173 invoice_no_found=1        # ocrmypdf.ocr(..., tesseract_thresholding=2
 
 So `PAPERLESS_OCR_USER_ARGS='{"tesseract_thresholding": 2}'` goes into group_vars; `OCR_CLEAN=none` stays (the
 measurement ran without unpaper) and the mode stays `auto`. Existing photo-PDFs are fixed with Reprocess.
+
+Applied the same night (operator playbook run `ok=88 changed=1`, the paperless env update) and verified on the
+document that started it: after Reprocess, `IMG_5815`'s content is the whole invoice (operator: "invoice is working
+now"). The remaining phone-photo PDFs are reprocessed in a batch, followed by `document_llmindex update` so the AI
+index sees their text.
