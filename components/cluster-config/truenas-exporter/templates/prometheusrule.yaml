@@ -296,6 +296,65 @@ spec:
               or renamed. Check the task list without printing credentials:
               `ssh truenas_admin@192.168.1.25 "midclt call cloudsync.query" | jq -c '.[] | {id, description, enabled}'`
 
+    # The nightly paperless export (cron job 04:15, ansible/truenas
+    # paperless-export.py). Both Cloud Sync legs copy its output, so a stale
+    # export is a stale backup. The Cloud Sync alerts above only say the COPY ran.
+    # Same shape as the Cloud Sync rules: the last success comes from Prometheus
+    # history, because the script rewrites the file only on success.
+    - name: truenas-paperless
+      rules:
+        - alert: TrueNASPaperlessExportStale
+          expr: |
+            time() - max_over_time(truenas_paperless_export_last_success_timestamp_seconds[7d]) > 36 * 3600
+          for: 15m
+          keep_firing_for: 2h
+          labels:
+            severity: warning
+          annotations:
+            summary: "paperless export without a success for {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
+            description: |
+              The nightly export (cron job "paperless export (managed by
+              ansible/truenas)", 04:15) last succeeded {{ "{{" }} $value | humanizeDuration {{ "}}" }}
+              ago. Read the job without changing it:
+              `ssh truenas_admin@192.168.1.25 "midclt call cronjob.query" | jq '.[] | select(.description | startswith("paperless export")) | {id, enabled, schedule}'`
+              A failed run mails its stderr; the usual causes are no or two
+              paperless containers (app stopped or being updated) and a full dataset.
+
+        - alert: TrueNASPaperlessExportStale
+          expr: |
+            time() - max_over_time(truenas_paperless_export_last_success_timestamp_seconds[7d]) > 72 * 3600
+          for: 15m
+          keep_firing_for: 2h
+          labels:
+            severity: critical
+          annotations:
+            summary: "paperless export without a success for {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
+            description: |
+              No successful paperless export in over 72 hours, so the Synology
+              and Hetzner copies of tank/paperless/export are that old. Read the
+              cron job as in the warning (`midclt call cronjob.query`, description
+              "paperless export (managed by ansible/truenas)").
+
+        # The two rules above see nothing when the series is gone: the collector
+        # file was never written, or the last success left the 7-day window. The
+        # 36h window fires well before the 7-day edge.
+        - alert: TrueNASPaperlessExportStale
+          expr: |
+            absent_over_time(truenas_paperless_export_last_success_timestamp_seconds[36h])
+          for: 15m
+          labels:
+            severity: critical
+            window: absent-36h
+          annotations:
+            summary: "paperless export metric absent for 36 hours"
+            description: |
+              truenas_paperless_export_last_success_timestamp_seconds has had no
+              sample for 36 hours: the export never succeeded, the textfile
+              collector stopped, or the file was removed. Right after the playbook
+              first creates the cron job this fires until its first run. Check the
+              cron job (`midclt call cronjob.query`, description "paperless export
+              (managed by ansible/truenas)") and `truenas_textfile_collector_errors`.
+
     # A TrueNAS release offered by the update train, read from update.status
     # by the textfile collector. Info and console-only, like OKD's own
     # UpdateAvailable: installing it reboots the NAS and pauses every NFS
