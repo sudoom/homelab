@@ -447,3 +447,15 @@ Set `PAPERLESS_OCR_MODE=redo`: OCR on every page, replacing existing OCR text; v
 stays. The cost is Tesseract on every PDF. Existing documents are fixed with Actions → Reprocess, which in 3.4.2
 (`bulk_edit.reprocess` → `update_document_content_maybe_archive_file`) rewrites only content, archive file and
 thumbnail; title, tags, correspondent and dates stay.
+
+## 2026-11-06 — filing rules settled with the first real documents
+
+Working through the first uploads with the operator settled the rules the README's "Document model" table now records:
+the type is decided by source (tax office or ZUS → Tax document; you are the seller → Invoice (issued); your NIP as
+the buyer → Invoice (received); a household charge without your NIP → Bill; anything else → Receipt), so filtering
+"Invoice (received)" by month is exactly the accountant's pile. One generic correspondent `Urząd Skarbowy` covers UPOs
+(issued by the Ministry of Finance system) and tax-office letters, `ZUS` covers UPPs; neither matches on a NIP,
+because a UPO carries the taxpayer's own NIP. `Tax/PIT` takes ryczałt (settled on PIT-28). Operator: "yes, count tax
+payments in totals": the payment confirmation carries `Amount`, `Category` `taxes` or `zus` and `Scope/JDG`, with the
+month the tax is for as `Period`; returns, UPOs and registers never carry an amount. A one-page filing guide with
+these rules went to a private claude.ai page for use while sorting.
