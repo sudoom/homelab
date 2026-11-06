@@ -268,3 +268,18 @@ Summary: 5 resources found parsing stdin - Valid: 4, Invalid: 0, Errors: 0, Skip
 The only rendered change is the DPA's `s3Url`. A one-off Backup `truenas-https-check`
 (`tests/truenas-https/backup-check.yaml`, object in `openshift-adp`, backing up the `homelab-tls-probe` namespace,
 TTL 24 h) proves a real upload after the push.
+
+### Velero over HTTPS, verified (2026-11-06 22:38-22:39Z)
+
+Pushed 22:36:43Z. The BSL spec read `https://s3.homelab.sudops.pl` at 22:38:31Z, phase `Available` with
+`lastValidationTime: 2026-11-06T22:38:19Z`, and at 22:38:21Z Velero re-prepared its kopia repositories on
+`truenas-garage` through the new URL (`Repo has already been initialized`, no TLS error). The `daily` Schedule stayed
+paused. One-off check Backup (operator-approved `oc create -f tests/truenas-https/backup-check.yaml`):
+
+```
+$ oc -n openshift-adp get backups.velero.io truenas-https-check -o jsonpath='phase=… items=… errors=… warnings=…'
+phase=Completed items=37/37 errors= warnings= start=2026-11-06T22:39:09Z done=2026-11-06T22:39:14Z expires=2026-11-07T22:39:09Z
+```
+
+`oc get backup` alone resolves to CNPG's `backups.postgresql.cnpg.io` on this cluster; the Velero kind needs its full
+name.
