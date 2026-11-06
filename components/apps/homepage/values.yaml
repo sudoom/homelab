@@ -101,11 +101,17 @@ services:
           icon: mdi-docker
   - Network & NAS:
       - TrueNAS:
-          href: https://192.168.1.25
+          href: https://truenas.homelab.sudops.pl
           icon: truenas.png
       - Syncthing:
-          href: http://192.168.1.25:8384
+          href: https://syncthing.homelab.sudops.pl
           icon: syncthing.png
+      - Paperless:
+          href: https://paperless.homelab.sudops.pl
+          icon: paperless-ngx.png
+      - Garage:
+          href: https://garage.homelab.sudops.pl
+          icon: garage.png
       - MikroTik router:
           href: http://192.168.1.1
           icon: mikrotik.png
