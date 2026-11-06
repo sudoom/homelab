@@ -23,7 +23,7 @@ os.replace()d into place: a half-written file would make node_exporter discard
 the whole textfile scrape (see node-exporter-textfile.py).
 
 No `-u` on the exec: the container runs as 0:0 and the image's wrapper drops to
-the paperless user (568), so exported files are 568-owned like the dataset.
+the paperless user (run_as, 1000), so exported files are owned like the dataset.
 """
 
 import argparse

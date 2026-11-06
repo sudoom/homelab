@@ -640,8 +640,13 @@ truenas_paperless:
   version: "1.6.79"          # paperless-ngx 3.4.2; the catalog keeps only its newest version, so a fresh create needs the current one
   admin_user: admin
   admin_mail: paperless@homelab.sudops.pl   # required by the schema; no mail is sent
-  run_as_uid: 568
-  run_as_gid: 568
+  # The image's own paperless uid/gid, NOT the apps account (568). The catalog
+  # passes run_as as USERMAP_UID/GID, and any value other than 1000 makes the
+  # image's init run `usermod --uid` over /usr/src/paperless, which on this
+  # HDD-backed Docker storage took over 30 minutes (2026-11-06) and repeats on
+  # every container recreate (each app.update). 1000 is unused on this box.
+  run_as_uid: 1000
+  run_as_gid: 1000
   port: 30070
   bind_ip: 0.0.0.0           # see BIND ADDRESS
   cpus: 2

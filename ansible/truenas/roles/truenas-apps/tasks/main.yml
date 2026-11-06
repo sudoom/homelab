@@ -686,7 +686,7 @@
 # `truenas_paperless` in group_vars. Datasets come from truenas-storage.
 # ---------------------------------------------------------------------------
 
-# The container runs as run_as (568) and a fresh dataset is root:root. Ownership
+# The container runs as run_as (1000, see group_vars) and a fresh dataset is root:root. Ownership
 # is checked per path and fixed only when wrong. Not `postgres`: the catalog's
 # auto_permissions (set below) gives it to Postgres's own uid at start.
 - name: Stat the paperless storage paths

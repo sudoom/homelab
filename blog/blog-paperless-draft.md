@@ -202,3 +202,42 @@ chart version and one image tag (`8.39.0` → `8.40.0`), nothing in the schema. 
 version of each app, so a pinned version breaks the next fresh create whenever the catalog moves. The pin is now
 `1.6.79`. The same holds for Task 3 Step 5: the throwaway restore app must be created with whatever version the
 catalog offers on that day.
+
+## 2026-11-06 — first start hangs in `usermod`; paperless now runs as uid 1000
+
+With 1.6.79 the create job succeeded (job 71672), but the app stayed `DEPLOYING` and the `paperless` container
+`starting`, with an empty `data` dataset, for over 30 minutes. My first guess, that the Polish OCR install needs root
+and the container is non-root, was wrong. `truenas_admin` cannot reach the Docker socket, but the middleware log
+stream works when `midclt subscribe` gets an event count and a timeout:
+
+```
+midclt subscribe -n 60 -t 20 'app.container_log_follow:{"app_name": "paperless", "container_id": "<id>", "tail_lines": 60}'
+11:20:37 [init-start] paperless-ngx docker container starting init as root
+11:20:37 [init-user] Mapping UID for paperless to 568
+11:20:52 [init-tesseract-langs] Installed tesseract-ocr-pol
+```
+
+Nothing after 11:20:52. In the image's s6 graph, `init-migrations` waits for `init-folders` and
+`init-compile-bytecode`, both of which print a first line at once, and neither had. Both wait for
+`init-modify-user`, which printed "Mapping UID" but never "Mapping GID"/"No GID changes". On the host:
+
+```
+ps -eo pid,stat,etime,time,args | grep usermod
+2275672  D  26:22  00:00:04  usermod --non-unique --uid 568 paperless
+grep ctxt /proc/2275672/status   # 7823, then 7873 ten seconds later
+```
+
+`usermod` had been in uninterruptible I/O wait for 26 minutes with 4 s of CPU, advancing at about 5 blocking
+waits a second. The catalog passes `run_as` (568, the apps account) as `USERMAP_UID`, and the image's `paperless`
+user is uid 1000 with home `/usr/src/paperless`. `usermod --uid` re-owns everything in that home, which in a container
+means copying each image file into the writable layer, and Docker's storage here is `tank/ix-apps` on the RAIDZ2 HDDs.
+The pool itself was not the bottleneck: `zpool iostat -l` showed sync-write waits of 1-2 ms, and the busy datasets were
+garage's `tank/s3/meta` (writes) and `tank/media` (reads), with `tank/ix-apps/docker` nearly idle. Which kernel path
+makes each step that slow was not established. What matters operationally is that every container recreate (any
+`app.update`, catalog upgrades) starts from a fresh writable layer and repeats it.
+
+Fix: `run_as` 1000:1000 (the catalog's minimum is 568, no maximum; uid and gid 1000 are unused on the box). The role
+already chowns `data`, `media`, `consume` and `export` to `run_as` and reconciles `run_as` through `app.update`, so the
+change is the two values in `group_vars` plus comments. With `USERMAP_UID` equal to the image's uid, `init-modify-user`
+prints "No UID changes" and `usermod` never runs. Checks: `--syntax-check` rc 0, `tests/paperless-render.yml` 8 ok,
+`test_paperless_export` 5 tests OK.

@@ -478,6 +478,7 @@ chronology: `blog/blog-paperless-draft.md`.
 | UI | `http://192.168.1.25:30070/` (plain HTTP; all interfaces, so also on the storage backnet, as garage and Syncthing) |
 | Database | the app's own Postgres 18 container, never SQLite; Valkey broker; Tika/Gotenberg off; in-app trash off |
 | Datasets | `tank/paperless` (parent) with `data`, `media`, `consume`, `postgres` (16K) and `export`; all `host_path`. `consume` exists only because the app requires it: documents go in through the UI |
+| Run as | uid/gid **1000**, the image's own `paperless` user, not the `apps` account (568): any other value makes the image's init `usermod --uid` the whole home on every container recreate, over 30 minutes on this HDD-backed Docker storage (2026-11-06). `data`, `media`, `consume` and `export` are owned 1000:1000 |
 | Ownership | the role chowns `data`, `media`, `consume`, `export` to 568:568; `postgres` is fixed by the catalog's `auto_permissions` |
 | Export mount | `paperless/export` at `/paperless/export` in the container (`additional_storage`) |
 | OCR / dates | `PAPERLESS_OCR_LANGUAGES=pol`, `PAPERLESS_OCR_LANGUAGE=pol+eng`, `PAPERLESS_DATE_PARSER_LANGUAGES=pl+en`; `PAPERLESS_SEARCH_LANGUAGE` stays unset (no Polish stemmer; a bad value fails startup) |
