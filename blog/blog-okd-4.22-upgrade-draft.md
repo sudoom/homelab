@@ -825,3 +825,11 @@ submodule pins are unchanged: `openshift/jetstack-cert-manager` `release-1.20` a
 The bundle's `olm.skipRange` is `>=1.0.0 <1.20.0-<build date>`, so a 4.22 build also skips the 10-22 entry already in
 the 4.22 catalog. The branch is local only. The check build on the cluster, the push to the fork and the draft PR wait
 for the end of the Rook freeze (no in-cluster builds until the Tentacle stage is done).
+
+Filed the same day at the operator's go, before the build: draft
+[#52](https://github.com/okd-project/okd-operator-pipeline/pull/52) `release-4.22` ← `sudoom:cert-manager-1.20-4.22`
+(`6ff7e53`, 10 files). Reason for not waiting: besides `cert-manager/` (identical to `release-4.21`), the branch
+differs from `release-4.21` only in `common.sh` (the `OKD_VERSION` default, which `cert-manager/build.sh` does not
+read, and the nested-submodule fix) and `operator-deploy.yaml` (50 extra lines). The body says it is not built from
+this branch yet and points at the `release-4.21` run 39785980679. A draft cannot be merged; it is marked ready only
+after the in-cluster check build passes.
