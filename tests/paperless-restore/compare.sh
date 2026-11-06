@@ -16,8 +16,17 @@ USER_NAME="${USER_NAME:-admin}"
 read -rsp "password (input hidden): " PASSWORD
 echo
 
+# curl's config syntax treats \ and " as escapes inside a double-quoted value (a backslash before
+# any other character is dropped), so a password containing either reached the server altered and
+# the first run got a 401 (2026-11-06). Escape both before writing the config line.
+curl_quote() {
+  local s="${1//\\/\\\\}"
+  printf '%s' "${s//\"/\\\"}"
+}
+CURL_USER_LINE="user = \"$(curl_quote "$USER_NAME"):$(curl_quote "$PASSWORD")\""
+
 api() {  # api <base-url> <path>
-  printf 'user = "%s:%s"\n' "$USER_NAME" "$PASSWORD" | curl -fsS --config - "$1$2"
+  printf '%s\n' "$CURL_USER_LINE" | curl -fsS --config - "$1$2"
 }
 
 WORK=$(mktemp -d)
