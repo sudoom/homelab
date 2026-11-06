@@ -57,10 +57,11 @@
       "enabled": false
     },
     {
-      "description": "Rook is a manual, supervised, version-coherent bump (CLAUDE.md 'Upgrading Rook/Ceph'). Renovate must NOT auto-propose it: the 2026-06-12 v1.19.5->v1.20.0 auto-bump (#134) broke CSI (operator changed the CSI ServiceAccount naming, ceph-csi-*-sa went missing). Both charts bump together, by hand, after a helm-dependency-update chart-exists check + an oc-diff of the CSI SA/RBAC delta.",
+      "description": "Rook is a manual, supervised, version-coherent bump (CLAUDE.md 'Upgrading Rook/Ceph'). Renovate must NOT auto-propose it: the 2026-06-12 v1.19.5->v1.20.0 auto-bump (#134) broke CSI (operator changed the CSI ServiceAccount naming, ceph-csi-*-sa went missing). Both charts bump together, by hand, after a helm-dependency-update chart-exists check + an oc-diff of the CSI SA/RBAC delta. ceph-csi-drivers (since Rook v1.20.9 the operator chart's CSI Driver subchart) is pinned to the ceph-csi-operator version that Rook release bundles (1.0.4 for v1.20.9) and moves with Rook; Renovate proposed 1.1.0 as #213 on 2026-11-05.",
       "matchPackageNames": [
         "rook-ceph",
-        "rook-ceph-cluster"
+        "rook-ceph-cluster",
+        "ceph-csi-drivers"
       ],
       "enabled": false
     },
