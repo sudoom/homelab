@@ -882,8 +882,8 @@ Error: writing blob: initiating layer upload to /v2/okderators/gitops/rollouts/b
 `release-4.22` the `Catalog Index PR` job was skipped, so the deploy bot opened no catalog PR.
 
 The repository exists. `skopeo list-tags docker://quay.io/okderators/gitops/rollouts` lists 8 tags, the last
-`1.19.0-2026-02-07-151505`, so the CI push credential has no write permission on it. This is the same error #45
-reports for `quay.io/okderators/nmstate/*`. cert-manager's push from `release-4.21` on 2026-10-22 succeeded, so the
+`1.19.0-2026-02-07-151505`, so the CI push credential has no write permission on it. This is the same error the
+`Deploy NMState` run 39841564719 (`release-4.21`) hit on `quay.io/okderators/nmstate/console-plugin`. cert-manager's push from `release-4.21` on 2026-10-22 succeeded, so the
 credential itself works; the permission is per repository. The 1.22 build pushes 13 repositories under
 `quay.io/okderators/gitops/`: `agent`, `argocd`, `backend`, `console-plugin`, `dex`, `extensions`, `image-updater`,
 `must-gather`, `operator`, `operator-bundle` and `rollouts` exist, and `promoter` and `promoter-extension` (new in
@@ -894,4 +894,4 @@ repositories, then a re-run of the three runs. The cluster stays on the zot test
 
 2026-11-06: filed as okd-operator-pipeline [#51](https://github.com/okd-project/okd-operator-pipeline/issues/51)
 ("CI cannot push to quay.io/okderators/gitops/*: Deploy GitOps fails after #39-#41"), with the three runs, the error,
-the 13 repositories and the pointer to #45.
+the 13 repositories and the nmstate run 39841564719. The first version cited #45 for the nmstate error; #45 does quote that run, but a PR about the ImageStream is the wrong source, so the issue now links the run itself.
