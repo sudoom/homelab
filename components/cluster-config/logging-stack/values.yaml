@@ -19,7 +19,7 @@ namespace: openshift-logging
 # Endpoint is the FRONTNET address. Pods cannot reach the storage backnet
 # (192.168.10.0/24) -- see CLAUDE.md -- and Loki's ingesters and queriers are
 # ordinary pod-network pods, unlike the hostNetwork CSI daemons that mount NFS.
-# This is the same address the proven Velero truenas-garage BSL uses.
+# This was the same address the Velero truenas-garage BSL used until it moved to the HTTPS name (b549e31).
 #
 # HTTPS by name since 2026-11-06: Traefik on TrueNAS terminates TLS for
 # s3.homelab.sudops.pl with the Let's Encrypt wildcard and forwards to garage.

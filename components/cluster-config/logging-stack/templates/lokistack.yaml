@@ -5,6 +5,14 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: "2"
+    # Carrier for the secret-translator Job's inputs. The Job is an Argo CD
+    # Sync hook and hooks are outside the app's diff, so a change that only
+    # touches its inputs (endpoint, bucket, region, credentials Secret name,
+    # destination Secret name) never made the app OutOfSync: auto-sync did not
+    # run and the hook never rewrote loki-storage (the 2026-11-06 endpoint
+    # change did not reach Loki for that reason). This hash changes with any of
+    # them, so the app goes OutOfSync, syncs, and the hook runs.
+    sudops.pl/storage-secret-inputs: {{ list .Values.garage.endpoint .Values.garage.bucket .Values.garage.region .Values.garage.credentialsSecret .Values.secretTranslator.destinationSecretName | join "|" | sha256sum | trunc 16 | quote }}
 spec:
   size: {{ .Values.lokistack.size }}
   storage:

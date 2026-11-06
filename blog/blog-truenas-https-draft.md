@@ -309,3 +309,21 @@ Summary: 12 resources found parsing stdin - Valid: 10, Invalid: 0, Errors: 0, Sk
 
 The only rendered change is the secret-translator Job's `ENDPOINT` value. (kubeconform needed the sandbox off for the
 schema download: TLS verification failed inside it.)
+
+### The first push did not reach Loki (2026-11-07 fix)
+
+Commit 39afe05 was pushed, and 15 minutes later `logging-loki-config` still had `endpoint: 192.168.1.25:30188` and
+`insecure: true`, with no Loki pod restarted. The Argo CD app `logging-stack` was Synced/Healthy at the new revision,
+but its last sync operation had finished on 2026-10-21, and Secret `loki-storage` was last written 2026-09-07. Cause:
+`secret-translator-job.yaml` is an Argo CD Sync hook. Hooks are not part of the app's diff, so a change that only
+touches the hook's inputs never makes the app OutOfSync, auto-sync never runs and the hook never rewrites the Secret.
+Fix: a non-hook carrier, the LokiStack annotation `sudops.pl/storage-secret-inputs`, a 16-char sha256 over
+endpoint, bucket, region, credentialsSecret and destinationSecretName joined with `|`. Render diff against 39afe05:
+
+```
++    sudops.pl/storage-secret-inputs: "1640263e1e5d2991"      (LokiStack metadata.annotations, plus its comment)
++    # Hooks are outside the app diff: ...                      (comment lines only, in the Job's annotations)
+```
+
+`helm lint`: 0 failed. kubeconform: 12 resources, 10 valid, 0 invalid, 0 errors, 2 skipped. The Job's rendered
+fields are unchanged. The stale values.yaml sentence about the Velero BSL address is now past tense.
