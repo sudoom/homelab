@@ -570,8 +570,8 @@ chronology: `blog/blog-truenas-https-draft.md`.
 - **Certificate.** `*.homelab.sudops.pl` with the SAN `*.s3.homelab.sudops.pl` (Loki's virtual-host buckets), declared
   once on the `websecure` entry point; the routers carry no `tls` key, so every name gets the wildcard by SNI. The
   resolver is `truenas_traefik_acme_resolver`: `le` (Let's Encrypt production) since run #2; `lestaging` (staging,
-  browsers warn) was used for the first order and is the way back. Only the active resolver is declared, because a defined but unused one would still renew its
-  stored certificate. DNS-01 uses the `cloudflare` provider with a token of its own (never cert-manager's), passed as
+  browsers warn) was used for the first order and is the way back. Only the active
+  resolver is declared, because a defined but unused one would still renew its stored certificate. DNS-01 uses the `cloudflare` provider with a token of its own (never cert-manager's), passed as
   the env var `CF_DNS_API_TOKEN`; the propagation check asks `1.1.1.1` and `8.8.8.8`, because `homelab.sudops.pl` is
   authoritative on Technitium inside the LAN.
 - **Renewal.** Traefik renews by itself before expiry and keeps the ACME account key and the certificate in
@@ -590,7 +590,7 @@ chronology: `blog/blog-truenas-https-draft.md`.
   frontnet-only bind, as for every app here). The websecure read timeout is 300 s, because Traefik v3's 60 s default
   can cut off a large Velero upload over 1 GbE.
 - **Dashboard.** `https://traefik.homelab.sudops.pl`, basic auth from the vault variable
-  `truenas_traefik_dashboard_users` (one `htpasswd -nbB admin '<password>'` line, `vars/vault.yml.example`).
+  `truenas_traefik_dashboard_users` (one `htpasswd -nB admin` line, `vars/vault.yml.example`).
   `api_insecure` is false and the catalog's API port (30384) is neither published nor exposed, so this router is the
   only way to it. Without the vault line the router is not rendered and the play's last Traefik line says
   `dashboard NOT ROUTED`.
@@ -614,9 +614,12 @@ chronology: `blog/blog-truenas-https-draft.md`.
   leaves those owners alone.
 - **Render test** (no box): `ansible-playbook -i localhost, -c local tests/traefik-render.yml -e
   truenas_traefik_cf_dns_api_token=dummy -e "truenas_traefik_dashboard_users='admin:\$2y\$05\$dummy'"`, once more
-  with `-e truenas_traefik_acme_resolver=lestaging` (the test asserts the committed default is `le`), and once without the dashboard users. It checks the flags against the
-  catalog's reserved list, the routing file's routers, rules and backends, and `no_log` on every task that carries a
+  with `-e truenas_traefik_acme_resolver=lestaging` (the test asserts the committed default is `le`), and once
+  without the dashboard users. It checks the flags against the catalog's reserved list, the routing file's routers, rules and backends, and `no_log` on every task that carries a
   Traefik secret.
+- **Garage render test** (no box): `ansible-playbook -i localhost, -c local tests/garage-render.yml` checks the declared
+  `additional_options` (`s3_api.root_domain`), that the reconcile task exists and that every task touching garage's
+  config is `no_log`.
 
 ## Backup tasks (Cloud Sync)
 

@@ -100,8 +100,8 @@ truenas_traefik_cf_dns_api_token: CHANGEME
 
 # The basic-auth line for the dashboard at https://traefik.homelab.sudops.pl:
 # the whole output line of
-#   htpasswd -nbB admin '<password>'
-# (bcrypt; htpasswd ships with macOS), single-quoted here because it contains
-# `$`. Without it (or CHANGEME) the dashboard router is not rendered and the
+#   htpasswd -nB admin
+# (it prompts, so the password stays out of shell history; bcrypt; htpasswd ships
+# with macOS), single-quoted here because it contains `$`. Without it (or CHANGEME) the dashboard router is not rendered and the
 # dashboard is unreachable; the rest of Traefik is unaffected.
 truenas_traefik_dashboard_users: CHANGEME

@@ -2,6 +2,100 @@
 
 The apps on the TrueNAS box (paperless, syncthing, garage and the TrueNAS UI itself) are reached today by IP and port, over plain HTTP, and garage's S3 endpoint is the same. The goal is a name and a valid Let's Encrypt certificate for each: a Traefik reverse proxy on the box terminates TLS with a DNS-01 wildcard, and the home DNS (Technitium, Ansible-managed, outside the cluster) points the names at it. These notes follow the work in order, starting with the DNS names.
 
+## Summary (as of 2026-11-07)
+
+**What was built.** The catalog Traefik app (v3.7.17) on the TrueNAS box terminates TLS on 80/443 with one Let's Encrypt
+wildcard (`*.homelab.sudops.pl` plus the SAN `*.s3.homelab.sudops.pl`), ordered and renewed by Traefik itself through
+Cloudflare DNS-01 with a token of its own; the certificate and ACME account live in `/mnt/tank/apps/traefik/acme` on the
+box, so no copy step exists that could break. Technitium holds the A records. The TrueNAS UI moved to 8080/8443. The
+cluster's S3 consumers (Velero BSL, Loki) use `https://s3.homelab.sudops.pl`. A blackbox probe in the cluster
+(`homelab-tls-probe`) watches the names and the Synology's :5001 and mails `HomelabTLSCertExpiringSoon`,
+`HomelabTLSEndpointDown` and `HomelabTLSProbeAbsent` through the Critical receiver. Everything is in code
+(`ansible/technitium`, `ansible/truenas`, the cluster charts). The plain app ports stay open as the fallback.
+
+| Name | Backend |
+|---|---|
+| `paperless.homelab.sudops.pl` | paperless `192.168.1.25:30070` |
+| `syncthing.homelab.sudops.pl` | Syncthing UI `192.168.1.25:8384` |
+| `garage.homelab.sudops.pl` | garage web UI `192.168.1.25:30186` |
+| `s3.homelab.sudops.pl`, `<bucket>.s3.homelab.sudops.pl` | garage S3 `192.168.1.25:30188` (path and virtual-host style) |
+| `truenas.homelab.sudops.pl` | the TrueNAS UI `https://192.168.1.25:8443` (self-signed backend, verification skipped for it only) |
+| `traefik.homelab.sudops.pl` | Traefik's dashboard, basic auth |
+
+**Verification.** Staging order first, production in run #2: every name verifies against the system trust store without
+`-k`, `loki.s3` proves the `*.s3` SAN. Velero: BSL `Available` on the HTTPS URL, one-off Backup `truenas-https-check`
+`Completed` 37/37, no errors. Loki: endpoint moved at 2026-11-06 23:12Z; its final log check and a 3-hour read-back were
+still in progress when this summary was written (the Loki section below carries the result). The probe's live checks
+(DNS from pods, negative controls) are recorded in its own section only as far as they were run when it was written.
+
+**Found along the way.**
+
+- An account-owned Cloudflare token (Zone:Read + DNS:Edit on `sudops.pl`) is what Traefik's DNS-01 needed; it is not
+  cert-manager's.
+- The TrueNAS catalog keeps only the newest version of each app: a pinned `version` breaks the next fresh `app.create`.
+- The readonly SA cannot dry-run new objects, so first-time validation of new kinds is by render, `kubeconform` and the
+  operator-approved create.
+- Argo CD hooks are outside the app diff. The Loki endpoint change reached no pod because the only consumer of it was a
+  Sync hook; the fix is a non-hook carrier (LokiStack annotation `sudops.pl/storage-secret-inputs`, a hash of the hook's
+  inputs). `logging-stack` is the only chart here with a Sync hook, so no sweep is open.
+- The catalog Traefik always mounts `/var/run/docker.sock` and passes `--providers.docker=true`; neither can be turned
+  off. Accepted (root-equivalent on the box), neutralised with `providers.docker.exposedbydefault=false`.
+- Paperless behind TLS needed `PAPERLESS_URL` on the https name and `PAPERLESS_PROXY_SSL_HEADER`, or login fails with a
+  CSRF 403.
+
+### Design record
+
+**Intent.** The operator typed `192.168.1.25:<port>` for every TrueNAS app and wanted names and valid HTTPS instead,
+for all of them including garage's S3 endpoint, which the cluster uses. Tool: Traefik ("pick traefik"). DNS: the zone
+is Cloudflare for the public side and Technitium inside the LAN; certificates are Let's Encrypt via Cloudflare DNS-01,
+as cert-manager already does.
+
+**Goals.** (1) Six names, publicly trusted certificate, no port in the URL. (2) Port 80 redirects to HTTPS. (3) Velero
+and Loki use `https://s3.homelab.sudops.pl`, so backups and logs travel encrypted. (4) Certificates renew on the box that
+serves them, with no copy step. (5) A probe from where the clients stand alerts before expiry or when a name stops
+answering. (6) Everything in code.
+
+**Non-goals.** No internet exposure (names resolve only in the LAN: no port forward, no Cloudflare proxying, no public A
+records). No auth layer in the proxy (each app keeps its login). No change to the Synology or the cluster's ingress.
+Syncthing's sync port 22000 stays direct. TrueNAS's built-in ACME client (exists in 25.10 with a Cloudflare
+authenticator) is not used.
+
+**Anti-goals.** Locking the operator out of the TrueNAS UI (`https://192.168.1.25:8443` must work at every step; the
+proxy is never the only way in). Breaking backups or logging (each consumer moves in its own commit, after the name
+resolved from pods and the HTTPS path was proven). A certificate that expires while every dashboard is green (the
+Synology, 2026-08-26). Proxy config clicked together in a UI (the box is code-only). Reusing cert-manager's Cloudflare
+token (one key per consumer, as with the garage keys).
+
+**Decisions and why.**
+
+- *Traefik on the box with its own ACME, not a `truenas-cert-sync` port and not TrueNAS's ACME.* A cert delivered from
+  the cluster needs a path that can break silently (the Synology's did for a month), and the cluster cannot cleanly speak
+  TrueNAS 25.10's JSON-RPC (REST is removed in 26). TrueNAS's own certificate lives in the middleware, and getting it
+  into a container is exactly the delivery step to avoid. Traefik renews and stores in its own `acme` dataset.
+- *The part with a consequence is S3.* Velero backups contain Kubernetes Secrets and crossed the LAN in plain HTTP;
+  a cert on the TrueNAS UI only stops a browser warning.
+- *UI to 8443, not Traefik to other ports.* Traefik should own 80/443 so names have no port; the UI moves, and its
+  direct HTTPS port stays the fallback. Port change from `truenas-system` before `truenas-apps`, over SSH so the
+  restart does not cut the playbook.
+- *One wildcard on the entry point, routers without `tls`.* Every name gets the certificate by SNI. SAN
+  `*.s3.homelab.sudops.pl` because Loki addresses buckets virtual-host style (operator's choice); Velero stays path
+  style. garage's `s3_api.root_domain` is set to `.s3.homelab.sudops.pl`, which serves both.
+- *Only the active resolver is declared.* A defined but unused resolver would keep renewing its stored certificate.
+  Staging first, then production.
+- *DNS-01 propagation check uses 1.1.1.1/8.8.8.8*, because `homelab.sudops.pl` is authoritative on Technitium inside the
+  LAN (the same trap cert-manager works around).
+- *Dashboard on, behind basic auth from the vault* (it has no login of its own); the catalog's API port is neither
+  published nor exposed, `api_insecure` false.
+- *Docker socket accepted* (see above); *read timeout 300 s* because the 60 s default can cut a large Velero upload.
+- *Plain ports stay open* (operator decision): the fallback if Traefik breaks. Encryption of the S3 traffic therefore
+  rests on the consumers being configured for `https://`, which was verified after each switch.
+- *Velero and Loki may depend on the LAN DNS* (operator decision): an outage longer than CoreDNS's cache (3600 s TTL)
+  stalls Loki's flushes (the WAL grows on Ceph) and marks the BSL unavailable until DNS returns.
+- *The probe covers the Synology's :5001 too* (the endpoint of the 2026-08-26 expiry) and lands before the consumers
+  move; warnings are routed to mail because Alertmanager mails only `critical` and listed names.
+- *Everything as a catalog app and Ansible code*, the `config` dataset owned by the SSH user so no `become` is needed
+  to write routing files.
+
 ## 2026-11-06 — names for the TrueNAS apps in Technitium
 
 **What changed.** Seven records were added to `homelab_records` in `ansible/technitium/group_vars/all.yml`, all in the `homelab.sudops.pl` zone and all `192.168.1.25` (the TrueNAS box): `paperless`, `syncthing`, `garage`, `s3`, `*.s3`, `truenas`, `traefik`. `nas` (Synology, `.2`) and `dns` are unchanged. The wildcard `*.s3` is for S3 virtual-host style bucket names (`loki.s3`, `velero.s3`). It is quoted in YAML because a bare `*` is an alias indicator and would not parse.

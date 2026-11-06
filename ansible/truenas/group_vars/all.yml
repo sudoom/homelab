@@ -426,8 +426,8 @@ truenas_hostname: truenas
 truenas_domain: homelab.sudops.pl
 truenas_timezone: Europe/Warsaw
 
-# Web UI ports. Moved off 80/443 so the Traefik app can bind them (spec:
-# docs/superpowers/specs/2026-11-06-truenas-https-design.md, section 2). The
+# Web UI ports. Moved off 80/443 so the Traefik app can bind them (record:
+# blog/blog-truenas-https-draft.md). The
 # `truenas` route in Traefik uses https as its backend port.
 truenas_ui_ports: {http: 8080, https: 8443}
 

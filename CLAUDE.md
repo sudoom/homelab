@@ -86,6 +86,12 @@ since the split out of this file. Reference files read directly (`teardown.md`, 
   frozen directory. Both tasks alert in the cluster when stale (`TrueNASCloudSyncStale`).
   **To stop `immich-server`, set `hpa.enabled: false` in git first** — ArgoCD ignores
   replicas and the HPA undoes `oc scale --replicas=0` within ~30 s. Runbook: `tests/immich-truenas-migration/`.
+- **The TrueNAS apps answer at `https://<app>.homelab.sudops.pl` since 2026-11-06** (paperless, syncthing, garage, s3 +
+  `*.s3`, truenas, traefik), through the catalog Traefik app: Let's Encrypt wildcard by Cloudflare DNS-01, renewed on
+  the box, records in `ansible/technitium`. The TrueNAS UI moved to 8443 (`https://192.168.1.25:8443` is the direct
+  fallback) and the plain app ports stay open. The cluster's S3 consumers (Velero BSL, Loki) use
+  `https://s3.homelab.sudops.pl`, so they depend on the LAN DNS (Technitium). Probe and alerts: `homelab-tls-probe`.
+  Record: `blog/blog-truenas-https-draft.md`.
 
 ## Architecture
 
@@ -152,7 +158,7 @@ Rules that hold even when the skill is not loaded:
   30-minute cap on storage-mode debugging before tearing down.
 - **Don't touch `enp1s0f0np0`, `ceph-shim` or `192.168.10.0/24` routing** without reading
   `blog/blog-multus-ceph-migration-draft.md` — those routes are load-bearing.
-- **A pod that needs the NAS uses `192.168.1.25`** — pod-network → backnet (`192.168.10.x`) egress does not work.
+- **A pod that needs the NAS uses `192.168.1.25`** (S3 by name, `s3.homelab.sudops.pl`, which resolves to it) — pod-network → backnet (`192.168.10.x`) egress does not work.
 - **Read per-pool `MAX AVAIL`, never cluster-level `avail`**, and re-measure hours after a snapshot deletion.
 - **Every storage action goes in a blog draft** — no exception for small ones.
 - Ceph-internal mutations (`ceph mgr fail`, `rbd trash purge schedule add`, …) may be appropriate — flag and confirm
