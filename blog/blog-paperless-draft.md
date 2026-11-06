@@ -479,3 +479,34 @@ a sharp photo. `redo` changed nothing and is reverted (it would only add OCR to 
 hypothesis: `clean: True` runs unpaper on the page image before OCR; unpaper is built for flat black-and-white scans,
 and on a photo with a grey background and a shadow it can blank most of the page, which also explains the
 orientation check's "too few characters". `PAPERLESS_OCR_CLEAN=none` is the test; OCR mode is back to the default.
+
+## 2026-11-06 (night) — the real cause: global thresholding; Sauvola fixes it
+
+The unpaper guess failed too: with `clean` off the log said `Using text from sidecar file` and the content was the same
+five fragments, so Tesseract itself read only those. Two configuration guesses down, the next step was measurement
+inside the paperless container instead of another playbook run (operator shell via `sudo docker exec`; output is
+counts only, never document text):
+
+```
+$ pdfimages -list "$F" | head -3
+page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio
+   1     0 image    5712  4284  icc     3   8  image  yes        5  0   518   518 24.1M  34%
+$ pdftoppm -r 300 -png -singlefile "$F" t300
+$ for m in 0 1 2; do tesseract t300.png - -l pol+eng -c thresholding_method=$m | wc -w; done
+method=0 words=48  invoice_no_found=0      # global Otsu, Tesseract's default
+method=1 words=118 invoice_no_found=1      # adaptive Otsu
+method=2 words=167 invoice_no_found=1      # Sauvola
+```
+
+The photo is plenty sharp (24 MP at 518 ppi); the default single threshold for the whole page loses the text under
+the photo's lighting gradient, and only the crisp, evenly lit islands survive. Before putting it in code the exact
+library call was tried, because a wrong argument would break every OCR job: `tesseract_thresholding='sauvola'`
+failed (`Input should be a valid integer … input_value='sauvola'`; OCRmyPDF 17 validates it as an int), and
+
+```
+ocrmypdf 17.12.1
+words=173 invoice_no_found=1        # ocrmypdf.ocr(..., tesseract_thresholding=2)
+```
+
+So `PAPERLESS_OCR_USER_ARGS='{"tesseract_thresholding": 2}'` goes into group_vars; `OCR_CLEAN=none` stays (the
+measurement ran without unpaper) and the mode stays `auto`. Existing photo-PDFs are fixed with Reprocess.

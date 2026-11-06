@@ -711,10 +711,14 @@ truenas_paperless:
     - { name: PAPERLESS_OCR_LANGUAGE, value: "pol+eng", container: paperless }
     - { name: PAPERLESS_DATE_PARSER_LANGUAGES, value: "pl+en", container: paperless }
     - { name: PAPERLESS_CONSUMER_DELETE_DUPLICATES, value: "true", container: paperless }
-    # No unpaper before OCR (the default `clean` runs it): on phone photos of invoices (grey background, shadow) it
-    # blanked most of the page and Tesseract read five fragments of a sharp photo (2026-11-06, IMG_5815). Scans OCR
-    # fine without it. OCR mode stays the default `auto`: that photo-PDF had no text layer at all
-    # (`original_has_text=False`), so auto already ran full OCR; a `redo` tried first fixed nothing and was reverted.
+    # Phone photos of invoices OCRed to five fragments (2026-11-06, IMG_5815, a 5712x4284 photo with a lighting
+    # gradient, no text layer). Cause, measured inside the container: Tesseract's default global Otsu binarisation
+    # loses text under uneven light (48 words); adaptive Otsu read 118, Sauvola 167, and OCRmyPDF 17.12.1's API with
+    # tesseract_thresholding=2 read 173 with the invoice number. OCRmyPDF 17 takes an integer here, not the CLI's
+    # name ('sauvola' fails pydantic int parsing). Two earlier guesses (OCR mode redo, then unpaper) changed nothing.
+    - { name: PAPERLESS_OCR_USER_ARGS, value: '{"tesseract_thresholding": 2}', container: paperless }
+    # No unpaper (the default `clean`): not the cause, but the measurement above ran without it, and scans OCR fine
+    # without it. OCR mode stays the default `auto`.
     - { name: PAPERLESS_OCR_CLEAN, value: "none", container: paperless }
     # !unsafe: Ansible must not render paperless's own Jinja placeholders.
     - name: PAPERLESS_FILENAME_FORMAT
