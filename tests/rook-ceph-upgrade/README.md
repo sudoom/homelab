@@ -446,6 +446,24 @@ ClientProfile (`ROOK_CREATE_CSI_OPERATOR_RESOURCES=true`). Ceph still Squid, `re
 Patches `s2-c2-operator` then `s2-c3-cluster`, same shape as stage 1: the controller re-renders from the applied
 patch and runs `oc diff` before each push. Gates first, and stage 1 verified and settled.
 
+c2 sets the image-set ConfigMap to ceph-csi-operator 1.1.0's built-in images (cephcsi `v3.18.1`) instead of the
+chart's empty values: the outgoing 1.0.4 operator copies empty values over its own defaults, so a Driver reconcile by
+it during the hop would give every plugin container an empty image. ceph-csi-operator 1.1.0 also brings an
+unconditional NetworkPolicy, `ceph-csi-ceph-csi-controller-manager`, on its own pod (all ingress denied, all egress
+allowed); the pod serves only its kubelet probes, which the policy does not block (item 9). c3 renders the same
+objects as v1.20.9 and applies nothing.
+
+**c2 pre-push gate.** c2 drops the `cbt.storage.k8s.io` `snapshotmetadataservices` get/list/watch rule from
+`ceph-csi-manager-role` while the 1.0.4 operator pod still runs. 1.0.4 uses it only to look for a
+SnapshotMetadataService and ignores a "no such API" error, so the rule is unused while the group is not served:
+
+```bash
+# CONTROLLER (readonly), before the c2 push
+KUBECONFIG=~/.kube/config-readonly oc api-resources --api-group=cbt.storage.k8s.io
+```
+
+Expected: the header line only. If it lists a resource, stop and report before pushing.
+
 **Verify after c2 and again after c3:**
 
 1. `KUBECONFIG=~/.kube/config-readonly bash tests/rook-ceph-upgrade/verify/csi-state.sh --expect stage2` -> all
@@ -464,9 +482,60 @@ patch and runs `oc diff` before each push. Gates first, and stage 1 verified and
 7. OSD prepare pods `Completed` on node4, node5, node6, all `NEW` against `$WINDOW_START` (Stage 1 item 6 command).
 8. Operator: `bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s2` -> `0 reads failed`, the provisioner caps still
    `mgr allow rw` / `mon profile rbd, allow command 'osd blocklist'` / `osd profile rbd`.
+9. CSI operator pod Ready, `driver-generation` stable:
 
-**Recovery.** After the 30-minute cap, revert c2 and c3 together to the stage-1 end state (v1.20.9, `ceph-csi-drivers`
-1.0.4). Never revert only one.
+```bash
+# CONTROLLER (readonly)
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get pods -l control-plane=ceph-csi-op-controller-manager \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\tReady="}{.status.conditions[?(@.type=="Ready")].status}{"\trestarts="}{.status.containerStatuses[0].restartCount}{"\n"}{end}'
+KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get networkpolicy ceph-csi-ceph-csi-controller-manager
+```
+
+   Expected: one row, image `quay.io/cephcsi/ceph-csi-operator:v1.1.0`, `Ready=True`, restarts `0`; the NetworkPolicy
+   listed; `driver-generation` equal to items 1 and 2.
+
+**Recovery.** Only if CSI mounts break and do not recover within 30 minutes of focused work. Never a plain revert of
+c2: the revert removes RBAC rules that ceph-csi-operator 1.1.0 and the plugin pods it built still run under, until the
+1.0.4 operator has rolled them back (operator: `networkpolicies` and `clientprofilereplications`; ctrlplugin:
+`update` on `volumesnapshots`; nodeplugin: `patch` on `persistentvolumeclaims`). The recovery is a forward commit,
+`s2-recovery.patch`: the operator wrapper back to rook-ceph v1.20.9 and `ceph-csi-drivers` 1.0.4 with the stage-1
+values, plus a temporary `templates/csi-rollback-rbac-s2.yaml` that keeps those rules in their own ClusterRoles, bound
+to `ceph-csi-controller-manager` and the two plugin service accounts, in sync wave `-1` so they are bound before the
+chart's ClusterRoles shrink. It touches only the operator wrapper, so it applies post-c2 and post-c3 alike. Render
+evidence: `work/renders/s2-recovery-checks.txt`. The operator downgrade rolls the Ceph daemons again: another degraded
+window.
+
+Before the push (controller): the recovery prunes CRD `clientprofilereplications.csi.ceph.io` (new in the 1.1.0
+render), and with it any ClientProfileReplication. Expect none:
+
+```bash
+# CONTROLLER (readonly)
+KUBECONFIG=~/.kube/config-readonly oc get clientprofilereplications.csi.ceph.io -A   # No resources found
+```
+
+Post-c2 (c3 not pushed): `git apply --check s2-recovery.patch`, `git apply s2-recovery.patch`, commit, push.
+Post-c3, in this order: apply and commit the recovery as above; then `git revert --no-edit <c3>` and reword its
+message to the `rook-ceph-cluster: …` style (`git commit --amend -m 'rook-ceph-cluster: back to v1.20.9'`); then
+push both commits together, so both charts are back at v1.20.9. The c3 revert applies nothing (the cluster render is
+identical at v1.20.9 and v1.21.1), but it brings back the old msgr2 stage-order comment in the cluster `values.yaml`
+("after every daemon runs Tentacle"), which is wrong: stage 3 comes before the Tentacle stage.
+
+Verify after the recovery (all must hold):
+
+1. `KUBECONFIG=~/.kube/config-readonly bash tests/rook-ceph-upgrade/verify/csi-state.sh --expect stage1` -> `RESULT PASS
+   stage1` once the plugins have rolled back (cephcsi `v3.17.1`, operator `v1.20.9`).
+2. The image-set ConfigMap reads the v1.20.9 pins, not empty values:
+   `KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get cm rook-csi-operator-image-set-configmap -o jsonpath='{.data.plugin}{"\n"}'`
+   -> `quay.io/cephcsi/cephcsi:v3.17.1`. (The outgoing v1.21.1 operator resets the ConfigMap to empty if it reconciles
+   CSI while it reads v3.17. If it reads empty, wait for ArgoCD self-heal to restore it, then restart ceph-csi-operator
+   as in Stage 1 item 1.)
+3. Smoke sequence PASS.
+4. No pod built by ceph-csi-operator 1.1.0 left:
+   `KUBECONFIG=~/.kube/config-readonly oc -n rook-ceph get pods -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' | grep -cE 'cephcsi:v3\.18\.|ceph-csi-operator:v1\.1\.'`
+   -> `0`.
+
+Follow-up, once item 4 reads `0`: one commit that deletes
+`components/operators/rook-ceph/templates/csi-rollback-rbac-s2.yaml`.
 
 ## Stage 3: msgr2
 
