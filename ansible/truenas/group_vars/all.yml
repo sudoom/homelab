@@ -665,6 +665,11 @@ truenas_paperless:
     - { name: PAPERLESS_OCR_LANGUAGE, value: "pol+eng", container: paperless }
     - { name: PAPERLESS_DATE_PARSER_LANGUAGES, value: "pl+en", container: paperless }
     - { name: PAPERLESS_CONSUMER_DELETE_DUPLICATES, value: "true", container: paperless }
+    # redo, not the default auto: auto skips OCR for any PDF that already carries text, and ~40 phone-photo PDFs in
+    # the pile carry a partial invisible text layer from the app that made them, so paperless kept five lines of an
+    # invoice and never read the rest (2026-11-06). redo OCRs every page and replaces existing OCR text; visible text
+    # in born-digital PDFs is kept. Cost: every PDF goes through Tesseract. Fix existing ones with Actions -> Reprocess.
+    - { name: PAPERLESS_OCR_MODE, value: "redo", container: paperless }
     # !unsafe: Ansible must not render paperless's own Jinja placeholders.
     - name: PAPERLESS_FILENAME_FORMAT
       value: !unsafe "{{ created_year }}/{{ correspondent }}/{{ created }} {{ title }}"

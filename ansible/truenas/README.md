@@ -481,7 +481,7 @@ chronology: `blog/blog-paperless-draft.md`.
 | Run as | uid/gid **1000**, the image's own `paperless` user, not the `apps` account (568): any other value makes the image's init `usermod --uid` the whole home on every container recreate, over 30 minutes on this HDD-backed Docker storage (2026-11-06). `data`, `media`, `consume` and `export` are owned 1000:1000 |
 | Ownership | the role chowns `data`, `media`, `consume`, `export` to 568:568; `postgres` is fixed by the catalog's `auto_permissions` |
 | Export mount | `paperless/export` at `/paperless/export` in the container (`additional_storage`) |
-| OCR / dates | `PAPERLESS_OCR_LANGUAGES=pol`, `PAPERLESS_OCR_LANGUAGE=pol+eng`, `PAPERLESS_DATE_PARSER_LANGUAGES=pl+en`; `PAPERLESS_SEARCH_LANGUAGE` stays unset (no Polish stemmer; a bad value fails startup) |
+| OCR / dates | `PAPERLESS_OCR_LANGUAGES=pol`, `PAPERLESS_OCR_LANGUAGE=pol+eng`, `PAPERLESS_OCR_MODE=redo` (the default `auto` skips OCR on any PDF that already has text, which left phone-photo PDFs with a partial text layer unread; redo re-OCRs every page, and Actions -> Reprocess fixes documents consumed before), `PAPERLESS_DATE_PARSER_LANGUAGES=pl+en`; `PAPERLESS_SEARCH_LANGUAGE` stays unset (no Polish stemmer; a bad value fails startup) |
 | File layout | `PAPERLESS_FILENAME_FORMAT` is `!unsafe` so Ansible does not render paperless's own `{{ ... }}` placeholders |
 
 - **Secrets.** `db_password`, `redis_password` and `secret_key` are generated on the box at create time (garage

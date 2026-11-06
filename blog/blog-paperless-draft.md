@@ -429,3 +429,21 @@ relaying streamed replies chunk by chunk, with a launchd agent and an idempotent
 fake Ollama: the chat body arrives with `think: false`, an embed body arrives byte-identical, the first streamed line
 reaches the client while the fake upstream still holds the rest, and a dead upstream gives 502 (8/8 on Python 3.9.6).
 Paperless moves to `http://192.168.1.3:11435` once the proxy answers on the Mini, after the Rook stage-2 window.
+
+## 2026-11-06 — phone-photo PDFs unread: `PAPERLESS_OCR_MODE=redo`
+
+AI switched to the proxy with the playbook run (`ok=79 changed=1`, the paperless `app.update`). Then the operator
+noticed bad results on photographed invoices. One of them (`IMG_5815.pdf`, 24.1 MB, `application/pdf`; a phone photo of
+an iSpot invoice wrapped in a PDF) had five lines of content: the issue and sale dates, one VAT line and a fragment of
+the signature box. No seller, NIP, invoice number or total, all perfectly legible in the image.
+
+Cause, from paperless 3.4.2's `docs/configuration.md`: `PAPERLESS_OCR_MODE` defaults to `auto`, which runs
+`pdftotext` first and skips OCR for the whole document when it finds embedded text. These PDFs carry a partial
+invisible text layer from the app that made them, so paperless kept those fragments and never ran Tesseract; Suggest
+then works from five lines. About 40 such PDFs are in the pile and the original photos are gone (operator: "i dont
+have original"), so re-uploading images is not an option.
+
+Set `PAPERLESS_OCR_MODE=redo`: OCR on every page, replacing existing OCR text; visible text in born-digital PDFs
+stays. The cost is Tesseract on every PDF. Existing documents are fixed with Actions → Reprocess, which in 3.4.2
+(`bulk_edit.reprocess` → `update_document_content_maybe_archive_file`) rewrites only content, archive file and
+thumbnail; title, tags, correspondent and dates stay.
