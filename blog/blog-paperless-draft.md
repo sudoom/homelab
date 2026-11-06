@@ -241,3 +241,10 @@ already chowns `data`, `media`, `consume` and `export` to `run_as` and reconcile
 change is the two values in `group_vars` plus comments. With `USERMAP_UID` equal to the image's uid, `init-modify-user`
 prints "No UID changes" and `usermod` never runs. Checks: `--syntax-check` rc 0, `tests/paperless-render.yml` 8 ok,
 `test_paperless_export` 5 tests OK.
+
+Result (playbook run 4, `changed=3 failed=0`: the chown of the four paths, the `app.update` with `run_as` 1000,
+and one other): the recreated container logged `[init-user] No UID changes for paperless` at 12:11:48Z, compiled
+bytecode in 7 s, applied migrations, and served (`Paperless-ngx version: v3.4.2`) at 12:12:28Z, 40 s after start.
+`init-superuser` reported "a user admin already exists": the uid-568 container must have finished its `usermod` and
+run migrations and the superuser step before `app.update` replaced it, with the same vault password. `data`, `media`,
+`consume` and `export` read 1000:1000; app state RUNNING.
