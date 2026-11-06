@@ -1,0 +1,29 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: homelab-tls-probe
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: homelab-tls-probe
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homelab-tls-probe
+  endpoints:
+    {{- range .Values.targets }}
+    - port: http
+      path: /probe
+      scheme: http
+      interval: {{ $.Values.scrapeInterval }}
+      scrapeTimeout: {{ $.Values.scrapeTimeout }}
+      params:
+        module: [https_answers]
+        target: [{{ . | quote }}]
+      # `instance` is the probed URL, not the pod IP. `action: replace` is
+      # spelled out because Prometheus-operator stamps it on the live object and
+      # ArgoCD would otherwise report a diff.
+      relabelings:
+        - action: replace
+          sourceLabels: [__param_target]
+          targetLabel: instance
+    {{- end }}

@@ -1,0 +1,46 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: homelab-tls-probe
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: homelab-tls-probe
+spec:
+  groups:
+    - name: homelab-tls-probe
+      rules:
+        - alert: HomelabTLSCertExpiringSoon
+          expr: probe_ssl_earliest_cert_expiry{job="homelab-tls-probe"} - time() < 14 * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `"Certificate for {{ $labels.instance }} expires in {{ $value | humanizeDuration }}"` }}
+            description: |
+              The certificate served at this target expires in under 14 days;
+              Traefik renews at 30. For a homelab.sudops.pl name check the Traefik
+              log on the TrueNAS box for ACME errors (Cloudflare token, rate
+              limits); for nas.homelab.sudops.pl check synology-cert-sync.
+        - alert: HomelabTLSEndpointDown
+          expr: probe_success{job="homelab-tls-probe"} == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ `"{{ $labels.instance }} does not answer over verified HTTPS"` }}
+            description: |
+              From inside the cluster this target gave no valid answer for 15m:
+              DNS, TCP, certificate verification, or a status other than
+              200/401/403. Read the cause with the probe's debug output (README).
+              Then check the Technitium answer for the name, the Traefik log, and
+              the backend's plain port on 192.168.1.25.
+        - alert: HomelabTLSProbeAbsent
+          expr: absent(probe_success{namespace="homelab-tls-probe"})
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No homelab-tls-probe results for 30m"
+            description: |
+              The probe series are missing, so the two alerts above cannot fire.
+              `oc -n {{ .Values.namespace }} get pods` and the ServiceMonitor targets.

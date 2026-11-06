@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  # The Service name becomes the scrape `job` label. A ClusterIP Service (not
+  # headless) so the API-server proxy path in the README works.
+  name: homelab-tls-probe
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: homelab-tls-probe
+spec:
+  selector:
+    app.kubernetes.io/name: homelab-tls-probe
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
+      protocol: TCP

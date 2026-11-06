@@ -1,0 +1,31 @@
+namespace: homelab-tls-probe
+
+image:
+  repository: quay.io/prometheus/blackbox-exporter
+  tag: v0.29.1
+
+port: 9115
+
+# One probe per URL, each a ServiceMonitor endpoint (`instance` = the URL).
+# The seven homelab.sudops.pl names are served by Traefik on the TrueNAS box with the
+# Let's Encrypt wildcard; loki.s3 stands for the *.s3 SAN. The Synology (nas, :5001)
+# has its own certificate, synced by synology-cert-sync.
+targets:
+  - https://paperless.homelab.sudops.pl/
+  - https://syncthing.homelab.sudops.pl/
+  - https://garage.homelab.sudops.pl/
+  - https://s3.homelab.sudops.pl/
+  - https://loki.s3.homelab.sudops.pl/
+  - https://truenas.homelab.sudops.pl/
+  - https://traefik.homelab.sudops.pl/
+  - https://nas.homelab.sudops.pl:5001/
+
+scrapeInterval: 2m
+scrapeTimeout: 30s
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 64Mi

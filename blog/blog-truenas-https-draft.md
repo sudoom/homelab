@@ -209,3 +209,36 @@ traefik    401 0
 
 `loki.s3` verifying proves the `*.s3.homelab.sudops.pl` SAN; 403 on both S3 names is garage refusing an anonymous
 request, by path and by bucket host.
+
+## 2026-11-06 — the in-cluster probe
+
+Names that verify from the workstation say nothing about what a pod sees, and a Let's Encrypt wildcard that
+silently fails to renew repeats the Synology's 2026-08-26 expiry. So a prometheus blackbox_exporter
+(`components/cluster-config/homelab-tls-probe/`, image `quay.io/prometheus/blackbox-exporter:v0.29.1`) probes
+all eight names from inside the cluster: seven Traefik names (`loki.s3` stands for the `*.s3` SAN) and the
+Synology at `nas.homelab.sudops.pl:5001`. One module, `https_answers`: HTTP prober, 20 s, IPv4, `fail_if_not_ssl`,
+200/401/403 count as answering (garage and Traefik refuse anonymous requests), redirects followed, TLS
+verification on, never `insecure_skip_verify`, so a Traefik default certificate fails the probe.
+
+The ServiceMonitor has one endpoint per target (`/probe`, `module` and `target` params, `__param_target` →
+`instance`, every 2 m, 30 s timeout), generated from `values.yaml`. Three `warning` rules:
+`HomelabTLSCertExpiringSoon` (`probe_ssl_earliest_cert_expiry - time() < 14 * 86400`, 1 h),
+`HomelabTLSEndpointDown` (`probe_success == 0`, 15 m), `HomelabTLSProbeAbsent`
+(`absent(probe_success{namespace="homelab-tls-probe"})`, 30 m). Warnings are not mailed, so
+`monitoring-config` gets a route `alertname =~ HomelabTLS.*` → `Critical`.
+
+Validation (no cluster commands):
+
+```
+$ helm lint components/cluster-config/homelab-tls-probe
+1 chart(s) linted, 0 chart(s) failed
+$ helm lint components/cluster-config/monitoring-config
+1 chart(s) linted, 0 chart(s) failed
+$ kubeconform -strict -ignore-missing-schemas -schema-location default -schema-location '<datreeio CRDs-catalog>' -summary
+probe chart:       7 resources found - Valid: 7, Invalid: 0, Errors: 0, Skipped: 0
+monitoring-config: 6 resources found - Valid: 5, Invalid: 0, Errors: 0, Skipped: 1
+$ helm template root-app bootstrap/root-app/ -f bootstrap/root-app/values.yaml   # new Application homelab-tls-probe, wave 5
+```
+
+kubeconform needed the sandbox off (TLS to raw.githubusercontent.com failed under it). The live checks (DNS from
+pods, eight probes, negative controls) follow after the push.

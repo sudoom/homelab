@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homelab-tls-probe
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: homelab-tls-probe
+data:
+  blackbox.yml: |
+    modules:
+      # A name "answers" when TLS verifies against the system trust store and the
+      # app replies 200, or 401/403 (garage and Traefik refuse anonymous requests).
+      # TLS verification stays on: a wrong or default certificate must fail.
+      https_answers:
+        prober: http
+        timeout: 20s
+        http:
+          preferred_ip_protocol: ip4
+          fail_if_not_ssl: true
+          valid_status_codes: [200, 401, 403]
+          follow_redirects: true

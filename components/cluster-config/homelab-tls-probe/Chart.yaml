@@ -1,0 +1,5 @@
+apiVersion: v2
+name: homelab-tls-probe
+description: blackbox_exporter probing the TrueNAS app names and the Synology over HTTPS from inside the cluster
+version: 1.0.0
+type: application

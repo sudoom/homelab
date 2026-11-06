@@ -339,6 +339,13 @@ applications:
     namespace: technitium-exporter
     syncWave: "5"
 
+  # In-cluster HTTPS probe (blackbox_exporter) of the TrueNAS app names and the Synology: verified certificate, answer, expiry; alerts mailed.
+  homelab-tls-probe:
+    enabled: true
+    path: components/cluster-config/homelab-tls-probe
+    namespace: homelab-tls-probe
+    syncWave: "5"
+
   # Scrape PATH for the node_exporter that runs on the TrueNAS box itself (an
   # Ansible-managed custom app). This chart is a one-container socat forwarder
   # plus its Service + ServiceMonitor. A forwarder rather than the textbook
