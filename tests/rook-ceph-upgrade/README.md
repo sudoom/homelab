@@ -448,7 +448,9 @@ patch and runs `oc diff` before each push. Gates first, and stage 1 verified and
 
 c2 sets the image-set ConfigMap to ceph-csi-operator 1.1.0's built-in images (cephcsi `v3.18.1`) instead of the
 chart's empty values: the outgoing 1.0.4 operator copies empty values over its own defaults, so a Driver reconcile by
-it during the hop would give every plugin container an empty image. ceph-csi-operator 1.1.0 also brings an
+it during the hop would give every plugin container an empty image (the pins were dropped on 2026-11-07, after the
+s2 point: 1.1.0 skips empty values, so the image set now carries the chart's `""` and renders the same built-ins).
+ceph-csi-operator 1.1.0 also brings an
 unconditional NetworkPolicy, `ceph-csi-ceph-csi-controller-manager`, on its own pod (all ingress denied, all egress
 allowed); the pod serves only its kubelet probes, which the policy does not block (item 9). c3 renders the same
 objects as v1.20.9 and applies nothing.

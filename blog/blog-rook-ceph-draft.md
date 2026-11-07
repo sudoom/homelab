@@ -3567,3 +3567,33 @@ background ops, though, not by fio's 1M reads during three 14-minute runs, so it
 fio ran. It does make the client side (the image mapping, now done by cephcsi v3.18.1) or the load at run time the
 better places to look if the dip is still there at the stage-3 point. Stage 2's measurements are closed. Next: the
 CSI image-pin cleanup (README TODO), the Rook v1.21.2 decision, then stage 3 (msgr2 required).
+
+## 2026-11-07 — CSI image pins dropped (README TODO)
+
+Stage 2 had pinned `rook-csi-operator-image-set-configmap` to ceph-csi-operator 1.1.0's built-in images (ruling 10b),
+only because the outgoing 1.0.4 operator copied empty values over its defaults during the hop. With 1.1.0 the only
+operator left, the pins went back to the chart's empty values, at the operator's request ("drop the csi image pins"),
+after the s2 fio and latency point.
+
+Checked upstream first, at the tag that runs here:
+
+```
+gh api 'repos/ceph/ceph-csi-operator/contents/internal/controller/driver_controller.go?ref=v1.1.0'
+  360:  utils.CopyNonEmptyValues(r.images, imageSetCM.Data)
+gh api 'repos/ceph/ceph-csi-operator/contents/internal/controller/defaults.go?ref=v1.1.0'
+  provisioner v6.3.0, attacher v4.13.0, resizer v2.2.1, snapshotter v8.6.0, registrar v2.18.0,
+  plugin quay.io/cephcsi/cephcsi:v3.18.1, addons k8s-sidecar v0.15.1   (= the seven pinned values)
+```
+
+So an empty value leaves the built-in in place, and the built-ins are exactly what was pinned. The values change
+deletes the `rook-ceph.csi.{cephcsi,registrar,provisioner,snapshotter,attacher,resizer,csiAddons}` block from
+`components/operators/rook-ceph/values.yaml` (the chart's defaults are `repository: ""`). Validation: `helm lint` clean;
+the render (release `rook-ceph-operator`, the ArgoCD app name; a render as `rook-ceph` fails `oc diff` on the CSI
+operator Deployment's immutable selector) differs from master in 14 lines, the seven ConfigMap values going to `""`;
+kubeconform 82 valid / 29 skipped / 0 invalid; live `oc diff -n rook-ceph` (operator kubeconfig) lists one object,
+`ConfigMap rook-csi-operator-image-set-configmap`, with the same seven lines.
+
+Before the push (20:28Z): `csi-state.sh --expect stage2` 18 PASS, driver-generation 79; CSI operator, two ctrlplugin and
+three nodeplugin pods all started 2026-11-06 19:18-19:19Z, 0 restarts, cephcsi v3.18.1 with the sidecars above.
+ceph-csi-operator does not reconcile on a change to that ConfigMap (stage 1, item 1), so the push itself should restart
+nothing; the empty set only takes effect at the next Driver reconcile.

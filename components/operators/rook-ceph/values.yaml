@@ -16,37 +16,11 @@ rook-ceph:
     # that makes Rook delete the CephConnection and ClientProfile, which breaks
     # all new provisioning and mounts. Rook v1.20.9's chart default was true.
     createCsiOperatorResources: true
-    # The CSI images in rook-csi-operator-image-set-configmap, set to
-    # ceph-csi-operator 1.1.0's built-ins (internal/controller/defaults.go@v1.1.0).
-    # The v1.21.1 chart leaves them empty so that the operator falls back to its
-    # built-ins, but the outgoing ceph-csi-operator 1.0.4 copies empty values
-    # over its own defaults: a Driver reconcile by it during the hop would give
-    # every plugin container an empty image. The chart's image set has no key
-    # for csi-snapshot-metadata; that sidecar keeps each operator's built-in and
-    # is not deployed here (no SnapshotMetadataService API). Drop these pins
-    # after stage 2 settles: from then on the outgoing operator is >= 1.1.0,
-    # which skips empty values, and the empty set renders the same built-ins.
-    cephcsi:
-      repository: quay.io/cephcsi/cephcsi
-      tag: v3.18.1
-    registrar:
-      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
-      tag: v2.18.0
-    provisioner:
-      repository: registry.k8s.io/sig-storage/csi-provisioner
-      tag: v6.3.0
-    snapshotter:
-      repository: registry.k8s.io/sig-storage/csi-snapshotter
-      tag: v8.6.0
-    attacher:
-      repository: registry.k8s.io/sig-storage/csi-attacher
-      tag: v4.13.0
-    resizer:
-      repository: registry.k8s.io/sig-storage/csi-resizer
-      tag: v2.2.1
-    csiAddons:
-      repository: quay.io/csiaddons/k8s-sidecar
-      tag: v0.15.1
+    # The CSI images (cephcsi and the sidecars) stay at the chart's empty
+    # values, so rook-csi-operator-image-set-configmap carries "" and
+    # ceph-csi-operator (>= 1.1.0 skips empty values, CopyNonEmptyValues) runs
+    # its built-in images. They were pinned for the stage-2 hop only, while the
+    # outgoing 1.0.4 operator would have copied empty values over its defaults.
   ceph-csi-operator:
     serviceAccount:
       # Permanent. The ceph-csi-operator subchart (1.0.4 and 1.1.0) would
