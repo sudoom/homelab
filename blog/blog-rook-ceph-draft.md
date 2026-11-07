@@ -3495,3 +3495,49 @@ items were not repeated after c3 (ruling 11b): c3 applied nothing, so the c2 res
 Stage 2 took 35 minutes from push to the last read, 11 of them the daemon roll. The s2 fio point runs in the
 2026-11-07 12:00-14:00Z slot and the latency window closes at 2026-11-07 19:15Z or later. Then the image-pin cleanup
 (README TODO) and the Rook v1.21.2 decision before stage 3 (msgr2 required).
+
+## 2026-11-07 — Stage 2 fio point (s2)
+
+The measurement after stage 2, with the same commands as the baseline and s1 (runbook "Stage M", label `s2`). It
+started late in the slot: at 13:27Z three runs (about 65 minutes at s1) no longer fitted before 14:00Z, I said so, and
+the operator chose to run now and then, after run 2, to finish the same day rather than wait for the next slot. So
+only run 1 is inside 12:00-14:00Z. Readonly gates at 13:25-13:28Z: sweep clean (3/3 nodes, CV/CO clean, 55/55 apps,
+CNPG ×3 2/2 archiving, HEALTH_OK, MCPs idle); CSI pre-flight clean (every PV and PVC Bound, no attached
+VolumeAttachment without its PV, no leftover bench PVC, Job or namespace).
+
+```
+bash tests/rook-ceph-upgrade/verify/ceph-reads.sh s2          # evidence ceph-reads-s2-20261107T133002Z.txt, 0 failed
+nvme-replicated  STORED 158 GiB  USED 464 GiB  34.20%  MAX AVAIL 298 GiB   -> 25% = 74.5 GiB >= 32Gi
+KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 \
+BENCH_LAYOUT_NOTE='shared-bulk BENCH_ALLOW_SMALL=1 rep=<n>/3 stage=s2' \
+  ./tests/storage-benchmark/run.sh --backend ceph-nvme-block [--dry-run]
+```
+
+The dry run's output reached me cut by `tail -30` to the pod spec, but `run.sh` dies at the first failed gate before
+its dry-run block, and the last line (`pod script passes bash -n`) was there, so the gates passed. Run 1's gate lines
+gave the cross-check: `run.sh` 297.67 GiB against `ceph df` 298 GiB. Runs: `bench-20261107-143151` (13:31:51Z, with
+the layout), `-170059` (16:01:05Z) and `-195630` (18:56:30Z); the run ids are local time. All exit 0 on node4; runs 2
+and 3 I started with the operator's kubeconfig at the operator's word, each when the permission prompt was answered.
+`BLUESTORE_SLOW_OP_ALERT` latched on all three OSDs during run 1's sequential write, as at the baseline and s1.
+
+| workload | s2 runs | s2 mean | baseline mean | change | s1 mean |
+|---|---|---|---|---|---|
+| seq-read 1M | 361.1 / 269.5 / 372.3 MiB/s | 334.3 | 400.2 | −16.5% | 390.4 |
+| seq-write 1M | 63.9 / 63.5 / 57.5 MiB/s | 61.6 | 62.7 | −1.7% | 64.0 |
+| rand-read 4K | 17,048 / 15,127 / 17,100 iops | 16,425 | 16,559 | −0.8% | 15,331 |
+| rand-write 4K | 2,585 / 2,299 / 2,123 iops | 2,336 | 2,280 | +2.4% | 2,320 |
+
+Writes and random reads did not move. Sequential read is the one change, and unlike s1 it is not one run: all three
+s2 runs are below every baseline run (393.6-406.1 MiB/s), and their p99 latencies are 82.3, 137.4 and 67.6 ms against
+48.5-50.1 ms at the baseline. Run 2 (16:01Z, outside the slot) is the deepest; without it the mean is 366.7 MiB/s
+(−8.4%). I could not attribute it. Two of the three runs are outside the slot, so time-of-day load is not excluded;
+the readonly account cannot read Prometheus history; and a 20 s sample of the pool's traffic taken right after run 2
+read 0.0 MiB/s read and 1.3 MiB/s write, which describes the minute after the run, not the run. Ceph itself is
+unchanged (Squid 19.2.4); what stage 2 changed on the read path is the CSI side (cephcsi v3.18.1 maps the image) and
+fresh OSD processes after the roll. The series stays record-only; the point after stage 3 shows whether the dip
+persists. Full rows in `data/storage-benchmark-results.tsv`, summary in `data/storage-throughput.md`.
+
+The benchmark PVC was kept after run 3; cleanup (`run.sh --clean`, then deleting the PVC) and the 24 h OSD-latency
+window (`ceph-latency.sh --end 2026-11-07T19:30:00Z --window 24h --label s2`) follow. The window ends at 19:30Z rather
+than the 19:15Z planned, so it starts after the stage-2 roll settled (HEALTH_OK at 19:25:04Z; c3 rolled nothing) and
+contains all three runs.

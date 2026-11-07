@@ -39,6 +39,7 @@ over which path, by which method**. A number without those is not reusable.
 | **TrueNAS** (RAIDZ2 6-wide) | SMB over 1G frontnet | — | **~114 MB/s** | 2026-08-31 | 2 Macs, Time Machine, link-saturating |
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **400.2 MiB/s** | **62.7 MiB/s** | 2026-11-05 | 1 client (node4), fio `seq-*-1m`, one 24G file, mean of 3 runs; Rook/Ceph upgrade series, compare only within it |
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **390.4 MiB/s** | **64.0 MiB/s** | 2026-11-06 | same method, after upgrade stage 1 (Rook v1.20.9); mean of 3 runs |
+| **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **334.3 MiB/s** | **61.6 MiB/s** | 2026-11-07 | same method, after upgrade stage 2 (Rook v1.21.1, cephcsi v3.18.1); mean of 3 runs, two outside the slot |
 | *(reference)* cross-node pod | iperf3, 1G frontnet | 879 Mbit/s | — | 2026-05-21 | pre-IPsec baseline |
 
 **TrueNAS NFS is ~4.3× CephFS-HDD read and ~4.7× the Synology on sequential reads —
@@ -193,6 +194,30 @@ the baseline.
 - **Wire against fio, reads:** seq-read 2541/3358 (76%), 3002/2966 (101%), 2872/3270 (88%); rand-read 386/488 (79%),
   437/451 (97%), 517/533 (97%). Run 2 has the highest wire share of the three. Other traffic into node4's backnet port
   during run 2 would both raise that figure and compete with fio; not checked.
+
+### Ceph RBD `ceph-nvme-block` — after stage 2, Rook v1.21.1 (2026-11-07)
+
+Same method as the baseline (label `stage=s2`), the day after stage 2 (Rook v1.20.9 → v1.21.1, ceph-csi-operator
+v1.1.0, cephcsi v3.18.1; Ceph unchanged at Squid 19.2.4, the OSDs restarted in the stage-2 roll). Client again on
+node4. **Only run 1 is in the 12:00-14:00Z slot:** the point started at 13:31Z, and runs 2 (16:01Z) and 3 (18:56Z)
+ran outside it because the operator chose to finish the point the same day. `BLUESTORE_SLOW_OP_ALERT` latched on all
+3 OSDs during run 1's `seq-write-1m`, as before.
+
+| workload | run 1 (13:31Z) | run 2 (16:01Z) | run 3 (18:56Z) | mean | vs baseline | vs s1 |
+|---|---|---|---|---|---|---|
+| `seq-read-1m` | 361.1 MiB/s, p99 82.3 ms | 269.5, p99 137.4 | 372.3, p99 67.6 | **334.3 MiB/s** | −16.5% | −14.4% |
+| `seq-write-1m` | 63.9 MiB/s, p99 265.3 ms | 63.5, p99 231.7 | 57.5, p99 244.3 | **61.6 MiB/s** | −1.7% | −3.7% |
+| `rand-read-4k` | 17,048 iops (66.6 MiB/s), p99 5.34 ms | 15,127 (59.1), p99 6.19 | 17,100 (66.8), p99 5.8 | **16,425 iops** | −0.8% | +7.1% |
+| `rand-write-4k` | 2,585 iops (10.1 MiB/s), p99 27.7 ms | 2,299 (9.0), p99 41.2 | 2,123 (8.3), p99 40.1 | **2,336 iops** | +2.4% | +0.7% |
+
+- **Writes and random reads did not move** (within ±3% of the baseline).
+- **Sequential read is down in every run, not in one.** All three runs are below every baseline run (393.6-406.1
+  MiB/s), and every seq-read p99 is higher (67.6-137.4 ms against 48.5-50.1 ms at the baseline). Run 2 is the deepest;
+  without it the mean is 366.7 MiB/s (−8.4%). Not attributed: two runs fall outside the slot, the readonly account
+  cannot read Prometheus history, and a 20 s sample of the pool's traffic right after run 2 read idle (0.0 MiB/s
+  read), which says nothing about the run itself. The next point, after stage 3, shows whether it persists.
+- **Wire against fio, reads:** seq-read 2394/2958 (81%), 2072/2208 (94%), 2728/3050 (89%); rand-read 473/546 (87%),
+  487/484 (101%), 545/547 (100%).
 
 ### TrueNAS SMB (Time Machine) — the 1G frontnet is the constraint here
 
