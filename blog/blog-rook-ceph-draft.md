@@ -3667,3 +3667,17 @@ will only watch for resources in the operator deployed namespace` (`WATCH_NAMESP
 prints and which is why the `openshift-storage` keys failed with "unknown namespace for the cache". `csi-state.sh
 --expect stage2` RESULT PASS (18), driver-generation 79, the five plugin pods unchanged (the hourly
 `csi-rbd-provisioner-caps-fix-bootstrap` Job pod is the only other new pod).
+
+## 2026-11-07 — Rook v1.21.1 for stage 3; ceph-csi-operator bug drafted
+
+**Decision (operator, "1.21.1").** Stage 3 (msgr2 required) runs on Rook v1.21.1, not v1.21.2. v1.21.2 (out
+2026-11-05) carries rook#18557: when `requireMsgr2` is true it also switches msgr1 off on the OSDs, mgrs and MDSs. The
+stage-3 plan relies on existing kernel RBD mappings staying on msgr1 until each is remapped, so with v1.21.2 every
+mounted RBD volume would need a planned move to msgr2 first. Not researched further; a later v1.21.2 hop gets its own
+plan for that.
+
+**Bug draft.** The CSIDriver recreation above is a ceph-csi-operator regression from PR #612 (9111aa67, "controller:
+skip if the driver CR is not present", in v1.1.0): `LoadAndValidateDesiredState` returns
+`client.IgnoreNotFound(err)`, and `reconcile()` only stops on an error, so a missing Driver runs every reconciler.
+`main` still has the same code (`driver_controller.go` lines 437-441 on 2026-11-07); no upstream issue or PR found for
+it. Filing-ready body: `bugs/upstream-ceph-csi-operator-missing-driver-reconciled.md` (not filed).
