@@ -3541,3 +3541,29 @@ The benchmark PVC was kept after run 3; cleanup (`run.sh --clean`, then deleting
 window (`ceph-latency.sh --end 2026-11-07T19:30:00Z --window 24h --label s2`) follow. The window ends at 19:30Z rather
 than the 19:15Z planned, so it starts after the stage-2 roll settled (HEALTH_OK at 19:25:04Z; c3 rolled nothing) and
 contains all three runs.
+
+Cleanup at 19:18Z, at the operator's go: `run.sh --clean` (25G layout removed; its gates read 305.87 GiB headroom),
+then `oc -n default delete pvc storage-bench-ceph-nvme-block`. A readonly check at 19:18:46Z found no bench PVC, Job
+or pod, the PV gone and no Released or Failed PV.
+
+### Stage 2 OSD latency (24 h window to 2026-11-07 19:30Z)
+
+```
+bash tests/rook-ceph-upgrade/metrics/ceph-latency.sh --end 2026-11-07T19:30:00Z --window 24h --label s2   # 18 rows
+```
+
+| metric (24 h average) | osd.0 | osd.1 | osd.2 |
+|---|---|---|---|
+| `op_w_latency` | 70.7 → 60.7 → 56.6 ms (−20.0% vs baseline) | 67.8 → 59.8 → 56.2 (−17.2%) | 64.6 → 54.3 → 57.4 (−11.2%) |
+| `commit_latency` (= `apply_latency`) | 16.3 → 17.5 → 15.9 ms (−2.2%) | 22.0 → 19.3 → 19.5 (−11.5%) | 14.5 → 13.2 → 13.4 (−7.8%) |
+| `kv_commit_lat` | 4.35 → 4.26 → 4.20 ms (−3.5%) | 4.78 → 4.53 → 4.58 (−4.0%) | 4.19 → 4.09 → 4.08 (−2.5%) |
+| `op_r_latency` | 1.00 → 1.09 → 0.86 ms (−14.1%) | 1.13 → 1.01 → 0.94 (−17.4%) | 0.74 → 0.66 → 0.68 (−9.0%) |
+| `slow_ops_max` | 0 → 0 → 0 | 0 → 0 → 0 | 0 → 0 → 0 |
+
+Values are baseline → s1 → s2. Nothing regressed on the OSD side: write latency is 11-20% under the baseline and
+within a few percent of s1, kv commit is flat, reads stay under 1 ms. That includes OSD read latency, so the fio
+sequential-read dip has no counterpart in the OSDs' 24 h average. The average is dominated by the cluster's small
+background ops, though, not by fio's 1M reads during three 14-minute runs, so it cannot rule out slower OSD reads while
+fio ran. It does make the client side (the image mapping, now done by cephcsi v3.18.1) or the load at run time the
+better places to look if the dip is still there at the stage-3 point. Stage 2's measurements are closed. Next: the
+CSI image-pin cleanup (README TODO), the Rook v1.21.2 decision, then stage 3 (msgr2 required).
