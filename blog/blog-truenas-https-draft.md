@@ -25,8 +25,8 @@ cluster's S3 consumers (Velero BSL, Loki) use `https://s3.homelab.sudops.pl`. A 
 **Verification.** Staging order first, production in run #2: every name verifies against the system trust store without
 `-k`, `loki.s3` proves the `*.s3` SAN. Velero: BSL `Available` on the HTTPS URL, one-off Backup `truenas-https-check`
 `Completed` 37/37, no errors. Loki: on `https://s3.homelab.sudops.pl` (virtual-host) since 2026-11-06 23:12Z, all pods
-rolled, 0 S3/TLS/flush errors on the three ingesters 30 minutes later; a 3-hour read-back from Grafana is the last
-open check. The probe passes on all eight targets and fails, as it must, on Traefik's default certificate and the
+rolled, 0 S3/TLS/flush errors on the three ingesters 30 minutes later, and a Grafana read-back on 2026-11-07 of
+09:00-10:00Z, hours after the roll, returned lines (operator). The probe passes on all eight targets and fails, as it must, on Traefik's default certificate and the
 TrueNAS self-signed one; the full record is in "Live verification record" at the end.
 
 **Found along the way.**
@@ -520,3 +520,8 @@ the hook rewrote the Secret with identical content)
 
 Left: a Grafana read-back of logs older than the ingesters' in-memory window (about 3 h after the roll), which proves
 chunks written through `loki.s3.homelab.sudops.pl` read back.
+
+2026-11-07: the operator ran that read-back in Grafana (Loki datasource, 10:00-11:00 local = 09:00-10:00Z, about 10 h
+after the roll, so served from chunks in garage) and it returned lines ("Loki ok"). An earlier screenshot of the
+audit dashboard over the last 30 minutes did not count: that range is still served from the ingesters' memory.
+Every check of the plan has passed.
