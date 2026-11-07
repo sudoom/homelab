@@ -3597,3 +3597,9 @@ Before the push (20:28Z): `csi-state.sh --expect stage2` 18 PASS, driver-generat
 three nodeplugin pods all started 2026-11-06 19:18-19:19Z, 0 restarts, cephcsi v3.18.1 with the sidecars above.
 ceph-csi-operator does not reconcile on a change to that ConfigMap (stage 1, item 1), so the push itself should restart
 nothing; the empty set only takes effect at the next Driver reconcile.
+
+After the push (`a849335`): ArgoCD synced it by 20:34:09Z, `rook-ceph-operator` Synced/Healthy, the ConfigMap reads
+`{"addons":"","attacher":"","plugin":"","provisioner":"","registrar":"","resizer":"","snapshotter":""}`.
+`csi-state.sh --expect stage2` RESULT PASS (18 checks), driver-generation still 79, and the six CSI pods are identical
+to the 20:28Z read (same start times, 0 restarts, same images). As expected, nothing reconciled: the empty set is now
+what the next Driver reconcile reads.
