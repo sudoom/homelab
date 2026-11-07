@@ -3630,3 +3630,31 @@ not be empty`). 42 `CSI Driver reconciliation failed` lines in the first minute,
 that validation stops a cephfs plugin from being created. Nothing uses the three: every PV (33 rbd, 4 nfs) and every
 VolumeAttachment (32) is on `rook-ceph.rbd.csi.ceph.com` or `nfs.csi.k8s.io`, no StorageClass provisions them, no
 CSINode registers them, and none carries an ArgoCD tracking id or a finalizer.
+
+Deleted at the operator's instruction, 21:27:04Z: `oc delete csidriver openshift-storage.rbd.csi.ceph.com
+openshift-storage.cephfs.csi.ceph.com rook-ceph.cephfs.csi.ceph.com`. The two `openshift-storage` objects stayed gone.
+`rook-ceph.cephfs.csi.ceph.com` was back in the same second (new uid `8b6e1fa7-…`, creationTimestamp 21:27:04Z, the
+same `csi.ceph.io/ownerref` annotation). The source explains it (`driver_controller.go@v1.1.0`):
+
+```go
+// LoadAndValidateDesiredState()
+if err := r.Get(r.ctx, client.ObjectKeyFromObject(&r.driver), &r.driver); err != nil {
+    r.log.Error(err, "Unable to load driver.csi.ceph.io", ...)
+    //return nil if the driver is not present or else return err
+    return client.IgnoreNotFound(err)
+}
+```
+
+A missing Driver makes `LoadAndValidateDesiredState` return nil, so `reconcile()` goes on and runs every reconciler
+against an empty Driver. `reconcileK8sCsiDriver` creates the cluster-scoped CSIDriver with the ownerref annotation (no
+owner UID is needed there, so it succeeds); the namespaced objects need an owner UID and are rejected. The delete event
+on the CSIDriver enqueued `rook-ceph/rook-ceph.cephfs.csi.ceph.com` through the annotation watch, and the reconcile
+recreated it. The `openshift-storage` ones never get that far: the Get fails with "unknown namespace for the cache",
+which is not NotFound, so they return an error before any reconciler. An upstream bug (the intent in the comment is
+to stop the reconcile, not to continue it); not filed yet.
+
+So the CSIDriver can only be removed while no operator process can reconcile it: delete the operator pod (`oc delete`
+waits until it is gone) and the CSIDriver right after, before the new pod's informers list CSIDrivers (the restart at
+21:15 took 27 s from delete to the first reconcile). With neither the CSIDriver nor a cephfs Driver, ceph-csi-config's
+owners (the rbd Driver and two ClientProfiles) and the OperatorConfig watch (existing Drivers only) enqueue nothing for
+cephfs.
