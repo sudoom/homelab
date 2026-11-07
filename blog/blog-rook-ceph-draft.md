@@ -3603,3 +3603,30 @@ After the push (`a849335`): ArgoCD synced it by 20:34:09Z, `rook-ceph-operator` 
 `csi-state.sh --expect stage2` RESULT PASS (18 checks), driver-generation still 79, and the six CSI pods are identical
 to the 20:28Z read (same start times, 0 restarts, same images). As expected, nothing reconciled: the empty set is now
 what the next Driver reconcile reads.
+
+Reconcile check (operator's go): `oc -n rook-ceph delete pod ceph-csi-controller-manager-5b94788d9c-cldcc` at
+21:15:35Z; the new pod was Ready at 21:15:55Z and reconciled the rbd Driver from the empty image set. A minute later
+`csi-state.sh --expect stage2` RESULT PASS (18 checks), driver-generation 79, the ctrlplugin Deployment at
+generation 80 = observed and the nodeplugin DaemonSet at 9 = observed, and the five plugin pods identical to the 20:28Z
+read (start times 2026-11-06 19:18-19:19Z, 0 restarts, cephcsi v3.18.1 and the same sidecars). So the empty set
+renders the same images, as the source said.
+
+The restart also explained the operator's error noise noted at stage 1 ("unknown namespace for the cache" for
+Drivers that do not exist). ceph-csi-operator v1.1.0's driver controller `Watches(&storagev1.CSIDriver{},
+enqueueFromOwnerRefAnnotation)` (`driver_controller.go`): every cluster-scoped `CSIDriver` with a `csi.ceph.io/ownerref`
+annotation enqueues the Driver it names. Three leftover CSIDriver objects name Drivers that are gone:
+
+| CSIDriver | created | ownerref |
+|---|---|---|
+| `openshift-storage.cephfs.csi.ceph.com` | 2026-04-06 | `openshift-storage/openshift-storage.cephfs.csi.ceph.com` |
+| `openshift-storage.rbd.csi.ceph.com` | 2026-04-06 | `openshift-storage/openshift-storage.rbd.csi.ceph.com` |
+| `rook-ceph.cephfs.csi.ceph.com` | 2026-04-12 | `rook-ceph/rook-ceph.cephfs.csi.ceph.com` (driver off since 2026-09-13) |
+
+The two `openshift-storage` ones fail at once (the namespace does not exist and is not in the cache). The
+`rook-ceph.cephfs` one gets further on 1.1.0: after `Unable to load driver.csi.ceph.io … not found` it still tries to
+create the cephfs NetworkPolicy, ctrlplugin Deployment and nodeplugin DaemonSet and to update `ceph-csi-config`, each
+with an empty owner UID, and the API server rejects every one (`metadata.ownerReferences.uid: Invalid value: "": must
+not be empty`). 42 `CSI Driver reconciliation failed` lines in the first minute, then controller-runtime backoff. Only
+that validation stops a cephfs plugin from being created. Nothing uses the three: every PV (33 rbd, 4 nfs) and every
+VolumeAttachment (32) is on `rook-ceph.rbd.csi.ceph.com` or `nfs.csi.k8s.io`, no StorageClass provisions them, no
+CSINode registers them, and none carries an ArgoCD tracking id or a finalizer.
