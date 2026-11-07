@@ -3658,3 +3658,12 @@ waits until it is gone) and the CSIDriver right after, before the new pod's info
 21:15 took 27 s from delete to the first reconcile). With neither the CSIDriver nor a cephfs Driver, ceph-csi-config's
 owners (the rbd Driver and two ClientProfiles) and the OperatorConfig watch (existing Drivers only) enqueue nothing for
 cephfs.
+
+Done at the operator's ok, 21:36:27-29Z: `oc -n rook-ceph delete pod ceph-csi-controller-manager-5b94788d9c-m2k74 &&
+oc delete csidriver rook-ceph.cephfs.csi.ceph.com` (two seconds end to end). The new pod was Ready at 21:36:45Z. At
+21:38:15Z only `nfs.csi.k8s.io` and `rook-ceph.rbd.csi.ceph.com` remain; the new pod logged one Driver reconcile
+(rbd, completed successfully), two ClientProfile reconciles, and a single ERROR line, the startup notice `manager
+will only watch for resources in the operator deployed namespace` (`WATCH_NAMESPACE must be set`), which every start
+prints and which is why the `openshift-storage` keys failed with "unknown namespace for the cache". `csi-state.sh
+--expect stage2` RESULT PASS (18), driver-generation 79, the five plugin pods unchanged (the hourly
+`csi-rbd-provisioner-caps-fix-bootstrap` Job pod is the only other new pod).
