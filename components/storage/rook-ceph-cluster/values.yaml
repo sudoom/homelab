@@ -81,11 +81,13 @@ rook-ceph-cluster:
         cluster:
           - "192.168.10.0/24"
       connections:
-        # Explicit on purpose: msgr2-only stays off through the Rook upgrade
-        # stages (1 and 2) and flips to true only in stage 3, on Rook v1.21.1
-        # and before the Tentacle stage. The v1.21.1 chart defaults it to true;
-        # this pin keeps it false until then.
-        requireMsgr2: false
+        # True since stage 3 of the Rook upgrade (Rook v1.21.1, before the
+        # Tentacle stage): clients get the mons' v2 port :3300 and new kernel
+        # RBD mappings use ms_mode=prefer-crc (CRC, no encryption). Mappings
+        # made before stage 3 keep their v1 mapping until remapped. Rook
+        # v1.21.2+ also turns msgr1 off on OSDs/mgrs/MDSs when this is true
+        # (rook#18557): a hop to it needs a plan for those older mappings.
+        requireMsgr2: true
 
     # Do not roll the next OSD while PGs are unhealthy during an upgrade.
     # Rook's default is false; with 3 OSDs and no drain headroom a roll on
