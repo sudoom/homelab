@@ -40,6 +40,7 @@ over which path, by which method**. A number without those is not reusable.
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **400.2 MiB/s** | **62.7 MiB/s** | 2026-11-05 | 1 client (node4), fio `seq-*-1m`, one 24G file, mean of 3 runs; Rook/Ceph upgrade series, compare only within it |
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **390.4 MiB/s** | **64.0 MiB/s** | 2026-11-06 | same method, after upgrade stage 1 (Rook v1.20.9); mean of 3 runs |
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **334.3 MiB/s** | **61.6 MiB/s** | 2026-11-07 | same method, after upgrade stage 2 (Rook v1.21.1, cephcsi v3.18.1); mean of 3 runs, two outside the slot |
+| **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **359.7 MiB/s** | **69.1 MiB/s** | 2026-11-08 | same method, after upgrade stage 3 (msgr2 required); mean of 3 runs, all in the slot |
 | *(reference)* cross-node pod | iperf3, 1G frontnet | 879 Mbit/s | — | 2026-05-21 | pre-IPsec baseline |
 
 **TrueNAS NFS is ~4.3× CephFS-HDD read and ~4.7× the Synology on sequential reads —
@@ -218,6 +219,29 @@ ran outside it because the operator chose to finish the point the same day. `BLU
   read), which says nothing about the run itself. The next point, after stage 3, shows whether it persists.
 - **Wire against fio, reads:** seq-read 2394/2958 (81%), 2072/2208 (94%), 2728/3050 (89%); rand-read 473/546 (87%),
   487/484 (101%), 545/547 (100%).
+
+### Ceph RBD `ceph-nvme-block` — after stage 3, msgr2 required (2026-11-08)
+
+Same method (label `stage=s3`), about four hours after stage 3 (`requireMsgr2: true` on Rook v1.21.1; Ceph unchanged
+at Squid 19.2.4; every kernel mapping was already on msgr2 `prefer-crc` before the change). All three runs in the
+12:00-14:00Z slot this time, client again on node4. `BLUESTORE_SLOW_OP_ALERT` latched on all 3 OSDs during run 1's
+`seq-write-1m`, as before.
+
+| workload | run 1 (12:00Z) | run 2 (12:22Z) | run 3 (12:36Z) | mean | vs baseline | vs s2 |
+|---|---|---|---|---|---|---|
+| `seq-read-1m` | 357.6 MiB/s, p99 81.3 ms | 381.0, p99 51.6 | 340.4, p99 83.4 | **359.7 MiB/s** | −10.1% | +7.6% |
+| `seq-write-1m` | 60.7 MiB/s, p99 299.9 ms | 78.3, p99 189.8 | 68.2, p99 278.9 | **69.1 MiB/s** | +10.2% | +12.1% |
+| `rand-read-4k` | 16,293 iops (63.6 MiB/s), p99 6.06 ms | 15,998 (62.5), p99 6.32 | 16,875 (65.9), p99 5.54 | **16,389 iops** | −1.0% | −0.2% |
+| `rand-write-4k` | 2,528 iops (9.9 MiB/s), p99 26.6 ms | 2,494 (9.7), p99 27.4 | 2,266 (8.9), p99 30.3 | **2,429 iops** | +6.5% | +4.0% |
+
+- **Sequential read stays below the baseline, now with every run in the slot.** All three runs are under the
+  baseline range (393.6-406.1 MiB/s); two of three have p99 above 80 ms against 48.5-50.1 ms at the baseline. So the
+  stage-2 dip was not the time of day. s1 (390.4) was still at the baseline, so it appeared with stage 2 (Rook
+  v1.21.1, ceph-csi-operator 1.1.0, cephcsi v3.18.1). Stage 3 cannot be the cause on the client side: the kernel
+  mappings were on msgr2 before it. Not attributed; record-only.
+- **Writes and random reads did not move down;** sequential write is the best mean in the series (+10.2%).
+- **Wire against fio, reads:** seq-read 2992/2930 (102%), 3149/3121 (101%), 2522/2789 (90%); rand-read 449/521 (86%),
+  507/512 (99%), 476/540 (88%).
 
 ### TrueNAS SMB (Time Machine) — the 1G frontnet is the constraint here
 

@@ -3759,3 +3759,46 @@ gone by 08:52:46Z, HEALTH_OK.
 
 Stage 3 took 12 minutes from push to settled, 8 of them the roll. Next: the s3 fio point in the 2026-11-09
 12:00-14:00Z slot and its 24 h latency window, then the stage-4 patches (Tentacle 20.2.5).
+
+## 2026-11-08 — Stage 3 fio point (s3)
+
+The operator handed the whole point to me ("run Speedtest when time comes"); a one-shot reminder fired at 11:54Z.
+Readonly gates at 11:54:17Z: 3/3 nodes, CV/CO clean, 54/55 apps Synced+Healthy and `rook-ceph-cluster` OutOfSync
+(Job `pg-num-floor-bootstrap` Missing after its one-hour TTL, last sync 11:50:52Z Succeeded; Synced again by 12:22Z),
+CNPG ×3 archiving, CephCluster gen 14 = observed, HEALTH_WARN `BLUESTORE_SLOW_OP_ALERT` on 1 OSD (re-latched since the
+stage-3 restarts), MCPs idle, every PV/PVC Bound, no orphan VolumeAttachment, no bench leftover.
+
+The operator's `ceph-reads.sh` capture needs `oc exec`, so it was replaced by the mgr metrics through the apiserver
+proxy (readonly), which carry what the 25% rule needs:
+
+```
+oc get --raw "/api/v1/namespaces/rook-ceph/services/http:rook-ceph-mgr:9283/proxy/metrics"
+ceph_health_status 1 (WARN); pool 1 max_avail 292.6 GiB, stored 162.7 GiB; pgs active/clean/total 128/128/128
+-> 25% = 73.2 GiB >= 32Gi
+```
+
+Dry run 11:55:59Z: gates ok, `run.sh` headroom 292.58 GiB against the metrics' 292.6 GiB. The three runs went as one
+background driver (`s3-fio-driver.sh`, scratch) that waited for 12:00:00Z, so the operator answered one permission
+prompt instead of one per run and all three landed in the slot: `bench-20261108-130002` (12:00:01Z, with the layout),
+`-132232` (12:22:31Z), `-133639` (12:36:38Z), all exit 0 on node4, done 12:50:29Z. `BLUESTORE_SLOW_OP_ALERT` covered all
+three OSDs again after run 1's sequential write.
+
+| workload | s3 runs | s3 mean | baseline mean | change | s1 / s2 mean |
+|---|---|---|---|---|---|
+| seq-read 1M | 357.6 / 381.0 / 340.4 MiB/s | 359.7 | 400.2 | −10.1% | 390.4 / 334.3 |
+| seq-write 1M | 60.7 / 78.3 / 68.2 MiB/s | 69.1 | 62.7 | +10.2% | 64.0 / 61.6 |
+| rand-read 4K | 16,293 / 15,998 / 16,875 iops | 16,389 | 16,559 | −1.0% | 15,331 / 16,425 |
+| rand-write 4K | 2,528 / 2,494 / 2,266 iops | 2,429 | 2,280 | +6.5% | 2,320 / 2,336 |
+
+This answers the s2 question about the time of day: with all three runs in the slot, sequential read is still below
+every baseline run (393.6-406.1 MiB/s), and two of three runs have p99 above 80 ms (baseline 48.5-50.1 ms). It
+appeared between s1 (390.4, at the baseline) and s2, i.e. with stage 2 (Rook v1.21.1, ceph-csi-operator 1.1.0,
+cephcsi v3.18.1). Stage 3 does not explain it on the client side: the kernel mappings were already msgr2 `prefer-crc`
+before stage 3, and they were mapped by cephcsi's Tentacle `rbd` client at every point. Everything else is flat or
+better; sequential write has its best mean of the series. Still record-only and not attributed; the stage-4 point
+will show whether it moves with the Ceph daemons.
+
+Cleanup 13:08Z: `run.sh --clean` (25G removed; gates read 266.12 GiB headroom), `oc -n default delete pvc
+storage-bench-ceph-nvme-block`; at 13:08:50Z no bench PVC, Job, pod or non-Bound PV. Next: the operator's 24 h
+latency read, `ceph-latency.sh --end 2026-11-09T07:50:00Z --window 24h --label s3` or later (the window then starts
+after the stage-3 roll settled at 07:48:47Z and contains these runs).
