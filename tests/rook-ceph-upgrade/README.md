@@ -557,8 +557,9 @@ oc -n rook-ceph exec <nodeplugin pod> -c csi-rbdplugin -- sh -c 'cat /sys/bus/rb
 
 Run the `exec` once per nodeplugin pod (three pods, one per node; a node with no mapped RBD prints a `No such file`
 error from the glob, which is expected there). Save the output (one line per mapped
-device; it holds the mon addresses and the pool, no key). Before the change the mons read `:6789` (v1) and there is no
-`ms_mode`.
+device; it holds the mon addresses and the pool, no key). The plan expected `:6789` (v1) and no `ms_mode` before the
+change; on 2026-11-08 all 32 mappings already read `:3300` with `ms_mode=prefer-crc`, because cephcsi's Tentacle `rbd`
+client defaults to msgr2 and takes the mon addresses from the monmap. Either is fine; record which.
 
 ```bash
 # CONTROLLER (readonly): CSI config before the change (informational baseline)

@@ -3681,3 +3681,81 @@ skip if the driver CR is not present", in v1.1.0): `LoadAndValidateDesiredState`
 `client.IgnoreNotFound(err)`, and `reconcile()` only stops on an error, so a missing Driver runs every reconciler.
 `main` still has the same code (`driver_controller.go` lines 437-441 on 2026-11-07); no upstream issue or PR found for
 it. Filing-ready body: `bugs/upstream-ceph-csi-operator-missing-driver-reconciled.md` (not filed).
+
+## 2026-11-08 — Stage 3: msgr2 required (Rook v1.21.1)
+
+The operator said "U can run it" on 2026-11-07 ~21:48Z; I asked whether that meant stage 3 or filing the bug, and the
+answer was "Stage 3". The window itself ran the next morning.
+
+**Change.** One line in `components/storage/rook-ceph-cluster/values.yaml`,
+`cephClusterSpec.network.connections.requireMsgr2: false → true`, plus its comment (commit `fd116ab`, "rook-ceph:
+require msgr2"). Render diff exactly that line (2376 lines both sides); kubeconform clean apart from the known-stale
+datree CephCluster schema (`cephx.csi.keyType`, failing the same way on master); live `oc diff` one object, the
+CephCluster, one field. One review of the diff (Sonnet): OK to push; it checked the comment against Rook v1.21.1:
+
+- `csi/cluster_config.go:82-92` rewrites `:6789` mon endpoints to `:3300` when `requireMsgr2` is true, and
+  `csi/ceph_connection.go:101` feeds that into the CephConnection.
+- `cluster/cluster.go:856-857` sets `rbd_default_map_options=ms_mode=prefer-crc` (msgr2 required, no encryption).
+- Existing mons keep port 6789 (`mon/mon.go:658`); only a mon whose own port is 3300 gets `ms_bind_msgr1=false`
+  (`mon/spec.go:357-373`), i.e. new mons only.
+
+The one gap it left, whether OSDs stop accepting msgr1, I closed in the source: `osd/spec.go:1373-1415` only drops the
+`osd-port-v1` container and Service port declarations; there is no `ms_bind_msgr1` anywhere in `osd/spec.go`,
+`cluster.go`, `config/defaults.go`, `config/monstore.go` or `mgr/spec.go` at v1.21.1, and the OSD pods are
+hostNetwork, so the daemons keep binding v1. The port-list change is what rolls the OSDs.
+
+**Pre-reads (operator, 2026-11-08 07:23:59Z).** `ceph-reads.sh pre-s3`: HEALTH_WARN slow-op only, 129 active+clean,
+`nvme-replicated` 32.38% / MAX AVAIL 306 GiB, `rbd_default_map_options` not set. The per-node mapping read was the
+surprise:
+
+```
+for p in $(oc -n rook-ceph get pods -l app=rook-ceph.rbd.csi.ceph.com-nodeplugin -o name); do
+  oc -n rook-ceph exec $p -c csi-rbdplugin -- sh -c 'cat /sys/bus/rbd/devices/*/config_info'; done
+192.168.1.7:3300,192.168.1.9:3300,192.168.1.8:3300 name=csi-rbd-node.1,key=client.csi-rbd-node.1,ms_mode=prefer-crc nvme-replicated csi-vol-… -
+```
+
+All 32 mappings (= the 32 VolumeAttachments) were already on `:3300` with `ms_mode=prefer-crc`; none on `:6789`. The
+runbook expected the opposite. The design had said "many may already be on msgr2": cephcsi's Tentacle `rbd` client
+defaults to `prefer-crc` and takes the mon addresses from the monmap, whatever `ceph-csi-config` says. So stage 3 had
+no kernel msgr1 session to keep alive, and the reason given on 2026-11-07 for staying on v1.21.1 (v1.21.2 switches
+msgr1 off) does not apply to kernel mappings; other msgr1 clients were not checked. The runbook sentence is corrected.
+
+**Gates** re-run at 07:25Z (the evening ones were 10 h old): 3/3 Ready, CV/CO clean, 55/55, no bad pods, CNPG ×3
+archiving, CephCluster gen 13 = observed, MCPs idle, every PV/PVC Bound, only the 03:00Z transmission restarts.
+
+**Roll** (operator "Yes"; window start 07:38:53Z; watcher `s3-watch.sh`, readonly, one line per state change):
+
+```
+07:40:10Z app: fd116ab OutOfSync -> 07:40:43Z Synced/Healthy
+07:40:43Z ceph-csi-config: 3300x6   cephconnection: ["192.168.1.9:3300","192.168.1.8:3300","192.168.1.7:3300"]
+07:40:40-07:42:03Z mons b, c, a
+07:42:52-07:43:57Z mgrs a, b
+07:44:07Z osd-0, 07:45:27Z osd-1, 07:46:59Z osd-2 (one at a time, 33.333% degraded each)
+07:48:15Z CephCluster gen=14 obs=14 Ready
+07:48:47Z HEALTH_OK
+07:50:41Z DONE (held 2 min)
+```
+
+One moment looked wrong: at 07:45:34Z osd-1 started while the CephCluster status still said "1 osds down". The mgr
+metrics through the apiserver proxy (readonly) showed the status was lagging, not two OSDs down:
+
+```
+oc get --raw "/api/v1/namespaces/rook-ceph/services/http:rook-ceph-mgr:9283/proxy/metrics" | grep -E '^ceph_osd_up|^ceph_pg_(active|down|peering)'
+ceph_osd_up{osd.0} 1  ceph_osd_up{osd.1} 0  ceph_osd_up{osd.2} 1
+ceph_pg_active 128 + 1 (of 129), ceph_pg_down 0, ceph_pg_peering 0
+```
+
+FailedMount and FailedAttachVolume stayed 0 from the window start, and no pod in `rook-ceph` went into a waiting
+error. The restarts also cleared the `BLUESTORE_SLOW_OP_ALERT` latch, so health came back as HEALTH_OK.
+
+**Verify.** `csi-state.sh --expect stage3` RESULT PASS (20 checks; `cephconnection-monitors-3300 all:3300 (3)`,
+`ceph-csi-config-monitors-3300 all:3300 (6)`, driver-generation 79; the `rook-ceph-mon-endpoints` INFO line still lists
+`:6789`, as expected for existing mons). Smoke (controller, one prompt per apply): writer on node6 08:44:49Z
+`sha256=880c5289…`, snapshot ready 08:47:40Z, reader 08:48:04Z restored = stored = `880c5289…`: PASS. Operator
+`ceph-reads.sh s3` (08:49:18Z): HEALTH_OK, 129 active+clean, 8/8 daemons 19.2.4, `rbd_default_map_options
+ms_mode=prefer-crc` (global), `nvme-replicated` 33.52% / MAX AVAIL 301 GiB. Both smoke images on node6 mapped
+`192.168.1.{7,9,8}:3300 … ms_mode=prefer-crc`. Smoke namespace deleted 08:52:08Z; both PVs and the snapshot content
+gone by 08:52:46Z, HEALTH_OK.
+
+Stage 3 took 12 minutes from push to settled, 8 of them the roll. Next: the s3 fio point in the 2026-11-09
+12:00-14:00Z slot and its 24 h latency window, then the stage-4 patches (Tentacle 20.2.5).
