@@ -717,6 +717,11 @@ None of this is the incident:
 - The four muted `AUTH_INSECURE_*` warnings (`AUTH_INSECURE_ROTATING_SERVICE_KEY_TYPE`, `AUTH_INSECURE_CLIENT_KEY_TYPE`,
   `AUTH_INSECURE_KEYS_ALLOWED`, `AUTH_INSECURE_KEYS_CREATABLE`; c2 sets them through `healthCheck.muteHealthWarning`).
   Whether and how `ceph health detail` lists a muted warning is read in the window.
+- The Rook operator reloading its own manager in-process, with no pod restart: after the admin key rotates
+  (`restarting rook operator after successful admin cephx key rotation`, `pkg/operator/ceph/cluster/cephx.go:456-459`)
+  and once the OSDs support key rotation again (`upgrade: restarting rook operator after cephx key rotation is
+  re-enabled`, `pkg/operator/ceph/cluster/cluster.go:1046-1052`, both at v1.21.1). A reconcile error wrapping
+  `cephx key rotation re-enablement requires the current cluster reconcile to restart` comes with it.
 
 ### Step 5: no-touch rule
 
