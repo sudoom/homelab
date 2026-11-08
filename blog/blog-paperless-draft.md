@@ -515,3 +515,16 @@ Applied the same night (operator playbook run `ok=88 changed=1`, the paperless e
 document that started it: after Reprocess, `IMG_5815`'s content is the whole invoice (operator: "invoice is working
 now"). The remaining phone-photo PDFs are reprocessed in a batch, followed by `document_llmindex update` so the AI
 index sees their text.
+
+## 2026-11-07 — backups caught up with the pile; photo batch reprocessed
+
+At 00:03Z the operator asked whether the database is backed up and where the documents would be if something broke.
+A read on the NAS (`/mnt/tank/monitoring/textfile/paperless-export.prom`, `cloudsync.query`, `zfs list -t snapshot`)
+showed the design working but behind the uploads: the live app had 48 originals, while the last export (the manual
+one of 2026-11-06 ~13:14Z) and both Cloud Sync copies (12:50/12:51Z) held 5 documents, and only two 6-hourly
+snapshots existed. The operator declined a manual run and left it to the night. At 13:25Z the same read showed the
+04:15 export (03:15Z) with `truenas_paperless_export_documents 48` (100 files, 39M), the Synology copy SUCCESS at
+03:45Z and the Hetzner copy SUCCESS at 06:30Z, and four snapshots. So a document is on the NAS pool only until the
+next 04:15 export; that window is the design's, not a fault.
+
+The operator reprocessed the `IMG_` phone-photo batch and ran `document_llmindex update` the same day ("3. done").
