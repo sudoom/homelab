@@ -28,7 +28,7 @@ rook-ceph-cluster:
 
   cephImage:
     repository: quay.io/ceph/ceph
-    tag: v19.2.4
+    tag: v20.2.5-20261028
     allowUnsupported: false
 
   # Everything that goes verbatim into CephCluster.spec (the chart inserts
@@ -105,6 +105,31 @@ rook-ceph-cluster:
       cephx:
         csi:
           keyType: aes
+        # One-off rotation of the daemon keys, done with the Ceph 20.2.5 roll
+        # (daemons restart anyway). Rook picks the key type itself (aes256k
+        # on 20.2.5); raise keyGeneration to rotate again, never lower or
+        # remove it (the CRD rejects both).
+        daemon:
+          keyRotationPolicy: KeyGeneration
+          keyGeneration: 2
+
+    # Ceph 20.2.4+ raises these four while AES keys or ciphers remain:
+    # ROTATING_SERVICE_KEY_TYPE clears 2-3 h after the daemon rotation,
+    # CLIENT_KEY_TYPE stays while the CSI keys are aes (aes256k needs
+    # kernel 7.0), KEYS_ALLOWED/CREATABLE stay until allowedCiphers is
+    # aes256k only. Muted (sticky), as Rook's cephx-key-rotation guide
+    # suggests, so they do not hold Ceph in HEALTH_WARN on their own.
+    # Set `unmute` once all keys are aes256k.
+    healthCheck:
+      muteHealthWarning:
+        AUTH_INSECURE_ROTATING_SERVICE_KEY_TYPE:
+          policy: mute
+        AUTH_INSECURE_CLIENT_KEY_TYPE:
+          policy: mute
+        AUTH_INSECURE_KEYS_ALLOWED:
+          policy: mute
+        AUTH_INSECURE_KEYS_CREATABLE:
+          policy: mute
 
     cephConfig:
       global:
@@ -283,7 +308,7 @@ rbdTrashPurgeSchedule:
   pools:
     - nvme-replicated
   # Pinned to the same image we use for the cluster.
-  image: quay.io/ceph/ceph:v19.2.4
+  image: quay.io/ceph/ceph:v20.2.5-20261028
 
 # Pins the Ceph-internal `.mgr` pool to a device-class-specific CRUSH rule.
 # Ceph creates `.mgr` itself, so no CR owns it and it defaults to
@@ -296,7 +321,7 @@ mgrPoolCrushRule:
   enabled: true
   pool: .mgr
   rule: nvme-replicated
-  image: quay.io/ceph/ceph:v19.2.4
+  image: quay.io/ceph/ceph:v20.2.5-20261028
 
 # Bootstrap Job that applies the canonical caps to the CSI RBD provisioner
 # user, working around an upstream Rook 1.19.5 bug where the user is
@@ -311,7 +336,7 @@ mgrPoolCrushRule:
 # creates `.2`, add it here.
 csiRbdProvisionerCapsFix:
   enabled: true
-  image: quay.io/ceph/ceph:v19.2.4
+  image: quay.io/ceph/ceph:v20.2.5-20261028
   users:
     - client.csi-rbd-provisioner.1
 
@@ -329,7 +354,7 @@ csiRbdProvisionerCapsFix:
 #   entries were removed.
 pgNumFloor:
   enabled: true
-  image: quay.io/ceph/ceph:v19.2.4
+  image: quay.io/ceph/ceph:v20.2.5-20261028
   pools:
     - name: nvme-replicated
       floor: 128
