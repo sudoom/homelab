@@ -47,8 +47,12 @@ rook-ceph-cluster:
       modules:
         - name: pg_autoscaler
           enabled: true
+        # Off before the Ceph 20.2.5 hop, as Rook v1.21.1 recommends
+        # (Documentation/Upgrade/ceph-upgrade.md): the rook mgr module has
+        # known stability issues on Tentacle. Rook does not need it here;
+        # only the dashboard's orchestrator pages and `ceph orch` go away.
         - name: rook
-          enabled: true
+          enabled: false
         - name: devicehealth
           enabled: true
 
