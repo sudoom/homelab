@@ -5680,3 +5680,58 @@ garage and the Velero BSL fail and recover, and the five apps (paperless, traefi
 restart, so the `*.homelab.sudops.pl` names are down for that time. Plan: the 2026-10-15 procedure (read-only
 pre-flight, operator install, the same checks afterwards) in a quiet hour, not on a Monday evening and not inside the
 Rook close-out reads.
+
+## 2026-11-09 — 25.10.7 → 25.10.8
+
+The operator said to go ahead the same afternoon. Pre-flight, read-only, 14:13Z (the 2026-10-15 shape):
+
+| check | result |
+|---|---|
+| version, update | TrueNAS-25.10.7; 25.10.8 downloaded |
+| running jobs | none |
+| pool | `tank` healthy, 60 %; `boot-pool` 2 % |
+| SMB sessions | one, `tm-mba`; `tmutil status` on that Mac: `Running = 0` |
+| Cloud Sync | all last runs `SUCCESS` |
+| next scheduled work | `tank/sync` snapshot at the next even hour, ~45 min away |
+| cluster | no Velero Backup or data mover running, BSL `truenas-garage` Available, 3 Loki ingesters; NFS users: `immich-server` (library), jellyfin, sonarr, radarr, bazarr and both transmissions (media), transmission (keepers) |
+
+`update.run` takes `dataset_name`, `resume`, `train`, `version` and `reboot` (`core.get_methods`; a job method). The
+operator ran:
+
+```bash
+ssh truenas_admin@192.168.1.25 'midclt call -job update.run "{\"version\": \"25.10.8\", \"reboot\": true}"'
+```
+
+A readonly watcher (`tn-watch.sh`, scratch: box version over ssh, the Velero BSL, NFS consumer restart counts, Loki
+flush errors, every 15 s) recorded:
+
+| time (UTC) | evidence |
+|---|---|
+| 14:17:29 | box unreachable |
+| 14:17:51 | first Loki `failed to flush` (garage) |
+| 14:18:32 | Velero BSL `Unavailable` |
+| 14:20:12 | middleware answers `TrueNAS-25.10.8` |
+| 14:20:47 | last Loki flush error |
+| 14:20:52 | garage, syncthing, node-exporter RUNNING; paperless and traefik DEPLOYING |
+| 14:21:18 | Velero BSL `Available` |
+
+About 3 m 20 s from the box dropping to garage answering, against 2.5 min for 25.10.7; the apps take about half a
+minute longer than the middleware.
+
+After (14:23Z):
+
+```
+TrueNAS-25.10.8, kernel 6.12.113-production+truenas, zfs-2.3.9-1 (unchanged)
+all pools are healthy            boot-pool ONLINE 3%   tank ONLINE 60%
+boot environments                25.10.5, 25.10.6, 25.10.7, 25.10.8 (active)
+update.status new_version        None
+alert.list                       empty
+services                         cifs, nfs, ssh RUNNING
+apps                             paperless, traefik, garage, syncthing, node-exporter RUNNING
+nfs.get_nfs4_clients             192.168.10.2, .3, .4
+```
+
+- `ansible-playbook -i inventory.yml check.yml`: ok=5 changed=0, version `TrueNAS-25.10.8`.
+- The eight NFS consumer pods kept running with no new restarts (the transmissions' 22/23/22 are the 03:00 UTC liveness
+  restart), and none logged `EIO`, stale-handle or timeout lines in the 10 minutes around the window.
+- Loki: no flush error after 14:20:47Z.
