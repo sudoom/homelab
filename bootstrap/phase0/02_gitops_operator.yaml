@@ -20,9 +20,9 @@ spec:
   # Approve each InstallPlan by hand.
   installPlanApproval: Manual
   name: gitops-operator
-  # Temporary (2026-10-22): okd-test-gitops is the zot test build of okderators GitOps 1.22
-  # (components/operators/gitops-test-catalog/); it offers 1.22 as the upgrade from the
-  # installed 1.19.0. Back to `okderators` once okderators publishes 1.22. The recovery
-  # path to 1.19.0 (bootstrap/phase0/readme.md) switches this back to okderators first.
-  source: okd-test-gitops
+  # okderators publishes GitOps 1.22 since 2026-11-08 (catalog-index #63-#66). From
+  # 2026-10-22 to 2026-11-09 this cluster ran our zot test build of 1.22 from okd-test-gitops;
+  # the official 1.22 entry only replaces 1.19.0, so the move back was a re-subscribe
+  # (bootstrap/phase0/readme.md, blog/blog-okderators-gitops-1.22-draft.md).
+  source: okderators
   sourceNamespace: openshift-marketplace
