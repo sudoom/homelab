@@ -3963,3 +3963,21 @@ No regression: writes are back at the baseline level (stage 2's window was 11-20
 better, and reads are about 0.3 ms slower on two OSDs. The read average does not follow the fio sequential-read dip:
 s2 had the lowest OSD read latency of the series and the worst sequential read. Record-only, not attributed. Stage 3
 is closed.
+
+Stage 4 follow-ups the same morning:
+
+- Item 10: the four bootstrap Jobs ran again at 09:54:05-09:54:18Z, once their one-hour TTL removed the c2-sync copies
+  and selfHeal recreated them, and all four succeeded with the rotated admin key (`csi-rbd-provisioner-caps-fix`,
+  `mgr-pool-crush-rule`, `pg-num-floor`, `rbd-trash-purge-schedule`).
+- Item 14: `rook-ceph-cluster` and `root-app` Synced/Healthy at `1e99263`.
+- Item 13 (record only), operator `ceph osd pool autoscale-status`: on Tentacle the autoscaler lists both pools, which
+  Squid never did (`[]`, the bug behind the `pg_num_min` floor):
+
+```
+POOL               SIZE  TARGET SIZE  RATE  RAW CAPACITY   RATIO  FINAL RATIO  TARGET RATIO  EFFECTIVE RATIO  BIAS  PG_NUM  NEW PG_NUM  AUTOSCALE  BULK
+.mgr             18692k                3.0         1430G  0.0000       0.0100                                  1.0       1              on         False
+nvme-replicated  141.1G                3.0         1430G  0.2959       1.2800                                  1.0     128              on         True
+```
+
+  No new `pg_num` target, so the autoscaler agrees with the floor. Whether the floor and its Job stay is a decision for
+  after the freeze (README TODO on the Squid autoscaler bug).
