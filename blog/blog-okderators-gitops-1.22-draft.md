@@ -956,3 +956,24 @@ official image). When it dropped out is not known.
 
 Left: the `okd-test/gitops*` repositories in zot, kept for a day as the way back, then deleted by the operator (README
 TODO on zot cleanup).
+
+**Follow-up the same afternoon: the operator's metrics ServiceMonitor was rejected.** The operator's alert read at
+~14:00Z showed one new alert, `PrometheusOperatorRejectedResources` (openshift-user-workload-monitoring, since
+13:54:47Z). The user-workload prometheus-operator had logged at 13:44:36Z and 13:45:30Z:
+
+```
+"openshift-operators/openshift-gitops-operator-metrics-monitor" was rejected due to invalid configuration:
+endpoints[0]: bearerTokenSecret: unable to get secret "openshift-gitops-operator-metrics-monitor-bearer-token"
+```
+
+The bundle ships that Secret as a `kubernetes.io/service-account-token` template annotated with the service account
+`openshift-gitops-operator-controller-manager`. The InstallPlan created it at 13:44:36Z, but the service account only
+at 13:44:43Z (the CSV delete had removed the old one), and Kubernetes' token controller deletes a token Secret whose
+service account does not exist. In October the account already existed from 1.19, so it survived. Fix, controller
+(prompted): the same template re-applied with `oc apply` (14:04Z). The user-workload operator did not re-check on its
+own: it syncs only on monitoring events, and its namespace cache does not know `openshift-operators` ("get namespace to
+enqueue Prometheus instances failed"), so neither the Secret nor an annotation on the ServiceMonitor triggered a sync;
+in six hours it had synced only four times, all during the switch. Restarting its pod
+(`oc -n openshift-user-workload-monitoring delete pod -l app.kubernetes.io/name=prometheus-operator`, 14:06:47Z) gave two
+full syncs with no rejection. Lesson for the re-subscribe path: re-apply that Secret after the new service account
+exists, or expect this.
