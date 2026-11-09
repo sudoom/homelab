@@ -3802,3 +3802,138 @@ Cleanup 13:08Z: `run.sh --clean` (25G removed; gates read 266.12 GiB headroom), 
 storage-bench-ceph-nvme-block`; at 13:08:50Z no bench PVC, Job, pod or non-Bound PV. Next: the operator's 24 h
 latency read, `ceph-latency.sh --end 2026-11-09T07:50:00Z --window 24h --label s3` or later (the window then starts
 after the stage-3 roll settled at 07:48:47Z and contains these runs).
+
+## 2026-11-09 — Stage 4: Ceph Tentacle 20.2.5 with CephX key rotation (Rook v1.21.1)
+
+The operator picked "today, start at 08:00" (read as 08:00Z, my proposal; Monday, so 19:00-23:00Z was out). Rook stays
+on v1.21.1, msgr2 has been required since stage 3. Two commits from Task 13's reviewed patches.
+
+**Gates, 07:59:45Z (readonly).** 3/3 nodes Ready and schedulable, CV 4.22.0-okd-scos.10 Available, CO clean, MCPs idle,
+55/55 apps Synced+Healthy, no bad pods, CNPG ×3 archiving, CephCluster gen 14 = observed, HEALTH_WARN
+`BLUESTORE_SLOW_OP_ALERT` only, mgr metrics 3 OSDs up/in and 129/129 PGs active+clean, no `do-not-reconcile` label. The
+one surprise, namespace `okd-build`, is empty and dates from the 2026-10-20 logging build: not a build, freeze intact.
+
+**c1, `bde834f` "rook-ceph: turn off the rook mgr module before the tentacle hop".** Render equal to Task 13's
+reviewed render once `--api-versions security.openshift.io/v1` is passed (without it the chart drops its SCC, the only
+difference); kubeconform 13 valid plus the known-stale datree CephCluster schema (`cephx.csi.keyType`); live `oc diff`
+one field, the mgr module `rook` `true → false`. Pushed 08:01:09Z, gen 15 = observed at 08:06:42Z, operator log
+`successful modules: mgr module(s) from the spec`, no daemon pod restarted (the mgr process respawned in place: `ceph -s`
+said `mgr: a(active, since 32m)` at 08:38Z). Operator read: `ceph mgr module ls -f json | jq -r '.enabled_modules[]'` →
+`dashboard iostat nfs prometheus restful`.
+
+The stage-1 surprise (c1a rolled all mons and mgrs because the Monday aescbc rotation rewrites the keyring Secrets and
+Rook keys `cephx-key-identifier` on their resourceVersion) could not recur here: the last rotation was 2026-11-02 and
+stage 3 had reconciled since.
+
+**Pre-commit checks (runbook Stage 4 Step 2), all PASS, `s4-pre.txt`.**
+
+1. Second restore of Backup `pre-rook-upgrade` as `pre-rook-upgrade-check2`: Completed 08:16:58-08:17:42Z, no errors
+   or warnings, DataDownloads `webtlo-data-pvc` and `transmission-config-pvc` Completed. The Stage B pass rule (equal
+   compare counts) cannot hold for a five-day-old backup: 6 webtlo and 111 transmission files changed live since the
+   backup started, so they leave the live "older than the backup" set by construction. What I checked instead: every
+   live file unchanged since the backup (5 + 104) is in the restore with the same sha256, size and mtime; the diff has 0
+   live-only lines; all 117 restore-only lines are files modified live after the start; and this restore is identical,
+   file for file, to Stage B's restore of the same backup, which passed the strict compare on 2026-11-04.
+2. CNPG ×3 `ContinuousArchiving=True`, 2/2 ready (re-read at 08:43:46Z, just before the push).
+3. `images-check.sh quay.io/ceph/ceph:v20.2.5-20261028` → `IMAGE OK`; zot 25.38 GiB free of 48.91. A sandboxed first run
+   said MISSING in 0.25 s: no network, not zot.
+4. Gates plus the operator's `ceph-reads.sh s4-pre` (08:38:53Z, 0 failed): osd.0-2 up, REWEIGHT 1.00000, 129
+   active+clean, `nvme-replicated` 30.58% / MAX AVAIL 314 GiB, `require_osd_release squid`, cipher `unset`.
+5. `csi-state.sh --expect stage3` PASS (20 checks); smoke PASS (sha `0d6b0ffe…`).
+6. Monday but nowhere near 19:00Z; client IO 601 KiB/s write, 9 op/s.
+
+`noautoscale` set by the operator (`ceph osd pool set noautoscale` → "all pools now have autoscale off").
+
+One app was not Synced at 08:43Z: `rook-ceph-operator` read Sync `Unknown`, a ComparisonError since 08:09:41Z,
+`helm dependency build` could not download
+`github.com/ceph/ceph-csi-operator/releases/download/v1.1.0/ceph-csi-drivers-1.1.0.tgz`: `504 Gateway Time-out`. An HTTP
+answer, so egress worked; the repo-server caches the failure. Not on c2's path (c2 changes only `rook-ceph-cluster`,
+whose chart comes from charts.rook.io; the operator app's desired state is unchanged since 2026-11-07), so it did not
+hold the push.
+
+**c2, `4e3de7c` "rook-ceph: ceph to tentacle 20.2.5 with cephx key rotation" — the point of no return.** Render equal to
+the reviewed one: six `v20.2.5-20261028` image references (CephCluster, toolbox, four bootstrap Jobs), none on 19.2.4.
+The live `oc diff` fails on the four Jobs (`spec.template` is immutable; they carry `Replace=true` for ArgoCD); without
+them it shows two objects: the toolbox image, and the CephCluster image, `healthCheck.muteHealthWarning` with the four
+`AUTH_INSECURE_*` mutes, and `security.cephx.daemon` `{}` → `keyRotationPolicy: KeyGeneration, keyGeneration: 2`.
+Operator go ("go"), pushed 08:44:44Z (window start 08:44:42Z). Watcher `s4-watch.sh` (readonly, mgr metrics through the
+apiserver proxy for OSD and PG state, because the CR status lags) and Monitor on its events file.
+
+Timeline (UTC):
+
+| time | what |
+|---|---|
+| 08:48:22-08:51:37 | ArgoCD syncs `4e3de7c`, Synced/Healthy before any HEALTH_ERR; the four Jobs re-run 08:49-08:51 |
+| 08:48:38 | CephCluster gen 16, "Detecting Ceph version", then "Configuring Ceph Mons" (08:50:00) |
+| 08:49:59 / 08:52:07 | mon-a, mon-b (then mon-c) restart on 20.2.5; `MON_DOWN` while each restarts |
+| 08:52:58 | mons 3/3 on 20.2.5; HEALTH_ERR `AUTH_INSECURE_SERVICE_KEY_TYPE` + `AUTH_INSECURE_SERVICE_TICKETS` (expected) |
+| 08:53:09 | Rook: "disabling cephx key rotation because … at least one OSD (low version "19.2.4-0 squid") does not" |
+| 08:54:02-08:55:07 | mgrs on 20.2.5 |
+| 08:55:24-08:59:10 | osd.0, osd.1, osd.2 one at a time; each back and 129 clean before the next went down |
+| 08:59:10 | "upgrade: restarting rook operator after cephx key rotation is re-enabled" (in-process reload) |
+| 08:59:26 | all 8 daemons on 20.2.5 |
+| 09:00:07-09:00:16 | admin key rotation, then "restarting rook operator after successful admin cephx key rotation" |
+| 09:02:21 | mon keys rotated ("triggering a new reconcile to restart the mon daemons after mon cephx key rotation") |
+| 09:02:36-09:03:35 | mons restart with the new keys |
+| 09:05:22-09:05:52 | mgr keys generation 2, mgrs restart |
+| 09:06:43-09:08:07 | OSDs restart one at a time with the new keys; osd keys generation 2 at 09:08:38 |
+| 09:09:36 | "enabling cephx key rotation because the cluster is not upgrading" |
+| 09:10:15 | `AUTH_INSECURE_SERVICE_TICKETS` and `PG_DEGRADED` clear |
+| 09:11:36 | CephCluster Ready, "Cluster created successfully" |
+
+Every PG stayed active the whole way; the mgr metrics endpoint dropped out for 15-30 s at each mgr change and once
+reported `active=0` for one poll (08:52:26Z) right after a mon restart, while the mgr had no PG stats yet; a direct read
+at 08:52:53Z showed 129 active+clean and 0 unknown. Runbook Step 4 expected the failed multi-wave sync with
+HEALTH_ERR; it did not happen, because ArgoCD finished the sync before the first mon was on Tentacle.
+
+Things the runbook did not predict:
+
+- **Leftover MDS keys hold HEALTH_ERR.** At 09:11Z the only ERR was `AUTH_INSECURE_SERVICE_KEY_TYPE: 2 auth service
+  entities`, `mds.cephfs-a` and `mds.cephfs-b` with `aes` keys: the CephFS retired on 2026-09-07 left its MDS auth
+  entities behind, and Rook rotates keys only for daemons it runs. No CephFilesystem CR, no MDS pods, `ceph -s` lists
+  mon/mgr/osd only. Operator: `ceph fs ls` → "No filesystems enabled", `ceph auth del mds.cephfs-a`, `ceph auth del
+  mds.cephfs-b` → `HEALTH_OK (muted: AUTH_INSECURE_CLIENT_KEY_TYPE AUTH_INSECURE_KEYS_ALLOWED AUTH_INSECURE_KEYS_CREATABLE
+  AUTH_INSECURE_ROTATING_SERVICE_KEY_TYPE)`. More leftovers stay under the muted client warning: `client.rgw.ceph.objectstore.a`
+  (retired RGW) and the two `client.csi-cephfs-*` keys, next to the two `csi-rbd-*` keys that stay `aes` by design (kernel
+  7.0 for aes256k) and `client.rbd-mirror-peer`.
+- **Muted warnings stay visible.** `ceph health detail` lists them as `(MUTED, STICKY) [WRN] …`, and the CephCluster
+  status still carries them in `details` (the runbook's "read in the window" question).
+- **`rook-ceph-mgr` ServiceMonitor has two writers.** `rook-ceph-cluster` went OutOfSync at 09:06:11Z on
+  `ServiceMonitor/rook-ceph-mgr` while Rook configured the mgrs; selfHeal synced 09:05:28-09:05:31Z ("successfully
+  synced (all tasks run)"), applied the CephCluster unchanged, and the roll carried on. Our chart ships that object and
+  Rook writes it too; follow-up.
+- **`rbd_default_map_options` is deleted and re-set on every reconcile.** Rook's `configureMsgr2()`
+  (`cluster/cluster.go`) deletes the encryption options, `rbd_default_map_options` among them, when encryption is off,
+  then sets it back to `ms_mode=prefer-crc` if msgr2 is required (09:10:12-09:10:17Z in the log). The value was in place
+  in both captures; I first misread the s4-roll capture as missing it.
+- **`ceph auth dump-keys` is shaped differently on Tentacle.** `ceph-reads.sh` parsed it to
+  `[{"entity":"data","type_str":"data"}]` (no key material, the self-check passed). Item 3 (aes256k on the daemon keys)
+  was read from Ceph's own insecure-entity lists instead, which named no mon, mgr or OSD entity, and from the CephCluster
+  `status.cephx` (mgr and OSD `keyType aes256k`, every daemon key generation 2). The filter gets fixed in the close-out
+  with a key-free shape probe.
+
+**End of the no-touch rule**, operator `ceph-reads.sh s4-roll` at 09:18:11Z: 8/8 daemons `ceph version 20.2.5
+(ed27c686…) tentacle`, `auth_service_cipher` `aes256k` (monmap epoch 6), `require_osd_release tentacle`.
+
+**Verify (runbook Step 8).** Operator `ceph-reads.sh s4` at 09:28:14Z, 0 failed, before the `noautoscale` unset:
+
+- versions mon 3 / mgr 2 / osd 3 / overall 8 on 20.2.5; `min_mon_release 20 (tentacle)`; mons keep `v2:…:3300` and
+  `v1:…:6789`;
+- `HEALTH_OK` with the four mutes; `AUTH_INSECURE_SERVICE_KEY_TYPE` and `AUTH_INSECURE_SERVICE_TICKETS` gone, not
+  muted; `BLUESTORE_SLOW_OP_ALERT` reset by the OSD restarts;
+- 129 active+clean, `nvme-replicated` 31.04% / MAX AVAIL 312 GiB; `rbd_default_map_options ms_mode=prefer-crc`;
+- `client.csi-rbd-provisioner.1` caps equal the caps-fix Job's set (`mgr allow rw`, `mon profile rbd, allow command
+  'osd blocklist'`, `osd profile rbd`).
+
+Then the operator unset `noautoscale` ("all pools now back to its previous mode", `ceph osd pool get noautoscale` →
+`noautoscale is off`; the mgr metrics endpoint dropped out for one 15 s poll right after, no mgr restart).
+`csi-state.sh --expect stage4` → `RESULT PASS stage4` (21 checks, `cephcluster-version 20.2.5-0`). Smoke on node6 PASS
+(sha `410156b7…`, a new RBD mapping on Tentacle); OADP Backup `post-tentacle-smoke` Completed 09:33:09Z with no errors
+or warnings, DataUploads `smoke` and `smoke-restore` Completed; smoke namespace deleted, both PVs and the snapshot
+content gone. No `FailedMount`/`FailedAttachVolume` since the window start; the six CNPG pods run since 2026-10-27 with
+0 restarts. Watcher DONE 09:31:37Z.
+
+Still open: item 9 (the CNPG scheduled VolumeSnapshots after 05:00Z on 2026-11-10), item 10 (the four bootstrap Jobs
+must run once after the admin key rotation at 09:00:16Z; their c2-sync runs at 08:49-08:51Z predate it, so the bar is
+"started after 09:00:16Z", not after the window start), item 13 (the operator's `ceph osd pool autoscale-status`, record
+only), item 14 (both apps Synced/Healthy after this commit's sync), then the s4 fio and latency points.
