@@ -5636,3 +5636,47 @@ scheduled run is 2026-11-01, 54 days after the last scrub. 54 days is past 45, s
 completes. The threshold fix (`truenas_scrub_threshold: 25`) prevents the next skip. It does not close this gap.
 To clear the alert before 11-01, the operator can start a manual scrub. With threshold 25 that would make the 11-01
 run skip, and 12-01 would run.
+
+## 2026-11-09 — 25.10.8 is out; what applies here
+
+`TrueNASUpdateAvailable` (info) has fired since 2026-11-05. The box already downloaded it (read-only):
+
+```bash
+ssh truenas_admin@192.168.1.25 'midclt call system.version; midclt call update.status'
+TrueNAS-25.10.7
+new_version 25.10.8, update_download_progress 100 % ("Update downloaded."); boot environments 25.10.5, 25.10.6, 25.10.7 (active)
+```
+
+The release notes from `update.status` (`new_version.release_notes`): kernel v6.12.113 with fixes for more than 1,600
+upstream CVEs; dataset passphrases no longer in plain text in an internal job's arguments; NVMe over TCP large
+transfers; SMB service settings with directory services; the 25.10.7 rsync regression (quoted extra options); Cloud
+Sync with B2 credentials that have spaces; the TrueNAS Connect timeout; NVIDIA GPU IDs in apps. "Pre-Update Actions:
+None required when updating from 25.10.7."
+
+Against this box:
+
+| fix | applies? |
+|---|---|
+| NFS server use-after-free CVEs (CVE-2026-89662, -89658, -89659, -89660, -90036, -90037, -89708) | yes: the cluster's three NFS 4.1 PVs (immich library, media, keepers) |
+| NFS lock manager (CVE-2026-89485) | no: NLM is NFSv3, the PVs are `nfsvers=4.1` |
+| Kerberos NFS (CVE-2026-89551, -89542) | no: `sec=sys` |
+| network stack (IP fragment queues, BIG TCP, guest checksum offsets) | the general kernel network path, yes; guests, no (no VMs) |
+| NVMe over TCP | no |
+| dataset passphrase in job arguments | no encrypted datasets (`pool.dataset.query` encrypted = none) |
+| SMB with directory services | no directory services |
+| rsync quoted options | no rsync tasks (`rsynctask.query` empty) |
+| Cloud Sync B2 | no: both Cloud Sync tasks use SFTP |
+| TrueNAS Connect, NVIDIA | no |
+
+So it is the kernel and its NFS-server fixes that matter here. The box is reachable only from the LAN and the backnet.
+
+Forum reports so far (announcement thread, 2026-11-05/06) are mostly clean upgrades. One user lost the web UI and
+inbound connections after **reinstalling** the garage app on 25.10.8, with bond messages on the console; here nothing
+gets reinstalled, the box has no bond (`interface.query`: `eno1`, `eno2`, `enp2s0f0np0` MTU 9000, `enp2s0f1np1`, all
+`PHYSICAL`), and garage is checked after the reboot anyway.
+
+Cost is the same as 25.10.7: a reboot of about 2.5 minutes in which the hard NFS mounts block, Loki's flushes to
+garage and the Velero BSL fail and recover, and the five apps (paperless, traefik, garage, syncthing, node-exporter)
+restart, so the `*.homelab.sudops.pl` names are down for that time. Plan: the 2026-10-15 procedure (read-only
+pre-flight, operator install, the same checks afterwards) in a quiet hour, not on a Monday evening and not inside the
+Rook close-out reads.
