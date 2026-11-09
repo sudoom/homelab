@@ -3981,3 +3981,32 @@ nvme-replicated  141.1G                3.0         1430G  0.2959       1.2800   
 
   No new `pg_num` target, so the autoscaler agrees with the floor. Whether the floor and its Job stay is a decision for
   after the freeze (README TODO on the Squid autoscaler bug).
+
+## 2026-11-09 — Stage 4 fio point (s4)
+
+The operator asked me to run it ("yes, pls run"). Dry run 09:52Z:
+
+```
+KUBECONFIG=~/.kube/config BENCH_FILESIZE=24G BENCH_ALLOW_SMALL=1 BENCH_LAYOUT_NOTE="shared-bulk BENCH_ALLOW_SMALL=1 rep=dry/3 stage=s4" \
+  ./tests/storage-benchmark/run.sh --backend ceph-nvme-block --dry-run
+  ok   ceph HEALTH_OK
+  ok   headroom 311.40 GiB available on ceph pool nvme-replicated, need 48.00 GiB
+```
+
+The same background driver as s3 (`s4-fio-driver.sh`, scratch; one permission prompt) waited from 09:53:01Z and ran
+`bench-20261109-130002` (12:00:01Z, with the layout), `-132219` (12:22:18Z) and `-133611` (12:36:11Z), all exit 0 on
+node4, done 12:50:18Z. Cleanup 13:09Z: `run.sh --clean` (25G removed), `oc -n default delete pvc
+storage-bench-ceph-nvme-block`; no bench object or non-Bound PV left.
+
+| workload | s4 runs | s4 mean | baseline mean | change | s1 / s2 / s3 mean |
+|---|---|---|---|---|---|
+| seq-read 1M | 369.1 / 401.2 / 323.9 MiB/s | 364.7 | 400.2 | −8.9% | 390.4 / 334.3 / 359.7 |
+| seq-write 1M | 72.2 / 90.6 / 130.7 MiB/s | 97.8 | 62.7 | +56.0% | 64.0 / 61.6 / 69.1 |
+| rand-read 4K | 14,167 / 16,115 / 14,466 iops | 14,916 | 16,559 | −9.9% | 15,331 / 16,425 / 16,389 |
+| rand-write 4K | 2,864 / 2,968 / 2,629 iops | 2,820 | 2,280 | +23.7% | 2,320 / 2,336 / 2,429 |
+
+On Tentacle the writes are the best of the series, sequential with a wide spread (72-131 MiB/s). Reads did not come
+back: sequential read stays about 9% under the baseline, as since stage 2 (run 2 alone reached the baseline range), and
+random read is 10% down for the first time. Record-only, not attributed; the 24 h OSD-latency window to 2026-11-10
+09:35Z or later is the next read. `AUTH_INSECURE_ROTATING_SERVICE_KEY_TYPE` had cleared by 13:10Z, as the c2 comment
+expected (2-3 h after the rotation); `BLUESTORE_SLOW_OP_ALERT` covered 2 OSDs after the runs.

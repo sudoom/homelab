@@ -41,6 +41,7 @@ over which path, by which method**. A number without those is not reusable.
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **390.4 MiB/s** | **64.0 MiB/s** | 2026-11-06 | same method, after upgrade stage 1 (Rook v1.20.9); mean of 3 runs |
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **334.3 MiB/s** | **61.6 MiB/s** | 2026-11-07 | same method, after upgrade stage 2 (Rook v1.21.1, cephcsi v3.18.1); mean of 3 runs, two outside the slot |
 | **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **359.7 MiB/s** | **69.1 MiB/s** | 2026-11-08 | same method, after upgrade stage 3 (msgr2 required); mean of 3 runs, all in the slot |
+| **Ceph RBD** `ceph-nvme-block` (×3, 3 NVMe) | kernel RBD, 10G backnet | **364.7 MiB/s** | **97.8 MiB/s** | 2026-11-09 | same method, after upgrade stage 4 (Ceph Tentacle 20.2.5, CephX key rotation); mean of 3 runs, all in the slot |
 | *(reference)* cross-node pod | iperf3, 1G frontnet | 879 Mbit/s | — | 2026-05-21 | pre-IPsec baseline |
 
 **TrueNAS NFS is ~4.3× CephFS-HDD read and ~4.7× the Synology on sequential reads —
@@ -242,6 +243,29 @@ at Squid 19.2.4; every kernel mapping was already on msgr2 `prefer-crc` before t
 - **Writes and random reads did not move down;** sequential write is the best mean in the series (+10.2%).
 - **Wire against fio, reads:** seq-read 2992/2930 (102%), 3149/3121 (101%), 2522/2789 (90%); rand-read 449/521 (86%),
   507/512 (99%), 476/540 (88%).
+
+### Ceph RBD `ceph-nvme-block` — after stage 4, Ceph Tentacle 20.2.5 (2026-11-09)
+
+Same method (label `stage=s4`), about three hours after stage 4 (Ceph Squid 19.2.4 → Tentacle 20.2.5 with the CephX
+daemon key rotation, Rook v1.21.1, msgr2 required; the roll settled 09:11-09:31Z). All three runs in the 12:00-14:00Z
+slot, client on node4, one background driver. `BLUESTORE_SLOW_OP_ALERT`, reset by the stage-4 OSD restarts, had
+re-latched on 1 OSD before the runs and covered 2 afterwards.
+
+| workload | run 1 (12:00Z) | run 2 (12:22Z) | run 3 (12:36Z) | mean | vs baseline | vs s3 |
+|---|---|---|---|---|---|---|
+| `seq-read-1m` | 369.1 MiB/s, p99 70.8 ms | 401.2, p99 47.5 | 323.9, p99 105.4 | **364.7 MiB/s** | −8.9% | +1.4% |
+| `seq-write-1m` | 72.2 MiB/s, p99 291.5 ms | 90.6, p99 252.7 | 130.7, p99 173.0 | **97.8 MiB/s** | +56.0% | +41.6% |
+| `rand-read-4k` | 14,167 iops (55.3 MiB/s), p99 6.65 ms | 16,115 (62.9), p99 5.87 | 14,466 (56.5), p99 6.91 | **14,916 iops** | −9.9% | −9.0% |
+| `rand-write-4k` | 2,864 iops (11.2 MiB/s), p99 26.4 ms | 2,968 (11.6), p99 26.4 | 2,629 (10.3), p99 34.3 | **2,820 iops** | +23.7% | +16.1% |
+
+- **Writes are the best of the series on Tentacle.** Sequential write +56% against the baseline with a wide spread
+  (72-131 MiB/s; p99 down from ~290 to 173 ms in the fastest run); random write +24%, every run above every earlier
+  point.
+- **Reads did not recover.** Sequential read stays about 9% under the baseline, as since stage 2, though run 2 (401.2)
+  is inside the baseline range (393.6-406.1). Random read is down 10%, which s1-s3 were not (−1% at s3). Not
+  attributed; record-only. The 24 h OSD-latency window after this point shows whether the OSDs see it.
+- **Wire against fio, reads:** seq-read 3087/3024 (102%), 2762/3287 (84%), 2363/2653 (89%); rand-read 458/453 (101%),
+  455/516 (88%), 461/463 (100%).
 
 ### TrueNAS SMB (Time Machine) — the 1G frontnet is the constraint here
 
