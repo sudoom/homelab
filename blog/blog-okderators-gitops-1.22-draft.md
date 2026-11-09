@@ -895,3 +895,64 @@ repositories, then a re-run of the three runs. The cluster stays on the zot test
 2026-11-06: filed as okd-operator-pipeline [#51](https://github.com/okd-project/okd-operator-pipeline/issues/51)
 ("CI cannot push to quay.io/okderators/gitops/*: Deploy GitOps fails after #39-#41"), with the three runs, the error,
 the 13 repositories and the nmstate run 39841564719. The first version cited #45 for the nmstate error; #45 does quote that run, but a PR about the ImageStream is the wrong source, so the issue now links the run itself.
+
+## 2026-11-07 to 2026-11-09: published, and this cluster on the official build
+
+Upstream, after #51: the maintainers re-ran the 4.21 deploy (2026-11-07 05:03Z, success) and merged #42
+(`release-4.20`, 2026-11-08 22:56Z, its deploy run green), so all four Deploy GitOps runs have now pushed to
+`quay.io/okderators/gitops/*` (`main` and 4.22 had succeeded on 2026-11-05). The deploy bot then opened one
+catalog-index PR per branch and they were merged: #63 `release-5.0`, #64 `release-4.22`, #65 `release-4.21`, #66
+`release-4.20` (2026-11-08 22:38Z to 2026-11-09 00:19Z). On every branch the new entry is
+
+```yaml
+  - name: gitops-operator.v1.22.0-2026-11-06-221018   # 4.22; each branch has its own build date
+    replaces: gitops-operator.v1.19.0-2026-02-07-151505
+```
+
+with no `skipRange` (the bot writes `replaces` only; our plan's entry also had `skipRange: '>=1.19.0-0 <1.22.0-<DATE>'`).
+For anyone on 1.19 that is the right path. It gives no edge from our test build
+`gitops-operator.v1.22.0-2026-10-22-173433`, which is in no okderators catalog. The bundle's CSV does carry
+`olm.skipRange: '>=1.0.0 <1.22.0-2026-11-06-221018'`, but a file-based catalog takes edges from its channel entries.
+The operator chose the plan's fallback (Task 12 Step 2, a supervised re-subscribe) over upstream skipRange PRs, after
+the Rook s4 fio point.
+
+Pre-checks 10:10Z: the cluster's `okderators` packagemanifest already offered the official CSV in `alpha` (catalog
+`catalog-index:4.22`, polled 09:14Z); its 14 related images are digest refs, all present on quay (`skopeo inspect
+--raw`, 14/14, plus the bundle tag); `quay.io` goes through the zot IDMS/ITMS with `AllowContactingSource`, and zot
+does not cache digest-only pulls, so these come from quay. Snapshot 13:10:52Z: test CSV Succeeded, 8 `openshift-gitops`
+pods since 2026-10-27 with 0 restarts, 55/55 apps Synced/Healthy, the CephCluster health override in the ArgoCD CR and
+in `argocd-cm`.
+
+Sequence (UTC):
+
+1. `2f09d9f` "gitops: subscribe from okderators again (official 1.22)": phase0 `02` `source: okderators`, phase0
+   readme without the `okd-test-gitops` sed. Operator: `oc apply -f bootstrap/phase0/02_gitops_operator.yaml`.
+   For 3 minutes the Subscription read `AtLatestKnown` on the test CSV: no InstallPlan, no ResolutionFailed. As
+   expected.
+2. Operator, 13:42-13:43Z: `oc -n openshift-operators delete subscription gitops-operator && oc -n openshift-operators
+   delete csv gitops-operator.v1.22.0-2026-10-22-173433 && oc apply -f bootstrap/phase0/02_gitops_operator.yaml`.
+   The Argo CD pods kept running. InstallPlan `install-crnmk` at 13:43:23Z: `gitops-operator.v1.22.0-2026-11-06-221018`,
+   Manual; 28 CRDs, all already on the cluster, plus the CSV, RBAC, 2 Services, 2 ConfigMaps and a ServiceMonitor; no
+   error. (The old InstallPlans went with the deleted Subscription, which owned them.)
+3. Operator approved it (`oc patch installplan install-crnmk … approved:true`). InstallPlan Complete 13:44:52Z, CSV
+   Succeeded 13:45:25Z, operator pod on `quay.io/okderators/gitops/operator@sha256:3690b33b…`. Seven Argo CD pods
+   rolled at 13:45:30-33Z onto `quay.io/okderators/gitops/{argocd,backend,console-plugin,dex}`; Redis kept its pod,
+   its image digest being the same in both builds.
+
+Checks (plan Task 8 Step 4) at 13:54Z: all 8 pods Ready with 0 restarts; 55/55 apps Synced/Healthy, every one
+reconciled by the new controller, none with a condition (`rook-ceph-operator`'s cached `504 Gateway Time-out` on the
+`ceph-csi-drivers` GitHub asset from 08:09Z was gone with the new repo-server); `immich` (OCI chart dependency)
+renders; the override still in the CR and `argocd-cm`; ArgoCD CR Available, every component Running; 7 NetworkPolicies;
+`/api/version` → `v3.5.5+a5038b0`, the same as the test build.
+
+Then `a4f8111` "gitops: remove the okd-test-gitops test catalog" (root-app entry and chart; render 54 → 53 child
+Applications, no Subscription on that source): ArgoCD deleted the Application and, through its resources finalizer,
+the CatalogSource and its pod by 13:58:24Z, a real commit end to end; 54/54 Synced/Healthy at 13:59Z.
+
+Found on the way, not caused by the switch: the console does not load the GitOps plugin. `consoles.operator.openshift.io
+cluster` `spec.plugins` reads `monitoring-plugin`, `networking-console-plugin`, `nmstate-console-plugin`; the
+`gitops-plugin` enabled on 2026-10-23 is no longer in it, while the ConsolePlugin object and its pod exist (now on the
+official image). When it dropped out is not known.
+
+Left: the `okd-test/gitops*` repositories in zot, kept for a day as the way back, then deleted by the operator (README
+TODO on zot cleanup).
