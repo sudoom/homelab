@@ -3937,3 +3937,29 @@ Still open: item 9 (the CNPG scheduled VolumeSnapshots after 05:00Z on 2026-11-1
 must run once after the admin key rotation at 09:00:16Z; their c2-sync runs at 08:49-08:51Z predate it, so the bar is
 "started after 09:00:16Z", not after the window start), item 13 (the operator's `ceph osd pool autoscale-status`, record
 only), item 14 (both apps Synced/Healthy after this commit's sync), then the s4 fio and latency points.
+
+## 2026-11-09 — Stage 3 latency point (s3)
+
+The operator ran the 24 h read after the stage-4 window had started (it reads a fixed past window from Prometheus, so
+the order does not matter):
+
+```
+bash tests/rook-ceph-upgrade/metrics/ceph-latency.sh --end 2026-11-09T07:50:00Z --window 24h --label s3
+appended 18 rows to data/ceph-osd-latency.tsv
+```
+
+The window starts 07:50Z on 2026-11-08, after the stage-3 roll settled (07:48:47Z), and contains the three s3 fio runs.
+Averages per OSD against the baseline (and s2):
+
+| metric | osd.0 | osd.1 | osd.2 |
+|---|---|---|---|
+| op_w_latency ms | 73.15 (+3.5%; s2 56.57) | 68.57 (+1.1%; s2 56.19) | 63.81 (−1.3%; s2 57.38) |
+| commit_latency ms | 17.92 (+10.1%) | 22.04 (+0.1%) | 15.40 (+6.3%) |
+| kv_commit_lat ms | 4.24 (−2.6%) | 4.58 (−4.1%) | 4.11 (−1.9%) |
+| op_r_latency ms | 1.31 (+30.5%; s2 0.86) | 1.20 (+6.0%; s2 0.94) | 1.00 (+34.6%; s2 0.68) |
+| slow_ops_max | 0 | 0 | 0 |
+
+No regression: writes are back at the baseline level (stage 2's window was 11-20% under it), kv_commit is a little
+better, and reads are about 0.3 ms slower on two OSDs. The read average does not follow the fio sequential-read dip:
+s2 had the lowest OSD read latency of the series and the worst sequential read. Record-only, not attributed. Stage 3
+is closed.
