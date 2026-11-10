@@ -24,7 +24,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   channel: {{ .Values.channel }}
-  installPlanApproval: Automatic
+  installPlanApproval: Manual
   name: cloudnative-pg
   source: {{ .Values.source }}
   sourceNamespace: {{ .Values.sourceNamespace }}

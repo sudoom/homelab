@@ -32,7 +32,7 @@ metadata:
 spec:
   sourceType: grpc
   # Source of the cloudnative-pg and kubernetes-nmstate-operator subscriptions
-  # (both installPlanApproval: Automatic). Created by hand before this file held
+  # (both installPlanApproval: Manual). Created by hand before this file held
   # it; brought under version control 2026-10-26 with the live spec unchanged
   # apart from the poll interval. Applied by hand, like okderators above.
   #
