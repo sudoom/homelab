@@ -1,4 +1,4 @@
-# Reads the contract and log files a build left on build-storage, after its pod is gone
+# Reads the contract and log files a build left on the PVC nmstate-build-storage, after its pod is gone
 # (deadline kill, deleted Job, rotated container log). README.md, "Reading the logs later".
 #   oc -n okd-build create -f tests/okderators-nmstate-build/log-reader.yaml
 # Read-only: the PVC is attached read-only and mounted read-only, the container only sleeps,
@@ -52,5 +52,5 @@ spec:
   volumes:
     - name: build-storage
       persistentVolumeClaim:
-        claimName: build-storage
+        claimName: nmstate-build-storage
         readOnly: true

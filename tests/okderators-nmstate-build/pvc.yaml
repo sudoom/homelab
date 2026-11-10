@@ -1,0 +1,18 @@
+# Build storage of the okderators-nmstate-build Jobs: podman graph root and /work (README.md).
+# Applied with `oc apply -f tests/okderators-nmstate-build/pvc.yaml`, not through kustomization.yaml.
+# The namespace okd-build, ServiceAccount builder and the privileged RoleBinding are persistent and
+# not part of this file. ceph-nvme-block, never node root disks (each node carries a mon).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nmstate-build-storage
+  namespace: okd-build
+  labels:
+    app.kubernetes.io/part-of: okderators-nmstate-build
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ceph-nvme-block
+  resources:
+    requests:
+      storage: 150Gi

@@ -10,7 +10,7 @@
 # First, for every branch in CATALOG_BRANCHES, before any clone or edit (a FAIL stops the run):
 #   - its catalog-branches.tsv row exists and holds no TO-FILL       CHECK branch-data-<branch>
 #   - its bundle (BUNDLES <branch>=<ref@digest>): package kubernetes-nmstate-operator, version
-#     4.N.0-<DATE> for release-4.N, name kubernetes-nmstate-operator.v<version>, objects exactly
+#     X.Y.0-<DATE> for release-X.Y, name kubernetes-nmstate-operator.v<version>, objects exactly
 #     the CRD nmstates.nmstate.io and that CSV                       CHECK bundle-<branch>
 #   - no ImageStream object in it                                    CHECK no-imagestream-<branch>
 # Then per branch:
@@ -68,7 +68,7 @@ CHANNEL=alpha
 # the upstream CSV has carried since 4.3, so any earlier nmstate CSV upgrades to the new entry.
 SKIP_FROM='>=4.3.0'
 CSV_RE='^kubernetes-nmstate-operator\.v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-# The branch the test catalog image is built from; release-4.22 for a cluster on OKD 4.22.
+# The branch the test catalog image is built from (callers pass it); release-5.0 for a cluster on OKD 5.0.
 IMAGE_BRANCH=${IMAGE_BRANCH:-release-4.21}
 # catalog.Containerfile builds FROM the mutable :latest; the test image pins it. v1.74.0 is the
 # opm build.sh installs (the GitOps Job's pin, 2026-10-20). Digest only: containers/image refuses
@@ -145,7 +145,7 @@ validate_inputs() {
   [[ -n $CATALOG_BRANCHES ]] || die "CATALOG_BRANCHES is empty"
   [[ -f $DATA ]] || die "branch data ${DATA} does not exist"
   for b in $CATALOG_BRANCHES; do
-    [[ $b =~ ^release-4\.[0-9]+$ ]] || die "catalog branch '${b}' is not release-4.N"
+    [[ $b =~ ^release-[0-9]+\.[0-9]+$ ]] || die "catalog branch '${b}' is not release-X.Y"
     [[ $seen != *" ${b} "* ]] || die "catalog branch ${b} is listed twice"
     seen="${seen}${b} "
   done

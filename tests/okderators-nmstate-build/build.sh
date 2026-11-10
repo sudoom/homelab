@@ -4,7 +4,7 @@
 # prune and push guards; it runs the pipeline's nmstate/build.sh and checks the NMState bundle.
 #
 # Runs as root in a privileged quay.io/podman/stable pod in namespace okd-build, with the
-# PVC build-storage mounted at /var/lib/containers (subPath containers) and /work (subPath work).
+# PVC nmstate-build-storage mounted at /var/lib/containers (subPath containers) and /work (subPath work).
 #
 # Inputs (env, set by job-template.yaml):
 #   MODE              full | catalog

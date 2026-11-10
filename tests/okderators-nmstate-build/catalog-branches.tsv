@@ -7,9 +7,13 @@
 #   INSTALLED  CSVs a cluster may run; {DATE} is the new bundle's DATE, {DATE-1d}/{DATE+1d} a day
 #              earlier/later: a test-shaped CSV (our test build) and the official 4.21 build; release-4.22
 #              also names the 4.21 test build this cluster ran before the 4.22 hop (2026-10-27)
+# release-5.0 (read 2026-11-10): its only entry is the 4.22 head, skipping the 4.21 official build;
+# INSTALLED is this cluster's 4.22 test CSV, a test-shaped 4.22 build and a test-shaped 5.0 build
+# installed before an official one.
 # release-4.21 and release-4.22: the plan's Global Constraints (2026-10-23). release-4.20: Task 1's
 # reading of upstream release-4.20 (pins.md section 3, 2026-10-23): the head is the only entry.
 #branch	REMOVE	SKIPS	INSTALLED
 release-4.21	kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851	kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851,kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436	kubernetes-nmstate-operator.v4.21.0-{DATE-1d},kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436
 release-4.22	kubernetes-nmstate-operator.v4.22.0-2025-12-14-152353	kubernetes-nmstate-operator.v4.22.0-2025-12-14-152353,kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851	kubernetes-nmstate-operator.v4.21.0-{DATE-1d},kubernetes-nmstate-operator.v4.21.0-{DATE+1d},kubernetes-nmstate-operator.v4.21.0-2026-10-26-123722
 release-4.20	kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436	kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436	kubernetes-nmstate-operator.v4.20.0-{DATE-1d}
+release-5.0	kubernetes-nmstate-operator.v4.22.0-2025-12-14-152353	kubernetes-nmstate-operator.v4.22.0-2025-12-14-152353,kubernetes-nmstate-operator.v4.21.0-2026-05-05-165851	kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655,kubernetes-nmstate-operator.v4.22.0-{DATE-1d},kubernetes-nmstate-operator.v5.0.0-{DATE-1d}

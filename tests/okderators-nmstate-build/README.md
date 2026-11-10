@@ -12,17 +12,21 @@ persistence, lock, prune and push guards. What differs is listed
 Not ArgoCD-managed. The operator applies, runs and deletes everything in this directory.
 Chronology and results: `blog/blog-okderators-nmstate-draft.md`.
 
-**Shared namespace.** This directory creates only the ConfigMap `nmstate-build-scripts`. The
-namespace `okd-build`, ServiceAccount `builder`, the privileged RoleBinding and PVC `build-storage`
-are owned by `tests/okderators-logging-build/manifests.yaml` and already exist. If the namespace is
-ever gone, apply the logging directory first (`oc apply -k tests/okderators-logging-build/`, which
-also creates its own `build-scripts` ConfigMap), then this one. `oc delete -k` here removes only the
-ConfigMap; deleting the namespace and PVC is `oc delete -k tests/okderators-logging-build/`.
+**Shared namespace.** The namespace `okd-build`, ServiceAccount `builder` and the privileged
+RoleBinding are persistent and not owned by this directory (they come from
+`tests/okderators-logging-build/manifests.yaml`; if the namespace is ever gone, apply that directory
+first). This directory carries only its own PVC `nmstate-build-storage` (`pvc.yaml`, 150Gi
+`ceph-nvme-block`, applied with `oc apply -f`) and the ConfigMap `nmstate-build-scripts`
+(`oc apply -k`; `-k` on this directory produces the ConfigMap only). The Job and the log-reader
+mount `nmstate-build-storage`, so the `flock` on `/work/.lock` no longer covers the other Jobs'
+PVC: check that no other build runs on the cluster before starting one (the namespace's
+`oc -n okd-build get jobs,pods`).
 
 ## Files
 
 | file | what |
 |---|---|
+| `pvc.yaml` | PVC `nmstate-build-storage` (150Gi `ceph-nvme-block`, RWO), applied with `oc apply -f`, not part of the kustomization |
 | `kustomization.yaml` | ConfigMap `nmstate-build-scripts` (no hash suffix), generated from `build.sh`, `catalog-edit.sh`, `catalog-walk.py` and `catalog-branches.tsv` |
 | `build.sh` | the Job's entry point, mounted at `/scripts/build.sh` |
 | `catalog-edit.sh` | `MODE=catalog`: the okderators catalog edit per branch, its checks and the test catalog image ([below](#modecatalog)) |
@@ -40,19 +44,20 @@ ConfigMap; deleting the namespace and PVC is `oc delete -k tests/okderators-logg
 - **Copy anything you still need from `/work`.** Both modes wipe `/work/run` (the previous run's
   diffs and renders are there), and a full run always prunes every unused image from the podman graph
   root. The `/work/logs` contract and log files are never touched.
-- **No other run is active.** The `flock` on `/work/.lock` is shared with the logging and GitOps
-  Jobs; a second run ends `RESULT FAIL another run holds /work/.lock`.
+- **No other run is active.** The `flock` on `/work/.lock` guards this PVC only; a second run of this
+  Job ends `RESULT FAIL another run holds /work/.lock`.
 
 ## Apply, run, read, delete
 
 ```bash
-# the script ConfigMap (re-run after editing any file it is generated from)
+# the build PVC (once), then the script ConfigMap (re-run after editing any file it is generated from)
+oc apply -f tests/okderators-nmstate-build/pvc.yaml
 oc apply -k tests/okderators-nmstate-build/
 
 # one run per pipeline branch, each with a new DATE
 DATE=$(date -u +%Y-%m-%d-%H%M%S)
 oc process --local -f tests/okderators-nmstate-build/job-template.yaml \
-  -p MODE=full -p PIPELINE_BRANCH=nmstate-bundle-fix-4.21 -p DATE=$DATE | oc -n okd-build create -f -
+  -p MODE=full -p PIPELINE_BRANCH=nmstate-bundle-fix -p DATE=$DATE | oc -n okd-build create -f -
 
 # watch, then pull out the contract lines
 oc -n okd-build logs -f job/nmstate-build-full-$DATE
@@ -62,8 +67,9 @@ oc -n okd-build logs job/nmstate-build-full-$DATE | grep -E '^(STEP|DISK|PUSHED|
 oc -n okd-build logs job/nmstate-build-full-$DATE | awk '$1=="STEP" && $3=="START" {s[$2]=$4} $1=="STEP" && $3=="END" {print $2, $4-s[$2] "s"}'
 ```
 
-The four branches of `sudoom/okd-operator-pipeline` are `nmstate-bundle-fix` (from `main`),
-`nmstate-bundle-fix-4.22`, `nmstate-bundle-fix-4.21` and `nmstate-bundle-fix-4.20`. Each builds with
+The four branches of `sudoom/okd-operator-pipeline` are `nmstate-bundle-fix` (from `main`; it builds
+the OKD 5.0 bundle for the `release-5.0` catalog branch), `nmstate-bundle-fix-4.22`,
+`nmstate-bundle-fix-4.21` and `nmstate-bundle-fix-4.20`. Each builds with
 its own `common.sh` `OKD_VERSION` default, which sets the CSV version, the image tags and the scos
 base image (`release-4.20` 4.20.0-okd-scos.6, `release-4.21` 4.21.0-okd-scos.10, `release-4.22`
 4.22.0-okd-scos.2, `main` 5.0.0-okd-scos.0, so the `main`-based branch builds
@@ -79,8 +85,12 @@ Cleanup:
 # a finished run (its contract and full log stay on the PVC, see below)
 oc -n okd-build delete job nmstate-build-full-$DATE
 
-# this directory's ConfigMap
-oc delete -k tests/okderators-nmstate-build/
+# when the NMState builds are over, per name (the namespace is persistent, never deleted from here):
+# each run's Job, with that run's own DATE (a full run and a catalog run have different DATEs):
+oc -n okd-build delete job nmstate-build-full-<DATE> nmstate-build-catalog-<DATE2> --ignore-not-found
+oc -n okd-build delete pod nmstate-log-reader --ignore-not-found
+oc -n okd-build delete pvc nmstate-build-storage                                    # the logs go with it
+oc delete -k tests/okderators-nmstate-build/                                        # the ConfigMap
 ```
 
 Test images in zot are deleted by digest once nothing runs on them; the `PUSHED` lines carry the
@@ -139,9 +149,9 @@ prune: it approximates a fresh runner because the base layers are pulled again.
 | `PIPELINE_BRANCH` | empty | `full` only, required there: one of the four branches above |
 | `BASE_REGISTRY` | `zot.apps.okd.sudops.pl/okd-test` | anything outside `zot.apps.okd.sudops.pl/okd-test` is refused; images land in `<BASE_REGISTRY>/nmstate/{operator,handler,console-plugin,bundle}` |
 | `OKD_VERSION` | empty (branch default) | exported to `nmstate/build.sh`, where `common.sh` reads `${OKD_VERSION:-...}` (empty counts as unset): the payload `kube-rbac-proxy` comes from it, and its `MAJOR.MINOR` names the CSV, the tags and the `scos-<MAJOR>.<MINOR>:base-stream9` base. Must keep the branch's release (`gitmodules-branch`); leave it empty. Logged as `INFO OKD_VERSION=` and `INFO var OKD_VERSION=` |
-| `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.21 release-4.22`; must include `IMAGE_BRANCH` (the test catalog's source) |
+| `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.21 release-4.22` or `release-5.0`; must include `IMAGE_BRANCH` (the test catalog's source) |
 | `BUNDLES` | empty | `catalog` only: one bundle per catalog branch, `<branch>=<ref@sha256:...>` separated by spaces, each ref as the full run's `PUSHED` line prints it |
-| `IMAGE_BRANCH` | `release-4.21` | `catalog` only: the branch whose edited tree becomes the test catalog image; must be in `CATALOG_BRANCHES`. `release-4.22` for a cluster on OKD 4.22 (2026-10-27) |
+| `IMAGE_BRANCH` | `release-4.21` | `catalog` only: the branch whose edited tree becomes the test catalog image; must be in `CATALOG_BRANCHES`. `release-4.22` for a cluster on OKD 4.22 (2026-10-27), `release-5.0` for OKD 5.0 (2026-11-10) |
 
 ## Output contract
 
@@ -200,7 +210,7 @@ oc -n okd-build logs job/nmstate-build-catalog-$DATE | grep -E '^(STEP|PUSHED|CH
 ```
 
 Each `BUNDLES` ref is the `PUSHED` line of that branch's full run
-(`.../nmstate/bundle:4.N.0-<DATE>@sha256:...`); the tag is dropped before use (opm v1.74.0 refuses a
+(`.../nmstate/bundle:X.Y.0-<DATE>@sha256:...`); the tag is dropped before use (opm v1.74.0 refuses a
 reference with both a tag and a digest). The package is `kubernetes-nmstate-operator` only.
 
 `catalog-branches.tsv` holds, per catalog branch (tab-separated, comma-separated lists):
@@ -211,7 +221,10 @@ reference with both a tag and a digest). The package is `kubernetes-nmstate-oper
 | `SKIPS` | the new entry's `skips` |
 | `INSTALLED` | CSVs a cluster may run that the channel may not list; the walker starts from them too. `{DATE}`, `{DATE-1d}`, `{DATE+1d}` are the new bundle's DATE, a day earlier or later: `{DATE-1d}` is the shape of our test build installed before the official one, and on 4.22 `v4.21.0-{DATE+1d}` an official 4.21 built after the 4.22 bundle |
 
-The `release-4.21` and `release-4.22` rows hold the plan's values; `release-4.20` holds that branch's
+The `release-4.21` and `release-4.22` rows hold the plan's values; `release-5.0` (read 2026-11-10) has
+the 4.22 head `kubernetes-nmstate-operator.v4.22.0-2025-12-14-152353` as its only entry, skipping the
+4.21 official build, and starts the walk from this cluster's 4.22 test CSV and test-shaped 4.22 and 5.0
+builds; `release-4.20` holds that branch's
 current head, read 2026-10-23: `kubernetes-nmstate-operator.v4.20.0-2025-12-27-212436` is its only
 entry, so it is both `REMOVE` and `SKIPS`. Per branch, in a depth-1 clone of
 `okd-project/okderators-catalog-index`:
@@ -222,14 +235,14 @@ entry, so it is both `REMOVE` and `SKIPS`. Per branch, in a depth-1 clone of
    fails for a `FROM scratch` bundle with no command (okderators-catalog-index PR #59).
 2. `git rm` of every `REMOVE` bundle file.
 3. The package file's `alpha` `entries:` block is replaced as text by one entry, every other line kept:
-   `name: <CSV>`, `skips: <SKIPS>`, `skipRange: '>=4.3.0 <4.N.0-<DATE>'`. `yq` then proves the
+   `name: <CSV>`, `skips: <SKIPS>`, `skipRange: '>=4.3.0 <X.Y.0-<DATE>'`. `yq` then proves the
    entries are exactly that one and that, with the `alpha` entries emptied, the old and new files are
    the same documents.
 
 | check | passes when |
 |---|---|
 | `branch-data-<branch>` | once per branch before anything else: one row, no `TO-FILL`, every `REMOVE`/`SKIPS` name a `kubernetes-nmstate-operator.v...` CSV name |
-| `bundle-<branch>` | before any clone: package `kubernetes-nmstate-operator`, version `4.N.0-<DATE>` for `release-4.N`, name `kubernetes-nmstate-operator.v<version>`, objects exactly the CRD `nmstates.nmstate.io` and that CSV |
+| `bundle-<branch>` | before any clone: package `kubernetes-nmstate-operator`, version `X.Y.0-<DATE>` for `release-X.Y`, name `kubernetes-nmstate-operator.v<version>`, objects exactly the CRD `nmstates.nmstate.io` and that CSV |
 | `no-imagestream-<branch>` | before any clone: no `ImageStream` object in the bundle |
 | `installed-<branch>` | printed only as a `FAIL`: an `INSTALLED` template did not expand to a CSV name |
 | `negative-control-imagestream-<branch>` | the unedited channel's single head, through the same ImageStream count as `no-imagestream-<branch>`, has at least one `ImageStream` (every okderators nmstate bundle today has one) |
@@ -238,7 +251,7 @@ entry, so it is both `REMOVE` and `SKIPS`. Per branch, in a depth-1 clone of
 | `opm-validate-<branch>` | `opm validate catalog` passes on the edited tree |
 | `walk-<branch>` | `catalog-walk.py`: the new CSV is the single head with the highest version, and every entry and every `INSTALLED` CSV reaches it by `replaces`, `skips` or `skipRange` edges with no other dead end |
 | `negative-control-skiprange-<branch>` | a copy whose entry has no `skipRange` still passes `opm validate`, and the walker fails it with exactly the `INSTALLED` CSVs that `SKIPS` does not name reported as stranded (the test-shaped CSVs) |
-| `opm-validate-image`, `catalog-image` | the image context (`release-4.21` tree, package `kubernetes-nmstate-operator` only) passes `opm validate`; the image, built from that branch's `catalog.Containerfile` with its `FROM quay.io/operator-framework/opm:latest` pinned to the v1.74.0 digest, is pushed, rendered back from zot, and has exactly the one package, the new head and the same walk. Not built when an earlier check failed |
+| `opm-validate-image`, `catalog-image` | the image context (the `IMAGE_BRANCH` tree, package `kubernetes-nmstate-operator` only) passes `opm validate`; the image, built from that branch's `catalog.Containerfile` with its `FROM quay.io/operator-framework/opm:latest` pinned to the v1.74.0 digest, is pushed, rendered back from zot, and has exactly the one package, the new head and the same walk. Not built when an earlier check failed |
 
 A `FAIL` in the first three stops the run before any clone. The push target is fixed in `build.sh`:
 `${BASE_REGISTRY}/nmstate-catalog:${DATE}`, through `guard_registry` and the tag check, and
@@ -261,9 +274,13 @@ git -C $T/mirror.git fetch -q $CAT refs/remotes/upstream/release-4.21:refs/heads
 mkdir $T/run
 RUN_DIR=$T/run CATALOG_REPO=$T/mirror.git CATALOG_BRANCHES='release-4.21 release-4.22' \
   CATALOG_EDIT_TEST_BUNDLES=$T/bundles bash tests/okderators-nmstate-build/catalog-edit.sh
+# release-5.0: fetch refs/remotes/upstream/release-5.0 into the mirror the same way, then
+RUN_DIR=$T/run CATALOG_REPO=$T/mirror.git CATALOG_BRANCHES=release-5.0 IMAGE_BRANCH=release-5.0 \
+  CATALOG_EDIT_TEST_BUNDLES=$T/bundles bash tests/okderators-nmstate-build/catalog-edit.sh
 ```
+`RUN_DIR` must be an absolute, existing directory (`mkdir -p $T/run`).
 
-A test bundle needs `schema: olm.bundle`, `name: kubernetes-nmstate-operator.v4.N.0-<DATE>`,
+A test bundle needs `schema: olm.bundle`, `name: kubernetes-nmstate-operator.vX.Y.0-<DATE>`,
 `package: kubernetes-nmstate-operator`, `image`, an `olm.package` property with that version, and
 `olm.bundle.object` properties for the CRD and a CSV of the same name (a catalog head with its
 `ImageStream` object dropped and the CSV renamed works).
