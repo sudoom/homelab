@@ -1234,6 +1234,8 @@ The provisioner user is missing `osd profile rbd`. Without it, CSI can authentic
 
 Confirmed Rook bug. Filed locally at `bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md` (ready to paste as a github.com/rook/rook issue).
 
+**Correction, 2026-11-10:** "confirmed Rook bug" did not hold. Rook v1.19.5's `cephCSIKeyringRBDProvisionerCaps()` includes `osd profile rbd`, and `createCSIKeyring` creates the user with all three caps (falling back to `ceph auth caps` with the full set), so the source does not explain what was seen. The draft is rewritten as "observed once, cause unknown" and is not filed without a reproduction; the caps-fix Job stays (README TODO).
+
 ### Three-step workaround
 
 ```
