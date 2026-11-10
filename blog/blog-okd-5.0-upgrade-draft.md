@@ -400,7 +400,7 @@ positives to age out.
 
 ## 2026-11-10 — `etcdDatabaseHighFragmentationRatio`, left firing
 
-About four hours after the hop the platform rule `etcdDatabaseHighFragmentationRatio` (warning, `for: 10m`) began
+About three hours after the hop (16:35Z, read from the console graph in CET) the platform rule `etcdDatabaseHighFragmentationRatio` (warning, `for: 10m`) began
 firing on all three members:
 
 ```
@@ -409,7 +409,7 @@ firing on all three members:
 and etcd_mvcc_db_total_size_in_use_in_bytes{job=~".*etcd.*"} > 104857600
 ```
 
-The ratio sat at 0.43-0.46 from 17:35Z. That is the expected consequence of the decision above: automatic defrag is
+The ratio sat at 0.43-0.46 from 16:35Z. That is the expected consequence of the decision above: automatic defrag is
 off (`DefragControllerDisabled=True` since 13:13Z) because of okd#2384 (still open, no comments since 2026-11-05), and
 a manual defrag on 5.0 would take the same non-blocking path. The manual blocking defrag before the window had brought
 fragmentation to 0-7 %; the hop's writes (every operator rolling, three reboots) left free pages behind again.
