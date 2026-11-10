@@ -1,0 +1,24 @@
+# One-off OADP backup of the app namespaces before the OKD 5.0 hop (plan Task 9 Step 3, ruling 8a): the daily
+# Schedule stays paused (standing rule), so nothing else covers the app PVCs for the accepted worst case
+# (reinstall plus restore). Same shape as tests/rook-ceph-upgrade/backup/backup.yaml (Stage B, 2026-11-04);
+# reuses ConfigMap openshift-adp/pre-rook-upgrade-policy (skips NFS volumes). Applied by the controller (prompted).
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: pre-okd5-upgrade
+  namespace: openshift-adp
+spec:
+  includedNamespaces:
+    - grafana
+    - homebox
+    - immich
+    - keepers
+    - media
+    - zot
+  storageLocation: truenas-garage
+  snapshotMoveData: true
+  defaultVolumesToFsBackup: false
+  ttl: 720h
+  resourcePolicy:
+    kind: configmap
+    name: pre-rook-upgrade-policy
