@@ -56,16 +56,31 @@ section "ceph config dump | grep rbd_default_map_options|ms_"
 grep_read 'rbd_default_map_options|ms_' ceph config dump
 section "ceph auth get client.csi-rbd-provisioner.1 (key deleted)"
 tool ceph auth get client.csi-rbd-provisioner.1 -f json 2>>"$OUT" | jq 'map(del(.key))' >> "$OUT" 2>&1 || echo "READ-FAILED rc=$?" >> "$OUT"
-# Ceph docs: `ceph auth ls -f json` is {"auth_dump":[{"entity":"client.x","key":"AQ...","caps":{...}}]}. The
-# shape of `auth dump-keys` is not verified on this cluster, so this filter keeps only .entity / .name and the
-# type derived from it, and deletes every other field; the self-check below is the safety net.
+# Shape verified on 20.2.5 (key-free probe, operator 2026-11-10; evidence file dump-keys-shape-s4.txt):
+#   {data: {version, rotating_version,
+#           secrets: [{entity: {type, type_str, id}, auth: {key: {type, type_str, created}, pending_key: {...},
+#                      caps: [{service_name, access_spec}]}}],
+#           rotating_secrets: [{entity: {...}, secrets: {max_ver, keys: [{id, expiring_key: {expiration,
+#                      key: {type, type_str, created}}}]}}]}}
+# The filter is an allowlist: it builds new objects from named fields only (entity "<type_str>.<id>", key type
+# names) and never passes a whole sub-object through. An empty or missing .data.secrets is a changed shape and is
+# reported as READ-FAILED. The self-check below stays as the safety net.
 section "ceph auth dump-keys (entity names and key type only)"
 if [ "$PRE_TENTACLE" -eq 1 ]; then
   echo "READ-SKIPPED (pre-Tentacle, dump-keys needs 20.2.4+)" >> "$OUT"
 else
-tool ceph auth dump-keys -f json 2>>"$OUT" | jq -c '
-  def ents: if type=="array" then .[] elif type=="object" and has("auth_dump") then .auth_dump[] elif type=="object" then to_entries[] | (.value + {entity: .key}) else . end;
-  [ ents | objects | {entity: (.entity // .name // "unknown"), type_str: (.type_str // ((.entity // .name // "") | split(".")[0]))} ]' >> "$OUT" 2>&1 \
+tool ceph auth dump-keys -f json 2>>"$OUT" | jq -r '
+  def s: if type=="string" then . elif type=="number" then tostring else "?" end;
+  if ((.data.secrets // []) | length) == 0 then "READ-FAILED unexpected dump-keys shape"
+  else
+    ( .data.secrets[]
+      | {entity: "\(.entity.type_str | s).\(.entity.id | s)", key_type: (.auth.key.type_str | s)}
+        + (if .auth.pending_key != null then {pending_key_type: (.auth.pending_key.type_str | s)} else {} end)
+      | tojson ),
+    ( (.data.rotating_secrets // [])[]
+      | {service: (.entity.type_str | s), key_types: ([.secrets.keys[]?.expiring_key.key.type_str | s] | unique)}
+      | tojson )
+  end' >> "$OUT" 2>&1 \
   || echo "READ-FAILED rc=$?" >> "$OUT"
 fi
 section "ceph mgr module ls | head -20"

@@ -4010,3 +4010,205 @@ back: sequential read stays about 9% under the baseline, as since stage 2 (run 2
 random read is 10% down for the first time. Record-only, not attributed; the 24 h OSD-latency window to 2026-11-10
 09:35Z or later is the next read. `AUTH_INSECURE_ROTATING_SERVICE_KEY_TYPE` had cleared by 13:10Z, as the c2 comment
 expected (2-3 h after the rotation); `BLUESTORE_SLOW_OP_ALERT` covered 2 OSDs after the runs.
+
+## 2026-11-10 — Close-out: Rook v1.19.5 / Squid 19.2.4 to Rook v1.21.1 / Tentacle 20.2.5
+
+The staged upgrade is finished and the freeze that held since 2026-11-05T12:28:44Z ended with this entry. Final state:
+Rook v1.21.1 (operator and cluster charts), ceph-csi-operator v1.1.0, cephcsi v3.18.1, the RBD `Driver` from the
+`ceph-csi-drivers` 1.1.0 subchart of the operator wrapper (`csi-driver-config` retired), msgr2 required (CRC, no
+encryption), Ceph Tentacle 20.2.5 with the daemon CephX keys on `aes256k`, `require_osd_release tentacle`, the `rook`
+mgr module off. The CSI keys stay `aes` by design, so four `AUTH_INSECURE_*` checks are muted (`muteHealthWarning` in
+`components/storage/rook-ceph-cluster/values.yaml`). Standing health is HEALTH_WARN from `BLUESTORE_SLOW_OP_ALERT`
+only; the muted checks still show as `(MUTED, STICKY)` in `ceph health detail`, in the CephCluster status details and
+on the dashboard, and `AUTH_INSECURE_SERVICE_KEY_TYPE` / `AUTH_INSECURE_SERVICE_TICKETS` (HEALTH_ERR) would be new.
+
+Timeline (UTC dates):
+
+| Date | Step | Commits / notes |
+|---|---|---|
+| 2026-11-04 | Stage B: OADP backup `pre-rook-upgrade` of 18 Ceph PVCs to garage, restore-checked on two config PVCs | kept to 2026-12-04 |
+| 2026-11-05 | fio baseline (3 runs, freeze starts 12:28:44Z), then stage 1: Rook v1.20.9, RBD Driver from the drivers chart under new service accounts, cephcsi v3.17.1 | 17:05-18:32Z |
+| 2026-11-06 | stage 2: Rook v1.21.1, ceph-csi-operator v1.1.0, cephcsi v3.18.1 | 7e0c70d, d72fc63; daemons rolled in 11 minutes |
+| 2026-11-08 | stage 3: `requireMsgr2: true` (CRC) | fd116ab; 8-minute roll |
+| 2026-11-09 | stage 4: `rook` mgr module off, then Tentacle 20.2.5 with the CephX daemon key rotation | bde834f, 4e3de7c; version roll 10 minutes, key rotation 12 more |
+| 2026-11-10 | verify item 9 (CNPG snapshots) passed, close-out, freeze ends | this commit |
+
+### Throughput before and after (fio, `ceph-nvme-block`)
+
+Method, the same at every point: one client on node4, one 24 GiB shared file, three repetitions per point, 60 s per
+workload, the 12:00-14:00Z slot (two s2 runs fell outside it). Means of three runs, from
+`data/storage-benchmark-results.tsv` (run ids `bench-202611*`), checked against the per-stage rows in
+`data/storage-throughput.md`. Percentages are against the baseline.
+
+| Point | seq-read MiB/s | seq-write MiB/s | rand-read iops | rand-write iops |
+|---|---|---|---|---|
+| baseline (Rook v1.19.5, Squid), 11-05 | 400.2 | 62.7 | 16,559 | 2,280 |
+| s1 (Rook v1.20.9), 11-06 | 390.4 (-2.5%) | 64.0 (+2.1%) | 15,331 (-7.4%) | 2,320 (+1.8%) |
+| s2 (Rook v1.21.1), 11-07 | 334.3 (-16.5%) | 61.6 (-1.6%) | 16,425 (-0.8%) | 2,336 (+2.5%) |
+| s3 (msgr2 required), 11-08 | 359.7 (-10.1%) | 69.1 (+10.2%) | 16,389 (-1.0%) | 2,429 (+6.6%) |
+| s4 (Tentacle 20.2.5), 11-09 | 364.7 (-8.9%) | 97.8 (+56.0%) | 14,916 (-9.9%) | 2,820 (+23.7%) |
+
+Reading: writes were flat through stage 2, a little better after msgr2 and clearly better on Tentacle (sequential
+write spread 72-131 MiB/s across the three s4 runs, so the +56% is a wide-range mean). Reads dropped at stage 2
+(sequential, every run below the baseline range) and have not come back: sequential read about 9% under the baseline,
+random read about 10% under since stage 4. Neither was attributed to a stage or a cause; it is recorded, not a gate
+(the plan made the numbers a record, not a go/no-go).
+
+### OSD latency before and after (Prometheus, 24 h window per point)
+
+Per-OSD 24 h averages from `data/ceph-osd-latency.tsv`, here the mean over the three OSDs and, in brackets, the range of
+the per-OSD change against the baseline. Window ends: baseline 2026-11-05T16:21Z, s1 11-06T17:27Z, s2 11-07T19:30Z,
+s3 11-09T07:50Z, s4 11-10T09:35Z (`ceph-latency.sh --end 2026-11-10T09:35:00Z --window 24h --label s4`, operator,
+2026-11-10; the window starts after the stage-4 roll and the mds key cleanup settled, about 09:27Z on 11-09, and holds
+the three s4 fio runs).
+
+| Metric (ms) | baseline | s1 | s2 | s3 | s4 |
+|---|---|---|---|---|---|
+| op_r_latency | 0.959 | 0.919 (-12..+9%) | 0.824 (-17..-9%) | 1.169 (+6..+35%) | 1.109 (+10..+24%) |
+| op_w_latency | 67.72 | 58.27 (-16..-12%) | 56.71 (-20..-11%) | 68.51 (-1..+3%) | 58.88 (-14..-13%) |
+| commit_latency | 17.59 | 16.67 (-12..+8%) | 16.26 (-12..-2%) | 18.45 (+0..+10%) | 13.15 (-32..-17%) |
+| kv_commit_lat | 4.438 | 4.293 (-5..-2%) | 4.287 (-4..-3%) | 4.309 (-4..-2%) | 2.295 (-49..-47%) |
+| slow ops (max) | 0 | 0 | 0 | 0 | 0 |
+
+No regression at any point. Writes got faster by 11-20% at s1/s2 and returned to the baseline level at s3; reads sit
+around 1 ms (0.3 ms more on two OSDs at s3). On Tentacle (s4) the write path is the fastest of the series:
+`kv_commit_lat` halved on all three OSDs (4.4 to 2.3 ms), commit latency 17-32% and client write latency 13-14% under
+the baseline, which matches the s4 fio write gain. Read latency stays 10-24% over the baseline, which matches the fio
+read dip; it is the same record-only item, not a regression gate (0 slow ops in the window).
+
+### Left open after the close-out
+
+Tracked in README "OKD 4.22 follow-ups" (2): the `rook-ceph-mgr` ServiceMonitor with two writers (Rook rewrote it
+during the stage-4 mgr configuration, ArgoCD's selfHeal re-applied it, 09:05-09:06Z); four muted leftover client auth
+keys; unmuting the four mutes once CSI keys can use `aes256k` (kernel client 7.0 or later); a Rook v1.21.2 decision
+(it turns msgr1 off once msgr2 is required, which the existing kernel RBD mappings made on msgr1 would not survive
+without their own plan); whether to file `bugs/upstream-ceph-csi-operator-missing-driver-reconciled.md`; the unattributed
+read dip. Also decided in this close-out:
+
+- **`csi-rbd-provisioner-caps-fix` stays.** Rook's `cephCSIKeyringRBDProvisionerCaps()`
+  (`pkg/operator/ceph/csi/secrets.go`) is the same in v1.19.5 and v1.21.1: mon `profile rbd, allow command 'osd
+  blocklist'`, mgr `allow rw`, osd `profile rbd`, and `createCSIKeyring` calls AuthGetOrCreateKey with that set, or
+  AuthUpdateCaps, on every reconcile in both. v1.19.5 is the version that produced the missing osd cap on 2026-05-15,
+  so the upgrade changed nothing that explains it, and a live read cannot tell because the Job re-applies the caps
+  hourly (the s1 read showed the Job's set). The drafted bug (`bugs/upstream-rook-csi-rbd-provisioner-missing-osd-cap.md`)
+  says the template lacks the osd cap, which contradicts the source, so it needs a rewrite before it is filed.
+- **The pg_num floor Job** (`pg-num-floor-bootstrap`): `ceph osd pool autoscale-status` lists both pools on 20.2.5 where
+  Squid returned `[]`, so the autoscaler bug is not reproduced; keeping or dropping the floor is a later decision.
+- **Two leftover `mds.cephfs-a` / `-b` auth entities** from the CephFS retired 2026-09-07 were deleted on 2026-11-09 to
+  clear HEALTH_ERR (see the 2026-11-09 stage-4 section).
+- **Restore-check wording (runbook Stage B).** The restore check's pass rule was written for a check run the same day as
+  the backup ("equal line counts"). Run days later it must tolerate live changes: a mismatch counts only on a file whose
+  live copy is unchanged since the backup start, and a live-only file must not be older than that start.
+- **`ceph-reads.sh` dump-keys filter.** On Tentacle the old best-effort filter printed `[{"entity":"data"}]`, because
+  the real output is `{data: {secrets: [...], rotating_secrets: [...]}}`. It is now an allowlist built from the shape
+  read key-free on 2026-11-10: per secret `<type_str>.<id>` with the key's `type_str` (and the pending key's), per
+  rotating service the unique key `type_str` values, nothing else passed through; an empty `.data.secrets` prints
+  `READ-FAILED unexpected dump-keys shape`.
+
+## 2026-11-10 — Design record: why the upgrade ran the way it did
+
+Written from the approved design (2026-11-03, reviewed by Fable before approval; the plan was reviewed the same way) so
+that the local spec and plan can be deleted. Decisions are the operator's unless marked "my call".
+
+### Why
+
+OKD 5.0 brings Kubernetes 1.36 and Rook v1.19 supports 1.30 to 1.35, so storage blocked the next OKD hop; and Ceph
+Squid (19.2.4 here) reached its target EOL on 2026-10-31. The target was the newest supported pair, Rook v1.21.1
+(Kubernetes 1.32 to 1.37) and Tentacle 20.2.5 (target EOL 2027-06-01), with msgr2 required, by documented paths, with no
+data loss, no production volume stuck, and a measured record of what each step did to performance. Non-goals: msgr2
+encryption (README TODO; "encryption for later"), Ceph Umbrella, OSD encryption at rest, Multus, CSI keys on `aes256k`
+(needs a kernel 7.0 client).
+
+### Decisions and reasons
+
+- **Option C, the latest Rook plus Tentacle** (operator "go with C"), after the OADP and descheduler soaks, from about
+  2026-11-05. Measure before and after, client-visible (fio) and Ceph's own OSD latencies, as a record and not a gate.
+- **One Rook minor at a time, operator and cluster charts on the same version each time.** ArgoCD runs `helm dependency
+  update` at sync, so a `Chart.yaml` bump is a live change; Renovate stays blocked from Rook and Ceph.
+- **msgr2 as its own stage on Rook v1.21.1, CRC, no encryption; `requireMsgr2: false` explicit through the hops.**
+  The operator first asked for msgr2 before the upgrade; recon showed flipping it on v1.19.5 is off-doc (Rook's docs allow
+  changing network settings after deployment only for encryption) and v1.19 lacks the #18111 fix, while v1.21's guide
+  documents the transition. The operator chose the documented path. v1.21.1's chart default is `true`, so the explicit
+  `false` pin is what kept msgr2 out of stage 2. Order relative to Tentacle (my call): msgr2 first, so the point of no
+  return comes last. All 32 kernel RBD mappings were already on msgr2 before the change (cephcsi 3.16.2 ships a Tentacle
+  `rbd` client defaulting to `prefer-crc`).
+- **The CSI move (stage 1) was designed around the June failure.** On 2026-06-12 the v1.20 render dropped the v1.19
+  service accounts (`ceph-csi-rbd-{ctrl,node}plugin-sa`) and their RBAC, ArgoCD pruned them, and the surviving Driver CR
+  pointed at names that no longer existed. Hard requirement: at no moment may the running Driver reference a
+  ServiceAccount that does not exist, and no SA, RBAC or SCC grant may go while a pod still runs under it (deleting an SA
+  invalidates the bound tokens of pods still using it). Mechanism: the drivers chart became a second dependency of the
+  operator wrapper (one Application, one render, one `oc diff`; two auto-synced apps cannot be ordered); the Driver was
+  protected with `Delete=false,Prune=false` before `csi-driver-config` went (root-app stamps a foreground-delete
+  finalizer on every Application, and a foreground-deleted Driver livelocks); a copy of the six old SAs, their RBAC and
+  SCC grant stayed in our own template until no pod used them; `PruneLast=true` on the Application; our own ClusterRole
+  and RoleBinding granting `use` on SCC `rook-ceph-csi` for the new SA names (not `ceph-csi-operator.openshift.enabled`,
+  whose ClusterRole name depends on a subchart default); `snapshotPolicy: volumeSnapshot` (the default `none` breaks CNPG
+  and OADP snapshots), ctrlplugin `hostNetwork: true`. The ceph-csi-operator keeps its SA name
+  `ceph-csi-controller-manager` at every hop (ruling 8a). Every local render passes `--api-versions
+  security.openshift.io/v1`, because ArgoCD sends the cluster's API versions and the chart drops the SCC without them.
+  Rook v1.19.5 overwrites the whole Driver spec on its reconcile, so the outgoing operator could strip fields once; the
+  verify read the spec twice, minutes apart, with `generation` stable.
+- **v1.21.1 traps handled explicitly.** `csi.createCsiOperatorResources` is missing from the chart's values and renders
+  an empty operator ConfigMap (Rook would then delete the CephConnection and ClientProfile), so it is set to `true`;
+  the chart's default StorageClass adds secret parameters, but our values replace the whole `parameters` map, so
+  `ceph-nvme-block` keeps today's set (adding them later is a delete and recreate: a separate decision).
+- **Stage 4 was the point of no return** (Ceph documents no downgrade from Tentacle), placed last. Immediately before:
+  a fresh restore check from stage B's backup, CNPG `ContinuousArchiving=True` on all three clusters, the image tag
+  confirmed through zot. The commit moved all five image pins together with the CephX daemon key rotation
+  (`KeyGeneration`, generation 2). 20.2.4+ raises two HEALTH_ERR checks until the daemon keys rotate, so HEALTH_ERR was
+  expected for the whole roll, our Argo CD health mapping read `rook-ceph-cluster` Degraded, and a no-touch rule held
+  until every daemon was on 20.2.5 and the cipher read `aes256k` (a reconcile restart mid-roll re-runs Rook's health check
+  and can stall the upgrade with mons on 20.2.5 and OSDs on 19.2.4). The stall contingency was a 4 h mute of the two
+  checks, not `skipUpgradeChecks: true` (which also drops the `ok-to-stop` gate that keeps two of three OSDs from being
+  down at once). rook#18537 (rotation while a node is cordoned strands that node's OSDs; fix #18620
+  not in v1.21.1) made every node schedulable and no MachineConfigPool updating hard gates.
+- **CSI keys stay `aes`; four `AUTH_INSECURE_*` warnings muted.** `aes256k` needs a kernel 7.0 client and the nodes run
+  6.12. `muteHealthWarning` covers warnings only, not the two errors, which is why the daemon rotation had to complete.
+- **The `rook` mgr module was switched off before Tentacle** (Rook's upgrade guide recommends it, known stability issues).
+  Cost: the dashboard's orchestrator pages are unavailable and `ceph orch` fails; README TODO to re-check it at the next
+  Rook bump.
+- **Stage B backup before any change:** one OADP data-mover (Kopia) backup of the 18 app PVCs on `ceph-nvme-block` plus
+  `zot/data-zot-0` (the only copy of the test-catalog images), TTL 30 days (kept to 2026-12-04), to garage. Excluded:
+  regenerable telemetry and the CNPG data volumes (own WAL archive and snapshots). Crash-consistent only, apps not
+  quiesced, and the restore proves one PVC's round trip, not every PVC. The `daily` schedule stayed paused.
+- **Measurement design.** A `ceph-nvme-block` backend row in `tests/storage-benchmark/` as its own series, never compared
+  with the NFS rows. File size 24 GiB: the OSDs' aggregate cache is about 12 GiB (3 x ~4 GiB `osd_memory_target`), so an
+  8 GiB file would be read from memory; `BENCH_ALLOW_SMALL=1` and the size are in every row. Three repetitions per point
+  because no run-to-run figure for Ceph existed here and one run cannot show its own spread. Same node, same slot, plus a
+  read-only Prometheus script for the 24 h OSD windows.
+- **A freeze from the baseline to the close-out** so the numbers stay comparable: no in-cluster builds, no MachineConfig
+  reroll (the `systemReserved` KubeletConfig, the catalog-churn step), no logging removal, no power-tuning change.
+  Upstream PR work and the OADP drill were not frozen (they do not touch the storage path).
+- **Common gates for every stage:** soaks finished, Ceph HEALTH_WARN with only `BLUESTORE_SLOW_OP_ALERT`, PGs
+  active+clean, no MCP updating, no node cordoned, CNPG archiving, not Monday 19:00-23:00Z (the weekly encryption-key
+  migration), at least 2 h of headroom, quiet IO, the stage's images confirmed through zot (zot's PVC is on this pool: if
+  CSI breaks and zot reschedules, nothing pulls, including what a revert needs). Every cluster mutation by the
+  operator's permission prompt; `oc exec` reads handed to the operator. 30-minute cap on CSI-mount recovery, then the
+  stage's recovery path; with production volumes on Ceph, teardown was never an option.
+- **Recovery paths:** stage B nothing (additive); stages 1-2 fix forward first, a prepared forward patch
+  (`s1-recovery`, `s2-recovery`, with a temporary template keeping the new pair's SAs, RBAC and SCC grant until no pod
+  runs under them) instead of a plain revert; stage 3 flip back to `requireMsgr2: false` (another full roll); stage 4
+  fix forward only.
+
+### Alternatives ruled out
+
+- msgr2 first on v1.19.5 (off-doc), and msgr2 folded into the Rook hop (two changes in one window).
+- Two Applications for operator and drivers chart (cannot be ordered on a push); `ceph-csi-operator.openshift.enabled`
+  for the SCC grant (name depends on a subchart default).
+- `PruneLast=true` alone for the old service accounts (it still deletes them while the old plugin pods run under them);
+  a plain revert as the stage-1 recovery (it would drop the SAs the new pair needs).
+- `skipUpgradeChecks: true` for a stalled stage 4 (drops `ok-to-stop`); stopping Renovate per window instead of blocking
+  it for good.
+- Disabling the other hourly Jobs per window (extra commits to the storage apps inside the no-touch window).
+- An 8 GiB fio file (served from OSD memory); a single run per point (no spread).
+- Moving the CSI keys to `aes256k` (kernel 7.0) and msgr2 secure mode (separate, later decisions).
+
+### Review findings that changed the design
+
+The Fable review of the design (2 blockers, 5 majors, 8 minors) produced: the stage-1 mechanism above (B1; `PruneLast`
+alone was not enough, so the old SAs stay in our template, and the app removal folded into the hop so the v1.19.5
+operator never drops the `hostNetwork` patch); the stage-4 point of no return, expected HEALTH_ERR, no-touch rule and mute
+contingency (B2); the 24 GiB file (M1); backup before baseline and zot in scope (M2); the expected Degraded Argo CD state
+(M3); the caps check after every hop (M4); the double read of the Driver spec (M5). The plan review corrected two
+verification commands that could not show what they claimed (the `auth_service_cipher` end condition and the key-type
+check) and added the operator SA prefix so the Driver had an existing SA under every interpretation during the sync.

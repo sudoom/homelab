@@ -128,7 +128,8 @@ kinds the logs name, still mapped into `rook-upgrade-restore`).
    `oc -n rook-upgrade-restore logs restore-checker > restored.txt` prints `sha256  size  mtime  path` per file in
    sections `CHECK begin webtlo|transmission` ... `CHECK end ...`. Any `ERROR` line is a FAIL (a file or a volume
    root could not be read). A subdirectory that cannot be entered is skipped by globstar without an `ERROR` line; the
-   equal-line-count criterion against the live list (Pass criteria) is what catches that.
+   compare against the live list (Pass criteria: a file missing from the
+   restore, or a live file older than the backup start that the restore lacks) is what catches that.
 7. Operator, the same list inside the live pods (read-only `oc exec`). Mounts read 2026-11-03: pod `webtlo-*`,
    container `webtlo`, `webtlo-data-pvc` at `/data`; pod `transmission-*`, container `transmission`,
    `transmission-config-pvc` at `/config` (`keepers-data-nfs` is also mounted at `/data` there; do not list it).
@@ -157,9 +158,11 @@ live_list "$(oc -n keepers get pods -o name | grep '/transmission-')" transmissi
 - Bucket bytes and objects grew.
 - Restore: DataDownloads `Completed` for `webtlo-data-pvc` and `transmission-config-pvc`; no `ERROR` line in the
   checker log.
-- Compare counts: per PVC the live and restored `.cmp` line counts are equal, and the total over both PVCs is at
-  least 1. A diff of two empty files is not a pass.
-- `diff` is empty for both PVCs (every sha256, size and mtime equal).
+- Compare set: the total over both PVCs is at least 1. A diff of two empty files is not a pass.
+- No mismatch on a file whose live copy is unchanged since the Backup's `status.startTimestamp`, and no live-only file
+  older than that start. Counts are not required to be equal: when the backup predates the window by days (2026-11-04
+  backup, check 2026-11-09 or later), live files modified after the backup start legitimately differ in sha256, size
+  or mtime, or are new. Compute the live copy's change from its mtime against the start timestamp.
 
 **Stop rules.** Any mismatch on a file older than the Backup's `status.startTimestamp` is a FAIL: Stage B stops and is
 reported to the operator (no retry, no pass). An empty compare set (total 0) is also a stop-and-report; there is no
