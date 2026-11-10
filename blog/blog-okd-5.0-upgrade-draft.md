@@ -115,3 +115,89 @@ oc adm upgrade --to=5.0.0-okd-scos.<N>
 To check after the hop: the scos.1 risk names a `verifier-public-key-redhat` keyring, which is not what 4.22 uses. The
 5.0 CVO may verify later 5.0.z builds against another key or store. Plan Task 11 reads the `release-verification`
 ConfigMap again on 5.0.
+
+## 2026-11-10 — what the checks before the hop found (plan Phase A)
+
+Three read-only research passes (notes kept locally) and four operator reads. Only the facts that shape the window are
+here.
+
+### etcd and okd#2384
+
+- **No fix exists in any 5.0 build.** okd#2384 has no comment and no label; it was assigned on 2026-11-05. scos.6
+  runs the same cluster-etcd-operator commit (`dc77052`) and the same etcd commit (`openshift/etcd 7cf5f0d`, etcd
+  3.6.13) as the scos.4 cluster that diverged. The commits come from the image labels (`SOURCE_GIT_COMMIT`), because
+  the release bodies list only digests.
+- **What changed between 4.22 and 5.0:** cluster-etcd-operator#1618 (merged 2026-08-12) turned on etcd's
+  `NonBlockingDefrag` feature gate. It is hard-coded in `bindata/etcd/pod.gotpl.yaml:173` with no override, and it
+  rides on a downstream carry in `openshift/etcd` ("implement not-as-blocking defrag"). On 4.22 the gate is absent,
+  so 4.22's defrags block. The only change that would turn it off is cluster-etcd-operator#1724 (a revert on
+  `release-5.0`), which is open and argued on performance, not on divergence. The reporter calls the link to defrag
+  a correlation, not proven.
+- **The switch works on both versions.** ConfigMap `openshift-etcd-operator/etcd-disable-defrag` is checked only for
+  existence, with the same name on 4.22 (`defragcontroller.go:97-105` at `14ecb16`) and on 5.0 (`:108-116` at
+  `dc77052`). The operator reports it as condition `DefragControllerDisabled=True` on `etcd/cluster`; today it reads
+  `False`. Nothing in the operator or the payload deletes that ConfigMap, and deleting it re-enables defrag at the next
+  sync (about every 11 minutes).
+- **Two consequences for the runbook:**
+  - The ConfigMap stops only the automatic defrag. On 5.0 every defrag, a manual `etcdctl defrag` included, takes the
+    non-blocking path. So no manual defrag after the hop while okd#2384 is open.
+  - The defrag controller waits for the operator-CR cache but not the ConfigMap cache, so its first sync after an
+    operator restart could miss the ConfigMap. This is unverified. The cheap guard: every member under 45%
+    fragmentation going into the hop, so a missed sync has nothing to defrag.
+- **On 5.0 a defrag is visible as events** in `openshift-etcd-operator`: `DefragControllerDefragmentAttempt`, then
+  `…Success` or `…Failed`; before a leader is defragmented, `DefragControllerLeaderTransferSuccess`. The watcher alerts
+  on any of these while the switch is set.
+
+So today the etcd gate opens only by the operator's fallback: the hop runs with automatic defrag off.
+
+### Deprecated APIs
+
+`apirequestcounts` is not populated on this cluster: "No resources found" for both the readonly SA and the operator.
+So the earlier "no removed API in use" was an empty read. The apiserver metric is the real evidence (operator,
+through `prometheus-k8s-0`):
+
+```bash
+oc -n openshift-monitoring exec prometheus-k8s-0 -c prometheus -- wget -qO- 'http://localhost:9090/api/v1/query?query=group%20by%20(group,version,resource,removed_release)%20(apiserver_requested_deprecated_apis)' | jq -r '.data.result[] | .metric | "\(.group)/\(.version) \(.resource) removed=\(.removed_release)"'
+```
+
+```
+null/v1 endpoints removed=null
+apps.openshift.io/v1 deploymentconfigs removed=6.0
+```
+
+Nothing removed in Kube 1.36 or OKD 5.0 is called. No DeploymentConfig exists, so something lists the type,
+probably the console or Argo CD.
+
+### Operators
+
+- **None needs its 5.0 build before the hop.** Logging and Loki 6.6, NMState 4.22, OADP 1.6 and the descheduler 5.4
+  (our zot test builds) all ride the hop.
+  - OADP is the least certain: Velero and its operator use client-go 0.33, and Red Hat lists OADP 1.6 for OCP 4.22
+    only.
+  - The NMState handler talks to the host's NetworkManager over D-Bus and to its Open vSwitch. Their versions in the
+    5.0 OS image are read at go/no-go.
+- **GitOps stays put when `okderators` moves to `catalog-index:5.0`.** OLM's resolver (`operator-framework-olm`
+  `release-5.0`) takes the installed CSV from its cache of installed CSVs, not from the catalog. A channel with no
+  candidate is not an error, so the Subscription stays `AtLatestKnown`, as it did on 2026-11-09. A re-subscribe onto
+  the catalog's own build is optional.
+- **Images only in zot that every node needs:** the NMState handler, the OADP node-agent (velero) and the logging
+  collector (vector). Each must be cached on all three nodes before the window, checked with `crictl images
+  --digests` per node.
+- **Kube 1.36 support elsewhere:** cephcsi v3.18.1 lists 1.34–1.36, and sealed-secrets 0.37 builds on client-go 0.36
+  with CI on 1.36.0. cert-manager 1.21 supports 1.33–1.36, so a 1.21 bundle would bring cert-manager back into its
+  matrix (a follow-up, not a gate). Whether grafana-operator is in `community-operator-index:v5.0` is still unknown.
+
+### CRI-O, okd#2361 and the rest
+
+- okd#2361 (CRI-O and Multus deadlock after an unclean shutdown) is open, and its CRI-O fix (cri-o#10436) is unmerged.
+  scos.5 and scos.6 both ship CRI-O 1.36.4, the version the thread reports, so the exposure starts with the hop. The
+  runbook carries the thread's recovery for a stuck node: move `00-multus.conf` aside first, the destructive wipe
+  last. Two stuck control-plane nodes at once would lose etcd quorum.
+- Kernels: scos.5 `6.12.0-275`, scos.6 `6.12.0-280` (today `6.12.0-254`).
+- 5.0 changes to check after the hop: the router's HAProxy 2.8 → 3.2, the default catalogs moving to the `v5.0` tag,
+  new MCO NetworkPolicies, and one extra etcd leader election per defrag. `components/cluster-config/olm-v1-catalogs/`
+  needs no change: the payload dropped the `openshift-redhat-marketplace` ClusterCatalog at 4.22 already, and the
+  live object survived that hop.
+- okd#2366 (sample ImageStreams) has a fix merged 2026-10-27; which build carries it is unknown.
+- The release-controller page reads scos.6's upgrade test from our build as failed or pending and scos.5's as passed.
+  That is page text, not a parse, and is read directly at go/no-go. scos.6 is also not in either graph yet.
