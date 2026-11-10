@@ -9,7 +9,15 @@ down, so every operator change here is gated per node.
 from the test catalog `okd-test-nmstate` on 2026-10-26 at 13:55Z (operand in `openshift-nmstate`, handler on every
 node); the 24 h soak passed and namespace `nmstate` is deleted. After the OKD 4.22 hop the same catalog moved to the
 4.22 build: `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655` since 2026-10-27 at 18:26Z (an in-place OLM
-upgrade, InstallPlan `install-565gh`), whose 24 h soak passed on 2026-10-29. v0.87.0 from `operatorhubio-catalog` is the rollback target (Rollback, below).
+upgrade, InstallPlan `install-565gh`), whose 24 h soak passed on 2026-10-29.
+
+**2026-11-10, after the OKD 5.0 hop:** the catalog (`okd-test/nmstate-catalog:2026-11-10-160833`, built from
+`okderators-catalog-index` `release-5.0`) and `startingCSV` point at the 5.0 build
+`kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454` (pipeline #43's branch at `199fa04`: operator code
+`release-5.0` `96778808`, el10 handler `nmstate-2.2.62-4.el10`). It reaches the cluster as an in-place OLM upgrade
+once the operator approves its InstallPlan; record and soak in `blog/blog-okderators-nmstate-draft.md`. Until that
+soak passes, the 4.22 build stays in zot as the rollback target ("Rollback to the 4.22 test build", below); v0.87.0
+from `operatorhubio-catalog` is the rollback of last resort ("Rollback to operatorhubio v0.87.0").
 
 ## What the chart installs
 
@@ -407,6 +415,55 @@ ocr -n nmstate get role/nmstate-prometheus-k8s-reader rolebinding/nmstate-promet
 Then the `cluster-health` sweep, clean. After the 24 h soak: the operator deletes namespace `nmstate` and the old
 InstallPlans `install-879xr` and `install-775wp` in `openshift-nmstate`.
 
+## Rollback to the 4.22 test build
+
+From the 5.0 build (`v5.0.0-2026-11-10-154454`) back to `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655`, while
+the 4.22 images and catalog `okd-test/nmstate-catalog:2026-10-27-181517` (`sha256:75417f71…`) are still in zot (they
+are deleted only after the 5.0 soak passes). OLM does not downgrade, so this is a re-subscribe. Every mutation is
+operator-run (# OPERATOR). **Never run for NMState on this cluster.**
+
+1. `git revert` the commit `nmstate: move to the okderators 5.0 test build` (catalog digest back to
+   `sha256:75417f715fd174c61c1ec545e3b5ad5fce3274c8c4b29fd9eb2876ade6c7cab7`, `startingCSV` back to the 4.22 CSV); push.
+   Wait for the old digest to be served, and check the 4.22 CSV is offered:
+
+   ```bash
+   ocr -n openshift-marketplace get catsrc okd-test-nmstate -o jsonpath='{.spec.image} {.status.connectionState.lastObservedState}{"\n"}'
+   ocr get packagemanifest -n openshift-marketplace -l catalog=okd-test-nmstate -o jsonpath='{range .items[*].status.channels[*]}{.currentCSV}{"\n"}{end}'
+   ```
+
+   Not offered = stop.
+2. **Auto-sync off** on `root-app` first, then `nmstate-operator` (Step 2 commands).
+3. Remove the 5.0 operator, **keeping the NMState CR** (deleting the CR removes the handlers and the webhook):
+
+   ```bash
+   oc -n openshift-nmstate delete subscription kubernetes-nmstate-operator
+   oc -n openshift-nmstate delete csv kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454
+   ```
+
+   Expected, but untested here: the CR, the CRDs, the handlers and the NNCPs stay (the operand is owned by the
+   cluster-scoped CR, and OLM keeps CRDs). Read it before step 4:
+
+   ```bash
+   ocr -n openshift-nmstate get ds nmstate-handler -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled}{"\n"}'   # 3/3
+   ocr -n openshift-nmstate get deploy nmstate-webhook -o jsonpath='{.status.readyReplicas}{"\n"}'
+   ocr get crd -o name | grep -c 'nmstate.io'                                                                                    # 4
+   ocr get mutatingwebhookconfiguration nmstate -o name
+   nnce                                                                                                                          # 3 Available, generations unchanged
+   ```
+
+   Between step 3 and step 4 the handlers run the 5.0 image with no operator: pass through, do not stay. If the
+   DaemonSet or the webhook is gone, the nodes keep their network (NetworkManager holds it): go on to step 4 and create,
+   edit or delete no NNCP while the webhook is absent. If a CRD is gone: stop, this is "Rollback to operatorhubio
+   v0.87.0" territory.
+4. Sync `nmstate-operator` by hand at the revert commit. The InstallPlan must name only the 4.22 CSV; read its resource
+   kinds before approving, and if it carries a CRD, compare `storedVersions` (NMState `v1`, NNCP `v1`, NNCE `v1beta1`,
+   NNS `v1beta1`) with what the 4.22 CRD serves first. Approve. The 4.22 operator rolls the handlers back to
+   `sha256:2f8f3047…`, one node at a time.
+5. The switch checks (handlers 3/3, NNCEs Available at the same generation, backnet NNS, `cephchk`, `brex` on all
+   three), then auto-sync back on, `root-app` last.
+6. If the 4.22 operator cannot adopt what 5.0 left (a CRD version it does not serve, a failing webhook): "Rollback to
+   operatorhubio v0.87.0", below.
+
 ## Rollback to operatorhubio v0.87.0
 
 The switch in reverse, every step operator-run, with the same read-only checks. v0.87.0 is still the `alpha` head of
@@ -437,8 +494,9 @@ The switch in reverse, every step operator-run, with the same read-only checks. 
 3. **Remove the okderators operator** (# OPERATOR):
 
    ```bash
+   CSV=$(ocr -n openshift-nmstate get sub kubernetes-nmstate-operator -o jsonpath='{.status.installedCSV}'); echo $CSV
    oc -n openshift-nmstate delete subscription kubernetes-nmstate-operator
-   oc -n openshift-nmstate delete csv kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655   # the installed CSV
+   oc -n openshift-nmstate delete csv "$CSV"   # the installed CSV
    ```
 
    Check: CSV and Deployment `nmstate-operator` NotFound, 4 CRDs present.
