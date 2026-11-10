@@ -1024,3 +1024,30 @@ The handler userland is el10 now (`nmstate-2.2.62-4.el10`, was `-3.el9`), althou
 `operatorframework.io/properties` and no `minKubeVersion`: no `maxOpenShiftVersion`, so NMState stays out of the
 `Upgradeable=False` list. zot went from 14.80 to 14.54 GiB free (0.26 GiB, against a 0.5 GiB estimate). The full Job
 was deleted after its log was saved; the PVC stays for the catalog run.
+
+## 2026-11-10 — the 5.0 test catalog
+
+```
+oc process --local -f tests/okderators-nmstate-build/job-template.yaml -p MODE=catalog -p DATE=2026-11-10-160833 \
+  -p CATALOG_BRANCHES=release-5.0 -p IMAGE_BRANCH=release-5.0 \
+  -p BUNDLES='release-5.0=zot.apps.okd.sudops.pl/okd-test/nmstate/bundle:5.0.0-2026-11-10-154454@sha256:cc4de1df...' | oc -n okd-build create -f -
+```
+
+1 min 26 s. `okderators-catalog-index` `release-5.0` carries one nmstate entry, the broken
+`v4.22.0-2025-12-14-152353` (with its ImageStream); the edit replaces it with our bundle, keeps its `skips` and adds
+`skipRange: '>=4.3.0 <5.0.0-2026-11-10-154454'`:
+
+```
+CHECK edit-release-5.0 PASS entries [kubernetes-nmstate-operator.v4.22.0-2025-12-14-152353] -> kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454 skips [...v4.22.0-2025-12-14-152353, ...v4.21.0-2026-05-05-165851] ...
+CHECK walk-release-5.0 PASS 1 entries + 3 CSVs absent from the channel reach kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454; installed: kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655, ...
+CHECK negative-control-skiprange-release-5.0 PASS without skipRange opm validate passes and the walker reports stranded: kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655 ...
+CHECK catalog-image PASS zot.apps.okd.sudops.pl/okd-test/nmstate-catalog:2026-11-10-160833: package kubernetes-nmstate-operator; head kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454 ...
+PUSHED zot.apps.okd.sudops.pl/okd-test/nmstate-catalog:2026-11-10-160833@sha256:4d5b40432b8dc79fa2c56807cc9e843588da49aaee0917466c74b01650741b81 31367382
+RESULT PASS catalog 2026-11-10-160833
+```
+
+The installed CSV reaches the new head only through the `skipRange` (the negative control strands it without one).
+The diff for the later upstream catalog PR and both contracts were copied off the PVC with the log-reader pod, then
+the build phase was closed by name: `oc -n okd-build delete pod/nmstate-log-reader`, then
+`oc -n okd-build delete job/nmstate-build-catalog-2026-11-10-160833 pvc/nmstate-build-storage`. `okd-build` is back to
+no PVC and no Job; zot 14.54 GiB free.
