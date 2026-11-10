@@ -237,7 +237,7 @@ The failed attempt goes into the blog draft with the commands and outputs that d
 
 ## Back to okderators for good
 
-When `catalog-index:4.22` lists the official 1.6 entry, commit `source: okderators` and `startingCSV` = the official
+When `catalog-index:5.0` (the okderators tag since the 5.0 hop, 2026-11-10) lists the official 1.6 entry, commit `source: okderators` and `startingCSV` = the official
 CSV. The installed test CSV is a `1.6.0-2026-11-02-205027` prerelease; the official entry's `skipRange`
 (`>=1.4.0-0 <1.6.0-<its date>`) is what lets OLM offer it. If no InstallPlan appears, do the supervised re-subscribe
 above (delete the test CSV and the Subscription after the commit). Check that the installed CSV is the official one and every pod image (containers and initContainers) is under
