@@ -986,3 +986,41 @@ ocr -n openshift-nmstate logs nmstate-handler-9njgp --previous
 
 It started before the node's pod network was up during the reboot; node4 went Ready at 13:08:40Z and the next container
 (started 13:08:30Z) has run since. The node5/node6 restarts are exit 137 from the hop's reboots. Benign.
+
+## 2026-11-10 — the 5.0 build
+
+#43's branch now carries two commits (`a005aed` ImageStream removal, `199fa04` the `release-5.0` gitlink), pushed to
+the fork on the operator's yes. The build scripts accept `release-5.0` since `84974e7`, and this run has its own PVC
+(`tests/okderators-nmstate-build/pvc.yaml`, `nmstate-build-storage`), because `okd-build` is a shared, persistent
+namespace for every okderators build.
+
+```
+oc apply -f tests/okderators-nmstate-build/pvc.yaml     # persistentvolumeclaim/nmstate-build-storage created
+oc apply -k tests/okderators-nmstate-build/             # configmap/nmstate-build-scripts configured
+DATE=2026-11-10-154454
+oc process --local -f tests/okderators-nmstate-build/job-template.yaml -p MODE=full -p PIPELINE_BRANCH=nmstate-bundle-fix -p DATE=$DATE | oc -n okd-build create -f -
+```
+
+Pod started 15:45:54Z, Job Complete 16:06:56Z (21 min, the same as the 10-26 `main` run). Contract:
+
+```
+CHECK gitmodules-branch PASS nmstate/operator=release-5.0 nmstate/console-plugin=release-5.0, the release of OCP_SHORT 5.0
+CHECK operator-commit PASS nmstate/operator built from 9677880835149f6830f7be8b3af640aebc2c65ff = the recorded gitlink (.gitmodules branch release-5.0), clean tree, no patch
+CHECK nmstate-rpm PASS nmstate-2.2.62-4.el10.x86_64 in zot.apps.okd.sudops.pl/okd-test/nmstate/handler:5.0.0-2026-11-10-154454
+CHECK bundle-objects PASS objects CustomResourceDefinition/nmstates.nmstate.io ClusterServiceVersion/kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454
+CHECK no-imagestream PASS no ImageStream object in opm render, no ImageStream in the bundle image's files, no image-references file
+CHECK csv-code-release PASS release 5.0 code: olm-status-descriptors kubernetes-nmstate-operator.v5.0.0, olm.skipRange '>=4.3.0 <5.0.0'
+CHECK install-modes PASS OwnNamespace=true SingleNamespace=true MultiNamespace=false AllNamespaces=true
+CHECK operator-sdk-validate PASS operator-sdk v1.36.1 bundle validate: passed, 1 warnings, 0 errors
+PUSHED .../okd-test/nmstate/console-plugin:5.0.0-2026-11-10-154454@sha256:60a41db0...   137849582
+PUSHED .../okd-test/nmstate/handler:5.0.0-2026-11-10-154454@sha256:d61c1d56...          245873667
+PUSHED .../okd-test/nmstate/operator:5.0.0-2026-11-10-154454@sha256:98977304...         154656585
+PUSHED .../okd-test/nmstate/bundle:5.0.0-2026-11-10-154454@sha256:cc4de1df...           25871
+RESULT PASS full 2026-11-10-154454
+```
+
+The handler userland is el10 now (`nmstate-2.2.62-4.el10`, was `-3.el9`), although the base tag is still called
+`scos-5.0:base-stream9`. The bundle CSV, read back from zot (`skopeo copy` + `tar`), has no `olm.properties`, no
+`operatorframework.io/properties` and no `minKubeVersion`: no `maxOpenShiftVersion`, so NMState stays out of the
+`Upgradeable=False` list. zot went from 14.80 to 14.54 GiB free (0.26 GiB, against a 0.5 GiB estimate). The full Job
+was deleted after its log was saved; the PVC stays for the catalog run.
