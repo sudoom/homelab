@@ -95,7 +95,8 @@ Not in the script (OPERATOR or operator-confirmed):
   for p in $(oc -n openshift-ovn-kubernetes get pods -l app=ovnkube-node -o jsonpath='{range .items[*]}{.metadata.name}:{.spec.nodeName}{"\n"}{end}'); do echo "${p##*:} $(oc -n openshift-ovn-kubernetes exec ${p%%:*} -c ovnkube-controller -- sysctl -n net.ipv4.conf.br-ex.forwarding 2>/dev/null)"; done
   ```
 
-- The cert-manager renewal gate: `homelab-wildcard` renewed on or after 2026-11-20 (`gates.sh` prints it as INFO).
+- (Dropped 2026-11-10 by the operator: the hop no longer waited for the cert-manager renewal of `homelab-wildcard` on
+  2026-11-20. `gates.sh` still prints its state as INFO; the check is part of the week after the hop.)
 - The inputs of the accepted worst case (reinstall plus restore) exist off the cluster: the sealed-secrets key backup,
   the CNPG object-store credentials, the OADP/garage credentials, this repo.
 - The Rook close-out is done (it is: c09622e, 2026-11-10).

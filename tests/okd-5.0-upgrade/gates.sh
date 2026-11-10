@@ -380,7 +380,7 @@ if [ -f "$TMP/cv.json" ]; then
 fi
 if [ -f "$TMP/certs.json" ]; then
   gate INFO cert-renewal "$(jall '[.certs.items[] | select(.metadata.namespace == "cert-manager" and .metadata.name == "homelab-wildcard")][0]
-    | if . == null then "homelab-wildcard not found" else "homelab-wildcard Ready=\(cond("Ready")) notBefore=\(.status.notBefore) renewalTime=\(.status.renewalTime); the go/no-go needs a renewal on or after 2026-11-20: \(if (.status.notBefore // "") >= "2026-11-20" then "yes" else "not yet" end)" end' certs)"
+    | if . == null then "homelab-wildcard not found" else "homelab-wildcard Ready=\(cond("Ready")) notBefore=\(.status.notBefore) renewalTime=\(.status.renewalTime); renewed on or after 2026-11-20 (first renewal on 1.20; no longer a hop gate, dropped 2026-11-10): \(if (.status.notBefore // "") >= "2026-11-20" then "yes" else "not yet" end)" end' certs)"
 fi
 gate INFO operator-only "not checked here (OPERATOR lines in the README): br-ex.forwarding=1 on all nodes; zot-only per-node images cached on all three nodes (crictl); etcd snapshot copied off the node; off-cluster inputs of the worst case (sealed-secrets key backup, CNPG object-store and OADP/garage credentials, this repo)"
 
