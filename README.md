@@ -417,10 +417,11 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   2026-11-05. Draft pipeline PRs filed 2026-11-05:
   [#49](https://github.com/okd-project/okd-operator-pipeline/pull/49) (`release-4.22`) and
   [#50](https://github.com/okd-project/okd-operator-pipeline/pull/50) (`main`); catalog-index PRs follow their merge and
-  CI (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** catalog `release-5.0` is the
-  February 2025 one, with five of our packages at ancient versions and no descheduler or NMState, and quay has no
-  `catalog-index:5.0`, so no 5.0 entry reaches anyone until okderators rebuilds and publishes it. That affects every
-  operator here, OADP 1.6 included. Raised upstream 2026-11-02:
+  CI (`blog/blog-descheduler-draft.md`). **A bigger gap for 5.0:** `catalog-index:5.0` exists on quay (deploy
+  runs on `release-5.0` 2026-11-06 and 2026-11-08); `release-5.0` was rebuilt from the 4.22 catalog on 2026-10-15
+  (`252d764`), plus cert-manager 1.20 (#61) and GitOps 1.22 (#63). Still missing there: logging and loki newer than
+  6.3.0, OADP 1.6, descheduler 5.4 and the fixed NMState bundle, so those four have no 5.0 entry until okderators
+  publishes them. Raised upstream 2026-11-02:
   [okderators-catalog-index #62](https://github.com/okd-project/okderators-catalog-index/issues/62).
   **For the next reroll:** check which node `zot-0` runs on. While zot is down, every `okd-test/` consumer rescheduled
   onto a node without its image cached waits (GitOps, NMState, logging), and each mirrored pull takes about 1m40s. Stale
