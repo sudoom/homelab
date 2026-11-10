@@ -211,3 +211,116 @@ fails, the parked Helm fallback (branch `cert-manager-helm-fallback`) is the way
 week. The earliest window is now set by the target's age: `5.0.0-okd-scos.5` was created 2026-11-05T10:55:47Z, so it
 is 7 days old on 2026-11-12 from about 11:00Z. Before that: the window checks (`tests/okd-5.0-upgrade/`), a one-off
 OADP backup of the app namespaces within 24 h, and the operator reads that need `oc exec` or `oc debug`.
+
+## 2026-11-10 — the hop: 4.22.0-okd-scos.10 → 5.0.0-okd-scos.5 in 82 minutes
+
+The operator chose to go the same day ("lets do now") and on scos.5, dropping the 7-day age rule. scos.6 was not
+offered from our build: it was in neither graph, and the release controller had no upgrade run of it from
+4.22.0-okd-scos.10. An OKD maintainer said on Slack that scos.6 and 5.1 ec.3 carry the latest base OS with an
+"eMudhra" fix. What that problem is, I could not find on GitHub. So the plan is scos.5 today and scos.5 → scos.6 as a
+5.0 update later.
+
+### Before the window
+
+| check | result |
+|---|---|
+| scos.5 edge (operator, release-controller API) | `{"From":"4.22.0-okd-scos.10","To":"5.0.0-okd-scos.5","Success":1,"Failure":0}`, AWS job `release-openshift-origin-installer-launch-aws-modern/2118387301678583808` |
+| `gates.sh` (11:33Z, then `--defrag-off` 11:49Z) | `GATES PASS` |
+| `br-ex.forwarding` (operator) | 1 on all three nodes |
+| zot-only images of per-node pods (operator, `crictl images --digests`) | NMState handler, OADP node-agent, vector cached on all three |
+| timed pull of scos.5's `stream-coreos` on node5, zot up | 1m50s: digest-only pulls go through zot to quay |
+| OADP Backup `pre-okd5-upgrade` (`tests/okd-5.0-upgrade/backup.yaml`) | `Completed` 11:40:15Z, 588/588 items, 18 DataUploads, no errors |
+| off-cluster inputs of the worst case | confirmed by the operator |
+
+**etcd.** okd#2384 is still open, so the hop ran with automatic defrag off. Fragmentation was 36–38%, close to the
+operator's 45% trigger, so the operator first defragmented on 4.22 by hand, using the blocking method, followers
+first:
+
+```bash
+oc -n openshift-etcd exec etcd-<node>.okd.sudops.pl -c etcdctl -- sh -c 'unset ETCDCTL_ENDPOINTS; etcdctl --command-timeout=30s --endpoints=https://localhost:2379 defrag'
+```
+
+node5 took 2.09 s, node6 1.95 s, and node4 (the leader) 2.00 s. All three endpoints were healthy after each, and
+there were no alarms. Afterwards the DBs were 115/115/125 MB with 0/0/8% not in use, the leader had not changed
+(raft term 74), and the raft index was equal on all three. Then the switch:
+
+```bash
+oc -n openshift-etcd-operator create configmap etcd-disable-defrag
+# DefragControllerDisabled=True AsExpected since 2026-11-10T11:48:51Z
+```
+
+**Start path.** The operator ran the patch to Cincinnati `stable-5.0`. The cluster then listed scos.2–scos.5, with
+scos.5 at `quay.io/okd/scos-release@sha256:29ed3ecc…`, the same digest as the release page. scos.1 was listed as a
+conditional update, `Recommended=False/SigningKeyVerificationFailure`.
+
+The etcd consistency read before the hop, `bash tests/okd-5.0-upgrade/etcd-consistency.sh pre`, gave `CONSISTENT 3
+members, hash 1551639787 at rev 178259624`. The snapshot was `cluster-backup.sh` on node4,
+`snapshot_2026-11-10_120101.db` (120 MB, revision 178263222). The snapshot and `static_kuberesources` were copied
+to two places off the cluster. The first copy landed in the repo root by mistake, untracked and not gitignored, and
+was moved out before any commit.
+
+### The window
+
+`oc adm upgrade --to=5.0.0-okd-scos.5` (operator) at 12:08:55Z. Timeline from `watch.sh` (readonly, 20 s polls):
+
+| time (Z) | event |
+|---|---|
+| 12:09:38 | desired 5.0.0-okd-scos.5, `ReleaseAccepted=True`, `history[0].verified=true` (the 4.22 CVO verified the 5.0 payload against `verifier-public-key-ci`); `Failing=True` for 20 s: the first try at CRD `rolebindingrestrictions.authorization.openshift.io` (22 of 1057), synced on retry |
+| 12:13–12:19 | etcd revision 13 rolls one member at a time (2/3 Ready for about a minute each) |
+| 12:18:18 | `ETCD-ON-TARGET`: past the point of no return; the read during the hop gave `CONSISTENT 3 members, hash 1927464603 at rev 178274371` |
+| 12:24–12:53 | kube-apiserver, kube-controller-manager, kube-scheduler, then OLM and network (OVN-K) roll; never Degraded |
+| 12:55:39 | 33/34 operators on 5.0; machine-config next |
+| 13:01:00–13:01:42 | **ALERT mcp-degraded**, cleared by itself (below) |
+| 13:01:21 | node4 cordoned; the mgr moves; zot-0 node4 → node5 (13:01:42–13:03:21); descheduler and ceph-csi-controller-manager in `ImagePullBackOff` until zot is back (13:03:41) |
+| 13:02:20–13:13:03 | **ALERT defrag-switch**, cleared by itself (below) |
+| 13:07:02 → 13:09:05 | node4 reboots, up on kubelet v1.36.5, Done on `rendered-master-a1f2c154`; cordon to Done 7.7 min |
+| 13:09:26 → 13:19:44 | node6, the same; its OSD waited for Ceph to be clean (13:13:22 → 13:13:42) |
+| 13:19:44 → 13:30:26 | node5, the same; zot-0 node5 → node6 (13:20:26–13:24:07, the RBD attach took about 3 min); cluster-logging and loki operators in `ImagePullBackOff` until about 13:25 |
+| 13:30:47 | 34/34 operators on 5.0, master pool 3/3 |
+| 13:31:24 | ClusterVersion `history[0]` Completed |
+| 13:33:28 | watcher `DONE`, after a 2 min hold |
+
+Only one OSD was ever down. Rook's PDBs held each node's OSD until the PGs were clean again, so a drain waited for
+recovery (about 1–2 min each). The CNPG primaries switched over ahead of each drain. Throughout, Ceph showed only its
+standing warnings, and the CNPG clusters stayed archiving.
+
+**The two alerts.**
+
+- `mcp-degraded` (40 s). The new machine-config-controller started at 12:59:05Z and refused to render the master pool:
+  `ignoring MC 99-master-generated-kubelet generated by older version 90b26966… (my version: 0e255703…)`. That MC is
+  generated from our KubeletConfig `system-reserved-increase`. Its controller had hit a transient `the object has
+  been modified` conflict, and then regenerated the MC with the new version annotation. The render followed at
+  13:01:25Z. It was a race between two controllers at start-up, and needed no action.
+- `defrag-switch` (11 min). The etcd operator pod moved to node5 at 13:01:32Z when node4 drained. Its first sync
+  reported `DefragControllerDisabled=False` at 13:02:00Z, while ConfigMap `etcd-disable-defrag` still existed (created
+  11:46:57Z). This is exactly the race the source reading predicted: the defrag controller waits for the operator-CR
+  cache but not the ConfigMap cache. The next sync, about 11 minutes later, set it back to `True` (13:13:00Z). No
+  `DefragControllerDefragment*` event appeared. The manual defrag before the window had put every member far below
+  the 45% trigger, so the gap had nothing to defragment. That guard paid off.
+
+### After the hop
+
+- `verify.sh 5.0.0-okd-scos.5 --defrag-off --since 2026-11-10T12:08:55Z`: the first run at 13:33Z failed only on Ceph
+  (`Progressing`, "Configuring Ceph Mgr(s)": Rook restarted both mgrs at 13:33:16Z and 13:33:45Z). The next failed
+  only on `rook-ceph-cluster` OutOfSync on `ServiceMonitor/rook-ceph/rook-ceph-mgr`, the known double writer (README
+  TODO), which selfHeal put back. At 13:38:31Z: `RESULT PASS`.
+- `etcd-consistency.sh post`: `CONSISTENT 3 members, hash 3928912595 at rev 178354290`. `br-ex.forwarding`: 1 on all
+  three nodes.
+- Nodes: CentOS Stream CoreOS 10.0.20261014-0, kernel 6.12.0-275.el10, kubelet v1.36.5, cri-o 1.36.4.
+- OLM: all 9 Subscriptions `AtLatestKnown`, every CSV `Succeeded`. `community-operators` moved to
+  `community-operator-index:v5.0` and is READY, and grafana-operator still resolves. `okderators` stays on
+  `catalog-index:4.22` until its own step.
+- The 5.0 CVO still verifies with `verifier-public-key-ci` against the `openshift-ci-release` store, so scos.6 (signed
+  in that store, checked earlier today) can verify the same way.
+- The alerts after the hop (operator read through Alertmanager):
+  - 13× `CephNodeDiskspaceWarning`, starting at each node's reboot. They are false: root disks are 56.5% / 28.5% /
+    34.3% used (174 / 286 / 262 GB free). The hop's image pulls stepped usage up, and the rule's 48 h
+    `predict_linear` extrapolates that step.
+  - `ClusterNotUpgradeable` (info). Three of our test builds cap `maxOpenShiftVersion` at 4.23, which OLM treats as
+    equal to 5.0: loki-operator and cluster-logging 6.6.0-2026-10-20-134619, and the descheduler 5.4.0-2026-11-03.
+    This blocks 5.1, not 5.0.z. The research had said logging and Loki carried no cap; they do.
+  - The rest are the standing set: CNPG PDBs ×3, KubeCPUOvercommit, InsightsRecommendationActive, Watchdog.
+
+Compared with HOP 2 (4.21 → 4.22, 83 min), this hop took about as long, despite each new image pull going through zot to
+quay. Automatic etcd defrag stays off until a build with the okd#2384 fix runs here (re-enable: delete the
+ConfigMap). The daily etcd consistency reads run for a week.
