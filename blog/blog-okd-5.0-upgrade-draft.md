@@ -201,3 +201,13 @@ probably the console or Argo CD.
 - okd#2366 (sample ImageStreams) has a fix merged 2026-10-27; which build carries it is unknown.
 - The release-controller page reads scos.6's upgrade test from our build as failed or pending and scos.5's as passed.
   That is page text, not a parse, and is read directly at go/no-go. scos.6 is also not in either graph yet.
+
+## 2026-11-10 — the cert-manager gate is dropped
+
+The design had the hop wait for the first ACME renewal on cert-manager 1.20 (`homelab-wildcard`, 2026-11-20), so that
+a renewal failure could not be mixed up with a 5.0 effect. The operator dropped that gate ("aim asap"). The renewal
+now happens on 5.0, with cert-manager 1.20 outside its Kube matrix (1.32–1.35; the cluster will be on 1.36). If it
+fails, the parked Helm fallback (branch `cert-manager-helm-fallback`) is the way out; the check moved to the post-hop
+week. The earliest window is now set by the target's age: `5.0.0-okd-scos.5` was created 2026-11-05T10:55:47Z, so it
+is 7 days old on 2026-11-12 from about 11:00Z. Before that: the window checks (`tests/okd-5.0-upgrade/`), a one-off
+OADP backup of the app namespaces within 24 h, and the operator reads that need `oc exec` or `oc debug`.
