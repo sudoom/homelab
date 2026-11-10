@@ -324,3 +324,76 @@ standing warnings, and the CNPG clusters stayed archiving.
 Compared with HOP 2 (4.21 → 4.22, 83 min), this hop took about as long, despite each new image pull going through zot to
 quay. Automatic etcd defrag stays off until a build with the okd#2384 fix runs here (re-enable: delete the
 ConfigMap). The daily etcd consistency reads run for a week.
+
+## 2026-11-10 — summary and design record
+
+This section keeps the design and its reasons, so that the spec, the recon notes and the plan can be deleted.
+
+**Result.** The cluster runs `5.0.0-okd-scos.5` (Kube 1.36.5) since 2026-11-10 13:31:24Z, 82 minutes after the start
+command, from `4.22.0-okd-scos.10`. 34/34 ClusterOperators, three nodes on CentOS Stream CoreOS 10.0.20261014-0 (kernel
+6.12.0-275.el10, cri-o 1.36.4), all ArgoCD apps Synced/Healthy, CNPG 2/2 and archiving, Ceph in its standing state.
+Update service Cincinnati (`https://updates.okd.io/api/updates/graph`), channel `stable-5.0`; `okderators` on
+`catalog-index:5.0` (commit 37fe780); all nine Subscriptions Manual.
+
+**Why move.** scos.10 was the last OKD 4.x build, so no fixes came to that line any more. No 5.0 feature was wanted
+and no date was set; the gates decided the moment. The node OS was already SCOS 10, so there was no OS major, and every
+5.0 build from scos.3 lists `4.22.0-okd-scos.10` as a source, so no intermediate hop.
+
+**Shape: four phases.** (A) settle the unknowns with no cluster change, each ending in a written answer here;
+(B) prepare with small reversible commits; (C) the window, with a go/no-go list; (D) after the hop: verify, update
+service, catalogs, the 5.0 builds of the operators, docs.
+
+**Decisions and why.**
+
+- *Start path.* Preference order: the cluster lists 5.0 itself after a channel change; else an explicit image by
+  digest with `--allow-explicit-upgrade`; never `--force`. The first worked: pointing the cluster at Cincinnati
+  `stable-5.0` listed scos.2 to scos.5. The 5.0 CVO still verifies with `verifier-public-key-ci` (okd#2369: scos.1
+  shipped without signatures and is a conditional update with `SigningKeyVerificationFailure`).
+- *Target build.* The design asked for the newest build at least 7 days old with a green CI run of the edge. The
+  operator took scos.5 the same day: it had one green AWS run of the edge from `4.22.0-okd-scos.10`, which the operator
+  accepted as enough (no bare-metal run needed). scos.6 was in neither graph and had no upgrade run from our build, so
+  scos.5 now and scos.5 to scos.6 as a 5.0 update later.
+- *etcd, okd#2384.* Open with no maintainer reply, same shape as this cluster (3 masters, automatic defrag on 5.0), so
+  the hop ran with automatic defrag off (ConfigMap `openshift-etcd-operator/etcd-disable-defrag`, read through the
+  `DefragControllerDisabled` condition rather than a log line). Fragmentation was 36-38%, near the 45% trigger, so a
+  blocking manual defrag on 4.22 came first, followers first; that is also why the 11 minutes in which the condition
+  read False after the etcd operator pod moved did nothing. Re-enable only with a fixed build running here; never a manual
+  `etcdctl defrag` on 5.0 while it is open. Consistency reads (revision and hash across the members) before, during,
+  after, and daily for a week.
+- *Worst case accepted.* An OKD upgrade cannot be rolled back, and an etcd snapshot restores only onto the build it was
+  taken on. Past the point of no return the way out is forward, or a reinstall plus restore from the app backups (CNPG to
+  R2, OADP, a one-off OADP backup the same day). The operator accepted that and no restore rehearsal was a gate.
+- *okd#2361* (CRI-O and Multus after an unclean shutdown): the nodes are on a UPS and reachable by console or SSH, so it
+  is a runbook note with a ready recovery command, not a gate. It did not occur.
+- *cert-manager stays on 1.20*, outside its Kube matrix on 1.36, as 1.18 was on 4.21 and 4.22. The design had the hop
+  wait for the first ACME renewal on 1.20 (2026-11-20) so that a failure could not be mixed up with a 5.0 effect; the
+  operator dropped that gate ("aim asap"). The Helm fallback branch stays.
+- *Operators.* CNPG and grafana-operator went to `installPlanApproval: Manual` first (the only two on Automatic, and the
+  marketplace moves `community-operators` to the `v5.0` index during the hop). The `okderators` tag stayed on 4.22
+  through the hop and flipped afterwards, as in both earlier hops, once it was clear that cert-manager and gitops stay
+  `AtLatestKnown`. The four zot test-build operators (logging and Loki, NMState, OADP, descheduler) rode the hop on
+  their 4.22 builds: a 5.0 build cannot be soaked on a 4.22 cluster, and four builds first would have delayed the hop by
+  days for no added safety. Each got a short written check for ties to Kube 1.35; none was found. The research had
+  said logging and Loki carry no `maxOpenShiftVersion` cap; they do (4.23), as does the descheduler 5.4 build, which
+  blocks 5.1 and not 5.0.z.
+- *zot.* The 5.0 payload is on `quay.io/okd/*`, which zot mirrors by host; zot does not cache digest-only pulls, so
+  payload pulls fall through to quay (measured 1m50s for one image on node5) and every node reboot while `zot-0` moves
+  stalls zot-only images for a few minutes (descheduler, ceph-csi-controller-manager, logging and loki operators in
+  `ImagePullBackOff` until zot was back). Per-node zot-only images (NMState handler, OADP node-agent, vector) were
+  confirmed cached on all three nodes before the window.
+- *Two disruptive changes never at once* (no drain headroom: 3 OSDs on 3 nodes). Not Monday 19:00-23:00Z; the Rook
+  close-out finished first.
+
+**Ruled out.** `--force` in any path; waiting for the 2026-11-20 renewal; waiting 7 days for the target's age; a
+restore rehearsal or a bare-metal CI run as gates; making the four test-build operators 5.0-ready before the hop;
+flipping the `okderators` tag before the hop; leaving automatic defrag on and trusting the 4.22 operator's defaults.
+
+**Plan review.** The design and the plan were reviewed on Fable 5.2 before approval and the findings applied (the etcd
+condition as the probe, a DONE condition needing every node on the new rendered MachineConfig, gates for backup
+freshness and for the off-cluster inputs a reinstall needs).
+
+**Open after the hop** (README TODO "OKD 5.0 follow-ups"): etcd defrag off until okd#2384 is fixed in a build running
+here; scos.6 as a 5.0 update; 5.0 builds of NMState, the descheduler, OADP and logging + Loki; the cert-manager
+renewal on 2026-11-20 and a 1.21 bundle; a 5.0 `oc` client (4.22.22 now); router HAProxy 2.8 to 3.2, the new MCO
+NetworkPolicies and the extra etcd leader election per defrag still to check; 13 `CephNodeDiskspaceWarning` false
+positives to age out.
