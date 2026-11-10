@@ -11,10 +11,12 @@ node); the 24 h soak passed and namespace `nmstate` is deleted. After the OKD 4.
 4.22 build: `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655` since 2026-10-27 at 18:26Z (an in-place OLM
 upgrade, InstallPlan `install-565gh`), whose 24 h soak passed on 2026-10-29.
 
-**2026-11-10, after the OKD 5.0 hop:** the catalog (`okd-test/nmstate-catalog:2026-11-10-160833`, built from
+**2026-11-10, after the OKD 5.0 hop:** the catalog (`okd-test/nmstate-catalog:2026-11-10-165132`, built from
 `okderators-catalog-index` `release-5.0`) and `startingCSV` point at the 5.0 build
-`kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454` (pipeline #43's branch at `199fa04`: operator code
-`release-5.0` `96778808`, el10 handler `nmstate-2.2.62-4.el10`). It reaches the cluster as an in-place OLM upgrade
+`kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515` (pipeline #43's branch at `173a239`: operator code
+`release-5.0` `96778808`, el10 handler `nmstate-2.2.62-4.el10`; catalog tag `2026-11-10-165132`). The first 5.0 build,
+`v5.0.0-2026-11-10-154454`, went live at 16:18Z without `tls_config.yaml` in the operator image, so the webhook and
+metrics pods could not start (ConfigMap `nmstate-tls-config` never rendered); the fix build replaces it in place. It reaches the cluster as an in-place OLM upgrade
 once the operator approves its InstallPlan; record and soak in `blog/blog-okderators-nmstate-draft.md`. Until that
 soak passes, the 4.22 build stays in zot as the rollback target ("Rollback to the 4.22 test build", below); v0.87.0
 from `operatorhubio-catalog` is the rollback of last resort ("Rollback to operatorhubio v0.87.0").
@@ -417,13 +419,14 @@ InstallPlans `install-879xr` and `install-775wp` in `openshift-nmstate`.
 
 ## Rollback to the 4.22 test build
 
-From the 5.0 build (`v5.0.0-2026-11-10-154454`) back to `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655`, while
+From the 5.0 build (`v5.0.0-2026-11-10-162515`) back to `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655`, while
 the 4.22 images and catalog `okd-test/nmstate-catalog:2026-10-27-181517` (`sha256:75417f71…`) are still in zot (they
 are deleted only after the 5.0 soak passes). OLM does not downgrade, so this is a re-subscribe. Every mutation is
 operator-run (# OPERATOR). **Never run for NMState on this cluster.**
 
-1. `git revert` the commit `nmstate: move to the okderators 5.0 test build` (catalog digest back to
-   `sha256:75417f715fd174c61c1ec545e3b5ad5fce3274c8c4b29fd9eb2876ade6c7cab7`, `startingCSV` back to the 4.22 CSV); push.
+1. Set the two values back in one commit, by hand (two 5.0 commits touched them: `nmstate: move to the okderators 5.0
+   test build` and `nmstate: move to the fixed 5.0 test build`; reverting one alone does not restore 4.22): catalog digest back to
+   `sha256:75417f715fd174c61c1ec545e3b5ad5fce3274c8c4b29fd9eb2876ade6c7cab7`, `startingCSV` back to the 4.22 CSV; push.
    Wait for the old digest to be served, and check the 4.22 CSV is offered:
 
    ```bash
@@ -437,7 +440,7 @@ operator-run (# OPERATOR). **Never run for NMState on this cluster.**
 
    ```bash
    oc -n openshift-nmstate delete subscription kubernetes-nmstate-operator
-   oc -n openshift-nmstate delete csv kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454
+   oc -n openshift-nmstate delete csv kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515
    ```
 
    Expected, but untested here: the CR, the CRDs, the handlers and the NNCPs stay (the operand is owned by the

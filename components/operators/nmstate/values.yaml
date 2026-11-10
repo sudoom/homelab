@@ -12,4 +12,4 @@ sourceNamespace: openshift-marketplace
 # picked up by OLM on its own.
 installPlanApproval: Manual
 # Install exactly the tested build. Empty or unset renders no startingCSV.
-startingCSV: kubernetes-nmstate-operator.v5.0.0-2026-11-10-154454
+startingCSV: kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515
