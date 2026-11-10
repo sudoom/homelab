@@ -397,3 +397,30 @@ here; scos.6 as a 5.0 update; 5.0 builds of NMState, the descheduler, OADP and l
 renewal on 2026-11-20 and a 1.21 bundle; a 5.0 `oc` client (4.22.22 now); router HAProxy 2.8 to 3.2, the new MCO
 NetworkPolicies and the extra etcd leader election per defrag still to check; 13 `CephNodeDiskspaceWarning` false
 positives to age out.
+
+## 2026-11-10 — `etcdDatabaseHighFragmentationRatio`, left firing
+
+About four hours after the hop the platform rule `etcdDatabaseHighFragmentationRatio` (warning, `for: 10m`) began
+firing on all three members:
+
+```
+(last_over_time(etcd_mvcc_db_total_size_in_use_in_bytes{job=~".*etcd.*"}[5m]) /
+ last_over_time(etcd_mvcc_db_total_size_in_bytes{job=~".*etcd.*"}[5m])) < 0.5
+and etcd_mvcc_db_total_size_in_use_in_bytes{job=~".*etcd.*"} > 104857600
+```
+
+The ratio sat at 0.43-0.46 from 17:35Z. That is the expected consequence of the decision above: automatic defrag is
+off (`DefragControllerDisabled=True` since 13:13Z) because of okd#2384 (still open, no comments since 2026-11-05), and
+a manual defrag on 5.0 would take the same non-blocking path. The manual blocking defrag before the window had brought
+fragmentation to 0-7 %; the hop's writes (every operator rolling, three reboots) left free pages behind again.
+
+Fragmentation costs disk space in the DB file, not correctness. The limit that matters is the backend quota:
+
+```
+oc -n openshift-etcd get pod etcd-node4.okd.sudops.pl -o json | jq -r '.spec.containers[]|select(.name=="etcd")|.env[]|select(.name|test("QUOTA"))|.name+"="+.value'
+ETCD_QUOTA_BACKEND_BYTES=8589934592
+```
+
+8 GiB, against about 115 MiB in use and a file of about 200-250 MiB. The operator decided to leave the alert firing
+rather than silence it, so it stays visible until a build with the okd#2384 fix lets defrag back on. The daily
+`etcd-consistency.sh` reads record `dbSize` and `dbSizeInUse` per member, which is where growth would show.
