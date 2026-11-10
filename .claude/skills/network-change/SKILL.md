@@ -82,7 +82,7 @@ break-glass kubeconfig is for** (SA token, not OAuth).
 **It recurred on 2026-09-14, and not on an upgrade.** An unplanned MCO reroll (next paragraph) selected node4 at
 12:09Z; the drain sat on `immich-postgres-1` for 5+ hours, the MCD went Degraded after the first hour
 (`failed to drain node: node4.okd.sudops.pl after 1 hour`), and five control-plane replicas plus mon-a and osd.0
-were Pending the whole time. **Every master-pool MachineConfig change hits this, not just the 4.22 hop.**
+were Pending the whole time. **Every master-pool MachineConfig change hits this, not just the 4.22 and 5.0 hops.**
 
 **Resolved 2026-09-15: `immich-postgres` runs `instances: 2`** (`components/apps/immich/values.yaml`, commit
 `e460c61`). With two or more instances CNPG performs a switchover ahead of the drain when the primary's node is
