@@ -934,3 +934,55 @@ okd-operator-pipeline#44 (`release-4.22`) was replaced by a body edit (`gh pr ed
 It now also says the bundle is installed on OKD 4.22.0-okd-scos.10 as an in-place OLM upgrade from the `release-4.21`
 build (#45), and that after 24 h there were 0 restarts and the NNCPs were unchanged. #40 and #36 were left alone. #43-#46
 are out of draft (the operator's step) with no review yet.
+
+## 2026-11-10 — toward the 5.0 build: baseline
+
+The cluster went to OKD 5.0.0-okd-scos.5 this morning (`blog/blog-okd-5.0-upgrade-draft.md`) and NMState still runs
+our 4.22 test build, `kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655` from `okd-test-nmstate`. That build does
+not block 5.1 (its CSV carries no `olm.maxOpenShiftVersion`; `Upgradeable=False` names only Loki, cluster-logging and
+the descheduler), but its handler userland is el9 (`nmstate-2.2.62-3.el9`) on SCOS 10 hosts, and its code is the
+`release-4.22` line. The next step is a build from pipeline `main` (which builds 5.0), through #43.
+
+Decisions taken before starting:
+
+- The build runs from #43's own branch, `sudoom:nmstate-bundle-fix`, with one commit added: the `nmstate/operator`
+  gitlink moves from `main`'s `fffb76de` to `openshift/kubernetes-nmstate` `release-5.0` head `96778808` (2026-09-25).
+  `main`'s pin is 4 commits behind and lacks OCPBUGS-94072 (DNS egress on 5353 in the three `allow-*-egress-dns`
+  NetworkPolicies), which the installed 4.22 build has. #43's branch is 7 commits behind upstream `main`; none of those
+  touches `nmstate/` or `common.sh` (`git diff --stat <merge-base> upstream/main -- nmstate common.sh` is empty), so no
+  rebase.
+- One accepted step back: `release-5.0` has `golang.org/x/net v0.56.0` (indirect); `release-4.22` has v0.57.0
+  (OCPBUGS-101979/-101843). Upstream's own 5.0 line, taken as is.
+- Console-plugin pin stays `c5a19713` (built with `npm ci` on 10-26).
+- In-place OLM upgrade, as on 10-27. It cannot pause between nodes: the DaemonSet advances when the new handler is
+  Ready, and each handler start re-applies that node's NNCPs (the backnet).
+
+Baseline, read-only (`ocr` = the readonly kubeconfig):
+
+```
+5.0.0-okd-scos.5 ... Available=True Failing=False Progressing=False ... Upgradeable=False
+mcp master 3/3/0
+sub: AtLatestKnown kubernetes-nmstate-operator.v4.22.0-2026-10-23-195655
+nncp storage-node4/5/6 gen=3 True
+nnce node4 gen=3 Available since=2026-11-10T13:08:45Z / node5 13:30:17Z / node6 13:19:18Z   (the hop's reboots)
+backnet  node4 enp1s0f0np0 up mtu=9000 192.168.10.2/24, ceph-shim 192.168.10.16/24
+         node5 .3 / .17, node6 .4 / .18, all up, mtu 9000
+ceph     HEALTH_WARN = BLUESTORE_SLOW_OP_ALERT + the three muted AUTH_INSECURE_*; osd.0-2 up; PGs 128/128 + 1/1 active+clean
+cnpg     media/immich/homebox 2/2 archiving=True
+br-ex.forwarding  node4 1, node5 1, node6 1
+zot      14.80 GiB free on data-zot-0 (gate: >= 8 GiB, and >= 5 GiB after this plan's ~0.5 GiB push)
+okd-build  no PVC, no Job; sa builder and rolebinding builder-scc-privileged present
+base image registry.ci.openshift.org/origin/scos-5.0:base-stream9 resolves (sha256:141d2cdc..., created 2026-07-25)
+```
+
+The node4 handler had restarted twice. Its previous container exited 1 at 13:08:30Z during the hop:
+
+```
+ocr -n openshift-nmstate logs nmstate-handler-9njgp --previous
+... "Successfully took nmstate exclusive lock"
+... "unable to fetch TLS configuration" error: unable to get TLS profile from API server: failed to get APIServer "/cluster":
+    failed to get server groups: Get "https://172.30.0.1:443/api": dial tcp 172.30.0.1:443: connect: network is unreachable
+```
+
+It started before the node's pod network was up during the reboot; node4 went Ready at 13:08:40Z and the next container
+(started 13:08:30Z) has run since. The node5/node6 restarts are exit 137 from the hop's reboots. Benign.
