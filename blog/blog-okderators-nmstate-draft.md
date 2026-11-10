@@ -1051,3 +1051,67 @@ The diff for the later upstream catalog PR and both contracts were copied off th
 the build phase was closed by name: `oc -n okd-build delete pod/nmstate-log-reader`, then
 `oc -n okd-build delete job/nmstate-build-catalog-2026-11-10-160833 pvc/nmstate-build-storage`. `okd-build` is back to
 no PVC and no Job; zot 14.54 GiB free.
+
+## 2026-11-10 — on the 5.0 build, and the missing `tls_config.yaml`
+
+**First switch.** `c85e220` moved the catalog digest to `sha256:4d5b4043…` and `startingCSV` to
+`v5.0.0-2026-11-10-154454`. `oc diff` is refused for the readonly SA (it needs a dry-run patch), so the check was a
+rendered-vs-live spec comparison: CatalogSource `image` and Subscription `startingCSV`, nothing else. Argo CD put the new
+digest on the CatalogSource at 16:16:46Z and OLM created `install-jkb8f` (only the 5.0 CSV; kinds ClusterRole,
+ClusterRoleBinding, CSV, CRD `nmstates.nmstate.io`, ServiceAccount). One difference from 10-27's InstallPlan: no
+namespaced Role/RoleBinding in the plan, because the 5.0 CSV has no namespaced `permissions` (upstream moved them into
+`clusterPermissions` and replaced every `*` verb with explicit verbs: Secrets read/delete only, pods read-only, plus
+`config.openshift.io/apiservers get` for the TLS profile). OLM still created a Role/RoleBinding for the CSV. Approved by
+the operator at 16:18:44Z.
+
+The handler roll, sampled every 5 s: node6 16:19:13Z, node5 16:20:00Z, node4 16:20:22Z, DaemonSet 3/3/3 on the new
+handler at 16:20:56Z. Ceph read `osd_up=3`, PGs 128/128 active+clean on every pass; each NNCE went Progressing and back
+to Available at generation 3. `br-ex.forwarding` 1/1/1 afterwards.
+
+**The defect.** The new `nmstate-webhook` and `nmstate-metrics` pods never started:
+
+```
+Warning FailedMount pod/nmstate-webhook-59788858d8-7mc5v  MountVolume.SetUp failed for volume "tls-config" : configmap "nmstate-tls-config" not found
+Warning FailedMount pod/nmstate-metrics-585d468674-jtsmt  MountVolume.SetUp failed for volume "tls-config" : configmap "nmstate-tls-config" not found
+```
+
+Both Deployments use `strategy: Recreate`, so the old pods were already gone. `release-5.0`'s
+`deploy/handler/operator.yaml` mounts ConfigMap `nmstate-tls-config` on OpenShift, and the operator renders it from
+`deploy/handler/tls_config.yaml` (`profile.json: '{{ .TLSProfileJSON }}'`, the cluster's APIServer TLS profile).
+Upstream's `build/Dockerfile.operator` and `Dockerfile.operator.openshift` copy that file into the image:
+
+```
+COPY deploy/handler/tls_config.yaml /bindata/kubernetes-nmstate/handler/tls_config.yaml
+```
+
+The pipeline's `nmstate/images/operator.Containerfile` copies an explicit list of `deploy/` files and that line was not
+in it, so the operator never rendered the ConfigMap. None of the build's checks compares the image's bindata with
+upstream's Dockerfile, which is why the build passed. Impact while it lasted: the handlers (the network) were fine; the
+NMState webhooks are `failurePolicy: Ignore`, so NNCP writes were not blocked, only unmutated; the `nmstate-monitor`
+target was down.
+
+**Fix forward** (operator's choice over a hand-made ConfigMap or a rollback to 4.22): one line added to the
+Containerfile on #43's branch (`173a239` "[nmstate] Copy tls_config.yaml into the operator image"), after which the
+operator image's COPY list matches upstream's line for line (the handler image copies no manifests). Rebuilt as
+`2026-11-10-162515` (16:25:42Z-16:45:07Z, all checks PASS, `COPY deploy/handler/tls_config.yaml ...` at step 6/16, and
+the pushed image's layers list `bindata/kubernetes-nmstate/handler/tls_config.yaml`); test catalog `2026-11-10-165132`
+(`sha256:7c3867a3…`), whose walk shows the installed `v5.0.0-2026-11-10-154454` reaching `v5.0.0-2026-11-10-162515`
+(`882c700` added the installed 5.0 CSV to the tsv row). `6133c31` moved the charts; `install-7brpp` approved at
+16:57:06Z:
+
+```
+16:57:20Z  ConfigMap nmstate-tls-config created (owner NMState/nmstate)
+16:58:02Z  handler node4 f2ae21   16:58:25Z node6   16:58:31Z node5
+16:58:31Z  DaemonSet 3/3/3, webhook and metrics Ready
+```
+
+About 1.5 minutes; Ceph `osd_up=3`, 128/128 on all 14 recorded passes; NNCEs Available at generation 3 by 16:58:57Z.
+The console-plugin's new ReplicaSet scaled 1→0→1 twice during the operator's first reconcile, then settled.
+
+Post-roll, 16:59Z: the three `allow-*-egress-dns` policies carry 53 and 5353; backnet NNS as in the baseline; Ceph
+known warnings only; CNPG ×3 archiving; Argo CD all Synced/Healthy; CRD storedVersions unchanged; seven pods 1/1 with
+0 restarts; operator log 0 `forbidden` (the tightened RBAC holds), only "object has been modified" conflicts during
+start-up; `up{service="nmstate-monitor"}` = 1 (operator, console). The metrics pod logs
+`http: TLS handshake error from 10.129.0.2:…: EOF` twice every 10 s: its liveness and readiness probes are plain
+`tcpSocket` probes on the TLS port 8443, and `10.129.0.2` is node5's OVN management port, where kubelet probes come
+from. Noise, new with the 5.0 code's probes. Soak started 16:58:31Z.
