@@ -1,0 +1,18 @@
+{
+ "metadata": {
+  "name": "cluster"
+ },
+ "status": {
+  "defaultStream": "stream-a",
+  "availableStreams": [
+   {
+    "name": "stream-a",
+    "osImage": "quay.io/okd/scos-content@sha256:aaaa000000000000000000000000000000000000000000000000000000000000"
+   },
+   {
+    "name": "stream-b",
+    "osImage": "quay.io/okd/scos-content@sha256:5b5b000000000000000000000000000000000000000000000000000000000000"
+   }
+  ]
+ }
+}

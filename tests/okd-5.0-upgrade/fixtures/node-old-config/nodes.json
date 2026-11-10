@@ -1,0 +1,82 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "node4.okd.sudops.pl",
+    "annotations": {
+     "machineconfiguration.openshift.io/currentConfig": "rendered-master-5d0c1f3a9b7e4c2d8f6a1b3c5d7e9f02",
+     "machineconfiguration.openshift.io/desiredConfig": "rendered-master-5d0c1f3a9b7e4c2d8f6a1b3c5d7e9f02",
+     "machineconfiguration.openshift.io/state": "Done"
+    }
+   },
+   "spec": {},
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ],
+    "nodeInfo": {
+     "kubeletVersion": "v1.36.5",
+     "bootID": "node4-boot-0000",
+     "osImage": "fixture",
+     "kernelVersion": "fixture",
+     "containerRuntimeVersion": "fixture"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "name": "node5.okd.sudops.pl",
+    "annotations": {
+     "machineconfiguration.openshift.io/currentConfig": "rendered-master-5d0c1f3a9b7e4c2d8f6a1b3c5d7e9f02",
+     "machineconfiguration.openshift.io/desiredConfig": "rendered-master-5d0c1f3a9b7e4c2d8f6a1b3c5d7e9f02",
+     "machineconfiguration.openshift.io/state": "Done"
+    }
+   },
+   "spec": {},
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ],
+    "nodeInfo": {
+     "kubeletVersion": "v1.36.5",
+     "bootID": "node5-boot-0000",
+     "osImage": "fixture",
+     "kernelVersion": "fixture",
+     "containerRuntimeVersion": "fixture"
+    }
+   }
+  },
+  {
+   "metadata": {
+    "name": "node6.okd.sudops.pl",
+    "annotations": {
+     "machineconfiguration.openshift.io/currentConfig": "rendered-master-e7e23bbc443ee66b196dffe436e1a1a2",
+     "machineconfiguration.openshift.io/desiredConfig": "rendered-master-e7e23bbc443ee66b196dffe436e1a1a2",
+     "machineconfiguration.openshift.io/state": "Done"
+    }
+   },
+   "spec": {},
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ],
+    "nodeInfo": {
+     "kubeletVersion": "v1.36.5",
+     "bootID": "node6-boot-0000",
+     "osImage": "fixture",
+     "kernelVersion": "fixture",
+     "containerRuntimeVersion": "fixture"
+    }
+   }
+  }
+ ]
+}

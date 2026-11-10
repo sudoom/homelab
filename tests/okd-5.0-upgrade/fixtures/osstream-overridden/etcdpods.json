@@ -1,0 +1,55 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "etcd-node4.okd.sudops.pl"
+   },
+   "spec": {
+    "nodeName": "node4.okd.sudops.pl"
+   },
+   "status": {
+    "phase": "Running",
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "etcd-node5.okd.sudops.pl"
+   },
+   "spec": {
+    "nodeName": "node5.okd.sudops.pl"
+   },
+   "status": {
+    "phase": "Running",
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "etcd-node6.okd.sudops.pl"
+   },
+   "spec": {
+    "nodeName": "node6.okd.sudops.pl"
+   },
+   "status": {
+    "phase": "Running",
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,72 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "master"
+   },
+   "spec": {
+    "paused": false,
+    "configuration": {
+     "name": "rendered-master-5d0c1f3a9b7e4c2d8f6a1b3c5d7e9f02"
+    }
+   },
+   "status": {
+    "configuration": {
+     "name": "rendered-master-5d0c1f3a9b7e4c2d8f6a1b3c5d7e9f02"
+    },
+    "machineCount": 3,
+    "updatedMachineCount": 3,
+    "readyMachineCount": 3,
+    "degradedMachineCount": 0,
+    "conditions": [
+     {
+      "type": "Updated",
+      "status": "True"
+     },
+     {
+      "type": "Updating",
+      "status": "False"
+     },
+     {
+      "type": "Degraded",
+      "status": "False"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "worker"
+   },
+   "spec": {
+    "paused": false,
+    "configuration": {
+     "name": "rendered-worker-7c3e5a1b9d2f4e6a8c0b2d4f6a8c0e13"
+    }
+   },
+   "status": {
+    "configuration": {
+     "name": "rendered-worker-7c3e5a1b9d2f4e6a8c0b2d4f6a8c0e13"
+    },
+    "machineCount": 0,
+    "updatedMachineCount": 0,
+    "readyMachineCount": 0,
+    "degradedMachineCount": 0,
+    "conditions": [
+     {
+      "type": "Updated",
+      "status": "True"
+     },
+     {
+      "type": "Updating",
+      "status": "False"
+     },
+     {
+      "type": "Degraded",
+      "status": "False"
+     }
+    ]
+   }
+  }
+ ]
+}

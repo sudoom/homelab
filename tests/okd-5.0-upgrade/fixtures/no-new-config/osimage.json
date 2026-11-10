@@ -1,0 +1,6 @@
+{
+ "data": {
+  "releaseVersion": "5.0.0-okd-scos.6",
+  "baseOSContainerImage": "quay.io/okd/scos-content@sha256:0000000000000000000000000000000000000000000000000000000000005000"
+ }
+}

@@ -1,0 +1,3 @@
+[{"Endpoint":"https://192.168.1.7:2379","Status":{"header":{"revision":175200300,"raft_term":41},"version":"3.6.13","dbSize":198004736,"raftIndex":281000010,"raftTerm":41,"raftAppliedIndex":281000010,"dbSizeInUse":115245056}},
+ {"Endpoint":"https://192.168.1.8:2379","Status":{"header":{"revision":175200301,"raft_term":41},"version":"3.6.13","dbSize":194908160,"raftIndex":281000011,"raftTerm":41,"raftAppliedIndex":281000011,"dbSizeInUse":115126272}},
+ {"Endpoint":"https://192.168.1.9:2379","Status":{"header":{"revision":175200301,"raft_term":41},"version":"3.6.13","dbSize":198291456,"raftIndex":281000011,"raftTerm":41,"raftAppliedIndex":281000011,"dbSizeInUse":115187712}}]

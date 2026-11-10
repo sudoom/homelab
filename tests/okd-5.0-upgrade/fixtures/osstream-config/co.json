@@ -1,0 +1,66 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "etcd"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Available",
+      "status": "True"
+     },
+     {
+      "type": "Progressing",
+      "status": "False"
+     },
+     {
+      "type": "Degraded",
+      "status": "False"
+     },
+     {
+      "type": "Upgradeable",
+      "status": "True"
+     }
+    ],
+    "versions": [
+     {
+      "name": "operator",
+      "version": "5.0.0-okd-scos.6"
+     }
+    ]
+   }
+  },
+  {
+   "metadata": {
+    "name": "machine-config"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Available",
+      "status": "True"
+     },
+     {
+      "type": "Progressing",
+      "status": "False"
+     },
+     {
+      "type": "Degraded",
+      "status": "False"
+     },
+     {
+      "type": "Upgradeable",
+      "status": "True"
+     }
+    ],
+    "versions": [
+     {
+      "name": "operator",
+      "version": "5.0.0-okd-scos.6"
+     }
+    ]
+   }
+  }
+ ]
+}

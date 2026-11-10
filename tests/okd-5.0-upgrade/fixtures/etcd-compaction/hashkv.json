@@ -1,0 +1,3 @@
+[{"Endpoint":"https://192.168.1.7:2379","HashKV":{"header":{"revision":175200100},"hash":3121651977,"compact_revision":175190000,"hash_revision":175200100}},
+ {"Endpoint":"https://192.168.1.8:2379","HashKV":{"header":{"revision":175200100},"hash":3121651977,"compact_revision":175190000,"hash_revision":175200100}},
+ {"Endpoint":"https://192.168.1.9:2379","HashKV":{"header":{"revision":175200100},"hash":2001,"compact_revision":175200050,"hash_revision":175200100}}]

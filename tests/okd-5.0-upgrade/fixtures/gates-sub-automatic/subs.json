@@ -1,0 +1,39 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "namespace": "cnpg-system",
+    "name": "cloudnative-pg"
+   },
+   "spec": {
+    "name": "cloudnative-pg",
+    "channel": "stable",
+    "source": "fixture",
+    "installPlanApproval": "Manual"
+   }
+  },
+  {
+   "metadata": {
+    "namespace": "grafana",
+    "name": "grafana-operator"
+   },
+   "spec": {
+    "name": "grafana-operator",
+    "channel": "stable",
+    "source": "fixture",
+    "installPlanApproval": "Automatic"
+   }
+  },
+  {
+   "metadata": {
+    "namespace": "openshift-operators",
+    "name": "fixture-unset"
+   },
+   "spec": {
+    "name": "fixture-unset",
+    "channel": "stable",
+    "source": "fixture"
+   }
+  }
+ ]
+}

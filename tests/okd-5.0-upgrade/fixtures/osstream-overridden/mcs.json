@@ -1,0 +1,16 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "name": "rendered-master-5d0c1f3a9b7e4c2d8f6a1b3c5d7e9f02",
+    "annotations": {
+     "machineconfiguration.openshift.io/release-image-version": "5.0.0-okd-scos.6",
+     "machineconfiguration.openshift.io/os-image-url-overridden": "true"
+    }
+   },
+   "spec": {
+    "osImageURL": "quay.io/example/custom-os@sha256:beef000000000000000000000000000000000000000000000000000000000000"
+   }
+  }
+ ]
+}

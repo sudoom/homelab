@@ -1,0 +1,44 @@
+{
+ "metadata": {
+  "name": "version"
+ },
+ "spec": {
+  "channel": "stable-5.0"
+ },
+ "status": {
+  "desired": {
+   "version": "5.0.0-okd-scos.6"
+  },
+  "history": [
+   {
+    "version": "5.0.0-okd-scos.6",
+    "state": "Completed",
+    "verified": true,
+    "completionTime": "2026-11-25T12:00:00Z"
+   },
+   {
+    "version": "4.22.0-okd-scos.10",
+    "state": "Completed",
+    "verified": true
+   }
+  ],
+  "conditions": [
+   {
+    "type": "Available",
+    "status": "True"
+   },
+   {
+    "type": "Progressing",
+    "status": "False"
+   },
+   {
+    "type": "Failing",
+    "status": "False"
+   },
+   {
+    "type": "ReleaseAccepted",
+    "status": "True"
+   }
+  ]
+ }
+}
