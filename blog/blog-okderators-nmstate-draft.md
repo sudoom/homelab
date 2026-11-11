@@ -1206,3 +1206,18 @@ already grown to 25.41 from the GC of the GitOps test images deleted on 2026-11-
 
 The only rollback now is v0.87.0 from `operatorhubio-catalog` (still offered; the `alpha` head is v0.87.3), which has
 not been tried on OKD 5.0. The "Rollback to the 4.22 test build" section is gone from the chart README.
+
+### #43 updated
+
+#43's title is now `[nmstate] Remove the ImageStream from the bundle, update to release-5.0` (the shape of #44), and the
+body lists its three changes (ImageStream removal, operator pin `fffb76de` → `release-5.0` head `96778808`,
+`tls_config.yaml` copied into the operator image, with the `MountVolume.SetUp failed … configmap "nmstate-tls-config"
+not found` line) and verifies them with the 5.0 build and this soak instead of the 4.21 build. The operator approved the
+text and the diff against the old body first:
+
+```
+gh pr edit 43 -R okd-project/okd-operator-pipeline --title '[nmstate] Remove the ImageStream from the bundle, update to release-5.0' --body-file pr43-body.md
+```
+
+The draft state was left as it was (`draft=false`, the operator's call). Left on this plan: the zot free-space reading
+after the next GC; the catalog PR waits for a maintainer merge and for upstream CI to push `quay.io/okderators/nmstate/*`.
