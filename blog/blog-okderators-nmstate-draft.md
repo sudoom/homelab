@@ -1172,3 +1172,37 @@ probe's daily restart.
 Decision: the soak passes. The 4.22 build is no longer a rollback target, so its zot images go next, together with
 the first 5.0 build (`5.0.0-2026-11-10-154454`, catalog `2026-11-10-160833`), which cannot run correctly and was never
 a rollback target. After that the only rollback is v0.87.0 from `operatorhubio-catalog`. Then #43's title and body.
+
+### zot cleanup after the soak
+
+Nothing in the cluster referenced an old image (pods, CSV `relatedImages`, CatalogSources): only the fix build's
+operator `14a12630`, handler `f2ae21b0`, console-plugin `ba171f1d` and catalog `7c3867a3`. A delete by digest removes
+the manifest for every tag that points at it, so I resolved every tag in the five repositories first:
+
+```
+Z=zot.apps.okd.sudops.pl/okd-test
+for r in nmstate/operator nmstate/handler nmstate/console-plugin nmstate/bundle nmstate-catalog; do
+  for t in $(skopeo list-tags docker://$Z/$r | jq -r '.Tags[]'); do
+    printf '%s:%s sha256:%s\n' $r $t "$(skopeo inspect --raw docker://$Z/$r:$t | shasum -a 256 | cut -c1-64)"
+  done
+done
+```
+
+16 tags, 16 different digests, so no kept tag could go with a deleted one. The delete list was the other 11: the
+4.22 build (`4.22.0-2026-10-23-195655`: operator, handler, console-plugin, bundle), the 4.21 bundle
+(`4.21.0-2026-10-26-123722`), the first 5.0 build (`5.0.0-2026-11-10-154454`, four images) and two catalogs,
+`2026-10-27-181517` (`75417f71`, the 4.22 rollback catalog) and `2026-11-10-160833` (`4d5b4043`, the catalog without
+`tls_config.yaml`). The operator ran it, by digest:
+
+```
+grep -o '^[^ ]*' nmstate-delete-list.txt | while read -r ref; do skopeo delete "docker://$ref" && echo "deleted $ref" || echo "FAILED $ref"; done
+# 11 x deleted, 0 FAILED
+```
+
+Afterwards each repository holds one tag, `5.0.0-2026-11-10-162515` (catalog `2026-11-10-165132`), at the same
+digests as before; the 7 pods kept running and the CatalogSource stayed `READY`. `data-zot-0` read 25.41 GiB free of
+48.91 at 17:38Z, unchanged, since a delete frees blobs only at the next GC (24 h interval). The earlier 14.39 GiB had
+already grown to 25.41 from the GC of the GitOps test images deleted on 2026-11-10.
+
+The only rollback now is v0.87.0 from `operatorhubio-catalog` (still offered; the `alpha` head is v0.87.3), which has
+not been tried on OKD 5.0. The "Rollback to the 4.22 test build" section is gone from the chart README.

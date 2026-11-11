@@ -7,8 +7,8 @@
 # v5.0.0-2026-11-10-154454) lacked tls_config.yaml in the operator image, so the webhook and
 # metrics pods could not start; it was live 16:18-17:0x on 2026-11-10.
 # Before it: the release-4.22 catalog (tag 2026-10-27-181517, v4.22.0-2026-10-23-195655),
-# sha256:75417f715fd174c61c1ec545e3b5ad5fce3274c8c4b29fd9eb2876ade6c7cab7 -- the rollback target
-# until the 5.0 soak passes; the 4.21 one (tag 2026-10-26-132334) was
+# sha256:75417f715fd174c61c1ec545e3b5ad5fce3274c8c4b29fd9eb2876ade6c7cab7, deleted from zot with
+# the first 5.0 catalog after the 5.0 soak (2026-11-11); the 4.21 one (tag 2026-10-26-132334) was
 # sha256:4433daca7a0dccc36b21e4c3f135f088189fa49b4412daffa01486f849774698.
 # Temporary: this chart and its root-app entry leave again when the kubernetes-nmstate-operator
 # Subscription (components/operators/nmstate/) moves to `okderators` (once okderators publishes

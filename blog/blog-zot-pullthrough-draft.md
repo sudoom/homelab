@@ -307,3 +307,10 @@ Two things to remember:
 - **Free space lags.** 15.4 GiB is before the next GC pass; the real gain gets measured after it.
 
 Automating this is a README TODO now ("Automate zot image cleanup").
+
+## 2026-11-11 — NMState test images deleted after the 5.0 soak
+
+11 manifests by digest under `okd-test/nmstate*` (the 4.22 build, the 4.21 bundle, the broken first 5.0 build and two
+catalogs); one tag per repository remains, the live 5.0 build. Details and the tag-to-digest check in
+`blog-okderators-nmstate-draft.md` ("zot cleanup after the soak"). `data-zot-0` before the next GC: 25.41 GiB free of
+48.91 (14.39 GiB on 2026-11-10 evening; the GitOps test images deleted at 13:49Z that day were collected in between).
