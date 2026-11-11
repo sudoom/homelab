@@ -424,3 +424,42 @@ ETCD_QUOTA_BACKEND_BYTES=8589934592
 8 GiB, against about 115 MiB in use and a file of about 200-250 MiB. The operator decided to leave the alert firing
 rather than silence it, so it stays visible until a build with the okd#2384 fix lets defrag back on. The daily
 `etcd-consistency.sh` reads record `dbSize` and `dbSizeInUse` per member, which is where growth would show.
+
+## 2026-11-11 — scos.6 offered, and the defrag switch has a start-up race
+
+Cincinnati `stable-5.0` offers `5.0.0-okd-scos.6` from scos.5 since 2026-11-10 22:39Z (`UpdateAvailable`). Release
+notes: the GitHub release (`okd-project/okd`, tag `5.0.0-okd-scos.6`, published 2026-11-09 22:45Z) is only the
+`oc adm release info` dump: machine-os 10.0.20261014-0 → 10.0.20261108-0, Kubernetes still 1.36.5, and 191 of 196
+image digests changed, which is a rebuild on a new base, not 191 code changes. The changelog is on the release
+controller (`amd64.origin.releases.ci.openshift.org/releasestream/5-scos-stable/release/5.0.0-okd-scos.6?from=5.0.0-okd-scos.5`):
+source changes in machine-config-operator (OCPBUGS-135085, OCPBUGS-136379), ovn-kubernetes (OCPBUGS-135003), OLM and
+operator-registry (OCPBUGS-135357, OCPBUGS-129498), cluster-config-operator (`golang.org/x/net` for CVE-2026-33814) and
+cloud-only components; cluster-etcd-operator (`dc770522`) and etcd (`7cf5f0db`) are rebuilt from the same commits, so
+no okd#2384 fix. Base OS: kernel 6.12.0-275 → 280.el10, ca-certificates 2026.2.90 → 2026.2.92, glibc, systemd,
+openssl 3.5.9; NetworkManager, openvswitch and CRI-O 1.36.4 unchanged. CI: the upgrade from scos.5 passed.
+
+`gates.sh` (readonly) at about 18:00Z: 21 PASS, 1 FAIL, `upgradeable` (the zot test builds' `maxOpenShiftVersion`
+4.23), which blocks a minor update and not a 5.0.z one.
+
+The runbook flagged one thing as "unverified, read from the source": whether the defrag controller's first sync after
+an etcd-operator restart can run before its ConfigMap cache fills. Read at `dc770522`:
+
+```
+pkg/operator/defragcontroller/defragcontroller.go
+  89  return factory.New().ResyncEvery(compactionInterval+1*time.Minute).WithBareInformers(
+  90          operatorClient.Informer(),
+  91  ).WithSync(syncer.Sync).ToController("DefragController", ...)
+ 108  disableConfigMap, err := c.configmapLister.ConfigMaps(operatorclient.OperatorNamespace).Get(defragDisableConfigmapName)
+ 109  if err != nil && !k8serror.IsNotFound(err) {
+pkg/operator/starter.go
+ 643  kubeInformersForNamespaces.Start(ctx.Done())
+ 661  go defragController.Run(ctx, 1)        (no WaitForCacheSync for the kube informers in between)
+```
+
+The controller waits only for the operator CR's informer; the ConfigMap lister comes from the namespace informers,
+which are started but not waited for. An empty cache answers NotFound, which reads as "defrag enabled". So the race
+is real in the code. How often it is lost is unknown: both informers start together and the namespace holds few
+ConfigMaps. During the hop all three members were at about 41%, under the controller's 45% threshold, so a lost race
+had nothing to do. Now all three are above 50% (the fragmentation alert), so a lost race defragments one member, on the
+non-blocking path okd#2384 implicates. Every etcd-operator restart is that exposure: scos.6 changes its image, and
+each drain of its node moves it. The 45% gate cannot pass any more, because defrag on 5.0 is ruled out.
