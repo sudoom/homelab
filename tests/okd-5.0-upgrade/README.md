@@ -1,6 +1,10 @@
 # OKD 4.22 → 5.0 upgrade: runbook and checks
 
-Runbook for moving this cluster in place from `4.22.0-okd-scos.10` to a `5.0.0-okd-scos.N` build. The record of the
+Runbook for moving this cluster in place from `4.22.0-okd-scos.10` to a `5.0.0-okd-scos.N` build, reused for 5.0.z
+updates (scos.5 → scos.6 on 2026-11-11). For a 5.0.z update: the start command and every script take the target
+version; section 1.5 and the catalog flip of section 6 are done; the defrag switch of 1.4 stays on, and its 45% gate
+cannot pass on 5.0 (no defrag allowed; the start-up race in README TODO (4)(a)), so it is a known FAIL the operator
+accepts; `Upgradeable=False` from the zot test builds blocks a minor update, not a 5.0.z one. The record of the
 planning and of the hop itself is `blog/blog-okd-5.0-upgrade-draft.md`; the previous hop (4.21 → 4.22, 83 min) is
 `blog/blog-okd-4.22-upgrade-draft.md` ("HOP 2").
 
@@ -34,8 +38,14 @@ They are bash 3.2 compatible (macOS `/bin/bash`). Run them with `bash`, not `sh`
 
 ### 1.1 Target
 
-The newest `5.0.0-okd-scos.N` that is at least 7 days old, has a green upgrade run from `4.22.0-okd-scos.10` for that
-exact build, a signature in the store the 4.22 CVO reads, and no new open issue that breaks upgrades or 3-node clusters.
+The newest `5.0.0-okd-scos.N` offered from the running build, with a green upgrade run from the running build for that
+exact build, a signature in the store the running CVO reads, and no new open issue that breaks upgrades or 3-node
+clusters. No minimum age: the operator dropped the 7-day rule for scos.5 on 2026-11-10 and removed it on 2026-11-11.
+
+Release notes: the GitHub release body is only the `oc adm release info` dump (versions and image digests). The
+changelog (source changes per component with bug IDs, the base-OS package diff, the upgrade CI runs per source
+release) is on the release controller:
+`https://amd64.origin.releases.ci.openshift.org/releasestream/5-scos-stable/release/5.0.0-okd-scos.<N>?from=<running build>`.
 
 ```bash
 GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN" gh api repos/okd-project/okd/releases/tags/5.0.0-okd-scos.<N> --jq .body   # 4.22.0-okd-scos.10 under Upgrades; "Pull From" digest
@@ -60,8 +70,10 @@ handler (a CentOS Stream 9 userland) talks to both over D-Bus and the OVS socket
   for n in node4 node5 node6; do echo "--- $n"; oc debug -q node/$n.okd.sudops.pl -- chroot /host crictl images --digests | grep -E 'REPOSITORY|zot\.apps\.okd\.sudops\.pl/okd-test/'; done
   ```
 
-  Required on every node, for the per-node pods: `okd-test/nmstate/handler` `sha256:2f8f3047…`,
-  `okd-test/oadp/velero` `sha256:8e026079…`, `okd-test/cluster-logging/vector` `sha256:3a8b699a…`. A missing one is
+  Required on every node, for the per-node pods: `okd-test/nmstate/handler` `sha256:f2ae21b0…` (the 5.0 build since
+  2026-11-10; `2f8f3047…` before), `okd-test/oadp/velero` `sha256:8e026079…`, `okd-test/cluster-logging/vector`
+  `sha256:3a8b699a…`. A DaemonSet pod running on a node with that `imageID` proves the image is cached there (readonly:
+  `ocr get pods -A -o json`, `containerStatuses[].imageID` per `spec.nodeName`). A missing one is
   pulled now, while zot is up. Every other image of logging/Loki, NMState, OADP and the descheduler (operators,
   plugins, their test catalogs) is zot-only too and moves with its pod; cached everywhere is better.
 - Time one payload pull by digest on one node (a `scos-content` digest from the target's release body). With zot up
