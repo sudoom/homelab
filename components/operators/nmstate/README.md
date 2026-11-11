@@ -16,10 +16,11 @@ upgrade, InstallPlan `install-565gh`), whose 24 h soak passed on 2026-10-29.
 `kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515` (pipeline #43's branch at `173a239`: operator code
 `release-5.0` `96778808`, el10 handler `nmstate-2.2.62-4.el10`; catalog tag `2026-11-10-165132`). The first 5.0 build,
 `v5.0.0-2026-11-10-154454`, went live at 16:18Z without `tls_config.yaml` in the operator image, so the webhook and
-metrics pods could not start (ConfigMap `nmstate-tls-config` never rendered); the fix build replaces it in place. It reaches the cluster as an in-place OLM upgrade
-once the operator approves its InstallPlan; record and soak in `blog/blog-okderators-nmstate-draft.md`. Until that
-soak passes, the 4.22 build stays in zot as the rollback target ("Rollback to the 4.22 test build", below); v0.87.0
-from `operatorhubio-catalog` is the rollback of last resort ("Rollback to operatorhubio v0.87.0").
+metrics pods could not start (ConfigMap `nmstate-tls-config` never rendered); the fix build replaces it in place. It reached the cluster as an in-place OLM upgrade
+(InstallPlan `install-7brpp`, done 16:58:31Z), and its 24 h soak passed on 2026-11-11 (record:
+`blog/blog-okderators-nmstate-draft.md`). The 4.22 build stays in zot only until the cleanup that follows the soak
+("Rollback to the 4.22 test build", below, works until then); after it, v0.87.0 from `operatorhubio-catalog` is the
+only rollback ("Rollback to operatorhubio v0.87.0").
 
 ## What the chart installs
 

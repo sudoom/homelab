@@ -1115,3 +1115,60 @@ start-up; `up{service="nmstate-monitor"}` = 1 (operator, console). The metrics p
 `http: TLS handshake error from 10.129.0.2:…: EOF` twice every 10 s: its liveness and readiness probes are plain
 `tcpSocket` probes on the TLS port 8443, and `10.129.0.2` is node5's OVN management port, where kubelet probes come
 from. Noise, new with the 5.0 code's probes. Soak started 16:58:31Z.
+
+## 2026-11-11 — the 5.0 build soak passed
+
+Read at 17:30:33Z, 24 h 32 min after the fix roll finished (16:58:31Z), with the readonly kubeconfig
+(`ocr` = `KUBECONFIG=~/.kube/config-readonly oc`). The `br-ex.forwarding`, Alertmanager and `up` lines are the
+operator's. Every pass line of the plan held.
+
+Pods: the same seven as after the roll, none replaced, none restarted.
+
+```
+$ ocr -n openshift-nmstate get pods -o json | jq -r '.items[] | "\(.metadata.name) \(.spec.nodeName) start=\(.status.startTime) restarts=\([.status.containerStatuses[]?.restartCount]|add)"'
+nmstate-console-plugin-f65d48947-n8mhr node5 start=2026-11-10T16:57:27Z restarts=0
+nmstate-handler-hqjsz                  node6 start=2026-11-10T16:58:02Z restarts=0
+nmstate-handler-rn22v                  node5 start=2026-11-10T16:58:24Z restarts=0
+nmstate-handler-s2g6l                  node4 start=2026-11-10T16:57:48Z restarts=0
+nmstate-metrics-dbfdcc78f-s7n52        node5 start=2026-11-10T16:57:55Z restarts=0
+nmstate-operator-768f487774-s6mx7      node5 start=2026-11-10T16:57:08Z restarts=0
+nmstate-webhook-7b5fdcc49c-67bdx       node5 start=2026-11-10T16:57:57Z restarts=0
+```
+
+OLM and the node network:
+
+```
+CSV kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515 Succeeded
+SUB kubernetes-nmstate-operator AtLatestKnown installed=…-162515 current=…-162515
+NNCE node4.okd.sudops.pl.storage-node4 True since=2026-11-10T16:58:42Z gen=3
+NNCE node5.okd.sudops.pl.storage-node5 True since=2026-11-10T16:58:38Z gen=3
+NNCE node6.okd.sudops.pl.storage-node6 True since=2026-11-10T16:58:57Z gen=3
+NNCP storage-node4/5/6 gen=3 Available=True
+```
+
+The NNCE transition times are the roll's and the generations are the baseline's: nothing re-enacted in 24 h.
+
+Logs over the whole window, per Deployment (`operator`, `webhook`, `metrics`), all three zero:
+
+```
+ocr -n openshift-nmstate logs deploy/nmstate-<x> --since=24h | grep -c -i -E 'no such host|i/o timeout|dial tcp'   # 0
+ocr -n openshift-nmstate logs deploy/nmstate-<x> --since=24h | grep -c -i forbidden                               # 0
+ocr -n openshift-nmstate logs deploy/nmstate-<x> --since=24h | grep -c -i -E 'level=error|"level":"error"'        # 0
+```
+
+Operator lines: `net.ipv4.conf.br-ex.forwarding` 1 on node4, node5 and node6; `up{service="nmstate-monitor"}` = 1
+for the whole console window, instance `10.129.0.95:8443` (the metrics pod since the roll). Alertmanager
+(`active=true`): `PodDisruptionBudgetAtLimit` ×3 (CNPG primaries), `KubeCPUOvercommit`, `Watchdog`,
+`etcdDatabaseHighFragmentationRatio` ×3 (left firing on purpose while defrag is off), `UpdateAvailable` (scos.6
+offered since 2026-11-10 22:39Z), `ClusterNotUpgradeable`, `InsightsRecommendationActive`, `CephHealthWarning`. All
+known; nothing from `openshift-nmstate`, no `PrometheusKubernetesListWatchFailures`, no `TargetDown`.
+
+Around it: Ceph 3 OSDs up, PGs 129/129 active+clean (128 + `.mgr`), HEALTH_WARN from BlueStore slow ops and the muted
+`AUTH_INSECURE_*` checks only; CNPG media, immich and homebox 2/2 with `ContinuousArchiving=True`;
+`Upgradeable=False` still names only cluster-logging, loki-operator and the descheduler. The only restarts
+cluster-wide since the previous evening were the three transmission containers at 03:00Z, which is their liveness
+probe's daily restart.
+
+Decision: the soak passes. The 4.22 build is no longer a rollback target, so its zot images go next, together with
+the first 5.0 build (`5.0.0-2026-11-10-154454`, catalog `2026-11-10-160833`), which cannot run correctly and was never
+a rollback target. After that the only rollback is v0.87.0 from `operatorhubio-catalog`. Then #43's title and body.
