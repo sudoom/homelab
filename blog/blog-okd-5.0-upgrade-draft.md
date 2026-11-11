@@ -463,3 +463,66 @@ ConfigMaps. During the hop all three members were at about 41%, under the contro
 had nothing to do. Now all three are above 50% (the fragmentation alert), so a lost race defragments one member, on the
 non-blocking path okd#2384 implicates. Every etcd-operator restart is that exposure: scos.6 changes its image, and
 each drain of its node moves it. The 45% gate cannot pass any more, because defrag on 5.0 is ruled out.
+
+## 2026-11-11 — scos.5 → scos.6 in 105 minutes
+
+The operator dropped the 7-day rule for good ("remove 7d rule. go tonight") and accepted the defrag start-up race.
+The runbook `tests/okd-5.0-upgrade/` ran unchanged apart from the target (`43f3417` notes how to reuse it for 5.0.z).
+
+Pre-window (17:57–18:02Z): offered image = the release's `Pull From` (`sha256:ea7e0f42…746f`); signature-1 HTTP 200;
+`gates.sh` 21 PASS, 1 FAIL `upgradeable` (minor-only); fragmentation node4 56.7%, node5 57.07%, node6 57.05%;
+`br-ex.forwarding` 1/1/1; `etcd-consistency.sh pre` CONSISTENT (hash 1540481152, rev 179345905); etcd snapshot on node4
+(`snapshot_2026-11-11_180132.db`, 272 MB) with two copies off the node. The per-node zot-only images (NMState handler
+`f2ae21b0`, velero `8e026079`, vector `3a8b699a`) were proven cached by the DaemonSet pods' `imageID` on each node,
+without `crictl`.
+
+Start (operator) `oc adm upgrade --to=5.0.0-okd-scos.6` at 18:03:55Z. Timeline from the watcher
+(`evidence/window-scos6-20261111T180244Z.events`):
+
+| time (Z) | event |
+|---|---|
+| 18:04:06 | CV desired scos.6; `Failing=True` "the update could not be applied" for 8 s, then False |
+| 18:04:59 | etcd-operator restarts on the scos.6 image (race moment 1): no defrag event |
+| 18:05:32–18:13:26 | etcd revision 14 rolls node4, node5, node6 (each 2/3 for about a minute) |
+| 18:12:27 | `ETCD-ON-TARGET`; `etcd-consistency.sh mid` CONSISTENT (hash 871313934) at 18:12:53 |
+| 18:32 | 28/34 operators on target |
+| 18:53:31 | node4 cordoned; osd.0 down |
+| 19:13:32 | `ALERT stuck-drain-node4` (the CNPG race below) |
+| 19:23:31 | the held pod is killed at the end of its grace period; 19:26:54 node4 reboots |
+| 19:28:55 | node4 Ready (2 min reboot), Done 19:29:20 |
+| 19:29:20 | node6 cordoned; zot-0 down 19:29:57–19:32:53 (moved to node4) |
+| 19:36:13 | node6 reboots, Done 19:38:35 |
+| 19:38:57 | node5 cordoned; 19:39:26 etcd-operator restarts on node6 (race moment 2): no defrag event |
+| 19:40:16 | `ALERT cv-failing` (machine-config Degraded since 19:23:08), cleared 19:41:15 |
+| 19:45:35 | node5 reboots, Done 19:47:55 |
+| 19:48:47 | CV history Completed; `DONE` 19:50:55 after the 120 s hold |
+
+**The stuck drain.** At 18:53:19Z CNPG began switching the homebox primary off the cordoned node4
+(`SwitchingOver … from homebox-postgres-1 to homebox-postgres-2`). The old primary's postgres container exited 0 at
+18:53:28 ("Releasing primary lease"); the drain evicted the pod at 18:53:31 with CNPG's 1800 s grace; at 18:53:42 the
+kubelet started the container again (restart 1) and in the same second logged `Killing: Stopping container postgres`.
+The instance manager came up as a streaming replica (18:54:15) and never shut down, so the pod sat `Terminating` until
+the SIGKILL at 19:23:31. My reading, not verified: the stop signal reached PID 1 before the instance manager had
+installed its handler. The primary was healthy on node6 the whole time and nothing was lost. I proposed deleting the
+replica pod with `--grace-period=60`; the operator did not act and by 19:22Z it was not worth it. node6 and node5
+drained normally (the old primary stopped within seconds both times), so it is a race, not a rule. The same 30 minutes
+pushed machine-config past its pool deadline: `syncRequiredMachineConfigPools: context deadline exceeded` (Degraded
+19:23:08Z), CV `Failing` for over 10 min, which cleared by itself while node5 rolled.
+
+**The defrag race.** The etcd operator restarted twice (new image at 18:04:59Z, the node5 drain at 19:39:26Z), each
+time with all three members above 45% fragmentation. Zero `DefragControllerDefragment*` or leader-transfer events in
+the window; `DefragControllerDisabled=True` throughout. Two restarts without a defrag say the race is not usually lost;
+they do not say it cannot be.
+
+**After.** `etcd-consistency.sh post` CONSISTENT (hash 2467342476, rev 179450488). `verify.sh` first gave 16 PASS,
+1 FAIL: 7 OLM apps Synced/Degraded from `ResolutionFailed` Subscriptions while the catalogs came back (the HOP 2
+pattern); clear at 19:53:01Z, and the re-run gave 17/17 PASS. `br-ex.forwarding` 1 on every node after its reboot (all
+three read at 19:40Z and node5 again at 19:48Z). Nodes on CentOS Stream CoreOS 10.0.20261108-0, kernel
+6.12.0-280.el10, CRI-O 1.36.4. Restarts in the window all line up with the reboots (kube-apiserver check-endpoints, KCM,
+csi-rbdplugin, multus, cluster-baremetal-operator, immich-server). The node5 NMState handler restarted 3 times: the
+reboot, then a start at 19:47:26 before the node's pod network was up
+(`dial tcp 172.30.0.1:443: connect: network is unreachable`), clean since 19:47:40. zot: 19.5 GiB free.
+
+One change in the payload shows on the cluster: the `Upgradeable=False` message now reads "blocking minor version
+upgrades to 5.1 or higher … maximum supported OCP version … is 5.0" for the logging, Loki and descheduler test builds
+(it said 4.23 before), which fits OCPBUGS-135357 in the changelog.
