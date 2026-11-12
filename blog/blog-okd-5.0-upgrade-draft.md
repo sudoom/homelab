@@ -526,3 +526,32 @@ reboot, then a start at 19:47:26 before the node's pod network was up
 One change in the payload shows on the cluster: the `Upgradeable=False` message now reads "blocking minor version
 upgrades to 5.1 or higher … maximum supported OCP version … is 5.0" for the logging, Loki and descheduler test builds
 (it said 4.23 before), which fits OCPBUGS-135357 in the changelog.
+
+## 2026-11-12 — the day after scos.6: one stale alert, etcd still consistent
+
+The session-start sweep at 17:03Z was clean: 3/3 nodes, `5.0.0-okd-scos.6` with nothing offered, 34/34 COs, 54/54 apps,
+every CSV and Certificate fine, no restarts since 19:50Z yesterday apart from the transmission pods' daily 03:00 one,
+CNPG ×3 archiving, Ceph 129/129 PGs active+clean, zot 19.0 GiB free.
+
+The daily etcd read (`bash tests/okd-5.0-upgrade/etcd-consistency.sh daily`, operator-run, 17:04:40Z):
+
+```
+member  node   revision   dbSize     dbSizeInUse
+.7      node4  180157019  275726336  120094720
+.9      node6  180157019  277585920  120086528
+.8      node5  180157019  280154112  120020992
+VERDICT CONSISTENT 3 members, hash 3544974599 at rev 180157019, compact_revision 180153590
+```
+
+`dbSize` is byte-for-byte what it was after the update (19:51Z yesterday); in use fell from ~146 MB to ~120 MB, so the
+freed pages stay in the file while defrag is off (~57% fragmentation).
+
+One alert came out of the update window: `CsvAbnormalFailedOver2Min` (warning) for
+`clusterkubedescheduleroperator.v5.4.0-2026-11-03-074110`, firing since 19:42:12Z. The CSV's own history shows
+why: `Failed ComponentUnhealthy` at 19:39:39Z ("deployment descheduler-operator not available", the node6 drain), then
+`Pending NeedsReinstall` → `InstallReady` → `Installing` → `Succeeded` at 19:40:14Z. Today the CSV is `Succeeded`, both
+descheduler pods Running with 0 restarts, and the olm-operator pod (started 19:39:06Z) has 0 restarts. My reading, not
+verified: olm-operator still exports the `csv_abnormal{phase="Failed"}` series from those 35 seconds. The readonly SA
+got nothing from the olm-operator metrics endpoint, and a Prometheus query by exec is the operator's. The fix would be
+an olm-operator pod restart; the operator chose to **leave it firing** ("leave it") until olm-operator restarts on its
+own, e.g. at the next update.
