@@ -555,3 +555,25 @@ verified: olm-operator still exports the `csv_abnormal{phase="Failed"}` series f
 got nothing from the olm-operator metrics endpoint, and a Prometheus query by exec is the operator's. The fix would be
 an olm-operator pod restart; the operator chose to **leave it firing** ("leave it") until olm-operator restarts on its
 own, e.g. at the next update.
+
+## 2026-11-13 — day 3 after scos.6: quiet
+
+Sweep at 10:45Z clean: 3/3 nodes, `5.0.0-okd-scos.6` with nothing offered, 34/34 COs, 54/54 apps, CSVs and
+Certificates fine, only the transmission pods' 03:00 restarts, CNPG ×3 archiving, Ceph standing WARN only. zot
+`data-zot-0` (kubelet stats summary): 24.3 GiB free of ~48.9, below the 25.41 GiB read before the 11-11 NMState image
+deletes, because the immich v3.4.1 and homepage v2.8.0 images were pulled in between.
+
+Daily etcd read (operator-run, 10:46:36Z):
+
+```
+member  node   revision   dbSize     dbSizeInUse
+.7      node4  180745621  275726336  121466880
+.9      node6  180745621  277585920  121495552
+.8      node5  180745621  280154112  121475072
+VERDICT CONSISTENT 3 members, hash 1376749160 at rev 180745621, compact_revision 180741209
+```
+
+`dbSize` unchanged since the update, in use ~121 MB. Alertmanager (`active=true`) holds the same set as yesterday,
+nothing new since 2026-11-11: `PodDisruptionBudgetAtLimit` ×3 (CNPG primary PDBs, structural), `KubeCPUOvercommit`,
+`CephHealthWarning`, `etcdDatabaseHighFragmentationRatio` ×3 (defrag off, left firing), `ClusterNotUpgradeable` (the
+4.23 caps), `InsightsRecommendationActive`, `CsvAbnormalFailedOver2Min` (left firing) and `Watchdog`.
