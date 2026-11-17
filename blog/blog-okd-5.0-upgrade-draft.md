@@ -577,3 +577,28 @@ VERDICT CONSISTENT 3 members, hash 1376749160 at rev 180745621, compact_revision
 nothing new since 2026-11-11: `PodDisruptionBudgetAtLimit` ×3 (CNPG primary PDBs, structural), `KubeCPUOvercommit`,
 `CephHealthWarning`, `etcdDatabaseHighFragmentationRatio` ×3 (defrag off, left firing), `ClusterNotUpgradeable` (the
 4.23 caps), `InsightsRecommendationActive`, `CsvAbnormalFailedOver2Min` (left firing) and `Watchdog`.
+
+## 2026-11-17 — last daily etcd read: the week closes consistent
+
+Sweep at 16:36Z clean: 3/3 nodes on `5.0.0-okd-scos.6`, nothing offered, 34/34 COs, 54/54 apps, CNPG ×3 archiving,
+zot 23.9 GiB free, and Ceph **HEALTH_OK** (the `BLUESTORE_SLOW_OP_ALERT` warning has aged out; only the muted
+`AUTH_INSECURE_*` checks remain). The only restart since 11-13: kube-apiserver revision 144 rolled out at 00:21Z today,
+and on node6 the `check-endpoints` sidecar exited 255 once, 4 s after start, then came up.
+
+Final daily etcd read (operator-run, 16:37:03Z):
+
+```
+member  node   revision   dbSize     dbSizeInUse
+.7      node4  184136167  275726336  121073664
+.9      node6  184136168  277585920  121126912
+.8      node5  184136168  280154112  121065472
+VERDICT CONSISTENT 3 members, hash 3580269397 at rev 184136167, compact_revision 184132042
+```
+
+The one-revision spread comes with a one-entry `raftAppliedIndex` spread, so it is a write in flight during the read,
+not the okd#2384 signature (a revision gap that grows while `raftAppliedIndex` stays in lockstep). `dbSize` is still
+byte-identical to the day of the update, about 121 MB in use.
+
+That closes the post-hop week: every read since the hop was CONSISTENT (post-hop, after scos.6, 11-12, 11-13, 11-17; I
+skipped 11-14 to 11-16). Defrag stays off until a build with the okd#2384 fix runs here, and the consistency check is
+re-run after any etcd-operator restart.
