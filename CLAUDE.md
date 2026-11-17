@@ -331,6 +331,7 @@ manifests live under `tests/`; the operator applies and deletes them. Expect rou
 ## Commit and branch conventions
 
 - Commit directly to `master` — ArgoCD watches it. No feature branches and no PRs for this repo; the only branches are upstream-contribution clones and the parked `cert-manager-helm-fallback`.
+- **Commits and SSH pushes need the operator's YubiKey (since 2026-11-16).** Commits are SSH-signed with a hardware key, which needs a touch and sometimes a PIN, so I cannot commit or push. I stage as I go, and at each break point (always at "call it") I hand over one command for the operator's own terminal that chains the commits and the push. Not with `!`: that has no TTY, so the PIN prompt fails. Subagents stage and never commit. Commits through the GitHub API with a token were considered and rejected (2026-11-17).
 - Commit messages: `<scope>: <imperative summary>` — e.g. `cert-manager: bump to v1.16.2`, `root-app: add monitoring stack`, `storage: enable fd-b zone`.
 - One logical change per commit. The rendered-manifest diff should be predictable from the message alone.
 - Renovate PRs (label `dependencies`) are reviewed, not rewritten.
