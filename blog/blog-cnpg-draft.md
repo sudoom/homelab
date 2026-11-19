@@ -1411,3 +1411,7 @@ Two changes followed (operator: "rule + switchover"):
   stay disabled; the plugin stays disabled (vendored manifest). Docker versioning keeps the `-1.1.1` vectorchord suffix
   fixed, so a vectorchord version change stays manual. The first PR should be 18.6 → 18.7 (1.30.2's new default
   image, CVE fixes).
+
+The switchover change closed README TODO "CNPG: `primaryUpdateMethod: switchover`" (open since 2026-09-15; it said
+"spec field, no restart to apply", and that held: after the push all three Clusters read `switchover` and no instance
+pod was recreated). The TODO is removed in the follow-up docs commit.
