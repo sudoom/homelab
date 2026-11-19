@@ -833,3 +833,41 @@ differs from `release-4.21` only in `common.sh` (the `OKD_VERSION` default, whic
 read, and the nested-submodule fix) and `operator-deploy.yaml` (50 extra lines). The body says it is not built from
 this branch yet and points at the `release-4.21` run 39785980679. A draft cannot be merged; it is marked ready only
 after the in-cluster check build passes.
+
+## 2026-11-18 — #52 merged; the bundle is on quay, the catalog step went to the wrong branch
+
+A maintainer merged [#52](https://github.com/okd-project/okd-operator-pipeline/pull/52) at 12:37:39Z
+(merge commit `aef4aa8`). The push started run
+[44305729907](https://github.com/okd-project/okd-operator-pipeline/actions/runs/44305729907) "Deploy Cert-Manager":
+
+| Job | Result |
+|---|---|
+| Deploy Operator (12:37:45Z → 12:46:27Z) | success: `quay.io/okderators/cert-manager/operator-bundle:1.20.0-2026-11-18-123802` pushed |
+| Catalog Index PR / Open Catalog Index PR | failure at step 11 "Validate catalog" (`opm validate catalog`); step 12 "Create pull request" skipped |
+
+The job ran with `catalog_branch: release-4.21`, not `release-4.22`:
+
+```
+Uses: okd-project/okd-operator-pipeline/.github/workflows/catalog-pr.yaml@refs/heads/release-4.22 (aef4aa8…)
+  catalog_branch: release-4.21
+```
+
+`cert-manager-deploy.yaml` on `release-4.22` passes only `operator: cert-manager` to `operator-deploy.yaml`, whose
+`catalog_branch` input defaults to `release-4.21`. `gitops-deploy.yaml` on the same branch passes
+`catalog_branch: release-4.22`, which is why the GitOps run of 11-05 opened catalog PR #64 on the right branch. #52
+changed the push branch in the workflow but not the catalog branch.
+
+The `opm validate` error itself is not in the job log: the fetched log ends at 12:46:48Z inside the "Render bundles"
+step, while the job ran to 12:49:12Z. The release-4.21 channel is linear (1.14 → 1.15 → 1.18 → 1.18 → 1.20 10-22) and
+the script appends the new bundle with `replaces` the 10-22 entry; the bundle versions are unique. A local
+reproduction (`opm render` + `update-catalog-package.sh` + `opm validate` on a `release-4.21` clone) is not run yet.
+
+Whatever the validate error is, a catalog PR on `release-4.21` would be wrong. What is open: a one-line pipeline PR
+on `release-4.22` adding `catalog_branch: release-4.22` to `cert-manager-deploy.yaml`; that push does not touch
+`cert-manager/**`, so a maintainer `workflow_dispatch` of "Deploy Cert-Manager" (or the next `cert-manager/` change)
+is what opens the catalog PR afterwards. The homelab is not affected: it reads `catalog-index:5.0`, and
+`catalog-index:4.22` already carries the 10-22 1.20 bundle built on `release-4.21`.
+
+2026-11-19: filed draft [#53](https://github.com/okd-project/okd-operator-pipeline/pull/53) `release-4.22` ←
+`sudoom:cert-manager-catalog-branch-4.22` (`5088178`, signed): one line, `catalog_branch: release-4.22` in
+`cert-manager-deploy.yaml`. Only cert-manager and GitOps deploy on pushes to `release-4.22`, and GitOps already sets it.
