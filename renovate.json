@@ -45,13 +45,40 @@
       "groupName": "immich"
     },
     {
-      "description": "CNPG Postgres operand + backup images are SUPERVISED, never Renovate-bumped. The operand tag encodes a Postgres major (cloudnative-pg/postgresql:18) or pg-major+extension (cloudnative-vectorchord:18-1.1.1) -> a major bump is a DB migration event (vchord also needs an in-DB ALTER EXTENSION). The barman-cloud plugin image (plugin-barman-cloud) is pinned to a vendored install manifest in components/operators/cnpg-barman-plugin/templates/plugin.yaml -> a tag bump alone would desync the manifest (same trap as sealed-secrets/rook), and the new plugin version must be re-checked against the running CNPG minor. Same gate class as ceph/rook.",
+      "description": "CNPG Postgres operand images: Renovate proposes MINOR updates only (since 2026-11-19), as one grouped PR, reviewed, never automerged. Tags are pinned to the Postgres minor (18.6, 18.6-1.1.1; floating 18 tags drifted per node, 2026-09-15). Docker versioning treats the vectorchord suffix (-1.1.1) as a compatibility string, so only the Postgres part moves; a vectorchord version change stays a manual job. The clusters use primaryUpdateMethod switchover, so a minor roll costs a switchover per cluster, not a ~4 min in-place restart.",
       "matchDatasources": [
         "docker"
       ],
       "matchPackageNames": [
-        "ghcr.io/tensorchord/cloudnative-vectorchord",
         "ghcr.io/cloudnative-pg/postgresql",
+        "ghcr.io/tensorchord/cloudnative-vectorchord"
+      ],
+      "groupName": "postgres minor",
+      "automerge": false,
+      "prBodyNotes": [
+        "After merge, on the immich-postgres primary as postgres superuser: `ALTER EXTENSION vector UPDATE;` if the new vectorchord build ships a newer pgvector (components/apps/immich/values.yaml). Check that all three clusters return to 2/2 healthy and ContinuousArchiving=True."
+      ]
+    },
+    {
+      "description": "A Postgres MAJOR (18 -> 19) is a database migration event, never a Renovate PR.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/cloudnative-pg/postgresql",
+        "ghcr.io/tensorchord/cloudnative-vectorchord"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The barman-cloud plugin image (plugin-barman-cloud) is pinned to a vendored install manifest in components/operators/cnpg-barman-plugin/templates/plugin.yaml -> a tag bump alone would desync the manifest (same trap as sealed-secrets/rook), and the new plugin version must be re-checked against the running CNPG minor. Bumped by hand.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
         "ghcr.io/cloudnative-pg/plugin-barman-cloud"
       ],
       "enabled": false
