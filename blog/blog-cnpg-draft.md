@@ -1375,3 +1375,39 @@ Two fixes: raise the R2 rule to ~40 days (30 + 7 + margin), or keep 31 and shrin
 second: `retentionPolicy: "23d"` on `media-postgres-r2`, `immich-postgres-r2` and `homebox-postgres-r2`. A 23-day
 recovery window needs a base at most 23 + 7 = 30 days old and WAL from then on, all under the 31-day rule. The R2
 rule stays as the backstop if barman's own retention ever stops running.
+
+## 2026-11-19 — operator 1.30.1 → 1.30.2, then switchover and minor-only Renovate
+
+The operator approved InstallPlan `install-f8d7z` (`cloudnative-pg.v1.30.2`, waiting since 11-18 10:54Z; the
+Subscription is Manual since 11-10). Release notes checked first: PG 14 dropped (we run 18.6), a 1.32 removal warning
+for in-tree `barmanObjectStore` (all three clusters use the `barman-cloud` plugin), `leases` `delete` RBAC (OLM-managed),
+fixes for snapshot-created replicas ignoring `backup_label`, switchover status retries and a frozen postmaster.
+
+Watch (15 s poll, readonly SA; NEW = pod created after the upgrade):
+
+```
+12:47:08  new cnpg-controller-manager pod
+12:47:20  all 3  Waiting for the instances to become active   replicas -1 recreated ("Creating new Pod to reattach a PVC")
+12:48:07  all 3  Primary instance is being restarted without a switchover   replicas ready
+12:48:22  homebox-2, media-3 primaries not ready; immich-2 from 12:48:37
+12:51:11  media    healthy 2/2   primary media-postgres-3
+12:51:27  homebox  healthy 2/2   primary homebox-postgres-2
+12:51:42  immich   healthy 2/2   primary immich-postgres-2
+```
+
+Each primary was down about three minutes (`primaryUpdateMethod: restart`, the default), the same shape as the 18.6 roll
+on 2026-09-15. ContinuousArchiving=True on all three afterwards. grafana-operator 5.25.0 → 5.26.0 was approved in the
+same minute and reached Succeeded.
+
+Two changes followed (operator: "rule + switchover"):
+
+- **`primaryUpdateMethod: switchover`** (with `primaryUpdateStrategy: unsupervised`, already the default) in the three
+  Cluster templates (`cnpg-clusters`, `immich`, `homebox`). A roll now promotes the already-updated replica instead of
+  restarting the primary in place, so the outage is a switchover, and the primary changes node on every roll. Lint,
+  render and kubeconform pass; `oc diff` needs patch rights the readonly SA lacks, so the live diff is the operator's.
+- **Renovate proposes Postgres minors.** The rule that disabled `cloudnative-pg/postgresql`,
+  `cloudnative-vectorchord` and `plugin-barman-cloud` is split in three: the two operand images get minor/patch PRs as
+  one group "postgres minor", never automerged, with a PR note for `ALTER EXTENSION vector UPDATE` on immich; majors
+  stay disabled; the plugin stays disabled (vendored manifest). Docker versioning keeps the `-1.1.1` vectorchord suffix
+  fixed, so a vectorchord version change stays manual. The first PR should be 18.6 → 18.7 (1.30.2's new default
+  image, CVE fixes).

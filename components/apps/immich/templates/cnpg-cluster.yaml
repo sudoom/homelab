@@ -12,6 +12,11 @@ metadata:
 spec:
   instances: {{ $pg.instances }}
   imageName: {{ $pg.image }}
+  # Minor-image and operator upgrades promote the already-updated replica
+  # instead of restarting the primary in place (~4 min outage per cluster on
+  # 2026-09-15 with the default `restart`). The primary moves node on each roll.
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
   # vchord must be preloaded for the extension to load.
   postgresql:
     shared_preload_libraries:

@@ -9,6 +9,11 @@ metadata:
 spec:
   instances: {{ $cluster.instances }}
   imageName: {{ $cluster.imageName }}
+  # Minor-image and operator upgrades promote the already-updated replica
+  # instead of restarting the primary in place (~4 min outage per cluster on
+  # 2026-09-15 with the default `restart`). The primary moves node on each roll.
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
   storage:
     size: {{ $cluster.storage.size }}
     storageClass: {{ $cluster.storage.storageClass }}
