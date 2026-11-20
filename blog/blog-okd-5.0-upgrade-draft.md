@@ -635,3 +635,40 @@ Changelog from scos.6 (release controller, `5.0.0-okd-scos.8?from=5.0.0-okd-scos
 What it means here: nothing touches okd#2384 (no defrag change, and the etcd rebase notes don't mention it), so defrag
 stays off after an update to scos.8. Nothing touches the `br-ex.forwarding` path either. It is a routine 5.0.z; applying
 it is the operator's call, with the runbook `tests/okd-5.0-upgrade/`.
+
+## 2026-11-20 — scos.6 → scos.8, 77 minutes
+
+Runbook `tests/okd-5.0-upgrade/`, defrag still off. Go/no-go (`gates.sh --defrag-off`, 14:40Z): three FAILs, two of
+them known on 5.0 (`upgradeable`: the zot test builds cap 5.1, not 5.0.z; `etcd-fragmentation`: the 45% gate cannot
+pass while defrag is ruled out) and one new, `node-rootfs` node4 at 60.7% (225.8 of 371.9 GiB, 146 GiB free; mon a
+warns below 30% free). The operator accepted it rather than prune within 24 h of the window. Target digest
+`sha256:64fb23b8…205` matched the release body's `Pull From`.
+
+| UTC | event |
+|---|---|
+| 14:44:32 | `oc adm upgrade --to=5.0.0-okd-scos.8` (operator); watcher started 14:44:18 |
+| 14:44:41 | `Failing=True` "Could not update authentication "cluster" (28 of 1058)" while the new CVO pod was `ContainerCreating`; cleared 14:45:22 |
+| 14:49 | etcd read CONSISTENT (still on scos.6, so the pre read) |
+| 14:53:03 | `ETCD-ON-TARGET`; `etcd-consistency.sh mid` CONSISTENT at 14:53:17 |
+| 15:21–15:30 | 82% waiting on network (OVN roll), then machine-config |
+| 15:34:23 | MCP master updating; node4 first (it held `zot-0`) |
+| 15:40:24 → 15:42:25 | node4 down → Ready on v1.36.6, Done |
+| 15:48:26 → 15:50:27 | node6 |
+| 15:51:28 → ~15:54 | `imagepullbackoff` homepage and grafana-operator on node6: `zot-0` was terminating on node5 for its drain, the pull got `connection reset` then `503`; both recovered once zot came back |
+| 15:58:57 → 16:00:39 | node5; MCP master 3/3/3 |
+| 16:01:26 | ClusterVersion `Completed` (verified=true) |
+| 16:01:25 | `etcd-consistency.sh post` CONSISTENT (hash 2727592150, rev 186545166) |
+| 16:03:40 | watcher `DONE` |
+
+`br-ex.forwarding` read 1 on all three nodes after the last reboot. Each node took about 8 minutes from cordon to Done
+except node4 (also 8) — no drain was held this time (the 2026-11-11 CNPG `stopDelay` stall did not recur).
+
+`verify.sh` at 16:04Z: `RESULT FAIL` on two checks, both settling. Four operator apps (cert-manager, descheduler, loki,
+nmstate) were `Synced/Degraded` because their Subscriptions still carried `ResolutionFailed` from the reboots
+(`error using catalogsource openshift-marketplace/operatorhubio-catalog: … connection refused`; the zot-served test
+catalogs moved with `zot-0` twice) while every CatalogSource was already `READY`; and the CephCluster was `Progressing`
+("Processing OSD 2 on node6"). Five minutes later the same command gave `RESULT PASS 5.0.0-okd-scos.8`.
+
+After: nodes on kubelet v1.36.6, CentOS Stream CoreOS 10.0.20261110-0, kernel 6.12.0-281.el10, cri-o 1.36.4. No newer
+build offered. zot `data-zot-0` 12.4 GiB free of 48.9 (19.5 after scos.6): the scos.8 payload went through zot by
+digest like scos.5 and scos.6 did, and the older payloads are still stored untagged. Root disks 63.7/42.7/44.8%.
