@@ -1,0 +1,11 @@
+# Per okderators-catalog-index branch: what catalog-edit.sh (MODE=catalog) appends, and which installed
+# CSVs the graph walk starts from. Tab-separated, one row per branch; lists are comma-separated CSV names.
+# A row holding TO-FILL stops a catalog run before any edit.
+#   REPLACES   the alpha channel's last entry before the edit, exactly (it must also be the channel's
+#              single head); the new entry is appended after it with `replaces: <REPLACES>`
+#   INSTALLED  CSVs a cluster may run; the walker starts from them too (here: this cluster's CSV)
+# release-5.0 read 2026-11-20 (upstream 72eb5d93b1a7, 2026-11-08): alpha ends with the 1.20 build that
+# replaces v1.18.0-2025-12-25-214537; this cluster runs that same 1.20 CSV (InstallPlan install-g5zzp,
+# 2026-10-27). No entry carries skipRange or skips.
+#branch	REPLACES	INSTALLED
+release-5.0	cert-manager-operator.v1.20.0-2026-10-22-132146	cert-manager-operator.v1.20.0-2026-10-22-132146

@@ -1,0 +1,22 @@
+# oc apply -k tests/okderators-cert-manager-build/   (README.md)
+# Only the script ConfigMap. The namespace okd-build, ServiceAccount builder and the privileged
+# RoleBinding are persistent (shared by the build Jobs; not owned or deleted from here). The PVC
+# cert-manager-build-storage is this directory's pvc.yaml, applied with `oc apply -f` and deliberately
+# not listed below, so `-k` on this directory produces the ConfigMap only. The ConfigMap is generated
+# from the files in this directory, so they exist once: build.sh for both modes, catalog-edit.sh,
+# catalog-walk.py and catalog-branches.tsv for MODE=catalog.
+# The per-run Job is not here: it comes from job-template.yaml via `oc process`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+configMapGenerator:
+  - name: cert-manager-build-scripts
+    namespace: okd-build
+    files:
+      - build.sh
+      - catalog-edit.sh
+      - catalog-walk.py
+      - catalog-branches.tsv
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/part-of: okderators-cert-manager-build
