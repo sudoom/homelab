@@ -670,5 +670,13 @@ catalogs moved with `zot-0` twice) while every CatalogSource was already `READY`
 ("Processing OSD 2 on node6"). Five minutes later the same command gave `RESULT PASS 5.0.0-okd-scos.8`.
 
 After: nodes on kubelet v1.36.6, CentOS Stream CoreOS 10.0.20261110-0, kernel 6.12.0-281.el10, cri-o 1.36.4. No newer
-build offered. zot `data-zot-0` 12.4 GiB free of 48.9 (19.5 after scos.6): the scos.8 payload went through zot by
-digest like scos.5 and scos.6 did, and the older payloads are still stored untagged. Root disks 63.7/42.7/44.8%.
+build offered. zot `data-zot-0` 12.4 GiB free of 48.9 (19.5 after scos.6). Root disks 63.7/42.7/44.8%.
+
+**What the 12.4 GiB is (read on node6 through `oc debug`, since the zot image has no shell).** I first assumed the
+older payloads were still stored untagged; that was wrong. `okd/scos-content` is the largest repo (11 GB), but its
+`index.json` holds **0 manifests**, the directory was created at 14:45 today (the update's first pulls), 256 files are
+newer than 2026-11-19 and none older than 2026-11-12. So the scos.5 and scos.6 payloads are gone: zot's GC already
+removed them, repo directory included. The 11 GB is today's scos.8 blobs, written by the on-demand sync of digest-only
+pulls with no manifest committed (the "digest-only pulls are not cached" behaviour, which still writes the blobs).
+Unreferenced, they go at the next GC pass (`gcDelay` 1h, `gcInterval` 24h), so each update costs about 11 GB of zot
+for up to a day, then returns it. Re-measure tomorrow; nothing to delete by hand.
