@@ -277,16 +277,13 @@ with a rule below, the repo rule wins and I say which one I am following and why
   Subagents work on `master` like I do, with no worktree and no branch (rule below), and never push. Every
   dispatch prompt repeats the rules its task touches: secrets, the commit message style, no `Co-Authored-By`
   trailer. The Workflow tool's multi-agent scripts are not covered by this and still need the operator's ask.
-- **Every proposed plan gets a Fable review (operator, 2026-11-02).** Once a plan is written, whatever it is for
-  (implementation, upgrade, migration, review), and whether it sits in a file or in chat, dispatch one read-only review
-  agent with `model: "fable"` before asking for approval or starting the work. Give it the plan, the spec and the facts
-  it needs, not my conclusions. Fix the findings that hold up, then present the plan with what the review found, what I
-  changed and what I rejected and why. A single-step suggestion is not a plan.
-- **Fable reviews plans only (operator, 2026-11-03: "fable review - only for plans"; "all plans (designs, etc), which u
-  asked for my approval, need to have fable as reviewer").** Anything I ask the operator to approve as a plan (a plan, a
-  design, a spec, a runbook) gets its Fable review first (the rule above; the Rook/Ceph design's builder check ran on Opus and was redone on
-  Fable before approval). Every other review keeps the skills' normal model choice: per-task reviews and scoped
-  re-reviews in `subagent-driven-development`, final whole-branch reviews, and PR reviews.
+- **Every proposed plan gets an Opus review (operator, 2026-11-02; reviewer model changed from Fable to Opus on
+  2026-11-20: "remove fable as mandatory reviewer (keep opus)").** Anything I ask the operator to approve as a plan (a
+  plan, a design, a spec, a runbook), whether it sits in a file or in chat, gets one read-only review agent with
+  `model: "opus"` before I ask for approval or start the work. Give it the plan, the spec and the facts it needs, not my
+  conclusions. Fix the findings that hold up, then present the plan with what the review found, what I changed and what
+  I rejected and why. A single-step suggestion is not a plan. Every other review keeps the skills' normal model choice:
+  per-task reviews and scoped re-reviews in `subagent-driven-development`, final whole-branch reviews, and PR reviews.
 
 **These conflict with existing rules — the repo rule wins:**
 
