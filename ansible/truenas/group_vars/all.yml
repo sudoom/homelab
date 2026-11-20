@@ -465,7 +465,7 @@ truenas_ntp_servers:
 truenas_garage:
   app_name: garage
   train: community
-  version: "1.2.5"          # the only version the catalog offers today
+  version: "1.2.18"         # garage v2.5.0; the catalog keeps only its newest version (trap 5)
   region: garage
   replication_factor: 1     # single node; this is a backup target, not a cluster
   web_ui_username: admin
@@ -632,7 +632,7 @@ truenas_node_exporter:
 truenas_syncthing:
   app_name: syncthing
   train: stable
-  version: "1.3.13"          # the only version the catalog offers today
+  version: "1.3.23"          # Syncthing 2.1.7; the catalog keeps only its newest version (trap 5)
   bind_ip: 0.0.0.0           # see BIND ADDRESS -- 192.168.1.25 is not in app.ip_choices
   ports:
     web: 8384                # the Syncthing default, not the app's 20910
@@ -677,7 +677,7 @@ truenas_paperless:
   app_name: paperless
   catalog_app: paperless-ngx
   train: community
-  version: "1.6.79"          # paperless-ngx 3.4.2; the catalog keeps only its newest version, so a fresh create needs the current one
+  version: "1.6.85"          # paperless-ngx 3.5.1; the catalog keeps only its newest version, so a fresh create needs the current one
   admin_user: admin
   admin_mail: paperless@homelab.sudops.pl   # required by the schema; no mail is sent
   # The image's own paperless uid/gid, NOT the apps account (568). The catalog
@@ -706,6 +706,11 @@ truenas_paperless:
     # http://192.168.1.25:30070 keeps working: Django's same-origin CSRF check
     # passes when the Origin matches the request host.
     - { name: PAPERLESS_URL, value: "https://paperless.homelab.sudops.pl", container: paperless }
+    # Since paperless 3.5.0 (#14735) a set PAPERLESS_URL without this narrows ALLOWED_HOSTS to the URL's host
+    # plus `localhost`. The catalog healthcheck curls 127.0.0.1:<port>, got 400 DisallowedHost, and the app sat
+    # in Deploying (2026-11-20, catalog 1.6.85). 127.0.0.1 is the healthcheck, 192.168.1.25 the plain fallback;
+    # Traefik passes the HTTPS name through as the Host header.
+    - { name: PAPERLESS_ALLOWED_HOSTS, value: "paperless.homelab.sudops.pl,192.168.1.25,127.0.0.1,localhost", container: paperless }
     - { name: PAPERLESS_PROXY_SSL_HEADER, value: '["HTTP_X_FORWARDED_PROTO", "https"]', container: paperless }
     - { name: PAPERLESS_OCR_LANGUAGES, value: "pol", container: paperless }
     - { name: PAPERLESS_OCR_LANGUAGE, value: "pol+eng", container: paperless }
@@ -775,7 +780,7 @@ truenas_paperless_additional_envs: "{{ truenas_paperless.envs + (truenas_paperle
 truenas_traefik:
   app_name: traefik
   train: community
-  version: "1.0.38"          # Traefik v3.7.17; the catalog keeps only its newest version (trap 5), so bump before a fresh create
+  version: "1.0.41"          # Traefik v3.7.19; the catalog keeps only its newest version (trap 5), so bump before a fresh create
   run_as_uid: 568            # the catalog's minimum; reads the 0644 routing file, owns the acme dataset
   run_as_gid: 568
   ports:

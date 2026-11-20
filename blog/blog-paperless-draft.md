@@ -528,3 +528,34 @@ snapshots existed. The operator declined a manual run and left it to the night. 
 next 04:15 export; that window is the design's, not a fault.
 
 The operator reprocessed the `IMG_` phone-photo batch and ran `document_llmindex update` the same day ("3. done").
+
+## 2026-11-20 — 3.5.1 stuck in Deploying: DisallowedHost on the healthcheck
+
+The app moved to catalog `1.6.85` (paperless-ngx 3.5.1) and sat in **Deploying**: `paperless` container `Starting`,
+postgres and redis `Running`. Its log repeated, every 30 s:
+
+```
+django.core.exceptions.DisallowedHost: Invalid HTTP_HOST header: '127.0.0.1:30070'. You may need to add '127.0.0.1' to ALLOWED_HOSTS.
+```
+
+Cause: paperless-ngx 3.5.0 (#14735, "Fix: fix allowed_hosts default") changed `ALLOWED_HOSTS`. Before, it defaulted to
+`*` unless `PAPERLESS_ALLOWED_HOSTS` was set. Now a set `PAPERLESS_URL` also switches off the `*` default, leaving only
+the URL's host plus `localhost`. The catalog template's healthcheck is `curl` on `127.0.0.1:<web port>`, so it gets 400,
+the container never turns healthy, and TrueNAS never leaves Deploying. The plain fallback `http://192.168.1.25:30070`
+breaks the same way. The HTTPS name keeps working because Traefik passes it through as the Host header.
+
+Fix in `group_vars/all.yml`: `PAPERLESS_ALLOWED_HOSTS=paperless.homelab.sudops.pl,192.168.1.25,127.0.0.1,localhost`,
+and the version pin moved from `1.6.79` to `1.6.85`. The role's paperless reconcile pushes `additional_envs` on
+`app.update`, so a playbook run applies it.
+
+The same day every TrueNAS app was updated from the UI, so I checked the others against our config too. I diffed each
+catalog app from our pin to the catalog head (`truenas/apps` `ix-dev/`) and read upstream changes:
+
+| App | Pin → running | What changed | Effect on our config |
+|---|---|---|---|
+| garage | `1.2.5` (v2.3.0) → `1.2.18` (v2.5.0) | `additional_options` now written by `yq` instead of `dasel`; the ixVolume `dataset_name` default went from `metadata` to `data`; upstream: resync-queue migration, admin API `?details` split, S3 lifecycle endpoints restricted | none: our two string options render the same, storage is `host_path`, the role uses the CLI, and nothing sets lifecycle rules on garage |
+| syncthing | `1.3.13` (2.1.5) → `1.3.23` (2.1.7) | image moved to `ghcr.io/syncthing/syncthing`; new optional `discovery_port` (default off) | none |
+| traefik | `1.0.38` (v3.7.17) → `1.0.41` (v3.7.19) | image and version only | none |
+
+The playbook run after the UI updates finished `failed=0`, which covered garage's bucket/key reads and its options
+reconcile on v2.5.0. The pins in `group_vars` move to the running versions so a fresh create works (trap 5).

@@ -293,7 +293,7 @@ the MacBook and this box never pair with each other. The mini carries
 
 | | |
 |---|---|
-| app | `syncthing` — **catalog** app, stable train, `1.3.13` (a custom compose app from 2026-09-09 to 09-11) |
+| app | `syncthing` — **catalog** app, stable train, `1.3.23` (a custom compose app from 2026-09-09 to 09-11) |
 | GUI | `http://192.168.1.25:8384/` — a password is required, set at first login |
 | sync | `tcp://192.168.1.25:22000`, `quic://192.168.1.25:22000` |
 | data | `tank/sync` → `/data` in the container; folder roots `/data/documents` and `/data/projects` (was `/data/projects` alone until 2026-09-14) |
@@ -470,13 +470,13 @@ button, not by hand.
 
 ## Paperless
 
-paperless-ngx 3.4.2 as the community-train catalog app `paperless-ngx` (app `paperless`, catalog version `1.6.79`; the catalog offers only its newest version, so bump the pin before a fresh create),
+paperless-ngx 3.5.1 as the community-train catalog app `paperless-ngx` (app `paperless`, catalog version `1.6.85`; the catalog offers only its newest version, so bump the pin before a fresh create),
 declared in `truenas_paperless` (`group_vars/all.yml`) and deployed by `roles/truenas-apps`. Design record and
 chronology: `blog/blog-paperless-draft.md`.
 
 | What | Value |
 |---|---|
-| UI | `https://paperless.homelab.sudops.pl` (Traefik, below) and the plain fallback `http://192.168.1.25:30070/` (all interfaces, so also on the storage backnet, as garage and Syncthing). `PAPERLESS_URL` is the HTTPS name and `PAPERLESS_PROXY_SSL_HEADER` is `["HTTP_X_FORWARDED_PROTO", "https"]`, without which login through the name fails with `403 CSRF verification failed`; the plain port still works (same-origin check). `bin/paperless-costs` defaults to the HTTPS name |
+| UI | `https://paperless.homelab.sudops.pl` (Traefik, below) and the plain fallback `http://192.168.1.25:30070/` (all interfaces, so also on the storage backnet, as garage and Syncthing). `PAPERLESS_URL` is the HTTPS name, `PAPERLESS_ALLOWED_HOSTS` lists it plus `192.168.1.25`, `127.0.0.1` and `localhost` (since paperless 3.5.0 a set URL alone narrows the allowed hosts to its name and `localhost`, which fails the catalog's `127.0.0.1` healthcheck and the plain port), and `PAPERLESS_PROXY_SSL_HEADER` is `["HTTP_X_FORWARDED_PROTO", "https"]`, without which login through the name fails with `403 CSRF verification failed`; the plain port still works (same-origin check). `bin/paperless-costs` defaults to the HTTPS name |
 | Database | the app's own Postgres 18 container, never SQLite; Valkey broker; Tika/Gotenberg off; in-app trash off |
 | Datasets | `tank/paperless` (parent) with `data`, `media`, `consume`, `postgres` (16K) and `export`; all `host_path`. `consume` exists only because the app requires it: documents go in through the UI |
 | Run as | uid/gid **1000**, the image's own `paperless` user, not the `apps` account (568): any other value makes the image's init `usermod --uid` the whole home on every container recreate, over 30 minutes on this HDD-backed Docker storage (2026-11-06). `data`, `media`, `consume` and `export` are owned 1000:1000 |
@@ -547,7 +547,7 @@ Docker needed). `tank/paperless` also has a recursive snapshot task (every 6 h, 
 
 ## Traefik
 
-Traefik v3.7.17 as the community-train catalog app `traefik` (catalog version `1.0.38`; the catalog offers only its
+Traefik v3.7.19 as the community-train catalog app `traefik` (catalog version `1.0.41`; the catalog offers only its
 newest version, so bump the pin before a fresh create), declared in `truenas_traefik` and the computed
 `truenas_traefik_*` variables below it (`group_vars/all.yml`), deployed by `roles/truenas-apps`. It terminates TLS on
 80/443 for the apps on this box with one Let's Encrypt wildcard that it orders and renews itself through Cloudflare
