@@ -680,3 +680,9 @@ removed them, repo directory included. The 11 GB is today's scos.8 blobs, writte
 pulls with no manifest committed (the "digest-only pulls are not cached" behaviour, which still writes the blobs).
 Unreferenced, they go at the next GC pass (`gcDelay` 1h, `gcInterval` 24h), so each update costs about 11 GB of zot
 for up to a day, then returns it. Re-measure tomorrow; nothing to delete by hand.
+
+**node4 prune (operator, ~17:30Z).** `oc debug node/node4.okd.sudops.pl -- chroot /host crictl --timeout=600s rmi --prune`
+deleted 654 images, mostly old `quay.io/okd/scos-content` payload images from the 4.21 → 5.0 hops, plus an unused
+`ghcr.io/cloudnative-pg/postgresql:18`. node4's root disk went from 63.7% to **14.5% used (318 GiB free)**. The
+runbook's 60% gate had flagged it at 60.7% before the update; the old payloads were the bulk of it. node5 (42.7%) and
+node6 (44.8%) were not pruned.
