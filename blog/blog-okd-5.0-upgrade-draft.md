@@ -602,3 +602,36 @@ byte-identical to the day of the update, about 121 MB in use.
 That closes the post-hop week: every read since the hop was CONSISTENT (post-hop, after scos.6, 11-12, 11-13, 11-17; I
 skipped 11-14 to 11-16). Defrag stays off until a build with the okd#2384 fix runs here, and the consistency check is
 re-run after any etcd-operator restart.
+
+## 2026-11-20 — the first cert-manager 1.20 renewal passed; scos.8 offered
+
+**Renewal.** `homelab-wildcard` renewed on schedule, the first ACME renewal on cert-manager 1.20 and the first on Kube
+1.36, where 1.20 runs outside its 1.32-1.35 matrix:
+
+```
+$ oc -n cert-manager get certificaterequest -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.creationTimestamp} {.status.conditions[?(@.type=="Ready")].reason}{"\n"}{end}'
+homelab-wildcard-4 2026-11-20T10:29:04Z Issued
+$ oc -n cert-manager get certificate homelab-wildcard -o jsonpath='{.status.notBefore} rev={.status.revision} {.status.notAfter}'
+2026-11-20T09:33:08Z rev=4 2027-02-18T09:33:07Z
+```
+
+(`notBefore` is an hour before the request because Let's Encrypt backdates certificates.) This was the gate for the
+cert-manager 1.21 sub-plan and for retiring the parked `cert-manager-helm-fallback` branch.
+
+**scos.8.** The sweep showed `offered=5.0.0-okd-scos.8` (created 2026-11-19 20:05Z, from nightly 2026-11-19-042635).
+Changelog from scos.6 (release controller, `5.0.0-okd-scos.8?from=5.0.0-okd-scos.6`):
+
+| Area | Change |
+|---|---|
+| Kubernetes | 1.36.5 → 1.36.6 (rebase #2838); kubectl 1.36.2 → 1.36.5 (CVE-2026-19444) |
+| etcd | v3.6.13 → v3.6.16 (etcd #431) |
+| cluster-etcd-operator | only #1755 "accept FQDN node names in TNF recovery" |
+| node image | CentOS Stream CoreOS 10.0.20261108-0 → 10.0.20261110-0, kernel 6.12.0-280 → 6.12.0-281, kubelet package rebuilt, podman 6.1.0-2 → 6.1.0-3; CRI-O 1.36.4, NetworkManager 1.58.0, openvswitch 3.5.3-5 listed without an old value |
+| MCO | #6747 Azure VIP route timer, #6739 skipped flaky unit tests, #6735 AMI list |
+| ovn-kubernetes | #3608 delete tombstones, #3560 kubevirt IPv4 gateways after migration, #3578 UDN EgressIP sync; CNO #3222 relaxed control-plane zone anti-affinity |
+| upgrade CI | blocking `e2e-aws-upgrade-from-scos-stable` succeeded; scos.6 listed as Success (link is a launch job, weaker); no scos.7 entry |
+| known issues | none listed, no conditional-update risk |
+
+What it means here: nothing touches okd#2384 (no defrag change, and the etcd rebase notes don't mention it), so defrag
+stays off after an update to scos.8. Nothing touches the `br-ex.forwarding` path either. It is a routine 5.0.z; applying
+it is the operator's call, with the runbook `tests/okd-5.0-upgrade/`.
