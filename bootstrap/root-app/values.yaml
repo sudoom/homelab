@@ -90,6 +90,14 @@ applications:
     namespace: cert-manager-operator
     syncWave: "1"
 
+  # Temporary: zot test build of the okderators cert-manager 1.21 catalog; leaves when the
+  # cert-manager Subscription moves back to okderators.
+  cert-manager-test-catalog:
+    enabled: true
+    path: components/operators/cert-manager-test-catalog
+    namespace: openshift-marketplace
+    syncWave: "1"
+
   rook-ceph-operator:
     enabled: true
     path: components/operators/rook-ceph

@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cert-manager-test-catalog
+description: Test CatalogSource for the okderators cert-manager 1.21 build in zot
+version: 0.1.0
+type: application

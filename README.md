@@ -99,6 +99,7 @@ components/
     cluster-logging/       # Cluster Logging operator (Red Hat)
     logging-test-catalog/  # Wave 1 — temporary CatalogSource `okd-test-logging` (zot test build of Logging/Loki 6.6)
     nmstate-test-catalog/  # Wave 1 — temporary CatalogSource `okd-test-nmstate` (zot test build of the NMState catalog, `release-5.0` since 2026-11-10)
+    cert-manager-test-catalog/ # Wave 1 — temporary CatalogSource `okd-test-cert-manager` (zot test build of the cert-manager 1.21 catalog, `release-5.0`, since 2026-11-21)
   storage/
     rook-ceph-cluster/     # CephCluster CR via upstream rook-ceph-cluster subchart + local extras
                            # (toolbox, dashboard Route, mgr ServiceMonitor, RBD trash purge,

@@ -1,0 +1,8 @@
+# Test build of the okderators cert-manager catalog: release-5.0 with the cert-manager operator
+# bundle cert-manager-operator.v1.21.0-2026-11-21-163714 (head of the channel, replaces
+# cert-manager-operator.v1.20.0-2026-10-22-132146), pushed to the cluster's zot
+# (tag 2026-11-21-170350). Pinned by digest.
+# Temporary: this chart and its root-app entry leave again when the cert-manager Subscription
+# (components/operators/cert-manager/) moves back to `okderators` (once okderators publishes 1.21).
+image: zot.apps.okd.sudops.pl/okd-test/cert-manager-catalog:2026-11-21-170350@sha256:d328e18ae82f66e601f23ddceaf3c84025a9f8e1818e2a90cd6ce7ec5c56d45e
+# No updateStrategy: the image is pinned by digest, so there is nothing to poll.
