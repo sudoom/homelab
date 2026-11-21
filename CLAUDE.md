@@ -2,6 +2,11 @@
 
 Guidance for Claude Code when working in this repository.
 
+**What belongs in this file:** rules, guardrails and the current state a session needs to act safely, plus pointers to
+where the detail lives. History (timelines, durations, incident narratives, retracted causes, finished PRs) goes to the
+topic's `blog/*-draft.md`; long designs for unbuilt work go to `backlog/`. A dated operator decision keeps its date and
+quote. When state changes, replace the old state here and record the change in the draft.
+
 ## Repository overview
 
 Homelab GitOps repository for a **3-node bare-metal OKD 5.0 cluster** (OpenShift Kubernetes Distribution), managed declaratively by **ArgoCD** with an app-of-apps pattern and Helm templating.
@@ -406,12 +411,16 @@ Update the draft as you work, not at the end. If a session does something undocu
 
 ## TODO list lives at the bottom of README.md
 
-The repo's TODO list is the structured section at the bottom of `README.md` (categories: In flight, Queued — observability, Queued — storage, Queued — operators / catalog, Queued — platform expansion, Documentation hygiene). Treat it as the single source of truth for tracked work.
+The repo's TODO list is the structured section at the bottom of `README.md` (categories: In flight, Queued — observability, Queued — storage, Queued — platform plumbing, Queued — operators / catalog, Queued — platform expansion). Treat it as the single source of truth for tracked work.
 
 - **When you suggest a new TODO** (e.g. you spot a gap during a session and the user agrees it should be tracked): add it to the appropriate category in `README.md`. Do not invent a separate TODO file. Match the existing item style — bold lead-in, then the *why* / *what* / *how to validate* in one or two sentences.
 - **When the user gives input that refines an existing TODO** (more context, a chosen approach, a deadline, a reason it's deprioritized): update that item in place rather than appending a duplicate. Preserve chronology only when it matters; otherwise rewrite for clarity.
 - **When a TODO ships:** remove it from the README in the same commit that lands the change. Don't leave checked-off items as historical record — the git log is the historical record.
 - **Don't reorganize categories or split items into subsections without an explicit ask** — the existing structure is deliberate.
+- **An item carries what is open, why, and how to validate.** Its history goes to its blog draft, with a link.
+- **Long design or assessment of work not yet built lives in `backlog/<topic>.md`** (`backlog/README.md`): the TODO item
+  keeps 1–2 lines and the link; delete the file when the item ships and move its record to the blog draft. This is the
+  one exception to "Do not invent a separate TODO file": the README TODO stays the index.
 
 ## README files — keep them current
 
