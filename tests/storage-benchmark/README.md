@@ -303,3 +303,29 @@ the filter off before theorising.
 | `fio-jobs.yaml` | ConfigMap of the six pinned workloads |
 | `bench-job.yaml.tpl` | PVC + Job template (`__TOKEN__` substitution; not valid YAML as-is) |
 | `parse-results.py` | fio JSON → one result row with conditions |
+
+## Small-file layout calibration (2026-09-06)
+
+Wording moved from the README TODO on 2026-11-20; the figures are also in `data/storage-throughput.md`.
+
+**Storage benchmark harness — SMALL-FILE SCALE QUESTION ANSWERED (2026-09-06).** The corpus layout was calibrated two-point on the Synology so that fixed setup cost could be separated from marginal per-file cost, which is the figure that decides the run: **2000 files in 10s, 20000 in 93s -> 4.61 ms/file, ~217 files/s per client, fixed overhead ~0.8s (essentially linear).** At 1,048,576 files/client that is **~80 minutes per client, not hours** -- the grid is runnable. The harness budgets `FILES_PER_CLIENT / 100` = 175 min, so the deadline is conservative by ~2.2x, which is the safe direction. Layout is metadata-bound, not bandwidth-bound: 217 files/s x 64 KiB is 13.9 MB/s against a 112 MiB/s link.
+
+**The first calibration attempt was wrong and is worth remembering:** it used `rw=write` with `--create_only=1` and measured 540-666 files/s -- the cost of creating ZERO-BYTE files, because `--create_only` lays out data only for a READ-shaped job. That is the identical defect the harness itself carried until 2026-09-05, reproduced from scratch in the measuring tool. It was caught only because the job counted file sizes afterwards (`at64k=` / `zerobyte=`); without that check the smallfile budget would have been under-estimated 2.5x.
+
+## TrueNAS corpus removal (2026-09-12)
+
+Moved from the README TODO on 2026-11-20: what the removal of the TrueNAS benchmark datasets changed, and how the root-owned corpus was deleted.
+
+**`tank` went 45% -> 38%, free 11.8 TiB -> 13.5 TiB** — the 1.7 TiB swing exceeds the 1.15 TiB logical size because RAIDZ2 parity is counted in the raw figure.
+
+**The harness was intact until 2026-09-12**, when `tank/bench`, `tank/bench16`, both NFS exports, both StorageClasses and the harness's two TrueNAS backend rows were all removed on request — restoring them is documented in `tests/storage-benchmark/README.md` Prerequisites. The six `bench16` rows already in `data/storage-benchmark-results.tsv` are unaffected.
+
+**Consequence for the wire cross-check item above [in the README TODO]: its evidence grid no longer exists on disk**, so re-testing that fix means paying a ~1.1 TiB layout pass first.
+
+**Mechanism worth remembering** — the corpus was root-owned (pods write through `maproot=root` NFS) and this playbook [ansible/truenas] has no `become`; `midclt` exposes **no unlink method**, so the working pattern is `filesystem.chown` (which runs as root via the middleware, `recursive: true`) to the automation account, then a normal `rm`.
+
+## Switch port evidence for the NAS LACP question
+
+Moved from the README TODO item on NAS LACP bonding on 2026-11-20.
+
+Confirmed 2026-09-06 that only `ether`-named ports are free — `mktxp_interface_rate` shows `nas` at 1000 and `ether9`-`ether16` all at 0, so the second NIC is genuinely uncabled today.

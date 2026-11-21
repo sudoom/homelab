@@ -1134,3 +1134,20 @@ the `skipRange`) come after these merge and upstream CI has published the images
 
 The operator marked both ready for review on 2026-11-04 at 11:52Z (#47 11:52:26Z, #48 11:52:34Z, `ready_for_review`
 events in the PR timelines). No reviews or comments as of 2026-11-05 11:00Z.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Stack and tool versions**
+
+- [OKD] OADP 1.6 runs our okderators test build from `okd-test-oadp` since 2026-11-03. 34 ClusterOperators.
+
+### From the README TODO
+
+**OKD 5.0 follow-ups**
+
+- Plan approved 2026-11-02 and executing: all 18 images, so 1.6 is complete for every OADP user (eight new images from six new submodules, plus a seventh for must-gather's source; no konveyor image in the bundle); real scheduled backups are not part of this work.
+- The full `release-4.22` build, the catalog image and the upgrade are done: the cluster runs the 1.6 test build from catalog `okd-test-oadp` since 2026-11-03 08:00Z, and drill run 2 on 1.6 passed. The 24 h soak passed 2026-11-04 (drill run 3 restored the new generation; drill Backups and namespaces cleaned up).

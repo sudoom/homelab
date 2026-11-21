@@ -488,3 +488,9 @@ The switch in reverse, every step operator-run, with the same read-only checks. 
    `openshift-nmstate`, re-adding each node's label in turn. Leave any later upgrade InstallPlan unapproved.
 7. **Auto-sync back on:** Step 7, gate included (`nmstate-nncp` Synced, NNCPs at their baseline generation), then
    watch `apps` stay Synced.
+
+## Source catalog and builds
+
+The catalog line for the NMState operator, moved from `CLAUDE.md` on 2026-11-20.
+
+`okd-test-nmstate` — **NMState since 2026-10-26**: our okderators test build from the zot catalog in `components/operators/nmstate-test-catalog/`, since 2026-11-10 16:58Z the **5.0** build (`kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515`, catalog `okd-test/nmstate-catalog:2026-11-10-165132`, from #43's branch: operator `release-5.0`, el10 handler; 24 h soak passed 2026-11-11, so the 4.22 build is no longer a rollback target; the 4.22 build `v4.22.0-2026-10-23-195655` ran from 10-27, the 4.21 build `v4.21.0-2026-10-26-123722` from 10-26) from the zot catalog in `components/operators/nmstate-test-catalog/`, until okderators publishes the fixed bundle (README TODO "NMState from `okderators`").

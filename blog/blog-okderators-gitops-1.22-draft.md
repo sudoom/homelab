@@ -977,3 +977,16 @@ in six hours it had synced only four times, all during the switch. Restarting it
 (`oc -n openshift-user-workload-monitoring delete pod -l app.kubernetes.io/name=prometheus-operator`, 14:06:47Z) gave two
 full syncs with no rejection. Lesson for the re-subscribe path: re-apply that Secret after the new service account
 exists, or expect this.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Stack and tool versions**
+
+- [Helm] GitOps 1.22 bundles Helm 4.2.4; until the 2026-10-22 upgrade GitOps 1.19's midstream pinned Helm **3.18.6**.
+- [ArgoCD] **v3.5.5+a5038b0** (official okderators GitOps 1.22, CSV `gitops-operator.v1.22.0-2026-11-06-221018`, since 2026-11-09; our zot test build of 1.22 ran from 2026-10-22; was v3.1.11 on 1.19.0)
+- [ArgoCD] Our pipeline PRs okd-operator-pipeline #39–#42 are merged, the deploy runs pushed to `quay.io/okderators/gitops/*`, and the bot's catalog-index PRs #63–#66 (5.0, 4.22, 4.21, 4.20) put 1.22 in every catalog. The 1.22 entry only `replaces` 1.19.0 (no `skipRange`), so leaving the test build took a re-subscribe (Subscription + CSV deleted, `02` re-applied; `bootstrap/phase0/readme.md`).
+- [OLM] `okderators` + `operatorhubio-catalog` CatalogSources (both in `bootstrap/phase0/01_catalog_source.yaml`), plus the marketplace-managed `community-operators` (on `community-operator-index:v5.0` since the 5.0 hop) and four zot test catalogs (`okd-test-logging`, `okd-test-nmstate`, `okd-test-oadp`, `okd-test-descheduler`; `okd-test-gitops` was removed 2026-11-09)

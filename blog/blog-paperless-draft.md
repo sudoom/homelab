@@ -559,3 +559,13 @@ catalog app from our pin to the catalog head (`truenas/apps` `ix-dev/`) and read
 
 The playbook run after the UI updates finished `failed=0`, which covered garage's bucket/key reads and its options
 reconcile on v2.5.0. The pins in `group_vars` move to the running versions so a fresh create works (trap 5).
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**paperless-ngx on TrueNAS**
+
+- Live since 2026-11-06 at `https://paperless.homelab.sudops.pl` (plain `http://192.168.1.25:30070` stays as a fallback) (paperless 3.4.2, catalog 1.6.79, run_as 1000): datasets, 6-hourly snapshots, the 04:15 export with its `.prom` file, both Cloud Sync legs (Synology, Storage Box), the `TrueNASPaperlessExportStale` alert and `bin/paperless-costs` are in place, and the restore test passed (`tests/paperless-restore/`, 5/5 documents, identical checksums). AI on since 2026-11-06 (Ollama `gemma4:26b` + `bge-m3` on the Mac mini, reached through `macmini/ollama-think-proxy` on `:11435`, which forces `think: false` because paperless 3.4.2 cannot: Polish suggestions in about 5 s instead of 20; document chat answers with sources). Phone-photo PDFs OCR in full since 2026-11-07 with Sauvola thresholding (`PAPERLESS_OCR_USER_ARGS`, 48 → 173 words on the test page).

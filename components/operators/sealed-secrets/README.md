@@ -44,3 +44,11 @@ kubeseal --cert components/operators/sealed-secrets/sealed-secrets-pub.pem \
 | `values.yaml` | `fullnameOverride` + `--key-renew-period=720h` |
 | `sealed-secrets-pub.pem` | current public sealing cert (offline `kubeseal --cert`) |
 | `templates/` | namespace + any local extras |
+
+## Rotation incident record
+
+Fix date and the open follow-ups, moved from `CLAUDE.md` and the README TODO on 2026-11-20.
+
+Fixed 2026-06-27 (`720h` → controller minted a fresh 10-year key, old key retained for decryption).
+
+**SUPERSEDED BY THE ESO + BITWARDEN MIGRATION (In flight) — do not re-seal; cutover retires every blob, and rotating the credentials themselves is the real fix for the history exposure.** **Sealed-secrets key rotation — auto-rotation RE-ENABLED 2026-06-27 after a cert-expiry incident; re-seal old blobs is the remaining bit.** The chart had `--key-renew-period=0` (auto-rotation DISABLED, intending manual quarterly rotation) — but that left the single sealing key's cert to **expire 2026-05-28** (~30d after creation) with nothing replacing it, so `kubeseal` failed with `expired certificate` and **all new sealing was blocked** (existing SealedSecrets kept decrypting — cert expiry only breaks *sealing*, not decryption; surfaced 2026-06-27 sealing R2 creds). Fixed by setting `--key-renew-period=720h` (`components/operators/sealed-secrets/values.yaml`) — the controller now mints a fresh long-lived key + cert and RETAINS old keys for decryption, so it won't silently expire again. Write the runbook into the security blog draft.

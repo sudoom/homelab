@@ -940,3 +940,16 @@ uptime is the time since the last maintenance run (or any other restart). `Techn
 (`max by (server) (technitium_realtime_uptime_seconds) > 30 * 86400`, for 1h, warning) carries the slave-first commands,
 and its own `monitoring-config` route emails it with `repeat_interval: 168h`: one mail, then weekly until done. With
 both nodes restarted today, the first is due around 2026-11-26.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**Pi-hole → Technitium DNS migration**
+
+- `cluster.local` + `svc.cluster.local.okd.sudops.pl` ship as authoritative-empty NXDOMAIN zones; the StevenBlack/hosts blocklist (~82.6k domains) is wired in.
+- Ansible playbook lives at `ansible/technitium/` (all `ansible.builtin.*`, vault-encrypted secrets, run manually from a workstation). 2026-05-13 soak check: 19h continuous uptime, 0 errors/warns in journal, 270MiB RSS, load avg 0.05, all four DNS-path tests pass (auth / forwarder / blocklist / recursive). Pi-hole purge codified in the `base` role's `pihole-cleanup` block (apt purge `pihole-meta` + file:state=absent across the installer-managed paths + daemon-reload); applied to `dns-master` and verified 0 pi-hole packages / 0 paths remaining.
+- **`dns-slave` — SHIPPED 2026-08-26. DNS is no longer a single point of failure.** RPi 3B+ at `192.168.1.13` (chosen 2026-08-19 over the Zero 2W: no Ethernet, 512 MB, and a ~2026-12-04 ship date on what was then a SPOF). Debian 13 trixie / arm64, verified identical to `dns-master`. **Two mechanisms, one job each:** `roles/technitium-cluster` runs Technitium's **native Cluster** (v14) syncing settings/blocklists/apps/users/API-tokens; `roles/technitium-replication` does classic AXFR/IXFR for the two authoritative zones. They do not collide because zones only sync under clustering if added to the auto-created `cluster-catalog.home` zone, and they are not. Cluster domain `home` is **immutable** — `dns-master.home` / `dns-slave.home`.
+- [dns-master and dns-slave:] Both advertised in MikroTik DHCP.

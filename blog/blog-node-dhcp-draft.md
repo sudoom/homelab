@@ -316,3 +316,21 @@ Loki operator 18:29Z):
   figures are the operator's `1x.pico` defaults. No config change made; tracked as a
   README TODO (Queued — observability), which lists both levers: raise the
   `infrastructure` tenant's limit, or cut its volume.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Repository overview**
+
+- Frontend addresses come from MikroTik DHCP reservations (1-day lease, `node-dhcp` chart) since 2026-09-25 — the IPs must never change (etcd and kubelet cert SANs); a router outage longer than a day would drop them
+
+### From the README TODO
+
+**Loki `infrastructure` tenant runs over its ingestion rate limit all day, so its logs arrive late (LOW; raised 2026-10-01).**
+
+- Both distributors reject `infrastructure` pushes every hour: 1,483 rejections in the 24 h to 2026-10-01, between 30 and 87 per hour, with no reboot since 09-25.
+- The limit is the operator's `1x.pico` default: `ingestion_rate_mb: 4` with the `global` strategy, which is 2 MiB/s per distributor, plus a 6 MB burst. A typical rejected batch is 876 lines and 2.66 MB.
+- Vector retries the 429s: 1,159 on `output_lokistack_output_infrastructure` against 5.22 M events sent. Neither discard counter has a series, so nothing has been lost so far.

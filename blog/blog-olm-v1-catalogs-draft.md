@@ -121,3 +121,26 @@ ceph: HEALTH_OK                            # MON_DISK_LOW gone, lastChecked 18:5
 
 Cluster back to a clean board. The remaining exposure is the operator-controller half of #2574 not being in the
 4.21 payload; with the three Red Hat catalogs Unavailable there is nothing left for it to leak on.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**OLM catalogs**
+
+- Created by hand; in `bootstrap/phase0/01_catalog_source.yaml` since 2026-10-26 with a **24h** registry poll, because every new digest of `:latest` (about 3.5 a day) left another index image on the catalog pod's node, node5, which carries mon c (README TODO "Stop the catalog image churn").
+- **OLM v1 (catalogd + operator-controller) is installed and unused (2026-09-14).** Zero `ClusterExtension`s; every operator here is an OLM v0 `Subscription`. The three Red Hat default `ClusterCatalog`s (`openshift-redhat-operators`, `-certified-operators`, `-redhat-marketplace`) are held at `availabilityMode: Unavailable` by `components/cluster-config/olm-v1-catalogs/` — no entitlement for their content, and the redhat one leaked 79 MB of catalog temp dirs per failed 10-minute poll into operator-controller's emptyDir on node5 (42 GiB in six days, Ceph `MON_DISK_LOW`; upstream fix operator-framework/operator-controller#2574 not in the 4.21 payload).
+
+### From the README TODO
+
+**Stop the catalog image churn that fills node5 (found 2026-10-14; step 1 live since 2026-10-26; step 2 needs its own reroll, kept out of the 4.22 hop on 2026-10-27).**
+
+- Its `:latest` moved about 3.5 times a day on quay.io (10-12 to 10-25, up to 8), so this cuts that catalog's pulls to at most one a day. It is the smaller pile: on 10-14 node5 held 85 of its images against 376 of `community-operators` (Red Hat's index, used by grafana-operator), which stays at the marketplace operator's 240m; replacing that default source is not worth it.
+- Pruned 2026-10-26 (node5 80.1 % → 13.3 % used, Ceph back to `HEALTH_OK`), so the refill rate with step 1 in place is measured from there.
+
+**OLM v1 `operator-controller` leaks a 79 MB catalog temp dir on every failed `openshift-redhat-operators` parse**
+
+- **OLM v1 `operator-controller` leaks a 79 MB catalog temp dir on every failed `openshift-redhat-operators` parse — 42 GiB on node5's root disk in six days, and the cause of Ceph's `MON_DISK_LOW` (found 2026-09-14; MED, grows ~7 GiB/day).** `openshift-operator-controller/operator-controller-controller-manager-94b6fb847-c4l9n` keeps its catalog cache in an `emptyDir` on the node's root filesystem; `/var/cache/catalogs` held **544** hidden `.openshift-redhat-operators-<n>` directories of 79 MB each (30/92/95/88/86/87/66 per day since 09-08) beside the three healthy catalogs' visible directories.
+- **Durable half SHIPPED 2026-09-14:** `components/cluster-config/olm-v1-catalogs/` (root-app wave 2) server-side-applies `spec.availabilityMode: Unavailable` onto the three Red Hat `ClusterCatalog`s — this cluster runs zero `ClusterExtension`s and they need an entitlement it does not have — which stops the polling, so nothing can leak again; `openshift-community-operators` stays Available. **Remaining, user-run once:** `oc -n openshift-operator-controller delete pod operator-controller-controller-manager-94b6fb847-c4l9n` — the leaked dirs sit in the pod's emptyDir and the 4.21 build has no orphan sweep, so only a pod restart returns the ~42 GiB and clears the Ceph warning.

@@ -1001,3 +1001,25 @@ Result, after ArgoCD synced `8adbb71` (watch loop on the readonly kubeconfig, 30
 ```
 
 The third ingester landed on node4, the one node that had none, and was Ready about 30 s after it started. It did not sit Pending: node CPU requests were 62–75 % and memory requests 20–28 % before the change, so `KubeCPUOvercommit` (which is about surviving a node loss) did not stop the scheduler. LokiStack now reads `Ready=True`, `Warning=False`; the ingester PDB allows 1 disruption; all three ingesters have restartCount 0, and the other logging pods were not restarted. The Completed `loki-secret-translator` pod is the chart's ArgoCD `Sync` hook, which reruns on every sync.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**OLM catalogs**
+
+- **Logging and Loki no longer come from `okderators`:** since 2026-10-20 their Subscriptions use the test CatalogSource `okd-test-logging` (`components/operators/logging-test-catalog/`, a zot image under `okd-test/`; installed 6.6.0-2026-10-20-134619, built from Red Hat's 6.6.1 commits) until okderators publishes 6.6, so a zot outage or data loss stops logging pods from restarting. Publishing needs our pipeline PRs merged (okd-operator-pipeline #35 `main`, which builds the images, plus backports #36–#38; filed 2026-10-20, ready for review since 2026-10-21 after the 24 h soak passed), then catalog-index PRs that are not filed yet.
+- **The okderators build chain is per-OKD-release, and `main` is NOT the branch that builds our catalog (found 2026-09-09).** `okd-operator-pipeline` has `main` plus `release-4.18`/`release-4.20`/`release-4.21`/`release-4.22` branches. **`main` builds OKD 5.0** (`OKD_VERSION=5.0.0-okd-scos.0` since 2026-09-23; it built 4.22 before that); **`release-4.22` builds 4.22 and, since the 2026-10-29 flip, our catalog** (`OKD_VERSION=4.22.0-okd-scos.2`, verified 2026-10-22); **`release-4.21` built it until then** (`OKD_VERSION=4.21.0-okd-scos.10`, and as of 2026-09-09 it was 34 commits behind `main`; the 39-submodules-pin-`release-4.22` count was also from 2026-09-09 and not re-checked). So a fix contributed to `main` does NOT reach `catalog-index:4.22` — it has to land on `release-4.22` too.
+
+### From the README TODO
+
+**okderators Logging/Loki 6.6.1 for OKD 4.20, 4.21 and 4.22**
+
+- **okderators Logging/Loki 6.6.1 for OKD 4.20, 4.21 and 4.22 — design and plan approved 2026-10-20; execution started 2026-10-20.** The 4.21 and 4.22 catalogs head at 6.3.0, whose `maxOpenShiftVersion` 4.20 blocks cluster upgrades (okderators-catalog-index #44); the only newer community build, 6.5.0-2026-06-04 (4.20 catalog only), is a 6.5 branch snapshot whose Loki binary was compiled from the wrong source and carries the LOG-9632 S3 bug for NetApp/Dell stores (#48; garage here is unaffected). Operator's decisions: every OKD user, all branches; Red Hat's 6.6.1 commits only, channel `alpha`; `main` carries it so upstream CI builds the images; builds run on this cluster and push to zot `okd-test/`; this cluster's logging moves to the test build and may be reinstalled freely. Shape: one `cluster-logging/` change on pipeline `main`, copied to `release-4.22/4.21/4.20`; catalog entries on 4.20/4.21/4.22 after CI publishes.
+- From this commit the logging Subscriptions point at that zot test catalog, so logging runs on images in zot `okd-test/` until okderators publishes 6.6, which is why zot data loss would stop logging pods from restarting. Both operators run 6.6 since 2026-10-20 (InstallPlans approved, still Manual); upstream CI needs disk, so the fork's `cluster-logging-6.6` (head 1466fa3) has an opt-in `free_disk_space` step in the shared `operator-deploy.yaml` (build peaked at 37.0 GB vs ~14 GB free on `ubuntu-latest`). The four pipeline PRs were filed on 2026-10-20 as drafts, ahead of the soak at the operator's ask, and have been ready for review since 2026-10-21: [#35](https://github.com/okd-project/okd-operator-pipeline/pull/35) `main`, [#36](https://github.com/okd-project/okd-operator-pipeline/pull/36) `release-4.22`, [#37](https://github.com/okd-project/okd-operator-pipeline/pull/37) `release-4.21`, [#38](https://github.com/okd-project/okd-operator-pipeline/pull/38) `release-4.20`; merging the backports builds nothing, the images come from the `main` build. The 24 h soak passed on 2026-10-21, and its results are a comment on #35.
+
+**OKD 5.0 follow-ups**
+
+- Upstream `main` got cluster-logging 6.6 on 2026-11-10 straight from a maintainer, not through our #35 (same sources and gitlinks, 8 files differ incl. no `passthrough-gateway` image, cap still 4.23), so #35 is overtaken and the logging change becomes a small one on top of `main`; #36-#38 are untouched (`.superpowers/sdd/2026-11-10-okd-5.0-upgrade/notes/logging-upstream-vs-our-prs.md`).

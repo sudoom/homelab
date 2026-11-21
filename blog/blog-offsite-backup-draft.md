@@ -1121,3 +1121,22 @@ The operator checked the TrueNAS single pane by eye the same evening:
 
 The exporter work is done. Its spec and plan were local working files and are deleted; this draft is the design
 record.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Non-cluster infrastructure — `ansible/` vs `components/`**
+
+- Two nightly TrueNAS Cloud Sync tasks copy the photos off that box: 05:00 into the Synology share folder `photo/backups/immich` (`COPY` on purpose, so a deletion in Immich never propagates there) and 06:00 to a Hetzner Storage Box sub-account (`SYNC`; history from the box's weekly snapshots × 10). The offsite task is in code since 2026-10-14 and exists on the box once `playbook.yml` has run.
+
+### From the README TODO
+
+**Immich library: preserve offsite coverage across the TrueNAS migration (revised 2026-10-11; HIGH**
+
+- The earlier claim came from over-reading "no hyper backup for kubenfs" as "nothing under kubenfs is backed up"; the job is **per-PVC**, and the keepers PVC (`pvc-3f531e77`) is deliberately excluded — correctly, since torrents are re-downloadable. **The actual work:** that task targets a *path on the Synology*, so migrating the library to TrueNAS drops it out of C2 while the task keeps reporting green against a stale directory — a silent coverage loss of the only irreplaceable data here. Stand up an equivalent TrueNAS→offsite path **before** cutover, then retire the C2 task only once the new one has a verified restore. **2026-10-11: the operator chose to move the library first** (no UPS, no offsite job yet), in this order: library to TrueNAS (**done 2026-10-11 17:52Z**, `tests/immich-truenas-migration/`, every file checksummed) → a TrueNAS → Synology copy into `photo/backups` (**in code since 2026-10-11** as a Cloud Sync task over SFTP, `COPY` mode, nightly 05:00, declared in `ansible/truenas/group_vars/all.yml`; **live since the same evening**: first run 164 files / 1.241 GiB, every file's sha256 identical between TrueNAS and the Synology; **adding `photo/backups` to the Hyper Backup task so C2 covers it is no longer needed once the offsite leg is verified (spec rollout step 7)**) → the full archive import → the offsite job.
+- The old library was deleted on purpose the same day, so the move itself was 1.3 GiB; the old Synology PVC `immich-library` stays Bound as the rollback. **Provider decided 2026-10-13: a Hetzner Storage Box (BX11, 1 TB, €3.20 net a month — ~17 zł with VAT — billed by the hour, no minimum term)**, filled nightly by a second TrueNAS Cloud Sync task over SFTP, the task type the Synology leg already uses, declared in `ansible/truenas/group_vars/all.yml`.
+- [The Hetzner Storage Box offsite copy:] Not encrypted on our side.
+- Sized against the measured archive: ~350 GB now, ~100 GB a year, so the 1 TB plan lasts about six years; near 1 TB the choice is reopened, because a bucket (Backblaze B2 or Hetzner Object Storage, ~33 zł per TB) is cheaper than the 5 TB plan until ~1.76 TB. **Scope note 2026-10-11:** the old family archive is being imported into Immich as the `family` account, so it lands in `tank/immich` and this same task covers it. **State 2026-10-14:** the design adapted to it (mirror mode, weekly snapshots × 10, a sub-account for TrueNAS, staleness alerts for both Cloud Sync tasks, a full pull-back restore test, C2 retirement) is approved; design in `blog/blog-offsite-backup-draft.md`. **The box was ordered and set up 2026-10-14; the spec was approved the same day and the code is in git** (role `transfers`, the offsite credential and task, collector metrics, alerts — commits `9ec39a2`…`f19827c`, five commits). **Converged 2026-10-14; the first offsite run and the full pull-back passed the same evening** (231 files, 1.3 GiB, 0 checksum differences; `blog/blog-offsite-backup-draft.md`). One file from a box snapshot matched too (2026-10-14).

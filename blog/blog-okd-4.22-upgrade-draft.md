@@ -871,3 +871,15 @@ is what opens the catalog PR afterwards. The homelab is not affected: it reads `
 2026-11-19: filed draft [#53](https://github.com/okd-project/okd-operator-pipeline/pull/53) `release-4.22` ←
 `sudoom:cert-manager-catalog-branch-4.22` (`5088178`, signed): one line, `catalog_branch: release-4.22` in
 `cert-manager-deploy.yaml`. Only cert-manager and GitOps deploy on pushes to `release-4.22`, and GitOps already sets it.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**OLM catalogs**
+
+- `okderators` (`quay.io/okderators/catalog-index:5.0` — flipped 2026-11-10 (commit 37fe780), right after the 5.0 hop; 4.21 → 4.22 was flipped 2026-10-29 and 4.20 → 4.21 on 2026-09-08) — OKD community operators.
+- [okderators catalog tag flips to 4.21, 4.22 and 5.0:] Zero InstallPlans all three times.
+- **`main` builds OKD 5.0** (`OKD_VERSION=5.0.0-okd-scos.0` since 2026-09-23; it built 4.22 before that); **`release-4.22` builds 4.22 and, since the 2026-10-29 flip, our catalog** (`OKD_VERSION=4.22.0-okd-scos.2`, verified 2026-10-22); **`release-4.21` built it until then** (`OKD_VERSION=4.21.0-okd-scos.10`, and as of 2026-09-09 it was 34 commits behind `main`; the 39-submodules-pin-`release-4.22` count was also from 2026-09-09 and not re-checked).

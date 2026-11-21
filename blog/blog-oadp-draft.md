@@ -209,3 +209,13 @@ Also discovered during this work: an orphan Loki bucket (`loki-a617fe86-...`, 42
 - **Toolbox-side `radosgw-admin` defaults to the orphan `default` zone.** All real data lives in the `ceph-objectstore` zone. Always pass `--rgw-realm=ceph-objectstore --rgw-zonegroup=ceph-objectstore --rgw-zone=ceph-objectstore` to inspect actual buckets. Same gotcha bit me during Loki bring-up; see `blog/blog-ceph-object-store-draft.md`.
 - **First daily backup will be heavy.** Kopia walks every PVC on the cluster, including Prometheus TSDB (Grafana panels remain functional during/after; they read from the new TSDB after restart) and Loki chunks (already in RGW — kopia will dedupe but still has to walk). Expect the 02:00 UTC backup window to take an hour or more on day 1; subsequent days should be minutes.
 - **Velero never modifies live state.** Restores are explicit `oc apply -f restore.yaml` actions, not automatic. There's no risk in having the operator + schedules running.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**Scope OADP backups before un-pausing**
+
+- The TODO item as it stood: [ ] **Scope OADP backups before un-pausing** — the HDD-capacity framing was wrong, not merely stale: the HDD tier landed 2026-06-12 but the RGW data pool is x3 on those same three OSDs, so backing Ceph-backed PVCs into RGW stays circular. **Two gates now:** (a) the `excludedNamespaces` block, and (b) choosing which BSL each Schedule targets — `truenas-garage` (live + Available 2026-08-28) is the non-circular destination. The restore path itself is proven (rehearsal PASSED 2026-08-28). Schedule is currently `paused: true` in chart (`a75f688`) after the 2026-06-08 Loki-WAL-fills-Ceph incident.

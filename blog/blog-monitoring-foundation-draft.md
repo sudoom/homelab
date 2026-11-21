@@ -486,3 +486,14 @@ dead-man's switch spec and plan are deleted; the decisions, their reasons and th
   (`blog/blog-external-secrets-bitwarden-draft.md`).
 - **Prerequisite.** The heartbeat needs `alertmanager.email.enabled`, because the `alertmanager.yaml` template is
   behind that flag.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**CNPG WAL-archiving alerting**
+
+- **Narrowed 2026-08-06:** the platform Prometheus PVCs are now structurally mitigated rather than alerted — `retentionSize` (38GiB platform / 7GiB UWM) in `components/cluster-config/monitoring-config/values.yaml` bounds those TSDBs by disk, so they can't fill regardless of series growth.
+- The 2026-08-06 `KubePersistentVolumeFillingUp` on `prometheus-k8s-db-prometheus-k8s-1` (85% at rest, ~90% at compaction peaks, on a 15d-steady-state TSDB) was the second concrete instance of this class after the media-postgres WAL fill; (3) **node `NotReady`** is already covered by the platform `KubeNodeNotReady` default. (1) firing into a console nobody watched at night was downstream of the alert-delivery gap, closed for critical alerts and the named `UserNamespace*`/`CNPGWALArchiveFailing*` routes by the Mailjet email since 2026-09-07, plus the Watchdog dead-man's switch since 2026-09-25 for the brownout case where Alertmanager itself goes silent (`blog/blog-monitoring-foundation-draft.md` 2026-09-25 section).

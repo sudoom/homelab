@@ -314,3 +314,23 @@ Automating this is a README TODO now ("Automate zot image cleanup").
 catalogs); one tag per repository remains, the live 5.0 build. Details and the tag-to-digest check in
 `blog-okderators-nmstate-draft.md` ("zot cleanup after the soak"). `data-zot-0` before the next GC: 25.41 GiB free of
 48.91 (14.39 GiB on 2026-11-10 evening; the GitOps test images deleted at 13:49Z that day were collected in between).
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Upstream PRs and comments**
+
+- Shape: a throwaway namespace; podman in a pod, which needs the `privileged` SCC (image: our own zot copy `okd-test/podman/stable:v5.8.9-2026-10-26@sha256:68e44184…`, because quay re-tags `podman/stable` daily and expires the old digests within days, and zot does not cache digest-only pulls; refresh by `skopeo copy` under a new dated tag, `tests/okderators-logging-build/README.md`); build storage on a temporary `ceph-nvme-block` PVC, never node root disks (each carries a mon, and node5's has crossed the `MON_DISK_LOW` line twice); images pushed to zot under `okd-test/`, never under a path that matches a real upstream repository (zot is the cluster's pull-through mirror for quay.io, docker.io, ghcr.io and registry.k8s.io, so such a push would shadow the real image cluster-wide). zot's PVC is 48 GiB with ~18 GiB free on 2026-10-20: measure after a build and delete test images when done, because a full zot breaks image pulls for the whole cluster.
+
+### From the README TODO
+
+**Automate zot image cleanup: no retention policy exists (found 2026-11-02).**
+
+- The first manual cleanup on 2026-11-02 removed 154 of 239 images (`blog/blog-zot-pullthrough-draft.md`).
+
+**OKD 5.0 follow-ups**
+
+- (h) **zot space after the hop:** `data-zot-0` went from 25 GiB free (11:25Z) to 13.9 GiB free (13:49Z), because zot now stores the 5.0 payload pulled by digest (repos `okd/scos-content` and `okd/scos-release`, untagged) — unlike the 4.22 payload, which came from `registry.ci` and bypassed it. The 14 `okd-test/gitops*` test images were deleted at 13:49Z and free their blobs at the next GC (24 h interval). 2026-11-11 17:38Z: 25.41 GiB free of 48.91 (that GC ran; the 11 NMState test images deleted at ~17:38Z free their blobs at the next one). After scos.6 (2026-11-11 19:53Z): 19.5 GiB free.

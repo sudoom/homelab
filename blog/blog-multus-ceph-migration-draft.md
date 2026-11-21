@@ -1317,3 +1317,14 @@ The seqwrite regression is **not architectural** — `ceph health detail` showed
 Morning's 163 MB/s ran on a cluster that had been up for hours. The "warm vs cold cluster" gap is the right framing — not "rebuild regression". Re-bench on this same cluster a few hours from now should recover the 163 MB/s number.
 
 The point of this re-bench was to **confirm the GitOps-only bootstrap produces a fully-functional cluster end-to-end** — `addressRanges` on backnet, ctrlplugin hostNetwork, csi-rbd-provisioner.1 caps applied, `pg_num` floored — all done via three idempotent bootstrap Jobs and one SSA-patch chart, no imperative interventions. That part is verified clean: PVC bound in 5s on first try, fio ran with no manual unsticking.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**Track upstream fixes for `kubernetes-nmstate-operator` (operatorhubio-catalog) CSV**
+
+- **Track upstream fixes for `kubernetes-nmstate-operator` (operatorhubio-catalog) CSV — THREE RBAC defects (no longer on this cluster since the 2026-10-26 switch to the okderators build; the workaround templates are deleted; what remains is the community upstream issue for (c))** — (a) discovered 2026-05-11: `use` on the `privileged` SCC, missing → new handler pods rejected at admission; (b) same day: `get/list/watch apiservers.config.openshift.io`, missing → handler crashes on startup fetching the cluster TLS profile.
+- **PR filed for (a)+(b) at https://github.com/okd-project/okd-operator-pipeline/pull/19.** (c) discovered 2026-08-06 and **NOT covered by PR #19**: the CSV's own `nmstate-monitor` + `prometheus-k8s` RoleBindings in ns `nmstate` bind subject `prometheus-k8s` in namespace `monitoring` — a namespace that does not exist on OpenShift (it's `openshift-monitoring`; the value comes from `MONITORING_NAMESPACE`, which the okderators build sets correctly and operatorhub.io leaves at the upstream default).

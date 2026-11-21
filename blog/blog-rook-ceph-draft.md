@@ -4212,3 +4212,36 @@ contingency (B2); the 24 GiB file (M1); backup before baseline and zot in scope 
 (M3); the caps check after every hop (M4); the double read of the Driver spec (M5). The plan review corrected two
 verification commands that could not show what they claimed (the `auth_service_cipher` end condition and the key-type
 check) and added the operator SA prefix so the Driver had an existing SA under every interpretation during the sync.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Stack and tool versions**
+
+- [OKD] Storage went first: Rook v1.21.1 (Kube 1.32-1.37) since 2026-11-06 and Ceph Tentacle 20.2.5 since 2026-11-09 (see Storage).
+
+**Storage (Rook-Ceph)**
+
+- The staged upgrade from Rook v1.19.5 / Squid 19.2.4 (Squid's target EOL was 2026-10-31; README TODO, runbook `tests/rook-ceph-upgrade/README.md`) ran backup, fio baseline, stage 1 (Rook v1.20.9, 2026-11-05; the RBD Driver comes from the `ceph-csi-drivers` subchart of the operator chart, `csi-driver-config` is retired), stage 2 (Rook v1.21.1, ceph-csi-operator v1.1.0, cephcsi v3.18.1, 2026-11-06), stage 3 (msgr2 required, 2026-11-08) and stage 4 (Tentacle 20.2.5 with the CephX daemon key rotation to `aes256k`, 2026-11-09; the `rook` mgr module is off, so the dashboard's orchestrator pages are unavailable).
+
+### From the README TODO
+
+**File upstream: `pg_autoscaler` returns empty status with `bulk: true` on Squid 19.2.3**
+
+- Confirmed on two pools (`nvme-replicated` and `ceph-objectstore.rgw.buckets.data`, both stuck at `pg_num: 1` until a one-time toolbox bump past Ceph's `pg_num_min > pg_num` EINVAL guardrail). **Bug report drafted** at `bugs/upstream-ceph-pg-autoscaler-bulk-ignored.md` — ready to paste as a tracker.ceph.com issue. Workaround context in `blog/blog-ceph-object-store-draft.md`. **Not reproduced on Tentacle 20.2.5 (2026-11-09, after the Rook upgrade's stage 4):** `autoscale-status` lists both pools, `nvme-replicated` with `BULK True`, `PG_NUM 128` and no new target. Squid is EOL, so filing against it is moot; whether the `pg_num_min` floor and its bootstrap Job can go is an open decision (the freeze ended 2026-11-10).
+
+**Investigate elevated cluster-wide `kv_commit_lat`**
+
+- **Investigate elevated cluster-wide `kv_commit_lat`** — post-rebuild 2026-05-15 baseline is 8-17ms across OSDs vs the post-PM9A1-swap reference ~3ms from 2026-05-07. Read-side fine; affects sustained seqwrite. **2026-05-21 finding**: BlueStore latency variability is large enough to dominate single rados-bench samples — two post-jumbo-frame measurements 5 min apart landed at 129.4 MB/s and 101.5 MB/s purely based on whichever OSD was compacting RocksDB at the time. The 8-13 ms commit_lat noise floor + intermittent BLUESTORE_SLOW_OP_ALERT cycling between OSDs is the root cause to dig into. Hypotheses: RocksDB compaction overhead post-pg_num bump still settling; node6's higher `percentage_used` (11% vs 4-6% on node4/5) accelerating; thermal under sustained burst. Next step: re-bench in a week on a steady-state cluster with multiple samples per state; if median delta persists, dig into `ceph daemon osd.N perf dump` over time. **2026-06-15 update — largely resolved**: lifetime `kv_commit_lat` avg is back to **~3.7 ms** on all 3 NVMe OSDs (osd.0/1/2: 3.685/3.943/3.826 ms, the post-PM9A1 reference) — the 2026-05-15 "8–17 ms elevated" condition has settled. The residual `BLUESTORE_SLOW_OP_ALERT` (osd.0/osd.1) is now understood as **benign hair-trigger** (threshold=1 op >5 s / 24 h) on no-PLP NVMe — rare fsync outliers (0.02–0.05 % of commits), avg latency healthy.
+
+**File upstream: Rook generates `csi-rbd-provisioner.<gen>` with missing `osd profile rbd` cap on fresh bootstrap**
+
+- **File upstream: Rook generates `csi-rbd-provisioner.<gen>` with missing `osd profile rbd` cap on fresh bootstrap** — discovered 2026-05-15 during the post-teardown re-bootstrap.
+- **Kept after the Rook upgrade (2026-11-10):** Rook's `cephCSIKeyringRBDProvisionerCaps()` (`pkg/operator/ceph/csi/secrets.go`) is identical in v1.19.5 and v1.21.1 (mon `profile rbd, allow command 'osd blocklist'`, mgr `allow rw`, osd `profile rbd`), and `createCSIKeyring` calls AuthGetOrCreateKey with that set, or AuthUpdateCaps, on every reconcile in both. v1.19.5 is the version that produced the missing cap on 2026-05-15, so the upgrade changed nothing that explains it, and a live read cannot tell because the Job re-applies the caps hourly.
+
+**OKD 5.0 follow-ups**
+
+- **(2) Rook and Ceph, done 2026-11-10 (the freeze ended with the close-out):** Rook v1.19.5 → v1.20.9 (2026-11-05, the RBD Driver from the `ceph-csi-drivers` subchart, `csi-driver-config` retired) → v1.21.1 (2026-11-06, ceph-csi-operator v1.1.0, cephcsi v3.18.1), msgr2 required (2026-11-08, CRC, no encryption) and Ceph Squid 19.2.4 → Tentacle 20.2.5 with the CephX daemon key rotation to `aes256k` (2026-11-09, the `rook` mgr module off).

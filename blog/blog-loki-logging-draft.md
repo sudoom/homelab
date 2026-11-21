@@ -598,3 +598,13 @@ Closing the read-path 504 saga. Final scoreboard on the three hypotheses we chas
 | **`okd.sudops.pl` in pod search list + ndots:5 + 5 s gRPC dial deadline** | **fixed by MCO rolling reboot recreating all long-lived pods with the current (clean) host resolv.conf snapshot** |
 
 The dispatcher script we shipped is a defensive no-op today (host resolv.conf doesn't carry the suffix anyway under KNI prepender), kept in place against future regression. And the actual mechanism — pod recreation — is what closed the issue. **One reboot beats one careful sed**, this time.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**Logging stack `application` tenant**
+
+- The TODO item as it stood: [ ] **Logging stack `application` tenant — LOG-6894** — Red Hat upstream bug; `grafana-loki` SA gets `allowed: true` from cluster-side SAR for `loki.grafana.com/application/logs:get`, but observatorium-api's OPA still returns 403. KCS-7113062 has no fix at v6.3.0. Workaround: enable the OpenShift console plugin (different OAuth path) for application logs.

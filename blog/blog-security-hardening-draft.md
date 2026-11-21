@@ -840,3 +840,18 @@ defaults (release notes + a `kubeseal --fetch-cert` smoke-seal against the upgra
 controller). Given the cert-expiry history, confirming rotation survives the bump is
 the whole review.
 
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**Encryption in transit**
+
+- **Encryption in transit — OVN-Kubernetes IPsec — ATTEMPT 1 ROLLED BACK 2026-05-20.** Enabling `mode: Full` triggered an MCO master-pool reroll (kernel modules + NM service install via MachineConfig — wasn't flagged pre-apply) which then surfaced multiple cluster-breaking interactions: (a) Loki ingester PDB MinAvailable=2 with 2 replicas blocked drain permanently, (b) image pulls extremely slow across IPsec (~15-19 min for ceph images), (c) RGW + router anti-affinity left only 1 schedulable node when routers re-balanced, (d) post-IPsec-reboot node could not reach etcd on host-network IPs (`192.168.1.7:2379`, `192.168.1.9:2379`) cross-node — root cause TBD. Rolled back via `oc patch network.operator/cluster` directly (ArgoCD repo-server was timing out under cluster stress).
+- Pre-IPsec baseline measurements (cleartext geneve tcpdump, iperf3 cross-node 879 Mbits/sec, RGW HTTP latency p50 2.0ms) captured 2026-05-21 in `data/ipsec-baseline-2026-05-21/`.
+
+**SUPERSEDED BY THE ESO + BITWARDEN MIGRATION (In flight)**
+
+- **SUPERSEDED BY THE ESO + BITWARDEN MIGRATION (In flight) — do not bump; the controller is removed after the last cutover. Renovate #153 (2.20.0) is NOT-APPROVE for the same two reasons as #141: no re-vendored tgz, and the restricted-v2 securityContext.** **sealed-secrets: bump 2.18.6 → 2.19.1 (controller 0.37.0 → 0.38.4) — BLOCKED on a restricted-v2 securityContext incompat; staying at 2.18.6.** History: Renovate #141 (55f636b) bumped `Chart.yaml`+`Chart.lock` to 2.19.1 but merged bare (did NOT re-vendor `charts/*.tgz`), leaving Chart.lock 2.19.1 vs vendored tgz 2.18.6 — a fresh-bootstrap `helm dependency build` digest failure on a bootstrap-critical chart (caught by the 2026-07-08 audit). Attempted to complete it (re-vendor 2.19.1.tgz); the image `docker.io/bitnami/sealed-secrets-controller:0.38.4` IS pullable (Docker Hub API: multi-arch, published 2026-07-03 — the Bitnami-freeze concern is moot, bitnami still ships this repo to `docker.io/bitnami`), **but the 0.38.4 chart's Deployment hardcodes `runAsUser: 1001` + `fsGroup: 65534` + a `seccomp.security.alpha` annotation that OpenShift restricted-v2 REJECTS** → new ReplicaSet `FailedCreate` (`must be in the ranges: [1000810000, 1000819999]`), rollout stuck (old 0.37.0 pod kept serving). **Reverted to coherent 2.18.6** (dc5f19b→revert), controller stays 0.37.0. **To land next (supervised):** override the chart's pod/container securityContext in `values.yaml` — drop the hardcoded `runAsUser`/`fsGroup` and the seccomp annotation so OpenShift injects a namespace-range UID/fsGroup (same pattern as the immich restricted-v2 overlay), `helm template | oc diff` to confirm the SCC passes BEFORE re-vendoring, then re-vendor 2.19.1.tgz + update the component README/Chart.yaml comment. Low urgency (0.37.0 Healthy, `--key-renew-period=720h` intact).

@@ -81,3 +81,13 @@ Same lesson as the nmstate gitlinks on 2026-09-09: read what was built, not what
 Next: spec review, then the implementation plan.
 
 2026-10-14: specs and plans are no longer kept in the repo; the design record is this draft.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**Replace sealed-secrets with External Secrets Operator + Bitwarden Secrets Manager (EU)**
+
+- Decided: Bitwarden SM EU cloud (free tier, end-to-end encrypted), ESO from the `okderators` catalog (user's choice over the upstream Helm chart), scope = the 13 live SealedSecrets (20 keys) as of 2026-09-24 — 17 SealedSecret files on 2026-10-24 (`git ls-files | grep /sealed-`), including that day's `homebox-postgres-r2-creds`, `homebox-auth` and `homepage-proxy`, with `technitium-exporter-token` still to come; Ansible Vault stays. Verified the catalog build: operator 1.0.0 / ESO **0.19.0** / `bitwarden-sdk-server` 0.5.1, all built 2025-10-05 (upstream ESO is 2.11.0), config CR is the pre-rename `ExternalSecrets` kind, so the next catalog rebuild brings a breaking rename — `installPlanApproval: Manual` holds it.

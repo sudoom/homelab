@@ -88,6 +88,8 @@ which was rsync-over-one-stream with small files in the mix, not of what the DS4
 do. Real number, invented conditions, which is the failure mode this whole file exists
 to prevent.
 
+**Storage benchmark harness — SMALL-FILE SCALE QUESTION ANSWERED (2026-09-06).** The corpus layout was calibrated two-point on the Synology so that fixed setup cost could be separated from marginal per-file cost, which is the figure that decides the run: **2000 files in 10s, 20000 in 93s -> 4.61 ms/file, ~217 files/s per client, fixed overhead ~0.8s (essentially linear).** At 1,048,576 files/client that is **~80 minutes per client, not hours** -- the grid is runnable.
+
 ### CephFS-HDD — EC 2+1 across three spindles, and not a network cap
 
 `cephfs-bulk-hdd`, erasure-coded 2+1 across the three HDD OSDs (one per node).

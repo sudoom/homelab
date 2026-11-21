@@ -1008,3 +1008,20 @@ on 2026-11-05 just before filing; each upstream head is an ancestor of its fork 
 approved the titles and bodies before filing ("yes, file both"). Both stay draft; marking them ready is the operator's
 call. The catalog-index PRs (`release-4.22` with `replaces` and `skipRange`, `release-5.0` as a new package) follow
 their merge and upstream CI.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**OLM catalogs**
+
+- Use for **cert-manager**; it served the **Kube Descheduler Operator** (`components/operators/kube-descheduler/`, v5.3.0, CR mode `Automatic`, replacing the vendored CronJob chart; it never evicts pods in `openshift-*`, `kube-system` or `hypershift`, by design; `blog/blog-descheduler-draft.md`) from 2026-10-24 until the 2026-11-04 move to `okd-test-descheduler` (below).
+
+### From the README TODO
+
+**OKD 5.0 follow-ups**
+
+- Read 2026-11-02: no okderators catalog a 4.22 cluster reaches offers anything newer. `release-4.21` and `release-4.22` head at that same 5.3.0, and only `release-4.20` has a 5.4 (5.4.0-2026-07-13).
+- `main`'s 2026-09-23 failure was the catalog-PR job, not the build. A `release-4.22` build sets the cap to 4.23, which clears OLM's check on 4.22 (`normalizeOCPVersion`), confirmed live 2026-11-04. CRD and profiles are unchanged from 5.3 to 5.4. The 12-task plan was approved 2026-11-02 and is running: both builds and the catalog image passed on 2026-11-03, and the eviction check on 5.3. The cluster runs the 5.4 test build from `okd-test-descheduler` since 2026-11-04 11:59Z: the eviction check passed on 5.4 and `ClusterNotUpgradeable` cleared. The 24 h soak passed 2026-11-05. Draft pipeline PRs filed 2026-11-05: [#49](https://github.com/okd-project/okd-operator-pipeline/pull/49) (`release-4.22`) and [#50](https://github.com/okd-project/okd-operator-pipeline/pull/50) (`main`); catalog-index PRs follow their merge and CI (`blog/blog-descheduler-draft.md`).

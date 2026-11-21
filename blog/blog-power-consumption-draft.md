@@ -1587,3 +1587,21 @@ survives without pinning the clock.
 The restore rollout ran 16:54–17:12Z (node4 back at 16:59:49Z, node6 at 17:05:58Z, node5 at 17:12:06Z). Ceph was back
 to its two standing warnings at 17:14:24Z once `osd-1` on node5 finished its init containers. The operator's sysctl
 check afterwards read `1` on all three nodes again: six MCO reboots in one day, and `br-ex.forwarding` never dropped.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Node drain and unplanned rerolls**
+
+- The way to take it off temporarily without the double reboot (done 2026-10-16, 10:36Z): switch off auto-sync on **both** `power-tuning` and `root-app` first, then delete the CR — one clean three-node reroll.
+
+### From the README TODO
+
+**Power consumption reduction**
+
+- **Power consumption reduction — Lever 1 SHIPPED + accepted; Lever 2 optional, Lever 3 queued** — **Off for six hours on 2026-10-16 and back on:** with Lever 1 the cluster used about three times the CPU time for the same work (the passive driver + `powersave` governor most likely pins every core at its minimum clock), and step 6's Immich job backlog held two nodes at ~99 % for 2.5 h; a middle ground (active mode, or passive + `schedutil`, keeping `max_cstate=9`) is worth measuring against the Shelly numbers (`blog/blog-power-consumption-draft.md` 2026-10-16).
+- **Result (2026-05-26, 12h post-apply)**: rack draw 372.5 W → 226 W (**−146 W, −39%**); node6 draw 102.88 W → 40.57 W (−60%). Cost: ~1,615 zł/year saved at current 1.263 zł/kWh. **Components shipped**: Shelly Plus Plug S Gen3 telemetry (2026-05-21, `shelly-exporter` with node6 + rack instances); Tuned profile sub-step A runtime knobs (2026-05-23, governor=powersave + EPB=15, confirmed no-op alone on `intel_pstate=active`); Tuned profile sub-step B (2026-05-25, `[bootloader]` section with `intel_pstate=passive processor.max_cstate=9` via NTO MachineConfig, cluster-wide on master MCP). **Accepted tradeoff**: CPU utilization metric inflated 4× (low-freq accounting artifact, not real load); several observability pods throttle 50-80% (smartctl-exporter, nmstate-cert-manager, mikrotik-exporter) — no CrashLoopBackOff, no CO degraded, all workloads functional. **Fallback knob if anything regresses**: raise `min_perf_pct` 16 → 30 (runtime tunable, no MCO event).
+- **2026-09-14: deleting the `powersave-experimental` Tuned CR by hand starts an MCO reboot rollout within a minute (NTO drops `50-nto-master`, MCO renders without the kernel args) — see CLAUDE.md "Node drain and unplanned rerolls" and the `network-change` skill. To switch the tuning off, change `bootArgs` in git.**

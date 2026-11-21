@@ -552,3 +552,14 @@ The alert proposed at the end of the 08-07 write-up — page on
 `net.ipv4.conf.br-ex.forwarding == 0` — was not built. Had it existed, detection would have been
 ~2 min instead of 3.5 h, and the WAL-archiving gap would have been near-zero. Two incidents, same
 undetected-for-hours shape, same one-line signal. Build it.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**Alert on `net.ipv4.conf.br-ex.forwarding == 0` (node-level)**
+
+- **2026-09-08:** ~3.5 h undetected, and the trigger was **not** what I first wrote here. I recorded it as "a bare keepalived VRRP failover"; that was **retracted the same day** — later that morning the ingress VIP failed over again during the phase-4 reboots and `br-ex.forwarding` stayed `1` on both surviving nodes.
+- Both times an OVN gateway reconcile zeroed this sysctl on all 3 nodes, killing cluster-wide pod egress and pod→ClusterIP, while all 3 `ovnkube-node` pods stayed `Ready` — nothing in their readiness probe reads it. The 09-08 run also left **both CNPG clusters not archiving WAL offsite for 3.5 h**, which is the only part with real data-loss exposure and is invisible unless the condition is asserted explicitly.

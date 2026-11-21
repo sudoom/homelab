@@ -2274,3 +2274,31 @@ back to Synced/Healthy, and RBD had not blinked. One orphan remains: the cluster
 "successfully removed CSI CephFS driver" nor the Driver deletion touched it. Inert — no plugin registers under it
 and no PVC names it — but litter: `oc delete csidriver rook-ceph.cephfs.csi.ceph.com` (operator-run) finishes
 the job. Filed as `bugs/upstream-ceph-csi-operator-reconciles-terminating-driver.md`.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**UNEXPLAINED: persistent EACCES under concurrent multi-node RWX**
+
+- `cephfs-hdd` could not serve two pods on two nodes: one client returned `Permission denied` on `statx` for directories that demonstrably existed and **did not recover** — 293 failures in 300 one-second iterations, first at iteration 8, still failing at 300. It cleared only when the concurrency stopped, which made it look transient. **Not the MDS** (filesystem Ready, no evictions since 2026-08-07). **Not one bad node** — node4 first, then node5 on a directory it had used successfully four times.
+- **Now unreproducible**: the tier was retired the next day, deliberately, with this open.
+
+**Wire cross-check window must exclude the corpus layout (found 2026-09-06).**
+
+- The barrier logs put the slowest client's layout end exactly 45s before fio start, inside that reach. When a cell creates its corpus in the same run, the layout's bytes therefore land inside the measurement window; layout is a WRITE, so it corrupts the `tx` counter and every `rand-write`/`seq-write` cross-check with a fresh corpus. Proven by asymmetry on the bench16 grid: `rand-read` (measures rx) came back 1.11-1.14x clean while `rand-write` (measures tx) came back 64x/236x/292x, and the Phase-1 `rand-write` cells whose corpus already existed came back `ok` at 2.3 Mb/s.
+- Deliberately NOT applied mid-grid on 2026-09-06 -- the CephFS grid was running and `cephfs-hdd` has no switch port, so the fix bought it nothing while a template edit to a live grid is what broke three TrueNAS cells the day before. The three affected rows carry the real cause inline; their fio figures are unaffected.
+
+**`CephPGImbalance` false positive on the 2-tier cluster (cosmetic)**
+
+- The TODO item as it stood: [ ] **`CephPGImbalance` false positive on the 2-tier cluster (cosmetic)** — fires for all 6 OSDs because Rook's `prometheus-ceph-rules` averages `ceph_osd_numpg` across *all* OSDs with no device-class grouping (NVMe ~185 PGs vs HDD ~68 PGs → both deviate ±46 % from the 126.5 mean → trip the 30 % threshold).
+- Defer unless the noise starts drowning real alerts; runtime Alertmanager silence is the cheap stopgap.
+- Full diagnosis in `blog/blog-rook-ceph-draft.md` 2026-06-15 section.
+
+**Jellyfin: in-cluster vs Mac mini**
+
+- **Jellyfin: in-cluster vs Mac mini — canonical decision** — the in-cluster instance is now on the **official `jellyfin/jellyfin:10.11.8`** image (migrated off linuxserver 2026-06-15; runs root via `runAsUser:0` + mandatory `JELLYFIN_*_DIR` env to reuse the existing `/config`; `/config` on ceph-nvme-block, `/data` shared RWX on CephFS `cephfs-hdd`), with **Intel QSV HW transcoding** (i7-11700 / UHD 750; `hwAccel:true` → hostPath `/dev/dri` + 100Gi `/transcode` emptyDir). So the in-cluster instance is now a full-featured Jellyfin.
+- **Jellyfin 10.11 migration-bug caveat**: 10.11.x crash-loops converting the legacy `migrations.xml` (unguarded `.Last()`, jellyfin/jellyfin#15388/#15686, unfixed through 10.11.11/master). Recovered by renaming `/config/migrations.xml` aside (one-time, in-PVC, carried in `/config`). Rollback once 10.11 has forward-migrated `jellyfin.db` is NOT possible without a pre-10.11 backup.
+- Verified working on an LG OLED via the webOS app: 4K HEVC + DV P8.1 **direct-streams** (video bitstream copied, only DTS-HD MA→AAC audio transcodes, ~6× realtime — no freeze); the browser was the only thing forcing a full transcode. Full saga incl. the playback diagnosis: `blog/blog-hdd-tier-rollout-draft.md` 2026-06-15. (In-PVC recovery artifacts cleaned 2026-06-15 after the official instance was confirmed good.)

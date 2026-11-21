@@ -392,3 +392,13 @@ Any one of the three alone would have been caught. The lesson worth keeping is
 (2): *a scheduled job whose common path is a no-op is not tested by running it.*
 The only meaningful test is forcing the rare path — which for a cert-sync means
 deliberately pushing a cert that differs, not waiting for a renewal to do it.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From the README TODO
+
+**`homelab.sudops.pl` zone + wildcard cert + Synology auto-import**
+
+- The TODO item as it stood: [x] **`homelab.sudops.pl` zone + wildcard cert + Synology auto-import — SHIPPED 2026-05-24.** All three phases live: (a) cert-manager `Certificate` for `*.homelab.sudops.pl` (a49a8d2) — LE-prod wildcard in `homelab-wildcard-tls`, DNS-01 via Cloudflare on parent zone, valid until 2026-08-22; (b) Technitium zone via Ansible (4e20c77) — `nas → 192.168.1.2` + `dns → 192.168.1.12`, applied via `ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass --tags zones`; (c) Synology cert-sync CronJob in `components/cluster-config/synology-cert-sync/` (47ecb54 + fixes) — daily 03:14 UTC, idempotent replace via `desc` lookup + `id=` reuse, end-to-end verified with `Fingerprints match; no upload needed` on second run. **Manual cleanup remaining**: one leftover unbound duplicate cert in DSM from the script-development phase (with `For: -`); user deletes via DSM UI once.

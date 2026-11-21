@@ -1415,3 +1415,33 @@ Two changes followed (operator: "rule + switchover"):
 The switchover change closed README TODO "CNPG: `primaryUpdateMethod: switchover`" (open since 2026-09-15; it said
 "spec field, no restart to apply", and that held: after the push all three Clusters read `switchover` and no instance
 pod was recreated). The TODO is removed in the follow-up docs commit.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Node drain and unplanned rerolls**
+
+- **Never run a 1-instance CNPG cluster on the master pool** — its primary PDB blocks every drain. media-postgres and immich-postgres run 2 instances since 2026-09-15; homebox-postgres (added 2026-10-24) started with 2.
+
+**Session hygiene**
+
+- The 2026-06-08 incident: I proposed shipping CNPG `barmanObjectStore` as a follow-up — when CNPG-native backup had already been shipped 2026-05-18 with a passing 2026-05-20 restore drill, fully documented in `blog/blog-cnpg-draft.md`.
+
+### From the README TODO
+
+**Add CNPG `ContinuousArchiving` + per-node egress to the standard health sweep (HIGH; surfaced 2026-07-30)**
+
+- **Add CNPG `ContinuousArchiving` + per-node egress to the standard health sweep (HIGH; surfaced 2026-07-30)** — **CNPG half SHIPPED:** the `ContinuousArchiving` assertion is in CLAUDE.md's start/end-of-session sweep and runs every session.
+- Every check is cluster-scoped, and a per-node egress break is invisible to all of them: the node is `Ready`, the ovnkube-node pod is `8/8 Ready`, Postgres is `Running` (it serves fine — only *archiving* breaks), Ceph is benign-`HEALTH_WARN`, ArgoCD is `Healthy`.
+- **Cheap fix, do this first:** add to the sweep (and to CLAUDE.md's start/end-of-session procedure) a one-liner per CNPG cluster asserting `ContinuousArchiving=True`, plus a per-node pod→external reachability check.
+
+**CNPG WAL-archiving alerting**
+
+- **CNPG WAL-archiving alerting — PRIMARY alert SHIPPED 2026-07-08; PVC-fill backstop is a platform-metric gap** (surfaced by the 2026-07-02 node4 outage).
+- **Shipped**: `CNPGWALArchiveFailing` (warning, 15m) + `CNPGWALArchiveFailingCritical` (critical, 1h) per archiving cluster, on `increase(cnpg_pg_stat_archiver_failed_count[15m]) > 0` — the direct "R2 push is failing" signal, no idle-DB false positive. Rules in `components/apps/cnpg-clusters/templates/prometheusrule-wal-archive.yaml` (media) + `components/apps/immich/templates/prometheusrule-wal-archive.yaml` (immich) — **one per namespace because UWM enforces namespace-isolation on user rules**; both evaluate in user-workload Prometheus (where CNPG metrics live). This fires with **days of lead** before the PVC fills, so it supersedes the originally-planned PVC-%used alert for this failure mode.
+- **Narrowed 2026-08-06:** the platform Prometheus PVCs are now structurally mitigated rather than alerted — `retentionSize` (38GiB platform / 7GiB UWM) in `components/cluster-config/monitoring-config/values.yaml` bounds those TSDBs by disk, so they can't fill regardless of series growth.
+- The 2026-08-06 `KubePersistentVolumeFillingUp` on `prometheus-k8s-db-prometheus-k8s-1` (85% at rest, ~90% at compaction peaks, on a 15d-steady-state TSDB) was the second concrete instance of this class after the media-postgres WAL fill; (3) **node `NotReady`** is already covered by the platform `KubeNodeNotReady` default.
+- **PromQL-verified on UWM 2026-07-08**: `failed_count` binds for both clusters (labels `namespace`/`pod`), `increase[15m]=0` both (healthy, not firing), last-archive 4–6 min ago. Notably media's `failed_count=3` (historical) with `increase=0` — live proof the `increase()>0` form avoids the false-fire a bare `>0` threshold would latch on.

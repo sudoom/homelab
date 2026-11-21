@@ -1221,3 +1221,35 @@ gh pr edit 43 -R okd-project/okd-operator-pipeline --title '[nmstate] Remove the
 
 The draft state was left as it was (`draft=false`, the operator's call). Left on this plan: the zot free-space reading
 after the next GC; the catalog PR waits for a maintainer merge and for upstream CI to push `quay.io/okderators/nmstate/*`.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**OLM catalogs**
+
+- `okd-test-nmstate` — **NMState since 2026-10-26**: our okderators test build from the zot catalog in `components/operators/nmstate-test-catalog/`, since 2026-11-10 16:58Z the **5.0** build (`kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515`, catalog `okd-test/nmstate-catalog:2026-11-10-165132`, from #43's branch: operator `release-5.0`, el10 handler; 24 h soak passed 2026-11-11, so the 4.22 build is no longer a rollback target; the 4.22 build `v4.22.0-2026-10-23-195655` ran from 10-27, the 4.21 build `v4.21.0-2026-10-26-123722` from 10-26) from the zot catalog in `components/operators/nmstate-test-catalog/`, until okderators publishes the fixed bundle (README TODO "NMState from `okderators`").
+- **`main` builds OKD 5.0** (`OKD_VERSION=5.0.0-okd-scos.0` since 2026-09-23; it built 4.22 before that); **`release-4.22` builds 4.22 and, since the 2026-10-29 flip, our catalog** (`OKD_VERSION=4.22.0-okd-scos.2`, verified 2026-10-22); **`release-4.21` built it until then** (`OKD_VERSION=4.21.0-okd-scos.10`, and as of 2026-09-09 it was 34 commits behind `main`; the 39-submodules-pin-`release-4.22` count was also from 2026-09-09 and not re-checked).
+- So a repo can declare `branch = release-4.21` while the gitlink is a 4.20 commit and every build silently produces 4.20 content — exactly the state nmstate was in on both branches (our PR #30).
+
+**Operator patterns**
+
+- **Since the 2026-10-26 switch to the okderators build the operand lives there too** (`HANDLER_NAMESPACE` from `metadata.namespace`); until then the community v0.87.0 build put it in a hardcoded `nmstate` namespace, which is why namespaced resources in this chart used to set `metadata.namespace: nmstate` (the three RBAC workaround templates that did so are deleted).
+
+### From the README TODO
+
+**NMState from `okderators`**
+
+- This cluster runs `kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515` (since 2026-11-10 16:58Z, after the OKD 5.0 hop; built from #43's branch at `173a239`: operator `release-5.0` `96778808`, el10 handler; catalog `okd-test/nmstate-catalog:2026-11-10-165132`; **24 h soak PASSED 2026-11-11** (read 17:30Z: 0 restarts, NNCPs unchanged, no new alerts, metrics up); the first 5.0 build `v5.0.0-2026-11-10-154454` lacked `tls_config.yaml` in the operator image and ran 16:18-16:58Z with webhook and metrics down; the 4.22 build `v4.22.0-2026-10-23-195655` ran from 2026-10-27, the 4.21 build `v4.21.0-2026-10-26-123722` from 10-26) from the zot test catalog `okd-test-nmstate` (`components/operators/nmstate-test-catalog/`), Subscription `Manual` with `startingCSV`; the operand moved from `nmstate` to `openshift-nmstate`, the handler runs on every node (the per-node gate the switch used, a node label plus the CR `nodeSelector`, was removed after the soak on 2026-10-27), and the three RBAC workaround templates are gone. Metrics are scraped now (`controller-manager-metrics-monitor` Up in `openshift-nmstate`; the community build's NetworkPolicy only admitted a `monitoring` namespace).
+- The 4.22 build passed its own 24 h soak on 2026-10-29 (0 restarts, NNCPs unchanged, metrics scraped), and #44's body now records that install. Pipeline PRs filed as drafts 2026-10-27: [#43](https://github.com/okd-project/okd-operator-pipeline/pull/43) (`main`), [#44](https://github.com/okd-project/okd-operator-pipeline/pull/44) (`release-4.22`), [#45](https://github.com/okd-project/okd-operator-pipeline/pull/45) (`release-4.21`), [#46](https://github.com/okd-project/okd-operator-pipeline/pull/46) (`release-4.20`). #43 now carries three commits (2026-11-10: ImageStream removal, gitlink to `release-5.0` head `96778808`, and `COPY deploy/handler/tls_config.yaml` into the operator image, without which every 5.0 build ships webhook and metrics pods that cannot start); its title (`[nmstate] Remove the ImageStream from the bundle, update to release-5.0`) and body were updated on 2026-11-11 to cover all three and the 5.0 soak.
+
+**Track upstream fixes for `kubernetes-nmstate-operator` (operatorhubio-catalog) CSV**
+
+- **Track upstream fixes for `kubernetes-nmstate-operator` (operatorhubio-catalog) CSV — THREE RBAC defects (no longer on this cluster since the 2026-10-26 switch to the okderators build; the workaround templates are deleted; what remains is the community upstream issue for (c))** — (a) discovered 2026-05-11: `use` on the `privileged` SCC, missing → new handler pods rejected at admission; (b) same day: `get/list/watch apiservers.config.openshift.io`, missing → handler crashes on startup fetching the cluster TLS profile. Existing pods (15 days old, 20-36 restarts) survived because once admitted and past the startup TLS read, the watch loop doesn't re-check either permission.
+- Platform Prometheus therefore couldn't list/watch pods/services/endpoints there, **nmstate metrics were never scraped at all**, and `PrometheusKubernetesListWatchFailures` fired for 12 days. Unlike (a)/(b) the bindings EXIST and are merely wrong, and the subject is a *different* SA — so no pod ever restarts and nothing surfaces it; the closing note in the (a)/(b) bug file predicted a third defect but assumed it would appear via a handler pod.
+
+**OKD 5.0 follow-ups**
+
+- NMState is done: on its 5.0 build since 2026-11-10, 24 h soak passed 2026-11-11 (it never blocked 5.1: no `maxOpenShiftVersion`; its last steps are in the NMState item).

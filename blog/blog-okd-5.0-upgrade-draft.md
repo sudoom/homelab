@@ -686,3 +686,35 @@ deleted 654 images, mostly old `quay.io/okd/scos-content` payload images from th
 `ghcr.io/cloudnative-pg/postgresql:18`. node4's root disk went from 63.7% to **14.5% used (318 GiB free)**. The
 runbook's 60% gate had flagged it at 60.7% before the update; the old payloads were the bulk of it. node5 (42.7%) and
 node6 (44.8%) were not pruned.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Stack and tool versions**
+
+- [OKD] **5.0.0-okd-scos.8** (since 2026-11-20, 77 min from scos.6, 14:44:32Z to 16:01:26Z, no ALERT, verify PASS; scos.6 since 2026-11-11, 105 min from scos.5, 18:03:55Z to 19:48:47Z, 30 min of it a drain held by a CNPG pod; scos.5 from 4.22.0-okd-scos.10 on 2026-11-10, 82 min, 12:08:55Z to 13:31:24Z; 4.21 → 4.22 was 2026-10-27, 83 min; 4.20 → 4.21 2026-09-08)
+- [OKD] Kube API **1.36** (kubelet v1.36.6, cri-o 1.36.4). The mapping "OKD `4.N` → Kube `1.(N+13)`" ends at 4.22 (= 1.35); 5.0 = 1.36.
+- [OKD] **Update service:** Cincinnati `https://updates.okd.io/api/updates/graph`, channel `stable-5.0` (set 2026-11-10; before that the release-controller graph on `stable-scos-4`).
+- [OKD] No newer 5.0 build is offered (2026-11-20, after scos.8; its changelog, in `blog/blog-okd-5.0-upgrade-draft.md`, carries etcd v3.6.16 and nothing about okd#2384, so defrag stays off).
+- [OKD] Consequence: `etcdDatabaseHighFragmentationRatio` (warning) fires since about 16:35Z 2026-11-10 and is left firing on purpose, not silenced (operator) — known, not actionable while defrag is off; the 8 GiB backend quota is the limit that matters (about 115 MiB in use). The week of daily etcd consistency reads (`tests/okd-5.0-upgrade/etcd-consistency.sh`, operator-run) ended 2026-11-17, all CONSISTENT; re-run it after any etcd-operator restart.
+- [OLM] `okderators` + `operatorhubio-catalog` CatalogSources (both in `bootstrap/phase0/01_catalog_source.yaml`), plus the marketplace-managed `community-operators` (on `community-operator-index:v5.0` since the 5.0 hop) and four zot test catalogs (`okd-test-logging`, `okd-test-nmstate`, `okd-test-oadp`, `okd-test-descheduler`; `okd-test-gitops` was removed 2026-11-09)
+- [cert-manager] OLM from `okderators` (`alpha`, Manual). 1.20 supports Kube 1.32–1.35: in matrix on 4.22 (Kube 1.35), **out of matrix since the 5.0 hop on 2026-11-10 (Kube 1.36)**; a 1.21 bundle (Kube 1.33–1.36) through okderators is a follow-up (README TODO "OKD 5.0 follow-ups" (4)(d)): planned 2026-11-11 as an in-cluster build and zot test catalog, like the other okderators operators, to run only after the 2026-11-20 renewal on 1.20; the 1.21 operator can create MachineConfigs (alpha HTTP01Proxy, off by default) and must never have that gate enabled.
+- [cert-manager] **The first ACME renewal on 1.20 succeeded on 2026-11-20, on 5.0 (Kube 1.36, out of matrix): `homelab-wildcard`, CertificateRequest `homelab-wildcard-4` created 10:29:04Z and Issued, revision 4, valid to 2027-02-18.** That was the gate for the cert-manager 1.21 work and for retiring the parked Helm fallback (branch `cert-manager-helm-fallback`); deleting the branch is the operator's call.
+
+**OLM catalogs**
+
+- `okderators` (`quay.io/okderators/catalog-index:5.0` — flipped 2026-11-10 (commit 37fe780), right after the 5.0 hop; 4.21 → 4.22 was flipped 2026-10-29 and 4.20 → 4.21 on 2026-09-08) — OKD community operators.
+- **No tag flip has delivered anything.** At the 4.21 flip the cert-manager head was still v1.18.0, gitops still v1.19.0, and the `cluster-logging` head v6.3.0, *older* than the 6.5.0 installed then.
+- The 5.0 flip left the cert-manager and gitops Subscriptions `AtLatestKnown`.
+- Same for `okderators-catalog-index`, which has its own `release-4.1x`/`release-4.21`/`release-4.22` branches (and `release-5.0`, which the cluster reads since 2026-11-10; the 5.0 catalog was rebuilt from the 4.22 one on 2026-10-15 plus cert-manager 1.20 and GitOps 1.22, and still lacks logging/Loki beyond 6.3.0, OADP 1.6, descheduler 5.4 and the fixed NMState bundle; the pipeline's own `release-5.0` branch was not re-checked).
+
+### From the README TODO
+
+**OKD 5.0 follow-ups**
+
+- **OKD 5.0 follow-ups — HOP 3 DONE 2026-11-10** (4.22.0-okd-scos.10 → 5.0.0-okd-scos.5 in 82 min, then scos.6 on 2026-11-11 in 105 min, Kube 1.36, 34/34 COs clean; update service Cincinnati `stable-5.0`; `blog/blog-okd-5.0-upgrade-draft.md`).
+- With defrag off, `etcdDatabaseHighFragmentationRatio` (warning; in-use/allocated < 0.5 with > 100 MiB in use) fires from about 16:35Z on 2026-11-10 and is **left firing on purpose, not silenced** (operator, 2026-11-10): the cost is free pages in the DB file, against an 8 GiB backend quota (`ETCD_QUOTA_BACKEND_BYTES`) with about 115 MiB in use; the daily read records `dbSize` per member, so growth stays visible. **Found 2026-11-11 in the source (cluster-etcd-operator `dc770522`, the commit scos.5 and scos.6 both ship):** the defrag controller reads the ConfigMap through an informer cache it does not wait for (`WithBareInformers(operatorClient.Informer())` only, and `starter.go` starts the informers and the controllers with no cache-sync wait in between), so its first sync after an etcd-operator restart can miss the ConfigMap and defragment one member that is at ≥ 45% fragmentation, as all three are now (the alert means > 50%).
+- (b) **Done 2026-11-11: `5.0.0-okd-scos.6`** (105 min; `blog/blog-okd-5.0-upgrade-draft.md`), **then `5.0.0-okd-scos.8` on 2026-11-20** (77 min, no ALERT, `verify.sh` PASS on the second run).

@@ -140,3 +140,11 @@ ArgoCD burned all five retries on it. Converting now would mean deleting and
 recreating the Service — a manual mutation for zero functional gain. Same shape
 as the `strategy: Recreate` trap in `shelly-exporter`: **when an immutable field
 blocks a cosmetic improvement, change the manifest, not the cluster.**
+
+## Dashboard queries: the `thanos-querier` trap and ARC
+
+Reading rules for the TrueNAS dashboards, moved from the README TODO on 2026-11-20.
+
+**Dashboard gotcha found on first render, and it generalises to every dashboard in this repo:** Grafana's Prometheus datasource is **`thanos-querier`**, which merges PLATFORM metrics with user-workload ones — so a bare `node_*` query silently blends the three OKD nodes' node_exporter into a panel that claims to be about the NAS (the interface panel rendered `ceph-shim`, `ovs-system`, `genev_sys_6081` and `enp0s31f6` alongside TrueNAS's `eno1`/`eno2`). Every `node_*` query in `truenas-single-pane.json` is therefore scoped `{instance="truenas"}`.
+
+**Querying `prometheus-user-workload-0` directly does NOT reproduce this** — UWM alone returns only `job="truenas-exporter"` — so it is invisible unless you check through Grafana's own datasource. One reading trap is documented in that panel: **ZFS ARC is not page cache**, so it counts as USED and `MemAvailable` excludes it — this box reads ~8.1 GiB available of 33.6 GiB while ~25 GiB of the gap is reclaimable ARC. Judge pressure by `MemTotal - MemAvailable - ARC`, not by `MemAvailable`.

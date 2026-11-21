@@ -139,3 +139,19 @@ Clean-up ran at about 18:35Z, in the order above. Afterwards all four objects re
 - the Certificate.
 
 No `cm-dns01-test` CertificateRequest, Order or Challenge was left. The five production Certificates all stayed `Ready=True`.
+
+## 2026-11-20 — facts moved from CLAUDE.md and the README TODO
+
+The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. These are the facts about this topic that left them, quoted as whole sentences as they stood at commit 94f34f1 so the history stays with the topic.
+
+### From CLAUDE.md
+
+**Stack and tool versions**
+
+- [cert-manager] **v1.20.4** (operator CSV `cert-manager-operator.v1.20.0-2026-10-22-132146`, since 2026-10-27)
+- [cert-manager] The bundle came from okd-operator-pipeline #28/#29 and reached the catalog through okderators-catalog-index #60 (`release-4.21`) and #61 (`release-4.22`), both merged 2026-10-27; the operator approved the InstallPlan the same day. Before that the cluster ran 1.18 (EOL 2026-03-10, Kube 1.29–1.33) out of matrix from the 4.21 hop on, and every renewal on it succeeded.
+- [cert-manager] The controller logs `version="canary"` because the build stamps no version; the operand label `app.kubernetes.io/version` reads v1.20.4
+
+**Upstream PRs and comments**
+
+- **Container image builds run on the cluster, not on the Mac (operator, 2026-10-20).** Any build of operator or other container images (okd-operator-pipeline `build.sh`, bundles, test catalogs) runs as a one-off Job on this cluster: the nodes are amd64 like upstream's CI runners, so the images can also be installed here, while the Mac is arm64 and emulating amd64 is far too slow (the cert-manager 1.20 build on 2026-09-08 was arm64-only and could not be installed).
