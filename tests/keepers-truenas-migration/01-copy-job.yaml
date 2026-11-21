@@ -106,7 +106,7 @@ spec:
                   echo "This is POD-NETWORK egress, NOT the NFS mounts -- those are"
                   echo "kernel-mounted by hostNetwork CSI pods and are unaffected."
                   echo "Check net.ipv4.conf.br-ex.forwarding on ALL THREE nodes (0 = broken),"
-                  echo "restart ovnkube-node, then re-apply this Job. See CLAUDE.md."
+                  echo "restart ovnkube-node, then re-apply this Job. See .claude/skills/network-change/SKILL.md."
                   exit 90
                 fi
                 echo "apk attempt $n failed; retrying in 15s"

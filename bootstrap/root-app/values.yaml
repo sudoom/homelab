@@ -231,7 +231,7 @@ applications:
   # Routes cluster image pulls through Zot pull-through cache. Triggers
   # a 3-master MCO reroll on first apply (writes /etc/containers/
   # registries.conf via MachineConfig). Run cascade pre-flight per
-  # CLAUDE.md before letting ArgoCD sync this.
+  # .claude/skills/network-change/SKILL.md before letting ArgoCD sync this.
   image-mirror-zot:
     enabled: true
     path: components/cluster-config/image-mirror-zot

@@ -28,7 +28,7 @@ nfs:
 #   * The nodes ALREADY hold 192.168.10.2/3/4 on enp1s0f0np0, so the mount is
 #     on-link and needs NO NNCP change. Bringing up the spare enp1s0f1np1 for a
 #     dedicated VLAN would have been an nmstate enactment = the br-ex.forwarding
-#     cascade trigger (see CLAUDE.md network pre-flight). Avoiding that is worth
+#     cascade trigger (see .claude/skills/network-change/SKILL.md pre-flight). Avoiding that is worth
 #     more than the segment isolation.
 #   * The bandwidth objection does not hold: the bulk migration READS from the
 #     1G-attached Synology, so it caps at ~118 MB/s -- under 10% of the 10G

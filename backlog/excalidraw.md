@@ -14,6 +14,6 @@ Candidate comparison and shape for a persistent Excalidraw on the cluster; not b
 
 **Not a replacement for the Obsidian Excalidraw plugin** (vault already has it + one drawing in `Excalidraw/`) — that stays the authoring path for notes; this covers shareable/persistent boards and anything collaborative.
 
-**Shape:** `components/apps/excalidash/` + a CNPG `Cluster` following the `media-postgres`/`immich-postgres` precedent (including the `plugins:` wiring for R2 and the **`serverName` in `Cluster.spec.plugins[].parameters`**, plus **NO `data.compression`** — see the R2 `InvalidPart` trap in CLAUDE.md), edge-TLS Route at `excalidash.apps.okd.sudops.pl`, restricted-v2 securityContext. OIDC against the cluster's own OAuth is worth evaluating but is not required for v1.
+**Shape:** `components/apps/excalidash/` + a CNPG `Cluster` following the `media-postgres`/`immich-postgres` precedent (including the `plugins:` wiring for R2 and the **`serverName` in `Cluster.spec.plugins[].parameters`**, plus **NO `data.compression`** — see the R2 `InvalidPart` trap in blog/blog-cnpg-draft.md, 2026-07-05), edge-TLS Route at `excalidash.apps.okd.sudops.pl`, restricted-v2 securityContext. OIDC against the cluster's own OAuth is worth evaluating but is not required for v1.
 
 **Validate:** draw something → reload in a private window and confirm it persisted → confirm rows landed in the CNPG DB → confirm a WAL archive reached R2 (`ContinuousArchiving=True` on the new cluster, per the end-of-session sweep) → then a restore drill before it holds anything you care about.

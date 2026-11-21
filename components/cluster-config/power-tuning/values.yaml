@@ -9,7 +9,7 @@
 # `[bootloader]` section generates a MachineConfig with kernel cmdline
 # args. NTO-rendered MC is MCP-scoped, not node-scoped, so this applies
 # to every node in the `master` pool (all 3 on this cluster). Triggers
-# a serial reroll of all 3 masters; cascade pre-flight per CLAUDE.md.
+# a serial reroll of all 3 masters; cascade pre-flight per .claude/skills/network-change/SKILL.md.
 #
 # Knobs in B:
 #   - intel_pstate=passive: switch the driver to passive mode so the

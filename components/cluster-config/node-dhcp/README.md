@@ -32,7 +32,7 @@ means:
 - **No BMC / remote console.** These are consumer SFF desktops. Recovery from a
   node that will not come back on the network means physically attaching a
   monitor and keyboard.
-- Each reboot re-trips the `br-ex.forwarding` cascade (see CLAUDE.md network
+- Each reboot re-trips the `br-ex.forwarding` cascade (see .claude/skills/network-change/SKILL.md
   pre-flight) and can bring the Ceph backnet NIC back `DOWN` (node6, 2026-07-25).
 
 ---

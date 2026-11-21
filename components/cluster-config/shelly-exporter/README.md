@@ -103,7 +103,7 @@ forks into a new series on every restart, which produces two visible faults:
   every panel legends on `{{instance}}`.
 - Any `avg_over_time` / `predict_linear` spanning the restart sees a **brand-new series with almost no
   history** and returns nonsense. (Same class of bug as the `CephNodeDiskspaceWarning` false positive
-  documented in CLAUDE.md, where a `sdb4` -> `sda4` device rename made `predict_linear` claim the
+  documented in `.claude/skills/cluster-health/SKILL.md`, where a `sdb4` -> `sda4` device rename made `predict_linear` claim the
   emptiest node was about to fill.)
 
 Both were observed on 2026-09-08 and fixed at three layers, all of which are needed:

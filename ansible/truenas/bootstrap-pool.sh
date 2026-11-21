@@ -17,7 +17,7 @@
 #   - the count is exactly $WANT
 #   - no pool exists yet
 # Any failure aborts before `pool.create` is called. Same fail-closed shape as
-# the SSD-wipe gate in the root CLAUDE.md.
+# the SATA-SSD wipe gate in .claude/skills/rook-ceph/disk-ops.md.
 #
 # Usage:  ./bootstrap-pool.sh            # dry run: gate + payload, no changes
 #         ./bootstrap-pool.sh --create   # actually create, then verify

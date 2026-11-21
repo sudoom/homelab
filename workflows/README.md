@@ -20,4 +20,4 @@ Every script here is **read-only** against the cluster — it uses the readonly 
 | `health-review.js` | Full cluster health review — core health (nodes/argo/ceph/cnpg) + backups + alerts/events/network, fanned out and synthesized into a GREEN/YELLOW/RED briefing with an actionable list. The reusable form of the ad-hoc "how's it going" / session-start sweeps. | `Workflow({ scriptPath: "workflows/health-review.js" })` (optional args `{ eventWindow: "60" }`) |
 
 **Maintenance:** keep each script's `KNOWN_BENIGN` / cluster-facts constants in sync with
-`CLAUDE.md` as documented false-positives and cluster shape evolve.
+`.claude/skills/cluster-health/SKILL.md` as documented false-positives and cluster shape evolve.

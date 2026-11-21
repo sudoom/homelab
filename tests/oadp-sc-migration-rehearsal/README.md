@@ -23,7 +23,7 @@ oc get sc nfs-truenas-keepers
 # 0b. garage BSL is Available (needs the SealedSecret; see the oadp chart values)
 oc -n openshift-adp get bsl truenas-garage -o jsonpath='{.status.phase}{"\n"}'
 
-# 0c. CSI pre-flight per CLAUDE.md — a stray Released PV blocks the provisioner
+# 0c. CSI pre-flight per .claude/skills/rook-ceph/SKILL.md ("Pre-flight checks for any CSI-mount-dependent work") — a stray Released PV blocks the provisioner
 #     cluster-wide and will present as a Velero bug
 oc get pv | grep -E "Released|Failed"
 oc get volumeattachment | awk '$5=="true"'

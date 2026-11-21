@@ -25,7 +25,7 @@
 #
 # The gate is re-derived ON THE BOX AT EXECUTION TIME (never from a value
 # pasted in today) and is fail-closed -- same shape as bootstrap-pool.sh and
-# the SSD-wipe gate in the root CLAUDE.md.
+# the SATA-SSD wipe gate in .claude/skills/rook-ceph/disk-ops.md.
 #
 # Usage:  ./destroy-empty-dataset.sh <name>             # dry run: gate only
 #         ./destroy-empty-dataset.sh <name> --destroy   # actually destroy

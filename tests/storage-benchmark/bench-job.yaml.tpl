@@ -129,7 +129,7 @@ spec:
 
               # fio is not in the ceph image. `dnf install` needs pod egress,
               # which on this cluster breaks whenever a host address changes
-              # (the br-ex.forwarding bug -- see CLAUDE.md network pre-flight).
+              # (the br-ex.forwarding bug -- see .claude/skills/network-change/SKILL.md pre-flight).
               # Say so explicitly rather than failing with a bare dnf error,
               # because "benchmark won't start" and "cluster egress is down"
               # look identical otherwise.
@@ -139,7 +139,7 @@ spec:
                   echo "FATAL: could not install fio." >&2
                   echo "  If this is a network timeout, check pod egress first:" >&2
                   echo "  net.ipv4.conf.br-ex.forwarding must be 1 on every node" >&2
-                  echo "  (see CLAUDE.md -> Pre-flight for any network-stack change)." >&2
+                  echo "  (see .claude/skills/network-change/SKILL.md -> Pre-flight for any network-stack change)." >&2
                   tail -20 /tmp/dnf.log >&2
                   exit 1
                 fi

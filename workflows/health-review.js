@@ -12,7 +12,7 @@
 //
 // This is the distilled, reusable form of the ad-hoc session-start / "how's it going" sweeps.
 // Keep the KNOWN_BENIGN list current as the cluster's documented false-positives evolve
-// (mirror CLAUDE.md).
+// (mirror .claude/skills/cluster-health/SKILL.md).
 
 export const meta = {
   name: 'health-review',

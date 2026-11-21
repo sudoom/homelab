@@ -4,7 +4,7 @@
 
 **Target:** node4 / osd.0. node4 has the most powered-on hours in the baseline (`nvme-smart-node4.txt`: 41h, 61 unsafe shutdowns) and is already documented.
 
-**Drive layout note:** the cluster uses positional `/dev/nvme0n1` (per `components/storage/ceph-cluster/values.yaml` decision documented in CLAUDE.md). The replacement drive will appear at the same path on first boot, so no values change required.
+**Drive layout note:** the cluster uses positional `/dev/nvme0n1` (per `components/storage/ceph-cluster/values.yaml` decision documented in .claude/skills/rook-ceph/SKILL.md). The replacement drive will appear at the same path on first boot, so no values change required.
 
 ---
 

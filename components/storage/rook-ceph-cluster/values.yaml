@@ -190,7 +190,7 @@ rook-ceph-cluster:
         # in the same slot REUSES the OSD instead of spawning a new one. by-id
         # WWN stays the ref for drive-SPECIFIC ops (wipe/SMART/gate). A device
         # must leave this list BEFORE its OSD is purged, or Rook recreates the
-        # OSD on its next reconcile (the 2026-09-08 HDD removal, in CLAUDE.md).
+        # OSD on its next reconcile (the 2026-09-08 HDD removal, in .claude/skills/rook-ceph/teardown.md).
         - name: "node4.okd.sudops.pl"
           devices:
             - name: "/dev/nvme0n1"
