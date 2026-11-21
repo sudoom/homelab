@@ -139,6 +139,7 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 
 - Its `:latest` moved about 3.5 times a day on quay.io (10-12 to 10-25, up to 8), so this cuts that catalog's pulls to at most one a day. It is the smaller pile: on 10-14 node5 held 85 of its images against 376 of `community-operators` (Red Hat's index, used by grafana-operator), which stays at the marketplace operator's 240m; replacing that default source is not worth it.
 - Pruned 2026-10-26 (node5 80.1 % → 13.3 % used, Ceph back to `HEALTH_OK`), so the refill rate with step 1 in place is measured from there.
+- **Step 1 (done):** `operatorhubio-catalog` (the CNPG source, and NMState's until that day's switch; created by hand until then) lives in `bootstrap/phase0/01_catalog_source.yaml` next to `okderators`, with `registryPoll.interval` 24h instead of 60m and the rest of the live spec unchanged; the operator applied it 2026-10-26 (`24h READY`, no catalog pod restarted, both subscriptions `AtLatestKnown`).
 
 **OLM v1 `operator-controller` leaks a 79 MB catalog temp dir on every failed `openshift-redhat-operators` parse**
 

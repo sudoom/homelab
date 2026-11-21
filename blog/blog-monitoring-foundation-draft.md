@@ -497,3 +497,11 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 
 - **Narrowed 2026-08-06:** the platform Prometheus PVCs are now structurally mitigated rather than alerted — `retentionSize` (38GiB platform / 7GiB UWM) in `components/cluster-config/monitoring-config/values.yaml` bounds those TSDBs by disk, so they can't fill regardless of series growth.
 - The 2026-08-06 `KubePersistentVolumeFillingUp` on `prometheus-k8s-db-prometheus-k8s-1` (85% at rest, ~90% at compaction peaks, on a 15d-steady-state TSDB) was the second concrete instance of this class after the media-postgres WAL fill; (3) **node `NotReady`** is already covered by the platform `KubeNodeNotReady` default. (1) firing into a console nobody watched at night was downstream of the alert-delivery gap, closed for critical alerts and the named `UserNamespace*`/`CNPGWALArchiveFailing*` routes by the Mailjet email since 2026-09-07, plus the Watchdog dead-man's switch since 2026-09-25 for the brownout case where Alertmanager itself goes silent (`blog/blog-monitoring-foundation-draft.md` 2026-09-25 section).
+
+**Mailjet 20 emails/hour limit (closed 2026-11-21)**
+
+- **Mailjet 20 emails/hour limit — ask Mailjet for a review from 2026-09-28 (LOW).** Support re-enabled sending on 2026-09-21 16:18Z with a **temporary 20 emails/hour limit**, reviewable after a week of regular sending.
+- At `group_by: namespace` + `group_interval: 5m` a multi-namespace critical storm can exceed it, so a gap in the inbox mid-storm may be the limit rather than the pipeline — `alertmanager_notifications_failed_total{integration="email"}` tells which.
+- Cluster delivery itself is proven: a synthetic critical posted with `amtool alert add` on 2026-09-25 arrived as `[okd.sudops.pl] FIRING EmailDeliveryTest` within a minute (`blog/blog-truenas-migration-draft.md`, 2026-09-25).
+- If mail stops arriving, the Mailjet UI banner is the first thing to look at, and the 2026-09-07 SMTP transcript in this item's git history (README.md) is the starting point.
+- On 2026-11-21 the Mailjet dashboard showed 39 of 6,000 monthly emails sent and 0 of 200 today (resets Dec 6): the account's limit is now 200 a day and 6,000 a month, which no longer matches the 20-an-hour cap recorded on 2026-09-21. The operator closed the TODO item the same day.

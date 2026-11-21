@@ -120,3 +120,11 @@ then `allowRegistration: false` (`HBOX_OPTIONS_ALLOW_REGISTRATION=false`).
 
 Note for the next new app: a first sync whose wave-0 Deployment crashloops pins ArgoCD to that revision through all
 its retries (22:21:10Z → 22:40:32Z, ~19 min here), so a fix pushed in the meantime waits for the retries to run out.
+
+## 2026-11-21 — Snipe-IT proposal closed
+
+Homebox covers the physical inventory, so on 2026-11-21 the operator closed the README TODO item "Snipe-IT — asset management for the physical inventory" (proposed 2026-08-28). These are the facts the item stated.
+
+When it was proposed, the hardware ledger lived as prose in the Obsidian vault (`Infrastructure/Homelab.md` + `_memory/chats/homelab/`): drive serials, WWNs, burn-in dates, which pulls are racked vs on the shelf, warranty/purchase dates. That is fine for narrative and bad for lookup: the 2026-06-10 DDF incident and the 2026-06-11 SSD-erase gate both turned on "which physical drive is this, and what has it been through", answered by grepping notes. Snipe-IT gives that a schema (asset → model → serial → status → location → custom fields for WWN, power-on hours, last burn-in) plus an API worth scripting against.
+
+The first decision the item named was in-cluster vs on the NAS. Snipe-IT needs MySQL/MariaDB, so in-cluster means another DB to back up (CNPG is Postgres; Snipe-IT does not support Postgres), while the NAS can run it as a docker app through the proven `truenas-apps` role with far less ceremony. The NAS option also keeps the inventory readable during a cluster outage, which is exactly when you are identifying a dead drive. The proposed ingest path was to seed from `smartctl_device_*` Prometheus series + the vault notes rather than typing it in. The item rated the work low priority, but high leverage the first time a drive fails.

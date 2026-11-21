@@ -334,3 +334,17 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 **OKD 5.0 follow-ups**
 
 - (h) **zot space after the hop:** `data-zot-0` went from 25 GiB free (11:25Z) to 13.9 GiB free (13:49Z), because zot now stores the 5.0 payload pulled by digest (repos `okd/scos-content` and `okd/scos-release`, untagged) — unlike the 4.22 payload, which came from `registry.ci` and bypassed it. The 14 `okd-test/gitops*` test images were deleted at 13:49Z and free their blobs at the next GC (24 h interval). 2026-11-11 17:38Z: 25.41 GiB free of 48.91 (that GC ran; the 11 NMState test images deleted at ~17:38Z free their blobs at the next one). After scos.6 (2026-11-11 19:53Z): 19.5 GiB free.
+
+- [README TODO, 2026-11-09 note, superseded by the 2026-11-10 13:49Z deletion recorded above] **Manual leftover (2026-11-09):** the `okd-test/gitops*` repositories (our GitOps 1.22 test build and its catalog) are unreferenced since the cluster moved to the official okderators build; delete them after a day on it, as the fallback until then.
+
+## 2026-11-21 — the day after scos.8: GC has not reclaimed the payload yet
+
+Read with the readonly kubeconfig (kubelet stats summary for `data-zot-0` on node6).
+
+- 09:12Z: 12.8 GiB free, 36 of 48 GiB used.
+- 15:58Z: 12.4 GiB free, 36.4 GiB used.
+- `zot-0` started 2026-11-20T15:53:10Z, during the scos.8 update; 0 restarts since.
+
+The zot log shows one GC pass since that restart, the start-up pass from 15:54Z to 16:18Z on 2026-11-20. It walked `okd/scos-content` at 16:00:23Z and collected 16 blobs, and `okd/scos-release` at 16:00:46Z with 3. The scos.8 payload had been pulled between 14:44Z and 16:01Z, so its blobs were all inside the 1 h `gcDelay` and were kept. That is why the 11 GB did not come back overnight: with `gcInterval: 24h` counted from the start-up pass, the next pass is due about 16:18Z on 2026-11-21.
+
+This also supersedes the README line written after the 2026-11-11 reading, "deleting the untagged scos.5 content after the scos.6 hop is the likely fix": after scos.8 the scos.5 and scos.6 blobs were already gone, and the GC does the work, only a day later than I assumed. The open point stays: re-read after the next pass, and before the next payload.

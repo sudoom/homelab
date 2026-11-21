@@ -2294,6 +2294,7 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 **`CephPGImbalance` false positive on the 2-tier cluster (cosmetic)**
 
 - The TODO item as it stood: [ ] **`CephPGImbalance` false positive on the 2-tier cluster (cosmetic)** — fires for all 6 OSDs because Rook's `prometheus-ceph-rules` averages `ceph_osd_numpg` across *all* OSDs with no device-class grouping (NVMe ~185 PGs vs HDD ~68 PGs → both deviate ±46 % from the 126.5 mean → trip the 30 % threshold).
+- Closed 2026-11-21 (operator): the `CephPGImbalance` item left the README TODO, because the cluster has had a single NVMe tier since the HDD tier was retired on 2026-09-07, so the 2-tier false positive no longer applies.
 - Defer unless the noise starts drowning real alerts; runtime Alertmanager silence is the cheap stopgap.
 - Full diagnosis in `blog/blog-rook-ceph-draft.md` 2026-06-15 section.
 
@@ -2302,3 +2303,7 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 - **Jellyfin: in-cluster vs Mac mini — canonical decision** — the in-cluster instance is now on the **official `jellyfin/jellyfin:10.11.8`** image (migrated off linuxserver 2026-06-15; runs root via `runAsUser:0` + mandatory `JELLYFIN_*_DIR` env to reuse the existing `/config`; `/config` on ceph-nvme-block, `/data` shared RWX on CephFS `cephfs-hdd`), with **Intel QSV HW transcoding** (i7-11700 / UHD 750; `hwAccel:true` → hostPath `/dev/dri` + 100Gi `/transcode` emptyDir). So the in-cluster instance is now a full-featured Jellyfin.
 - **Jellyfin 10.11 migration-bug caveat**: 10.11.x crash-loops converting the legacy `migrations.xml` (unguarded `.Last()`, jellyfin/jellyfin#15388/#15686, unfixed through 10.11.11/master). Recovered by renaming `/config/migrations.xml` aside (one-time, in-PVC, carried in `/config`). Rollback once 10.11 has forward-migrated `jellyfin.db` is NOT possible without a pre-10.11 backup.
 - Verified working on an LG OLED via the webOS app: 4K HEVC + DV P8.1 **direct-streams** (video bitstream copied, only DTS-HD MA→AAC audio transcodes, ~6× realtime — no freeze); the browser was the only thing forcing a full transcode. Full saga incl. the playback diagnosis: `blog/blog-hdd-tier-rollout-draft.md` 2026-06-15. (In-PVC recovery artifacts cleaned 2026-06-15 after the official instance was confirmed good.)
+- **Decision remaining**: (1) decommission the Mac mini, make in-cluster canonical (most of the way there now), OR (2) keep Mac mini canonical + remove in-cluster (free the 30Gi config PVC), OR (3) keep both with split roles.
+- Set the app-side QSV settings in the UI (HW accel=QSV, HEVC/VP9 decode, Low-Power H264+HEVC encode, transcode path `/transcode`).
+- **Always take a cold `/config` DB backup before the first restart on any major Jellyfin bump.**
+- Decided 2026-11-21 (operator): the in-cluster Jellyfin is canonical, with its library on TrueNAS (the media chart has mounted `/data` from TrueNAS NFS since the 2026-08-30 cutover), so the "Jellyfin: in-cluster vs Mac mini" item left the README TODO.

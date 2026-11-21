@@ -4245,3 +4245,12 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 **OKD 5.0 follow-ups**
 
 - **(2) Rook and Ceph, done 2026-11-10 (the freeze ended with the close-out):** Rook v1.19.5 → v1.20.9 (2026-11-05, the RBD Driver from the `ceph-csi-drivers` subchart, `csi-driver-config` retired) → v1.21.1 (2026-11-06, ceph-csi-operator v1.1.0, cephcsi v3.18.1), msgr2 required (2026-11-08, CRC, no encryption) and Ceph Squid 19.2.4 → Tentacle 20.2.5 with the CephX daemon key rotation to `aes256k` (2026-11-09, the `rook` mgr module off).
+
+**File upstream: Rook doesn't propagate `CSI_ENABLE_HOST_NETWORK` to `Driver.csi.ceph.io.spec.controllerPlugin.hostNetwork` (dropped 2026-11-21)**
+
+- The issue was discovered 2026-05-15 right after the cap bug above it in the TODO (the missing `osd profile rbd` cap on `csi-rbd-provisioner.<gen>`).
+- `rook-ceph-operator-config.CSI_ENABLE_HOST_NETWORK: "true"` correctly puts the **nodeplugin** DaemonSet on hostNetwork, but the **ctrlplugin** Deployment is left on the pod network because the Driver CR field never gets set.
+- On this cluster (OSDs bound to the 10G backnet via `addressRanges`), pod-network ctrlplugin can't reach cross-node OSDs and every CreateVolume hangs.
+- Filed locally at `bugs/upstream-rook-csi-enable-host-network-not-propagated.md`.
+- The workaround chart from commit `345cb1b`, which SSA-patched `controllerPlugin.hostNetwork: true` onto the Driver CR, was retired with the Rook v1.20 hop: the `ceph-csi-drivers` values in `components/operators/rook-ceph/values.yaml` now set `drivers.rbd.controllerPlugin.hostNetwork: true`, and Rook v1.20+ no longer writes the Driver CR, so this report concerns Rook v1.19 only.
+- On 2026-11-21 the operator dropped the item from the README TODO: the cluster runs Rook v1.21.1, so a report about Rook v1.19 has no consumer here. The `bugs/` draft stays as it is, unfiled.

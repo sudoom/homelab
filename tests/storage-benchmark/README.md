@@ -310,7 +310,7 @@ Wording moved from the README TODO on 2026-11-20; the figures are also in `data/
 
 **Storage benchmark harness — SMALL-FILE SCALE QUESTION ANSWERED (2026-09-06).** The corpus layout was calibrated two-point on the Synology so that fixed setup cost could be separated from marginal per-file cost, which is the figure that decides the run: **2000 files in 10s, 20000 in 93s -> 4.61 ms/file, ~217 files/s per client, fixed overhead ~0.8s (essentially linear).** At 1,048,576 files/client that is **~80 minutes per client, not hours** -- the grid is runnable. The harness budgets `FILES_PER_CLIENT / 100` = 175 min, so the deadline is conservative by ~2.2x, which is the safe direction. Layout is metadata-bound, not bandwidth-bound: 217 files/s x 64 KiB is 13.9 MB/s against a 112 MiB/s link.
 
-**The first calibration attempt was wrong and is worth remembering:** it used `rw=write` with `--create_only=1` and measured 540-666 files/s -- the cost of creating ZERO-BYTE files, because `--create_only` lays out data only for a READ-shaped job. That is the identical defect the harness itself carried until 2026-09-05, reproduced from scratch in the measuring tool. It was caught only because the job counted file sizes afterwards (`at64k=` / `zerobyte=`); without that check the smallfile budget would have been under-estimated 2.5x.
+**The first calibration attempt was wrong and is worth remembering:** it used `rw=write` with `--create_only=1` and measured 540-666 files/s -- the cost of creating ZERO-BYTE files, because `--create_only` lays out data only for a READ-shaped job. That is the identical defect the harness itself carried until 2026-09-05, reproduced from scratch in the measuring tool. It was caught only because the job counted file sizes afterwards (`at64k=` / `zerobyte=`); without that check the smallfile budget would have been under-estimated 2.5x. Every layout-timing measurement must assert file size, not just file count.
 
 ## TrueNAS corpus removal (2026-09-12)
 
@@ -323,6 +323,8 @@ Moved from the README TODO on 2026-11-20: what the removal of the TrueNAS benchm
 **Consequence for the wire cross-check item above [in the README TODO]: its evidence grid no longer exists on disk**, so re-testing that fix means paying a ~1.1 TiB layout pass first.
 
 **Mechanism worth remembering** — the corpus was root-owned (pods write through `maproot=root` NFS) and this playbook [ansible/truenas] has no `become`; `midclt` exposes **no unlink method**, so the working pattern is `filesystem.chown` (which runs as root via the middleware, `recursive: true`) to the automation account, then a normal `rm`.
+
+The two bench PVCs (`default/storage-bench-nfs-truenas-bench{,16}`) were deleted, their `Retain` PVs removed, and the ~1.15 TiB of corpus deleted on the box.
 
 ## Switch port evidence for the NAS LACP question
 
