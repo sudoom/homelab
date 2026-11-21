@@ -155,3 +155,106 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 **Upstream PRs and comments**
 
 - **Container image builds run on the cluster, not on the Mac (operator, 2026-10-20).** Any build of operator or other container images (okd-operator-pipeline `build.sh`, bundles, test catalogs) runs as a one-off Job on this cluster: the nodes are amd64 like upstream's CI runners, so the images can also be installed here, while the Mac is arm64 and emulating amd64 is far too slow (the cert-manager 1.20 build on 2026-09-08 was arm64-only and could not be installed).
+
+## 2026-11-21 — the 1.21 build on the cluster: `RESULT PASS` in 25 minutes
+
+Plan Task 6. The pre-run gates read at 16:35Z (readonly):
+
+- zot had 23.36 GiB free, read just after the 16:18Z GC pass, against an estimate of 0.5 GiB;
+- `okd-build` held no PVC, Job or pod, and the `builder` ServiceAccount and its privileged RoleBinding were present;
+- no OKD update was running or offered, and `master` read 3/3/0.
+
+The operator created the PVC (150Gi, `ceph-nvme-block`) and the script ConfigMap, then started the Job:
+
+```bash
+oc apply -f tests/okderators-cert-manager-build/pvc.yaml
+oc apply -k tests/okderators-cert-manager-build/
+DATE=$(date -u +%Y-%m-%d-%H%M%S)
+oc process --local -f tests/okderators-cert-manager-build/job-template.yaml -p MODE=full \
+  -p PIPELINE_REPO=https://github.com/sudoom/okd-operator-pipeline -p PIPELINE_BRANCH=cert-manager-1.21 \
+  -p OPERATOR_COMMIT=157e4aa1fd03e5e34ec0e6533555c94b98d729be \
+  -p CERT_MANAGER_COMMIT=925c22283de556172d48d96a165dc2fa27f7a6ff \
+  -p DATE=$DATE | oc -n okd-build create -f -
+```
+
+The Job was `cert-manager-build-full-2026-11-21-163714`. Its pod ran on node5 from about 16:37Z and the Job succeeded at 17:01:48Z. `build_containers` took 1,200 s; every other step took under 2 minutes. This was the first time the Job-only bash 4 paths of `build.sh` ran: the laptop has bash 3.2 and no `opm` or `operator-sdk`. All of them worked on the first run.
+
+### Source checks, before the build
+
+```
+CHECK gitmodules-branch PASS cert-manager/operator=cert-manager-1.21 cert-manager/cert-manager=release-1.21, the release of OCP_SHORT 1.21; cert-manager/istio-csr=main (recorded)
+CHECK operator-commit PASS cert-manager/operator HEAD~1 157e4aa1fd03e5e34ec0e6533555c94b98d729be = gitlink = OPERATOR_COMMIT; HEAD 30071adf2bf2f44a1b107fff61f49c3bc7953f64 is the patch commit 'OKDify'; clean tree
+CHECK cert-manager-commit PASS cert-manager/cert-manager HEAD 925c22283de556172d48d96a165dc2fa27f7a6ff = gitlink = CERT_MANAGER_COMMIT, clean tree, no patch
+CHECK patch-applied PASS git am -3 patches/operator.patch exited 0; ...
+CHECK feature-defaults PASS IstioCSR=true TrustManager=false HTTP01Proxy=false
+```
+
+### Pushed
+
+| Image (`zot.apps.okd.sudops.pl/okd-test/cert-manager/…:1.21.0-2026-11-21-163714`) | Digest | Bytes |
+|---|---|---|
+| `operator` | `sha256:8929d637c8c6f7a72ccccda69ec0fd95b9a47f8a283e03c1c23659bd5fcaea86` | 93,587,350 |
+| `cert-manager` | `sha256:cde9f9ba6df6ae82a9968eadddeee5094ad2c49a56715394ee23b0b994e78a9b` | 130,372,839 |
+| `acme-solver` | `sha256:5c192cbc2c4e020b7129643ad901b3e4c616ca7c41ad4f11ac3ef6ca09b0c419` | 130,372,840 |
+| `istio-csr` | `sha256:e37564b36f3b1aabfecd591a85a25fc5e67a66b0d2a55885c0142c115b0e6235` | 104,467,471 |
+| `operator-bundle` | `sha256:99ccae85cab7dc6b68a88de475cb3098f0c9080ef8cdda144248cd6ea5868c68` | 167,282 |
+
+The CSV is `cert-manager-operator.v1.21.0-2026-11-21-163714`.
+
+### Bundle checks
+
+```
+CHECK bundle-objects PASS 17 objects as expected (13 CRDs, ClusterServiceVersion/cert-manager-operator.v1.21.0-2026-11-21-163714, ClusterRole/cert-manager-operator-metrics-reader ConfigMap/cert-manager-operator-trusted-ca-bundle Service/cert-manager-operator-controller-manager-metrics-service); manifests/ 17 files; opm render: same
+CHECK csv-name PASS cert-manager-operator.v1.21.0-2026-11-21-163714 1.21.0-2026-11-21-163714; ...
+CHECK skiprange PASS olm.skipRange '>=1.0.0 <1.21.0-2026-11-21-163714', no replaces, no skips
+CHECK min-kube PASS minKubeVersion 1.31.0
+CHECK no-max-openshift PASS no olm.maxOpenShiftVersion in the CSV, the bundle files or the opm render
+CHECK version-env PASS ISTIOCSR_OPERAND_IMAGE_VERSION=1.21.0-2026-11-21-163714 OPERAND_IMAGE_VERSION=1.21.0-2026-11-21-163714 OPERATOR_IMAGE_VERSION=1.21.0-2026-11-21-163714
+CHECK images-by-digest PASS 21 refs, all @sha256; zot.apps.okd.sudops.pl/okd-test/cert-manager/ refs are this run's digests (...); EXTERNAL: cert-manager-approver-policy@b516dba9e41d trust-manager@783afe31d39f
+CHECK no-redhat-registry PASS ...
+CHECK install-modes PASS OwnNamespace=true SingleNamespace=true MultiNamespace=false AllNamespaces=true
+CHECK machineconfig-permission INFO cert-manager-operator-controller-manager: machineconfiguration.openshift.io machineconfigs verbs=create,delete,get,list,update,watch
+CHECK operator-sdk-validate PASS operator-sdk v1.36.1 bundle validate: passed, 1 warnings, 0 errors
+RESULT PASS full 2026-11-21-163714
+```
+
+- `operator-sdk validate` gave one warning: the HTTP01Proxy API has no entry in the CSV's example annotation. It does not affect the install.
+- The operator's ClusterRole can create, update and delete MachineConfigs. That permission belongs to the alpha HTTP01Proxy feature, and the gate stays off (`feature-defaults` above).
+- `no-max-openshift` passing means this bundle adds no `Upgradeable` blocker for 5.1.
+- trust-manager and approver-policy stay on `quay.io/jetstack`, pinned by digest, as planned.
+
+The build PVC peaked at about 11.6 GB used (`DISK` lines). zot read 23.52 GiB free at 17:02Z, which is not below the pre-run 23.36 although about 0.56 GB had just been pushed. The kubelet's volume stats are refreshed periodically, so this read may predate the push. The second read comes after Task 7.
+
+## 2026-11-21 — the test catalog: `RESULT PASS` in about 3 minutes
+
+Plan Task 7, run straight after Task 6 on the same PVC once the full-build Job was deleted:
+
+```bash
+DATE2=$(date -u +%Y-%m-%d-%H%M%S)
+oc process --local -f tests/okderators-cert-manager-build/job-template.yaml -p MODE=catalog -p DATE=$DATE2 \
+  -p CATALOG_BRANCHES=release-5.0 -p IMAGE_BRANCH=release-5.0 \
+  -p BUNDLES='release-5.0=zot.apps.okd.sudops.pl/okd-test/cert-manager/operator-bundle:1.21.0-2026-11-21-163714@sha256:99ccae85cab7dc6b68a88de475cb3098f0c9080ef8cdda144248cd6ea5868c68' \
+  | oc -n okd-build create -f -
+```
+
+The Job was `cert-manager-build-catalog-2026-11-21-170350`; it started at 17:03:50Z and succeeded by 17:06:45Z.
+
+```
+CHECK branch-data-release-5.0 PASS replaces cert-manager-operator.v1.20.0-2026-10-22-132146; installed [cert-manager-operator.v1.20.0-2026-10-22-132146]
+CHECK bundle-release-5.0 PASS cert-manager-operator.v1.21.0-2026-11-21-163714: package cert-manager-operator, ... 17 objects (13 CRDs); image zot.apps.okd.sudops.pl/okd-test/cert-manager/operator-bundle@sha256:99ccae85...
+CHECK edit-release-5.0 PASS appended cert-manager-operator.v1.21.0-2026-11-21-163714 replaces cert-manager-operator.v1.20.0-2026-10-22-132146 (no skipRange, no skips) after 5 entries; package file +2 -0 lines
+CHECK opm-validate-release-5.0 PASS opm validate catalog
+CHECK walk-release-5.0 PASS 6 entries reach cert-manager-operator.v1.21.0-2026-11-21-163714; installed: cert-manager-operator.v1.20.0-2026-10-22-132146
+CHECK negative-control-replaces-opm-release-5.0 PASS opm validate rejects the copy without the replaces: ... multiple channel heads found in graph: cert-manager-operator.v1.20.0-2026-10-22-132146, cert-manager-operator.v1.21.0-2026-11-21-163714
+CHECK negative-control-replaces-release-5.0 PASS without the replaces the walker fails and reports stranded: cert-manager-operator.v1.14.0-2024-08-09-204321 ... cert-manager-operator.v1.20.0-2026-10-22-132146
+CHECK opm-validate-image PASS opm validate catalog
+CHECK catalog-image PASS zot.apps.okd.sudops.pl/okd-test/cert-manager-catalog:2026-11-21-170350: package cert-manager-operator; head cert-manager-operator.v1.21.0-2026-11-21-163714; every entry and cert-manager-operator.v1.20.0-2026-10-22-132146 reach the head
+PUSHED zot.apps.okd.sudops.pl/okd-test/cert-manager-catalog:2026-11-21-170350@sha256:d328e18ae82f66e601f23ddceaf3c84025a9f8e1818e2a90cd6ce7ec5c56d45e 32606770
+RESULT PASS catalog 2026-11-21-170350
+```
+
+The two negative controls show the `replaces` line is what carries the upgrade. Without it, opm sees two heads in the `alpha` channel, and every older entry, including the installed 1.20 build, is left with no path to 1.21. The bundle's own `skipRange` does not replace that line in this file-based catalog.
+
+The catalog diff (`/work/run/release-5.0.diff`, 173 lines) was copied off the PVC with the log-reader pod. It is a new 157-line bundle file plus two lines in the package file. It is not the upstream PR: its bundle file points at the zot digest, and the official okderators build will carry its own date. The PR will be generated from the official quay bundle with `hack/add-bundle.sh`.
+
+End of the Job phase: the operator deleted the log-reader pod, the catalog Job and PVC `cert-manager-build-storage`; `okd-build` then held no PVC or Job, and the released PV was gone by 17:09Z. ConfigMap `cert-manager-build-scripts` stays. zot read 23.52 GiB free at 17:09Z, the same as at 17:02Z and 0.16 GiB above the 16:35Z pre-run read, although Tasks 6 and 7 pushed about 0.59 GB. Most likely the 16:35Z read was taken while the 16:18Z GC pass was still freeing space, and the pushed images share base layers already in zot. Either way the Job phase cost no measurable zot space.
