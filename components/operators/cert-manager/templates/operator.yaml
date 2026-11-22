@@ -37,6 +37,10 @@ spec:
   name: cert-manager-operator
   source: {{ .Values.source }}
   sourceNamespace: {{ .Values.sourceNamespace }}
+{{- /* Rollback only (README): OLM ignores startingCSV while a CSV is installed. */}}
+{{- with .Values.startingCSV }}
+  startingCSV: {{ . }}
+{{- end }}
 ---
 apiVersion: operator.openshift.io/v1alpha1
 kind: CertManager

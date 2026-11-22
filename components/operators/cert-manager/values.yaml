@@ -1,4 +1,9 @@
 namespace: cert-manager-operator
 channel: alpha
-source: okderators
+# okd-test-cert-manager = our okderators 1.21 test build (components/operators/cert-manager-test-catalog/),
+# since 2026-11-22, until okderators publishes 1.21; okderators (1.20) before. See README.md.
+source: okd-test-cert-manager
 sourceNamespace: openshift-marketplace
+# Unset by default and then rendered nowhere. Set it only for the rollback in README.md;
+# OLM ignores it while a CSV from this Subscription is installed.
+# startingCSV: cert-manager-operator.v1.20.0-2026-10-22-132146
