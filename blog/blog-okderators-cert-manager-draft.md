@@ -279,3 +279,41 @@ helm template cert-manager-operator components/operators/cert-manager/ --show-on
 ```
 
 `oc diff` cannot run under the readonly SA (it server-side dry-runs a patch: `cannot patch resource "subscriptions"`), so I compared the rendered `spec` of each object with live using `jq -S`. The Namespace, OperatorGroup and CertManager are unchanged; the Subscription differs in `source` only (`okderators` → `okd-test-cert-manager`).
+
+## 2026-11-22 — on 1.21: the InstallPlan, a 33-second roll, staging DNS-01 in 88 s
+
+The switch (`7cc8e39`) was pushed at 16:09:52Z; ArgoCD synced it by 16:11:02Z. The Subscription went `UpgradePending` with `currentCSV` `cert-manager-operator.v1.21.0-2026-11-21-163714`, and OLM wrote InstallPlan `install-fnbwm` (`RequiresApproval`).
+
+Read before approval:
+
+```bash
+ocr -n cert-manager-operator get installplan install-fnbwm -o json | jq -r '[.status.plan[]|.resource.kind+"/"+.resource.name+" "+.status]|.[]' | sort
+```
+
+22 steps: the CSV, ClusterRole `cert-manager-operator-metrics-reader`, the CSV's ClusterRole/ClusterRoleBinding and Role/RoleBinding, ServiceAccount `cert-manager-operator-controller-manager`, ConfigMap `cert-manager-operator-trusted-ca-bundle`, Service `cert-manager-operator-controller-manager-metrics-service`, and 13 CRDs: the 10 already installed plus `approverpolicymanagers.operator.openshift.io`, `certificaterequestpolicies.policy.cert-manager.io` and `http01proxies.operator.openshift.io`. The bundle lookup names `okd-test/cert-manager/operator-bundle@sha256:99ccae85…`, the Task 6 build.
+
+The InstallPlan's CSV step does not carry the manifest inline; it points at the bundle unpack ConfigMap in `openshift-marketplace`, whose `binaryData` entries are base64 of gzip. Decoded, the CSV has the operator at `operator@sha256:8929d637…`, the operands at the build's digests (`cert-manager@cde9f9ba…`, `acme-solver@5c192cbc…`, `istio-csr@e37564b3…`), trust-manager and approver-policy as quay digests (not enabled), `UNSUPPORTED_ADDON_FEATURES` empty, the expected `machineconfigs` rule (`create,delete,get,list,update,watch`), no Red Hat registry reference, `minKubeVersion: 1.31.0`, `olm.skipRange: '>=1.0.0 <1.21.0-2026-11-21-163714'`.
+
+The operator approved it; the Subscription read `approved` at 16:26:25Z, which is the soak start. Polled every 10 s:
+
+| Time (Z) | State |
+|---|---|
+| 16:26:25 | InstallPlan `Installing`; new CSV created |
+| 16:26:36 | v1.20 `Replacing`, v1.21 `InstallReady` |
+| 16:26:47 | InstallPlan `Complete`, v1.21 `Installing` |
+| 16:26:58 | v1.21 `Succeeded`, v1.20 gone; cert-manager, -cainjector, -webhook 1/1 on `cert-manager@sha256:cde9f9ba…` |
+
+About 33 s. The master pool stayed `3/3/0`, not updating, with 62 MachineConfigs throughout.
+
+Post-roll checks (16:55Z): CertManager CR conditions all fine; the controller keeps both `--dns01-recursive-nameservers*` flags; the operator logs `"enabled controllers" istioCSR=true trustManager=false http01Proxy=false`; no `HTTP01Proxy` objects; storedVersions unchanged (`v1` / `v1alpha1`); both cert-manager webhook configurations carry an 896-byte `caBundle`. The six cert-manager CRDs with an `inject-ca-from` annotation read an empty `caBundle`, because their conversion strategy is `None`, so there is nothing to inject. Five Certificates Ready with unchanged revisions; `letsencrypt-prod` Ready; 55/55 apps Synced and Healthy; the `Upgradeable` message still names only the descheduler, cluster-logging and loki-operator, so 1.21 adds no version cap.
+
+Logs: the controller logged the three expected start-up lines (`ACME client for issuer not initialised/available`). cainjector logged four errors at 16:27:09Z, all `unable to fetch certificate that owns the secret ... Certificate.cert-manager.io "api-cert" not found` for `openshift-kube-apiserver/user-serving-cert-000`. That Secret is the kube-apiserver operator's copy of the `api-cert` Secret, which keeps cert-manager's annotations in a namespace where no such Certificate exists. Start-up only; to re-check during the soak.
+
+Staging DNS-01 on 1.21, the Task 2 kit unchanged (operator applied, then deleted, both files):
+
+- ClusterIssuer `letsencrypt-staging-test` `Ready=True ACMEAccountRegistered` (a new account, the 1.20 run's was deleted), solvers identical to `letsencrypt-prod`.
+- Certificate created 16:57:19Z; CertificateRequest `cm-dns01-test-1` Approved 16:57:20Z; Challenge `dns-01` pending at 16:57:33Z, valid by 16:58:46Z; Order `valid`; CertificateRequest Ready 16:58:47Z. **88 s** apply to Ready (1.20: 83 s). `notBefore 2026-11-22T16:00:14Z`, `notAfter 2027-01-25T16:00:13Z`.
+- Controller errors during the run: one `ACME client for issuer not initialised` while the account registered, one `failed to update status` on the Order with no error text (the Order ended `valid`). The 1.20 run logged three lines of the same kind.
+- Cleanup in order (Certificate, ClusterIssuer, then both Secrets); afterwards both Secrets and the ClusterIssuer read `NotFound` and no CertificateRequest, Order or Challenge for it remained.
+
+Next: the 24 h soak to about 16:30Z on 2026-11-23, then the draft pipeline PR. The first production renewal on 1.21 is `api-cert` and `okd-wildcard`, about 2026-12-05 12:30Z.
