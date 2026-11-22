@@ -258,3 +258,24 @@ The two negative controls show the `replaces` line is what carries the upgrade. 
 The catalog diff (`/work/run/release-5.0.diff`, 173 lines) was copied off the PVC with the log-reader pod. It is a new 157-line bundle file plus two lines in the package file. It is not the upstream PR: its bundle file points at the zot digest, and the official okderators build will carry its own date. The PR will be generated from the official quay bundle with `hack/add-bundle.sh`.
 
 End of the Job phase: the operator deleted the log-reader pod, the catalog Job and PVC `cert-manager-build-storage`; `okd-build` then held no PVC or Job, and the released PV was gone by 17:09Z. ConfigMap `cert-manager-build-scripts` stays. zot read 23.52 GiB free at 17:09Z, the same as at 17:02Z and 0.16 GiB above the 16:35Z pre-run read, although Tasks 6 and 7 pushed about 0.59 GB. Most likely the 16:35Z read was taken while the 16:18Z GC pass was still freeing space, and the pushed images share base layers already in zot. Either way the Job phase cost no measurable zot space.
+
+## 2026-11-22 — the test catalog live, the pre-flight, and the switch commit
+
+The test catalog chart went in on 2026-11-21 (`8d46183`): CatalogSource `okd-test-cert-manager` read `READY`, its packagemanifest offered `alpha cert-manager-operator.v1.21.0-2026-11-21-163714`, and the Subscription stayed `AtLatestKnown` on `okderators` 1.20, because it did not read that catalog yet.
+
+Pre-flight on 2026-11-22 at 16:00Z, all reads with the readonly kubeconfig:
+
+- Cluster: 3/3 nodes Ready, `5.0.0-okd-scos.8` with nothing offered, every ClusterOperator `True False False`, 55/55 apps Synced and Healthy, MCP master `3/3/0` and not updating. The only restarts since the build were the three transmission pods at 03:00Z (their daily liveness design).
+- cert-manager: Subscription `AtLatestKnown cert-manager-operator.v1.20.0-2026-10-22-132146 okderators Manual`; CertManager CR conditions all `Available=True`/`Degraded=False`, both `overrideArgs` present; operand and operator pods at 0 restarts; 10 CRDs, as in the baseline; APIServer TLS profile empty; no NetworkPolicies; 0 controller errors in 24 h.
+- Renewal gate: `homelab-wildcard` rev 4, `notBefore=2026-11-20T09:33:08Z`, Ready. The next renewals are the two barman certificates on 2026-11-24 ~15:10Z (so not that day) and `api-cert` + `okd-wildcard` on 2026-12-05 ~12:30Z.
+- The MachineConfig list was the one check that differed: five new rendered master/worker pairs between 2026-11-21 17:24:50Z and 17:33:43Z. The only file that changed between them is `/var/lib/kubelet/config.json`, the global pull secret. The operator had replaced the OpenShift (OCP) pull credentials with a dummy pull secret, because using OCP credentials on an OKD cluster is against the OCP policy. MCO applied it without a reboot. Since then 49 pods had started with no pull errors (24 in `openshift-adp`, both catalog pods). Nothing on the cluster pulls from `registry.redhat.io` except the nightly `synology-cert-sync` Job (`openshift4/ose-cli:latest`), which succeeded at 03:14Z after the change; that image is worth replacing with an OKD or public one.
+
+The switch commit changes `components/operators/cert-manager/values.yaml` to `source: okd-test-cert-manager`, adds an optional `startingCSV` to the Subscription (rollback only, renders nothing when unset) and adds the chart README with the rollback. Checks:
+
+```bash
+helm lint <copy of the chart without charts/>        # 0 failed; the real chart fails on the gitignored fallback tarball, unchanged chart too
+helm template cert-manager-operator components/operators/cert-manager/ --show-only templates/operator.yaml | kubeconform -strict -ignore-missing-schemas -summary ...
+                                                      # Valid: 3, Skipped: 1 (CertManager)
+```
+
+`oc diff` cannot run under the readonly SA (it server-side dry-runs a patch: `cannot patch resource "subscriptions"`), so I compared the rendered `spec` of each object with live using `jq -S`. The Namespace, OperatorGroup and CertManager are unchanged; the Subscription differs in `source` only (`okderators` → `okd-test-cert-manager`).
