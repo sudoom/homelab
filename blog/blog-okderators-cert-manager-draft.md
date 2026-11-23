@@ -317,3 +317,39 @@ Staging DNS-01 on 1.21, the Task 2 kit unchanged (operator applied, then deleted
 - Cleanup in order (Certificate, ClusterIssuer, then both Secrets); afterwards both Secrets and the ClusterIssuer read `NotFound` and no CertificateRequest, Order or Challenge for it remained.
 
 Next: the 24 h soak to about 16:30Z on 2026-11-23, then the draft pipeline PR. The first production renewal on 1.21 is `api-cert` and `okd-wildcard`, about 2026-12-05 12:30Z.
+
+## 2026-11-23 — the 24 h soak: passed, and the `api-cert` errors are 1.20's too
+
+The soak read at 16:31:12Z, 24 h after the InstallPlan approval (16:26:25Z), read-only (`KUBECONFIG=~/.kube/config-readonly`):
+
+- 3/3 nodes Ready, no ClusterOperator off `True False False`, 55/55 apps Synced and Healthy, every CSV `Succeeded`
+  (`cert-manager-operator.v1.21.0-2026-11-21-163714` included).
+- All 5 Certificates Ready. Next renewals: `barman-cloud-client`/`-server` 2026-11-24 ~15:10Z, `api-cert` and
+  `okd-wildcard` 2026-12-05 ~12:30Z (the first production ACME renewals on 1.21), `homelab-wildcard` 2027-01-19.
+- MCP master `True False False`, 62 MachineConfigs: no MachineConfig from the 1.21 operator.
+- 0 restarts on cert-manager, cainjector, webhook and the operator.
+- cert-manager controller: 5 `E` lines since the switch, all from 2026-11-22: 3 at 16:27:28Z (start-up) and 2 from the
+  staging test (16:57:21Z `ACME client for issuer not initialised/available` right after the staging Issuer was
+  created, 16:58:48Z a `failed to update status` conflict on `cm-dns01-test-1-…`). Webhook: 0.
+
+The one finding: cainjector logged 8 more lines at 13:49:25Z,
+
+```
+E1123 13:49:25.544869 1 indexers.go:67] "unable to fetch certificate that owns the secret" err="Certificate.cert-manager.io \"api-cert\" not found" ... secret="openshift-kube-apiserver/user-serving-cert-000" certificate="openshift-kube-apiserver/api-cert"
+```
+
+the same 4 start-up lines as 16:27:09Z yesterday, twice (one per injectable kind: APIService, CRD, mutating and
+validating webhook configuration). `user-serving-cert-000` is kube-apiserver-operator's copy of `api-cert`, made with
+the cert-manager annotations still on it, in a namespace that has no Certificate. Nothing had written it: its only
+managedFields entry is `cluster-kube-apiserver-operator` on 2026-10-06 (`--show-managed-fields`; `oc` hides them by
+default). No CRD or webhook-CA write, no pod restart, no leader change either, so it reads as an informer re-list that
+re-runs the secret map function.
+
+Is it new in 1.21? The source says no. `certFromSecretToInjectableMapFuncBuilder` in
+`pkg/controller/cainjector/indexers.go` has the same `log.Error(err, "unable to fetch certificate that owns the
+secret")` in v1.20.4 (line 61) and v1.21.3 (line 67). The only change in 1.21 is an early return for an opt-in
+`--ignore-namespaces` list, empty by default. So 1.20 logged these too and nobody had looked. The operator ruled them
+expected for the soak. `--ignore-namespaces=openshift-kube-apiserver` on cainjector would silence them; not done,
+cosmetic.
+
+Soak: PASS. Left: the draft pipeline PR, the 2026-12-05 renewal, the move back to `okderators` once it publishes 1.21.
