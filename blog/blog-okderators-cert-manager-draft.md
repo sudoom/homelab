@@ -353,3 +353,15 @@ expected for the soak. `--ignore-namespaces=openshift-kube-apiserver` on cainjec
 cosmetic.
 
 Soak: PASS. Left: the draft pipeline PR, the 2026-12-05 renewal, the move back to `okderators` once it publishes 1.21.
+
+## 2026-11-23 — the pipeline PR
+
+Draft PR okd-project/okd-operator-pipeline#56, `[cert-manager] Update to 1.21`, `main` ← `sudoom:cert-manager-1.21`
+(2 commits, level with upstream `main` `2b205ade6f8d`). Re-checked before opening: Red Hat still has no
+`cert-manager-1.21` (operator) or `release-1.21` (jetstack fork) branch, so the gitlinks stay at operator `master`
+`157e4aa1fd03` (the merge of openshift/cert-manager-operator#538, "Bump operator to 1.21.0") and tag `v1.21.3`
+`925c22283de5`; operator `master` is 39 commits past that pin. The body names the unchanged istio-csr gitlink
+`6d4c57cfdfdc` (older than both operators' expected v0.16.0 / v0.19.1), the approver-policy and trust-manager images
+left at upstream defaults, and the MachineConfig RBAC the alpha `HTTP01Proxy` gate brings. No backport: `release-4.22`
+still builds 1.18 and has #53 open. Next: maintainer review; after the merge, `cert-manager-deploy.yaml` should open the
+catalog PR against `okderators-catalog-index` `release-5.0` itself.
