@@ -363,3 +363,5 @@ zot's log explains all three. A manifest GET by tag starts an on-demand sync eve
 At 17:53Z a manifest miss took 1.3 s, so the upstream slowness comes and goes. No pod in the cluster was in `ImagePullBackOff` at the time: CRI-O pulls by digest, or falls back to the source registry when zot errors (`AllowContactingSource`).
 
 Change: `haproxy.router.openshift.io/timeout: 3m` on the zot Route (`components/apps/zot/templates/route.yaml`). The build Job's tag check also moved to `skopeo list-tags`, which zot answers from storage without an upstream sync. Why ghcr.io and docker.io answered so slowly from the cluster was not investigated.
+
+Follow-up the same evening. The 3m route timeout did not end it. At 20:47Z a parallel `skopeo inspect` from the NMState 4.21 build got `502 Bad Gateway` on one of its own `okd-test/` tags. zot's log for those minutes shows one sync round of about 35 s per lookup (quay 1 s, docker.io 4 s, ghcr.io 30 s). The sync on held tags is the root cause; I tracked it as a README TODO. The builds were rerun.
