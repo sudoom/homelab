@@ -1272,3 +1272,27 @@ Error: invalid command options: none of --input-dir, --deploy-dir, or --crds-dir
 operator-sdk v1.37.0 decides it is reading from stdin when stdin is a named pipe (`internal/cmd/operator-sdk/generate/internal/genutil.go`, `IsPipeReader`: `info.Mode()&os.ModeNamedPipe != 0`), and `bundle.go` then rejects `--deploy-dir`/`--crds-dir`. The upstream Makefile's `bundle` target passes both. A GitHub Actions `run` step's stdin is a pipe; our cluster build Job's was not, which is why the same Makefile built there. The fix is `make … bundle < /dev/null` in `nmstate/build.sh` (a character device, not a pipe). Not proposed upstream yet.
 
 The `rhel-9-server-ose` repo errors in the same log (`Could not resolve host: base-5-0-rhel9.ocp.svc`) are from a Containerfile repo list and did not stop the image builds.
+
+## 2026-11-24 — refreshing #43–#46: the CI fix, new heads, builds that behave like CI
+
+**The change.** Four fork branches `nmstate-refresh-{5.0,4.22,4.21,4.20}` were pushed, then fast-forwarded onto the PR branches once their builds passed. Each branch gets two commits (#43 first merges `main` to pick up 8bd64ee without a force-push):
+- `[nmstate] Run make with stdin from /dev/null`;
+- `[nmstate] Update submodules to the release-X heads`.
+
+| branch | operator | console-plugin |
+|---|---|---|
+| 5.0 | 9677880 → 5f4a6d0 (+2: OCPBUGS-136668, obsolete validating webhooks removed on upgrade) | 57e2ff7 → ddc329a |
+| 4.22 | 1d6d332 → df994d6 (+2: the same backport) | 25b8f81 → 15698a5 |
+| 4.21 | bc318d1 (already the head) | f280b31 → 1db15d4 |
+| 4.20 | 6ecae5d → 05a8f6d (+2: an e2e test only) | 29b58ce → bdaa05d |
+
+**Reproducing CI on the cluster.** The build Job got a `PIPE_STDIN=1` mode. A pipe on the Job's own stdin would never reach `make`: the Job starts every pipeline step with `&`, and a background command in non-interactive bash gets `/dev/null`. So the pipe is created inside, for `build_bundle` only, and the log records `INFO STDIN-IS-PIPE` from there. The Job also got a `tls-config` check: the file must be present on 5.x and absent before.
+
+**Runs:**
+- the old #43 head (2026-11-24-182153): `STDIN-IS-PIPE`, then `none of --input-dir, --deploy-dir, or --crds-dir may be set if reading from stdin`, `make[1]: *** [Makefile:277: bundle] Error 1`. The same failure as CI run 44105656020;
+- `nmstate-refresh-5.0` (184558): RESULT PASS, `tls_config.yaml` present, `operator-sdk bundle validate` 0 errors;
+- 4.22 (191809, after a first attempt failed in `init` on a quay CDN `remote error: tls: internal error`): RESULT PASS, `tls_config.yaml` absent as expected;
+- 4.21 (205029, after a first attempt failed on a 502 from zot): RESULT PASS;
+- 4.20: not run yet.
+
+Three earlier demo attempts failed against zot itself (two 504s, one in the tag check). That led to the zot Route timeout of 3m, the `list-tags` tag check, and the build Jobs reading zot through its Service (`blog/blog-zot-pullthrough-draft.md`, 2026-11-24).

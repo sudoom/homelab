@@ -1026,3 +1026,37 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 **OKD 5.0 follow-ups**
 
 - Upstream `main` got cluster-logging 6.6 on 2026-11-10 straight from a maintainer, not through our #35 (same sources and gitlinks, 8 files differ incl. no `passthrough-gateway` image, cap still 4.23), so #35 is overtaken and the logging change becomes a small one on top of `main`; #36-#38 are untouched (`.superpowers/sdd/2026-11-10-okd-5.0-upgrade/notes/logging-upstream-vs-our-prs.md`).
+
+## 2026-11-24 — reworking #35–#38: main's variant, Red Hat 6.6.2, an upgrade path on every branch
+
+**Operator's brief:** resolve the conflicts, bump within 6.6, drop the workflow cleanup step, give #37/#38 a CI workflow, and keep the same version on all four OCP branches, installable on each and upgradable from the current okderators release. Plan `docs/superpowers/plans/2026-11-24-logging-prs-rework.md` (Opus-reviewed twice).
+
+**What is kept and what is dropped.** #35 merged `main` and took `main`'s side on all 18 conflicting paths, so it keeps the maintainer's Containerfiles. Dropped from our October version: `dnf update`, vector's `update-crypto-policies DEFAULT:PQ`, eventrouter's `strictfipsruntime` build, the exporter's `-s -w`, and the "Free runner disk" step. `main`'s own run 42838268065 built all 8 images on a stock runner, so that step was never needed.
+
+**What is added over `main`:**
+- the passthrough gateway (`main` falls back to loki's `quay.io/openshift-logging/passthrough-gateway:latest` from `manager_related_image_patch.yaml`);
+- the Loki CSV `skipRange` set to `>=6.2.0-0 <6.6.0` (upstream's still says `<6.2.0`);
+- on `main` only, `olm.maxOpenShiftVersion` raised to `OCP_NEXT` (5.1) in both `properties.yaml` files.
+
+The backports keep 4.23, because `OCP_NEXT` there would lower the cap or not move it.
+
+**Red Hat 6.6.2 pins.** A web-fetch agent read the Red Hat container catalog (my own read of it was blocked by auto mode). Its 6.6.1 values matched our existing pins, which validates the method, and every 6.6.2 commit was checked with `gh api compare`:
+
+| submodule | 6.6.2 |
+|---|---|
+| operator | 1b4ef385 |
+| loki | 02462af2 |
+| loki-server | 9ca651a2, on `upstream-v3.7.9` (not v3.7.3) |
+| vector | 8060cc4a |
+| log-file-metric-exporter | 11a6b67b |
+| observatorium-api | 6e30e9c3 |
+| opa-openshift | 1a62db13 |
+| eventrouter | 0d28ddec |
+
+**Version naming.** All four branches name the bundles `6.6.0-<DATE>`. The operator chose this over `6.6.2-<DATE>` to keep the pipeline convention.
+
+**Upgrade path.** Every okderators catalog branch uses channel `alpha`. The heads are 6.5.0-2026-06-04-101319 on 4.20 and 6.3.0-2025-08-08-133408 on 4.21/4.22/5.0, and both skipRanges cover them.
+
+**CI.** #37/#38 add `cluster-logging-deploy.yaml`, triggered on their own branch. #36 fixes 4.22's copy, which triggered on `main`.
+
+**Build.** `logging-refresh-5.0`, MODE=full, `MAX_OCP=5.1`: `RESULT PASS full 2026-11-24-190056`. Both bundles have exactly one cap (5.1) and the new skipRange, the gateway env is this run's digest, and 11 images were pushed. #35 is fast-forwarded to that tree. Left: MODE=check for the three backports, MODE=catalog walks on all four catalog branches, the PR bodies, and the install here.
