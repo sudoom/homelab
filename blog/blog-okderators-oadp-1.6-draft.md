@@ -1162,3 +1162,15 @@ Error: building at STEP "RUN CGO_ENABLED=1 GOOS=linux go build -a -mod=readonly 
 ```
 
 A Go module proxy download failed mid-stream: a network error, not something in #47. `gh run view --log-failed` did not return this step's output, and I first misread the run as stopping at `oc adm release info`; the operator's screenshot of the job log corrected that. The catalog-index PR job was skipped, so there is no 5.0 OADP bundle or catalog PR until the run is re-run (the maintainers' call). The `release-4.22` run was still building at ~17:20Z.
+
+### The `release-4.22` run: the CI robot cannot push the new repositories
+
+The `Deploy OADP` run on `release-4.22` (45442764849) failed after 1 h 10 min, in "Build and push operator", on its first push to a repository that 1.5 never had:
+
+```
++ podman push quay.io/okderators/oadp/cli-binaries:1.6.0-2026-11-24-165605
+Error: trying to reuse blob sha256:72ad1139… at destination: checking whether a blob sha256:72ad1139… exists in quay.io/okderators/oadp/cli-binaries: authentication required
+Error: Process completed with exit code 125.
+```
+
+The pushes to the existing repositories before it worked (`aws-legacy-plugin`, `aws-plugin`, `azure-plugin`). After #48, `oadp/build.sh` defines 8 images that the 1.5 build did not: `cli-binaries`, `kubevirt-datamover-controller`, `kubevirt-datamover-plugin`, `vm-file-restore`, `vmdp-binaries`, `vmfr-access`, `vmfr-filebrowser`, `vmfr-sshd`. The CI robot has write access to the old `quay.io/okderators/oadp/*` repositories but cannot create or push to new ones. GitOps 1.22 hit the same thing on 2026-11-05 (`okderators/gitops/*`). The fix is on the maintainers' side: create the eight repositories with write access for the robot, then re-run both deploy runs (the `main` run also needs a re-run for its proxy.golang.org failure, and would hit this next). Filed as okd-operator-pipeline#57 (2026-11-24), shaped like #51.
