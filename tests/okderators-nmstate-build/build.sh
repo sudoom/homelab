@@ -484,12 +484,17 @@ report_pushed() {  # report_pushed <array name> <IMG_* names...>
 }
 
 tag_check() {  # tag_check <ref>. A run never re-pushes a tag
-  local ref=$1 err
-  if err=$(skopeo inspect --raw "docker://${ref}" 2>&1 >/dev/null); then
-    finish FAIL "tag exists ${ref}"
-  fi
-  if ! grep -qiE "$ABSENT_RE" <<<"$err"; then
-    echo "ERROR cannot tell whether ${ref} exists: ${err##*$'\n'}"
+  # Reads the repository's tag list, which zot answers from its own storage. A manifest GET for a
+  # missing tag makes zot try every sync upstream first; on 2026-11-24 registry-1.docker.io stalled
+  # that past the route timeout (504 Gateway Time-out) and failed two runs at this step.
+  local ref=$1 repo=${1%:*} tag=${1##*:} out rc=0
+  out=$(skopeo list-tags "docker://${repo}" 2>&1) || rc=$?
+  if [[ $rc == 0 ]]; then
+    if jq -e --arg t "$tag" '.Tags | index($t)' >/dev/null <<<"$out"; then
+      finish FAIL "tag exists ${ref}"
+    fi
+  elif ! grep -qiE "$ABSENT_RE" <<<"$out"; then
+    echo "ERROR cannot tell whether ${ref} exists: ${out##*$'\n'}"
     finish FAIL "tag check failed"
   fi
   echo "INFO ${ref} does not exist yet"

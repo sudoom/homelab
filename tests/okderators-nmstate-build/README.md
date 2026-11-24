@@ -139,6 +139,8 @@ whatever is free. Nothing on the PVC needs keeping, and the command cannot be sc
 so it removes every unused one. The run's peak is `max(DISK)` over its contract lines after that
 prune: it approximates a fresh runner because the base layers are pulled again.
 
+**Tag check (since 2026-11-24).** A run never re-pushes a tag. It reads the repository's tag list (`skopeo list-tags`), which zot answers from its own storage, instead of asking for the manifest. A manifest request for a missing tag makes zot try every sync upstream first. On 2026-11-24 registry-1.docker.io stalled past the route timeout, so two runs ended `RESULT FAIL tag check failed` on a `504 Gateway Time-out`.
+
 ## Parameters
 
 | parameter | default | meaning |
