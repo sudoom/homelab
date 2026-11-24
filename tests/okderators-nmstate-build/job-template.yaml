@@ -58,6 +58,8 @@ objects:
                   value: ${BUNDLES}
                 - name: IMAGE_BRANCH
                   value: ${IMAGE_BRANCH}
+                - name: PIPE_STDIN
+                  value: ${PIPE_STDIN}
                 # Empty is harmless: common.sh uses ${OKD_VERSION:-default}, which treats empty as unset.
                 - name: OKD_VERSION
                   value: ${OKD_VERSION}
@@ -116,6 +118,9 @@ parameters:
     value: ""
   - name: BUNDLES
     description: MODE=catalog only; one bundle per catalog branch, "<branch>=<bundle ref@digest> ...", passed to catalog-edit.sh
+    value: ""
+  - name: PIPE_STDIN
+    description: MODE=full only; 1 runs the pipeline's build_bundle step with a pipe on stdin, as a GitHub Actions run step has (okd-operator-pipeline run 44105656020)
     value: ""
   - name: IMAGE_BRANCH
     description: MODE=catalog only; the catalog branch the test catalog image is built from, one of CATALOG_BRANCHES (release-5.0 for a cluster on OKD 5.0)

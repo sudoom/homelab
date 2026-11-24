@@ -10,6 +10,7 @@
 #   MODE              full | catalog
 #   PIPELINE_REPO     okd-operator-pipeline clone URL
 #   PIPELINE_BRANCH   MODE=full: the branch to build
+#   PIPE_STDIN        MODE=full: 1 = run the pipeline's build_bundle step with a pipe on stdin, as CI does
 #   DATE              YYYY-MM-DD-HHMMSS, new per run; in MODE=full the image tags' suffix
 #   BASE_REGISTRY     must be zot.apps.okd.sudops.pl/okd-test or a path under it
 #   CATALOG_BRANCHES  MODE=catalog only, passed through to catalog-edit.sh
@@ -244,7 +245,7 @@ validate() {
 
 print_inputs() {
   echo "INFO MODE=${MODE} DATE=${DATE} BASE_REGISTRY=${BASE_REGISTRY}"
-  echo "INFO PIPELINE_REPO=${PIPELINE_REPO} PIPELINE_BRANCH=${PIPELINE_BRANCH}"
+  echo "INFO PIPELINE_REPO=${PIPELINE_REPO} PIPELINE_BRANCH=${PIPELINE_BRANCH} PIPE_STDIN=${PIPE_STDIN:-}"
   echo "INFO CATALOG_BRANCHES=${CATALOG_BRANCHES} BUNDLES=${BUNDLES} IMAGE_BRANCH=${IMAGE_BRANCH:-release-4.21}"
   echo "INFO OKD_VERSION=${OKD_VERSION:-(pipeline default)}"
   echo "INFO node=${NODE_NAME:-unknown} nproc=$(nproc)"
@@ -432,7 +433,14 @@ split_vars() {  # fill IMAGE_VARS (built images, operator included) and BUNDLE_V
 
 pipeline_step() {  # pipeline_step <registry> <build.sh step>
   step_start "$2"
-  run_bg env -C "$PIPE/$OP_DIR" BASE_REGISTRY="$1" DATE="$DATE" bash ./build.sh "$2"
+  if [[ $2 == build_bundle && ${PIPE_STDIN:-} == 1 ]]; then
+    # PIPE_STDIN=1: give the bundle step a pipe on stdin, as a GitHub Actions run step has.
+    # run_bg's "&" alone gives a background command /dev/null, so the pipe is made inside.
+    run_bg bash -c ': | { if [ -p /dev/stdin ]; then echo "INFO STDIN-IS-PIPE"; else echo "INFO STDIN-NOT-PIPE"; fi
+      exec env -C "$0" BASE_REGISTRY="$1" DATE="$2" bash ./build.sh "$3"; }' "$PIPE/$OP_DIR" "$1" "$DATE" "$2"
+  else
+    run_bg env -C "$PIPE/$OP_DIR" BASE_REGISTRY="$1" DATE="$DATE" bash ./build.sh "$2"
+  fi
   step_end
 }
 
@@ -572,6 +580,28 @@ nmstate_rpm() {  # nmstate_rpm <array name>
       check nmstate-rpm PASS "${ver} in ${img}"
     else
       check nmstate-rpm FAIL "rpm -q nmstate in ${img} (exit ${rc}): $(echo "$out" | head -n 2 | one_line)"
+    fi
+  fi
+  step_end
+}
+
+# tls-config: /bindata/kubernetes-nmstate/handler/tls_config.yaml in the operator image. Upstream has
+# deploy/handler/tls_config.yaml only from release-5.0, so it must be present on 5.x and absent before.
+operator_tls_config() {  # operator_tls_config <array name>
+  local -n arr=$1
+  local img=${arr[IMG_OPERATOR]:-} f=/bindata/kubernetes-nmstate/handler/tls_config.yaml ctr want got
+  step_start tls-config
+  want=absent; [[ ${arr[MAJOR]:-} -ge 5 ]] 2>/dev/null && want=present
+  if [[ -z $img ]] || ! ctr=$(podman create "$img" 2>/dev/null); then
+    check tls-config FAIL "cannot create a container from IMG_OPERATOR '${img}'"
+  else
+    if podman cp "${ctr}:${f}" "$WORK/tls_config.yaml.$$" >/dev/null 2>&1; then got=present; else got=absent; fi
+    rm -f "$WORK/tls_config.yaml.$$"
+    podman rm -f "$ctr" >/dev/null 2>&1 || true
+    if [[ $got == "$want" ]]; then
+      check tls-config PASS "${f} ${got} in ${img} (MAJOR ${arr[MAJOR]:-?}: expected ${want})"
+    else
+      check tls-config FAIL "${f} ${got} in ${img} (MAJOR ${arr[MAJOR]:-?}: expected ${want})"
     fi
   fi
   step_end
@@ -848,6 +878,7 @@ mode_full() {
   pipeline_step "$BASE_REGISTRY" push_containers
   report_pushed V "${IMAGE_VARS[@]}"
   nmstate_rpm V
+  operator_tls_config V
   pipeline_step "$BASE_REGISTRY" build_bundle
   report_pushed V "${BUNDLE_VARS[@]}"
   pipeline_step "$BASE_REGISTRY" deinit
