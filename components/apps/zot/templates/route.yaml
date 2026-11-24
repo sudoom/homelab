@@ -3,6 +3,11 @@ kind: Route
 metadata:
   name: zot
   namespace: {{ .Values.namespace }}
+  annotations:
+    # zot checks every upstream on a manifest GET by tag, existing tags included (on-demand sync).
+    # On 2026-11-24 a slow ghcr.io made that take up to ~61 s, past the router's 30 s default, and
+    # the router answered 504 (blog/blog-zot-pullthrough-draft.md).
+    haproxy.router.openshift.io/timeout: 3m
 spec:
   host: {{ .Values.host }}.{{ .Values.domain }}
   port:

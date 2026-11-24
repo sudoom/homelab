@@ -350,3 +350,16 @@ The zot log shows one GC pass since that restart, the start-up pass from 15:54Z 
 This also supersedes the README line written after the 2026-11-11 reading, "deleting the untagged scos.5 content after the scos.6 hop is the likely fix": after scos.8 the scos.5 and scos.6 blobs were already gone, and the GC does the work, only a day later than I assumed. The open point stays: re-read after the next pass, and before the next payload.
 
 Post-GC reading, same day: the 24 h pass started at 16:18Z, reached `okd/scos-content` at 16:23:45Z and collected 254 blobs, then `okd/scos-release` at 16:24:00Z with 3. At 16:24Z `data-zot-0` read 23.3 GiB free, 25.5 GiB used. That is the scos.8 payload back, about 11 GB, a little over a day after it was pulled: GC frees an update's payload one full `gcInterval` after the pass that first sees it, not within the hour.
+
+## 2026-11-24 — 504 from the router: zot's on-demand sync outran the 30 s route timeout
+
+The NMState build Job (`tests/okderators-nmstate-build/`) failed three times in a row against zot with `received unexpected HTTP status: 504 Gateway Time-out`:
+
+- twice in its own tag check (`skopeo inspect` of a tag not pushed yet, 17:51Z and 17:55Z);
+- once inside the okd-operator-pipeline's `convert_all_images_to_digest` (`skopeo inspect` of tags it had pushed a minute earlier, 18:17Z).
+
+zot's log explains all three. A manifest GET by tag starts an on-demand sync even when zot already holds the tag ("trying to get updated image by syncing on demand"): zot asks every `syncRegistries` upstream in turn for `okd-test/...`. quay answered `unauthorized` in about 1 s. ghcr.io took about 26 s (18:16:14 → 18:16:40), docker.io stalled about 30 s at 17:51Z, and the 17:51Z miss took about 61 s from start to `manifest not found`. The route has no timeout annotation, so HAProxy's default `timeout server` of 30 s cut the request off first.
+
+At 17:53Z a manifest miss took 1.3 s, so the upstream slowness comes and goes. No pod in the cluster was in `ImagePullBackOff` at the time: CRI-O pulls by digest, or falls back to the source registry when zot errors (`AllowContactingSource`).
+
+Change: `haproxy.router.openshift.io/timeout: 3m` on the zot Route (`components/apps/zot/templates/route.yaml`). The build Job's tag check also moved to `skopeo list-tags`, which zot answers from storage without an upstream sync. Why ghcr.io and docker.io answered so slowly from the cluster was not investigated.
