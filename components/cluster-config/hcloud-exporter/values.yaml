@@ -12,7 +12,7 @@ namespace: hcloud-exporter
 # ---------------------------------------------------------------------------
 image:
   repository: ghcr.io/promhippie/hcloud-exporter
-  tag: "3.32.3@sha256:693c92bd2365de289ccc75611150f0a518ef4b54662ceb18c8897cde8ab86588"
+  tag: "3.33.0@sha256:aa0bdddd96b5968fe4965e37b20415fee8e159a19656057bf7b63089a93591ce"
 
 # The exporter's listen port, passed to it as HCLOUD_EXPORTER_WEB_ADDRESS.
 port: 9501
