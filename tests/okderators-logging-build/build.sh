@@ -344,6 +344,21 @@ label = false
 [engine]
 image_copy_tmp_dir = "${TMPDIR}"
 EOF
+  # Reads of zot go to its in-cluster Service, not the Route (plan 2026-11-24 zot-sync, Part A):
+  # every tag lookup makes zot ask all four sync upstreams first, which ran past the router on
+  # 2026-11-24 (504, then 502). containers/image applies `location` to image sources only, so
+  # pulls, skopeo inspect and opm render use the Service; pushes and list-tags keep the Route
+  # (they trigger no sync). Image names stay zot.apps.okd.sudops.pl.
+  mkdir -p /etc/containers/registries.conf.d
+  cat >/etc/containers/registries.conf.d/90-zot-direct.conf <<'EOF'
+[[registry]]
+prefix = "zot.apps.okd.sudops.pl"
+location = "zot.zot.svc.cluster.local:5000"
+insecure = true
+EOF
+  echo "INFO registries.conf.d: zot.apps.okd.sudops.pl reads -> zot.zot.svc.cluster.local:5000"
+  # Proof in the log that a read really takes the Service (this pod's own image is in zot).
+  echo "INFO zot-direct probe: $(skopeo --debug inspect --raw "docker://${POD_IMAGE:-zot.apps.okd.sudops.pl/okd-test/podman/stable:v5.8.9-2026-10-26}" 2>&1 >/dev/null | grep -m1 -o 'Trying to access "[^"]*"' || echo 'no "Trying to access" line')"
   local info  # an assignment, so a podman failure here stops the run
   info=$(podman info --format 'driver={{.Store.GraphDriverName}} graphroot={{.Store.GraphRoot}} backing={{index .Store.GraphStatus "Backing Filesystem"}} native-diff={{index .Store.GraphStatus "Native Overlay Diff"}} d_type={{index .Store.GraphStatus "Supports d_type"}}')
   echo "INFO podman ${info}"

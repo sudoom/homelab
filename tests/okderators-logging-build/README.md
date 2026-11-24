@@ -112,6 +112,8 @@ and is in the pod log only.
 
 `./build.sh update` never runs (it moves the gitlinks to branch tips).
 
+**Reads of zot bypass the router (since 2026-11-24).** `configure_podman` writes `/etc/containers/registries.conf.d/90-zot-direct.conf`, which rewrites `zot.apps.okd.sudops.pl` to the in-cluster Service `zot.zot.svc.cluster.local:5000` (plain HTTP). containers/image applies that to image sources only, so pulls, `skopeo inspect` (the pipeline's digest lookups) and `opm render` use the Service, while pushes and `skopeo list-tags` keep the Route. Image names do not change. The reason: every tag lookup makes zot ask all four sync upstreams first, and on 2026-11-24 that ran past the router (504, then 502). The log's `INFO zot-direct probe: Trying to access "zot.zot.svc.cluster.local:5000/..."` line shows it took effect. Plan: `docs/superpowers/plans/2026-11-24-zot-sync.md`, Part A.
+
 ## Parameters
 
 | parameter | default | meaning |

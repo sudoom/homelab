@@ -141,6 +141,8 @@ prune: it approximates a fresh runner because the base layers are pulled again.
 
 **Tag check (since 2026-11-24).** A run never re-pushes a tag. It reads the repository's tag list (`skopeo list-tags`), which zot answers from its own storage, instead of asking for the manifest. A manifest request for a missing tag makes zot try every sync upstream first. On 2026-11-24 registry-1.docker.io stalled past the route timeout, so two runs ended `RESULT FAIL tag check failed` on a `504 Gateway Time-out`.
 
+**Reads of zot bypass the router (since 2026-11-24).** `configure_podman` writes `/etc/containers/registries.conf.d/90-zot-direct.conf`, which rewrites `zot.apps.okd.sudops.pl` to the in-cluster Service `zot.zot.svc.cluster.local:5000` (plain HTTP). containers/image applies that to image sources only, so pulls, `skopeo inspect` (the pipeline's digest lookups) and `opm render` use the Service, while pushes and `skopeo list-tags` keep the Route. Image names do not change. The reason: every tag lookup makes zot ask all four sync upstreams first, and on 2026-11-24 that ran past the router (504, then 502). The log's `INFO zot-direct probe: Trying to access "zot.zot.svc.cluster.local:5000/..."` line shows it took effect. Plan: `docs/superpowers/plans/2026-11-24-zot-sync.md`, Part A.
+
 ## Parameters
 
 | parameter | default | meaning |
