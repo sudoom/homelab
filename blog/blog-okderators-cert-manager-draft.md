@@ -365,3 +365,17 @@ Draft PR okd-project/okd-operator-pipeline#56, `[cert-manager] Update to 1.21`, 
 left at upstream defaults, and the MachineConfig RBAC the alpha `HTTP01Proxy` gate brings. No backport: `release-4.22`
 still builds 1.18 and has #53 open. Next: maintainer review; after the merge, `cert-manager-deploy.yaml` should open the
 catalog PR against `okderators-catalog-index` `release-5.0` itself.
+
+## 2026-11-24 — #56 merged, and the bot's catalog PR
+
+A maintainer merged #56 at 16:53:23Z (merge commit `11525f8c74a1`), together with #53 on `release-4.22` and the OADP and descheduler PRs. The `Deploy Cert-Manager` run on `main` passed (run 45442340073), and at 17:08Z the bot opened okderators-catalog-index#73 against `release-5.0`:
+
+```
++  - name: cert-manager-operator.v1.21.0-2026-11-24-165354
++    replaces: cert-manager-operator.v1.20.0-2026-10-22-132146
+image: quay.io/okderators/cert-manager/operator-bundle:1.21.0-2026-11-24-165354
+```
+
+That is the same `replaces` edge the test catalog used, so a 1.20 install upgrades along it. This cluster runs the test CSV `v1.21.0-2026-11-21-163714`, which is not in that chain: the way back to `okderators` after #73 merges is a re-subscribe, as it was for GitOps. Nothing posted on #73.
+
+The barman certificates renewed on 1.21 as scheduled (`barman-cloud-client` 15:10:31Z, `barman-cloud-server` 15:10:32Z, both revision 3, Ready, next renewal 2027-02-07): the first renewals this cert-manager build has done in production, both from the CNPG self-signed issuer.

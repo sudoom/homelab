@@ -1151,3 +1151,14 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 
 - Plan approved 2026-11-02 and executing: all 18 images, so 1.6 is complete for every OADP user (eight new images from six new submodules, plus a seventh for must-gather's source; no konveyor image in the bundle); real scheduled backups are not part of this work.
 - The full `release-4.22` build, the catalog image and the upgrade are done: the cluster runs the 1.6 test build from catalog `okd-test-oadp` since 2026-11-03 08:00Z, and drill run 2 on 1.6 passed. The 24 h soak passed 2026-11-04 (drill run 3 restored the new generation; drill Backups and namespaces cleaned up).
+
+## 2026-11-24 — #47 and #48 merged; the `main` deploy failed
+
+A maintainer merged #47 (`main`, 16:55:21Z) and #48 (`release-4.22`, 16:55:35Z). The `Deploy OADP` run on `main` (45442716954) failed at 17:01:51Z, 6 min in, in the "Build and push operator" step, while building restic:
+
+```
+internal/blobru/cache.go:9:2: github.com/hashicorp/golang-lru/v2@v2.0.1: read "https://proxy.golang.org/github.com/hashicorp/golang-lru/v2/@v/v2.0.1.zip": stream error: stream ID 85; INTERNAL_ERROR; received from peer
+Error: building at STEP "RUN CGO_ENABLED=1 GOOS=linux go build -a -mod=readonly -tags strictfipsruntime -o ./bin/restic ./cmd/restic": while running runtime: exit status 1
+```
+
+A Go module proxy download failed mid-stream: a network error, not something in #47. `gh run view --log-failed` did not return this step's output, and I first misread the run as stopping at `oc adm release info`; the operator's screenshot of the job log corrected that. The catalog-index PR job was skipped, so there is no 5.0 OADP bundle or catalog PR until the run is re-run (the maintainers' call). The `release-4.22` run was still building at ~17:20Z.

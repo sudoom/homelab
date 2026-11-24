@@ -1254,3 +1254,21 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 **OKD 5.0 follow-ups**
 
 - NMState is done: on its 5.0 build since 2026-11-10, 24 h soak passed 2026-11-11 (it never blocked 5.1: no `maxOpenShiftVersion`; its last steps are in the NMState item).
+
+## 2026-11-24 — `main` moved without #43, and why "Deploy NMState" still fails
+
+A maintainer pushed `8bd64ee7c0a3` "[nmstate] Update to latest 5.0 sources" straight to `main` on 2026-11-10 16:24Z. It sets the `nmstate/operator` gitlink to `967788083514`, the same commit #43 pins (now 2 behind `release-5.0`), and moves `nmstate/console-plugin` `c5a19713bf01` → `57e2ff700e00` with a 6-line `console-plugin.Containerfile` change. #43 is still open and `mergeable: clean`; what it adds over `main` is now only its own two fixes:
+
+- `build.sh`: the ImageStream removal matching on content (`manifests/image-references` has no `.yaml` extension);
+- `operator.Containerfile`: `COPY deploy/handler/tls_config.yaml …`.
+
+The only "Deploy NMState" run on `main` since then (44105656020, 2026-11-17, triggered by an sr-iov push) pushed `console-plugin`, `handler` and `operator` to `quay.io/okderators/nmstate/*` with no `unauthorized` (the quay permission problem from #45 is gone), then failed in `make bundle`:
+
+```
+operator-sdk_1.37.0 generate bundle -q --overwrite --version 5.0.0-2026-11-17-164436 … --deploy-dir … --crds-dir deploy/crds …
+Error: invalid command options: none of --input-dir, --deploy-dir, or --crds-dir may be set if reading from stdin
+```
+
+operator-sdk v1.37.0 decides it is reading from stdin when stdin is a named pipe (`internal/cmd/operator-sdk/generate/internal/genutil.go`, `IsPipeReader`: `info.Mode()&os.ModeNamedPipe != 0`), and `bundle.go` then rejects `--deploy-dir`/`--crds-dir`. The upstream Makefile's `bundle` target passes both. A GitHub Actions `run` step's stdin is a pipe; our cluster build Job's was not, which is why the same Makefile built there. The fix is `make … bundle < /dev/null` in `nmstate/build.sh` (a character device, not a pipe). Not proposed upstream yet.
+
+The `rhel-9-server-ose` repo errors in the same log (`Could not resolve host: base-5-0-rhel9.ocp.svc`) are from a Containerfile repo list and did not stop the image builds.
