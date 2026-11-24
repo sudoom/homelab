@@ -101,6 +101,16 @@
         "quay.io/ceph/ceph"
       ],
       "enabled": false
+    },
+    {
+      "description": "origin-cli (the oc in the cnpg-snapshot-retention and logging-stack jobs) follows the cluster's OKD minor: Renovate may move the 5.0 digest, never the tag past the running minor. Raise this bound in the same change as an OKD minor upgrade (2026-11-24, replaced Renovate #144's jump to 5.1).",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "quay.io/openshift/origin-cli"
+      ],
+      "allowedVersions": "<5.1"
     }
   ],
   "ignorePaths": [
