@@ -55,6 +55,10 @@ objects:
                   value: ${CATALOG_BRANCHES}
                 - name: BUNDLES
                   value: ${BUNDLES}
+                - name: MAX_OCP
+                  value: ${MAX_OCP}
+                - name: IMAGE_BRANCH
+                  value: ${IMAGE_BRANCH}
                 - name: BUILDAH_ISOLATION
                   value: chroot
                 - name: NODE_NAME
@@ -108,6 +112,12 @@ parameters:
   - name: CATALOG_BRANCHES
     description: MODE=catalog only; okderators-catalog-index branches, passed to catalog-edit.sh
     value: ""
+  - name: IMAGE_BRANCH
+    description: MODE=catalog only; the catalog branch the test catalog image is built from, one of CATALOG_BRANCHES (release-5.0 for this OKD 5.0 cluster)
+    value: release-4.21
+  - name: MAX_OCP
+    description: full/check modes; the olm.maxOpenShiftVersion every bundle must carry exactly once (5.1 for the main/OKD 5.0 build, 4.23 for release-4.2x)
+    value: "4.23"
   - name: BUNDLES
     description: MODE=catalog only; bundle image references, passed to catalog-edit.sh
     value: ""

@@ -44,8 +44,14 @@ REGISTRY_RE='^zot\.apps\.okd\.sudops\.pl/okd-test(/[a-z0-9]+([._-][a-z0-9]+)*)*$
 # alone: every error quotes the ref, and a DATE like ...-140412 contains the digits 404.
 ABSENT_RE='manifest unknown|name unknown|repository name not known|not found|(^|[^0-9])404([^0-9]|$)'
 
-# olm.maxOpenShiftVersion every bundle must carry.
-MAX_OCP=4.23
+# olm.maxOpenShiftVersion every bundle must carry: exactly one such property per bundle. A Job
+# parameter since 2026-11-24: the main (OKD 5.0) build lifts the source cap to 5.1, the release
+# branches keep 4.23.
+MAX_OCP=${MAX_OCP:-4.23}
+
+# olm.skipRange both CSVs must carry, so every okderators head (6.3.0 on 4.21/4.22/5.0, 6.5.0 on
+# 4.20) can upgrade straight to this build. Upstream's loki-operator CSV still says <6.2.0.
+SKIP_RANGE='>=6.2.0-0 <6.6.0'
 
 # Branding baseline (P21): the "Red Hat" text that okderators' OKDify patches leave in, and
 # that the accepted okderators 6.5.0 CSVs (cluster-logging and loki-operator
@@ -227,7 +233,7 @@ validate() {
 print_inputs() {
   echo "INFO MODE=${MODE} DATE=${DATE} BASE_REGISTRY=${BASE_REGISTRY}"
   echo "INFO PIPELINE_REPO=${PIPELINE_REPO} PIPELINE_BRANCH=${PIPELINE_BRANCH}"
-  echo "INFO CATALOG_BRANCHES=${CATALOG_BRANCHES} BUNDLES=${BUNDLES}"
+  echo "INFO CATALOG_BRANCHES=${CATALOG_BRANCHES} BUNDLES=${BUNDLES} IMAGE_BRANCH=${IMAGE_BRANCH:-} MAX_OCP=${MAX_OCP}"
   echo "INFO node=${NODE_NAME:-unknown} nproc=$(nproc)"
 }
 
@@ -450,12 +456,16 @@ report_pushed() {  # report_pushed <array name> <IMG_* names...>
 }
 
 tag_check() {  # tag_check <ref>. P12: a run never re-pushes a tag
-  local ref=$1 err
-  if err=$(skopeo inspect --raw "docker://${ref}" 2>&1 >/dev/null); then
-    finish FAIL "tag exists ${ref}"
-  fi
-  if ! grep -qiE "$ABSENT_RE" <<<"$err"; then
-    echo "ERROR cannot tell whether ${ref} exists: ${err##*$'\n'}"
+  # Reads the repository's tag list, which zot answers from its own storage. A manifest GET makes
+  # zot sync from every upstream first, which ran past the route timeout (504) on 2026-11-24.
+  local ref=$1 repo=${1%:*} tag=${1##*:} out rc=0
+  out=$(skopeo list-tags "docker://${repo}" 2>&1) || rc=$?
+  if [[ $rc == 0 ]]; then
+    if jq -e --arg t "$tag" '.Tags | index($t)' >/dev/null <<<"$out"; then
+      finish FAIL "tag exists ${ref}"
+    fi
+  elif ! grep -qiE "$ABSENT_RE" <<<"$out"; then
+    echo "ERROR cannot tell whether ${ref} exists: ${out##*$'\n'}"
     finish FAIL "tag check failed"
   fi
   echo "INFO ${ref} does not exist yet"
@@ -530,11 +540,17 @@ verify() {  # verify <array name> <registry the bundles reference>
     fi
     echo "INFO verify ${pkg} ${repo}@${digest} $(jq -r '.metadata.name' "$dir/csv.json")"
 
-    max=$(jq -r '[.properties[]? | select(.type == "olm.maxOpenShiftVersion") | .value | tostring] | first // "missing"' "$dir/bundle.json")
+    max=$(jq -r '[.properties[]? | select(.type == "olm.maxOpenShiftVersion") | .value | tostring] | join(",") | if . == "" then "missing" else . end' "$dir/bundle.json")
     if [[ $max == "$MAX_OCP" ]]; then
-      check "max-openshift-version/${pkg}" PASS "$max"
+      check "max-openshift-version/${pkg}" PASS "$max (exactly one)"
     else
-      check "max-openshift-version/${pkg}" FAIL "${max}, want ${MAX_OCP}"
+      check "max-openshift-version/${pkg}" FAIL "${max}, want exactly one ${MAX_OCP}"
+    fi
+    n=$(jq -r '.metadata.annotations["olm.skipRange"] // "missing"' "$dir/csv.json")
+    if [[ $n == "$SKIP_RANGE" ]]; then
+      check "skip-range/${pkg}" PASS "'$n'"
+    else
+      check "skip-range/${pkg}" FAIL "'${n}', want '${SKIP_RANGE}'"
     fi
 
     # relatedImages, plus every RELATED_IMAGE_* / *_IMAGE env value in the CSV's deployments

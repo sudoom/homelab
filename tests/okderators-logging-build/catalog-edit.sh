@@ -51,13 +51,16 @@ CHANNEL=alpha
 BUNDLE_MINOR=6.6
 SKIP_RANGE=">=6.2.0-0 <${BUNDLE_MINOR}.0"
 # CSVs a cluster may run that a channel does not list; the walker starts from them too.
-# HOMELAB_CSVS: what the homelab runs (installed from the 4.20 catalog), absent from the
-# 4.21/4.22 catalogs, so only the new entry's skipRange reaches them.
+# HOMELAB_CSVS: what the homelab runs, absent from every okderators catalog, so only the new
+# entry's skipRange reaches them. Since 2026-10-20 that is our 6.6.0 test build; before, the
+# okderators 6.5.0 (still the release-4.20 head, and absent from the 4.21/4.22/5.0 catalogs).
 # OLD_CSVS: entries of the catalogs' past, today named only in the 6.2.0-2025-05-26 entries' skips.
-HOMELAB_CSVS=(cluster-logging.v6.5.0-2026-06-04-101319 loki-operator.v6.5.0-2026-06-04-101319)
+HOMELAB_CSVS=(cluster-logging.v6.6.0-2026-10-20-134619 loki-operator.v6.6.0-2026-10-20-134619)
 OLD_CSVS=(cluster-logging.v6.2.0-2025-05-25-184240 loki-operator.v6.2.0-2025-05-25-184240)
-INSTALLED=("${HOMELAB_CSVS[@]}" "${OLD_CSVS[@]}")
-IMAGE_BRANCH=release-4.21
+PRIOR_CSVS=(cluster-logging.v6.5.0-2026-06-04-101319 loki-operator.v6.5.0-2026-06-04-101319)
+INSTALLED=("${HOMELAB_CSVS[@]}" "${OLD_CSVS[@]}" "${PRIOR_CSVS[@]}")
+# the branch the test catalog image is built from; release-5.0 for this OKD 5.0 cluster
+IMAGE_BRANCH=${IMAGE_BRANCH:-release-4.21}
 # catalog.Containerfile builds FROM the mutable :latest; the test image pins it. v1.74.0 is the
 # opm build.sh installs, and :latest pointed at this same index on 2026-10-20. Digest only:
 # containers/image refuses a reference with both a tag and a digest.
