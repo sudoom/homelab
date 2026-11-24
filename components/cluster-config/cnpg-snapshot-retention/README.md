@@ -66,10 +66,12 @@ podman run --rm --platform linux/amd64 --network host \
   -e KUBECONFIG=/kube/config \
   -e MAX_AGE_DAYS=7 -e FLOOR=7 -e DRY_RUN=true \
   -e CLUSTERS="media/media-postgres immich/immich-postgres" \
-  quay.io/openshift/origin-cli:4.22 /bin/bash /script/prune.sh
+  quay.io/openshift/origin-cli:5.0@sha256:9a76702b84f93b2c9627511422739614ce729dd19357774066d6face269621c2 /bin/bash /script/prune.sh
 ```
 
 `--platform linux/amd64` is required: `origin-cli` publishes no arm64 image.
+
+The image is `origin-cli:5.0`, pinned by digest (2026-11-24; before that `4.22`). A digest pull goes past zot's cache, so the job needs quay.io reachable through the mirror fallback, as the Argo CD images do. Renovate keeps it on the cluster's OKD minor (`renovate.json`, `allowedVersions: "<5.1"`). The script names the CNPG resource in full, `backups.postgresql.cnpg.io`. The bare `backup` would be ambiguous with OADP's `backups.velero.io`, and a wrong resolution would print "nothing prunable" and still complete green.
 
 ## Values
 

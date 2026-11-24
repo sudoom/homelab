@@ -608,3 +608,13 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 **Logging stack `application` tenant**
 
 - The TODO item as it stood: [ ] **Logging stack `application` tenant — LOG-6894** — Red Hat upstream bug; `grafana-loki` SA gets `allowed: true` from cluster-side SAR for `loki.grafana.com/application/logs:get`, but observatorium-api's OPA still returns 403. KCS-7113062 has no fix at v6.3.0. Workaround: enable the OpenShift console plugin (different OAuth path) for application logs.
+
+## 2026-11-24 — the jobs' `oc` moves to origin-cli 5.0
+
+Renovate #144 wanted `quay.io/openshift/origin-cli:4.22` → `:5.1`. `5.1` was built the same day for a release this cluster does not run, so the jobs got `5.0@sha256:9a76702b…` instead: built 2026-11-13 from `openshift/oc` `release-5.0`, kubectl 1.36.5, CentOS Stream 10 base. A `renovate.json` rule (`allowedVersions: "<5.1"`) holds the tag at the cluster's minor until the next OKD minor upgrade.
+
+The image has `oc`, `bash`, `awk`, `date`, `seq`, `sleep`, `base64`, `curl` and `python3`, but no `openssl` (so `synology-cert-sync`'s `ose-cli` stays a separate TODO). The digest pin means the pull goes past zot's cache.
+
+In `cnpg-snapshot-retention` the script now names `backups.postgresql.cnpg.io`. The bare `backup` would be ambiguous with OADP's `backups.velero.io`, and because the `get` sends stderr to `/dev/null`, a wrong resolution would print "nothing prunable" and complete green. The verify step requires each cluster's line to show a total of ≥ 7.
+
+In `logging-stack` the image change moves the `sudops.pl/storage-secret-inputs` hash, so the `loki-secret-translator` Sync hook re-runs; the Secret write is a no-op `oc apply` when the data is the same.

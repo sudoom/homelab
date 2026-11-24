@@ -1448,3 +1448,13 @@ The repo-level `CLAUDE.md` and the README TODO list were trimmed on 2026-11-20. 
 - **Residuals (NOT buildable as a UWM rule):** (2) a true **PVC `%used`** alert needs platform `kubelet_volume_stats_*` (not visible to UWM, and no platform default exists) — belongs to platform monitoring.
 - Residual (2) now scopes to the *other* PVCs (alertmanager 1Gi, app PVCs).
 - **Re-raised 2026-10-20, operator agreed to track it: the uncovered PVC with the widest blast radius is zot's `data-zot-0`** (48.9 GiB, 18.6 GiB free on 2026-10-20).
+
+## 2026-11-24 — the jobs' `oc` moves to origin-cli 5.0
+
+Renovate #144 wanted `quay.io/openshift/origin-cli:4.22` → `:5.1`. `5.1` was built the same day for a release this cluster does not run, so the jobs got `5.0@sha256:9a76702b…` instead: built 2026-11-13 from `openshift/oc` `release-5.0`, kubectl 1.36.5, CentOS Stream 10 base. A `renovate.json` rule (`allowedVersions: "<5.1"`) holds the tag at the cluster's minor until the next OKD minor upgrade.
+
+The image has `oc`, `bash`, `awk`, `date`, `seq`, `sleep`, `base64`, `curl` and `python3`, but no `openssl` (so `synology-cert-sync`'s `ose-cli` stays a separate TODO). The digest pin means the pull goes past zot's cache.
+
+In `cnpg-snapshot-retention` the script now names `backups.postgresql.cnpg.io`. The bare `backup` would be ambiguous with OADP's `backups.velero.io`, and because the `get` sends stderr to `/dev/null`, a wrong resolution would print "nothing prunable" and complete green. The verify step requires each cluster's line to show a total of ≥ 7.
+
+In `logging-stack` the image change moves the `sudops.pl/storage-secret-inputs` hash, so the `loki-secret-translator` Sync hook re-runs; the Secret write is a no-op `oc apply` when the data is the same.

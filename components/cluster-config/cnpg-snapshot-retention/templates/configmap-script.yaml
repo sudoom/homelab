@@ -25,7 +25,7 @@ data:
       # scheduled-backup label is what keeps manual and restore-drill backups
       # out of scope -- those carry no such label and are never touched.
       mapfile -t rows < <(
-        oc -n "${ns}" get backup \
+        oc -n "${ns}" get backups.postgresql.cnpg.io \
              -l "cnpg.io/cluster=${cluster},cnpg.io/scheduled-backup" \
              --sort-by=.metadata.creationTimestamp \
              -o jsonpath='{range .items[*]}{.spec.method}{" "}{.metadata.creationTimestamp}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null \
@@ -57,7 +57,7 @@ data:
         # label rather than by name so a cluster with a separate WAL volume
         # (two snapshots per backup) is handled correctly.
         if oc -n "${ns}" delete volumesnapshot -l "cnpg.io/backupName=${name}" --ignore-not-found >/dev/null 2>&1 \
-           && oc -n "${ns}" delete backup "${name}" --ignore-not-found >/dev/null 2>&1; then
+           && oc -n "${ns}" delete backups.postgresql.cnpg.io "${name}" --ignore-not-found >/dev/null 2>&1; then
           echo "  deleted ${ns}/${name} (${ts})"
           deleted=$(( deleted + 1 ))
         else
