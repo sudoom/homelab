@@ -239,8 +239,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   - the cap lifted to 5.1 on `main` only;
   - no free-disk workflow step; a CI workflow on 4.21/4.20; the 4.22 trigger fixed.
 
-  All four builds and the catalog walk on `release-4.20/4.21/4.22/5.0` passed, #35–#38 are fast-forwarded and their bodies updated (2026-11-25), awaiting maintainer review. **Installed here 2026-11-25** (`6.6.0-2026-11-24-190056`, catalog `okd-test/logging-catalog:2026-11-25-084518`). **Next:**
-  1. the 24 h soak (until 2026-11-26 12:24Z), then a soak comment on #35 in the 2026-10-21 table format;
+  All four builds and the catalog walk on `release-4.20/4.21/4.22/5.0` passed, #35–#38 are fast-forwarded and their bodies updated (2026-11-25), back in draft until the soak ends (operator). **Installed here 2026-11-25** (`6.6.0-2026-11-24-190056`, catalog `okd-test/logging-catalog:2026-11-25-084518`). **Next:**
+  1. the 24 h soak (until 2026-11-26 12:24Z), then a soak comment on #35 in the 2026-10-21 table format, and the operator marks #35–#38 ready;
   2. deleting the superseded test images (the 2026-10-20 build and the check-run copies under `okd-test/check-logging-refresh-*`).
 
   Chronology: `blog/blog-okderators-logging-6.6-draft.md`.
@@ -251,8 +251,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   - a CI fix (`make` with stdin from `/dev/null`: operator-sdk rejects `--deploy-dir` when stdin is a pipe, which made run 44105656020 fail);
   - the submodules moved to the upstream `release-X` heads (5.0 adds OCPBUGS-136668).
 
-  Builds with a piped stdin: the old head reproduced the CI error, and all four branches passed. #43–#46 are fast-forwarded and their bodies updated (2026-11-25), awaiting maintainer review. **Installed here 2026-11-25 12:31Z** (catalog `okd-test/nmstate-catalog:2026-11-25-120918`; `br-ex.forwarding` 1 on all nodes before and after). **Next:**
-  1. the 24 h soak (until 2026-11-26 12:31Z; rollback `v5.0.0-2026-11-10-162515`), then a soak comment on #43;
+  Builds with a piped stdin: the old head reproduced the CI error, and all four branches passed. #43–#46 are fast-forwarded and their bodies updated (2026-11-25), back in draft until the soak ends (operator). **Installed here 2026-11-25 12:31Z** (catalog `okd-test/nmstate-catalog:2026-11-25-120918`; `br-ex.forwarding` 1 on all nodes before and after). **Next:**
+  1. the 24 h soak (until 2026-11-26 12:31Z; rollback `v5.0.0-2026-11-10-162515`), then a soak comment on #43, and the operator marks #43–#46 ready;
   2. deleting the test images of the demo and backport runs, the failed 4.20 run (`2026-11-24-212443`), and after the soak the `2026-11-10-162515` build.
 
   The quay push permission for `okderators/nmstate/*` is fixed upstream (run 44105656020 pushed all three images). Chronology: `blog/blog-okderators-nmstate-draft.md`.
