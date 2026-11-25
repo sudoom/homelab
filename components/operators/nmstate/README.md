@@ -22,6 +22,13 @@ metrics pods could not start (ConfigMap `nmstate-tls-config` never rendered); th
 (2026-11-11), so v0.87.0 from `operatorhubio-catalog` is the only rollback ("Rollback to operatorhubio v0.87.0"; still
 offered on 2026-11-11, `alpha` head v0.87.3; not tried on OKD 5.0).
 
+**2026-11-25:** the catalog (`okd-test/nmstate-catalog:2026-11-25-120918`, `release-5.0`) and `startingCSV` move to
+`kubernetes-nmstate-operator.v5.0.0-2026-11-24-184558`, the refreshed #43 at `93f2f38` (operator `release-5.0` head
+`5f4a6d0`, which adds OCPBUGS-136668; console-plugin `ddc329a`). It replaces `v5.0.0-2026-11-10-162515` in place through a
+Manual InstallPlan; the handler restart re-applies the NNCPs, so the `network-change` checks run after it. Until its
+24 h soak passes, `v5.0.0-2026-11-10-162515` (catalog `sha256:7c3867a3…`, kept in zot) is the rollback: set both values
+back. Record: `blog/blog-okderators-nmstate-draft.md`.
+
 ## What the chart installs
 
 root-app entry `nmstate-operator`, wave 1, destination namespace `openshift-nmstate`.
