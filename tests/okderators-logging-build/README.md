@@ -112,7 +112,7 @@ and is in the pod log only.
 
 `./build.sh update` never runs (it moves the gitlinks to branch tips).
 
-**Reads of zot bypass the router (since 2026-11-24).** `configure_podman` writes `/etc/containers/registries.conf.d/90-zot-direct.conf`, which rewrites `zot.apps.okd.sudops.pl` to the in-cluster Service `zot.zot.svc.cluster.local:5000` (plain HTTP). containers/image applies that to image sources only, so pulls, `skopeo inspect` (the pipeline's digest lookups) and `opm render` use the Service, while pushes and `skopeo list-tags` keep the Route. Image names do not change. The reason: every tag lookup makes zot ask all four sync upstreams first, and on 2026-11-24 that ran past the router (504, then 502). The log's `INFO zot-direct probe: Trying to access "zot.zot.svc.cluster.local:5000/..."` line shows it took effect. Plan: `docs/superpowers/plans/2026-11-24-zot-sync.md`, Part A.
+**Reads of zot bypass the router (since 2026-11-24).** `configure_podman` writes `/etc/containers/registries.conf.d/90-zot-direct.conf`, which rewrites `zot.apps.okd.sudops.pl` to the in-cluster Service `zot.zot.svc.cluster.local:5000` (plain HTTP). containers/image applies that to image sources only, so pulls, `skopeo inspect` (the pipeline's digest lookups) and `opm render` use the Service, while pushes and `skopeo list-tags` keep the Route. Image names do not change. The reason: every tag lookup makes zot ask all four sync upstreams first, and on 2026-11-24 that ran past the router (504, then 502). The log's `INFO zot-direct probe: Trying to access "zot.zot.svc.cluster.local:5000/..."` line shows it took effect. `opm` is a shim in the tools directory that adds `--skip-tls-verify` to every `opm render` (upstream's `hack/add-bundle.sh` included): opm v1.74.0 passes an explicit `InsecureSkipTLSVerify=false` to containers/image, which overrides the drop-in's `insecure = true`, and without the flag an image render through the Service fails with `server gave HTTP response to HTTPS client` (logging 4.22 check, 2026-11-24). With it, TLS is tried first, then plain HTTP. Plan: `docs/superpowers/plans/2026-11-24-zot-sync.md`, Part A.
 
 ## Parameters
 
@@ -123,7 +123,7 @@ and is in the pod log only.
 | `PIPELINE_REPO` | `https://github.com/sudoom/okd-operator-pipeline.git` | |
 | `PIPELINE_BRANCH` | `cluster-logging-6.6` | |
 | `BASE_REGISTRY` | `zot.apps.okd.sudops.pl/okd-test` | anything outside `zot.apps.okd.sudops.pl/okd-test` is refused |
-| `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.20 release-4.21 release-4.22`; must include `IMAGE_BRANCH` (the test catalog's source) |
+| `CATALOG_BRANCHES` | empty | `catalog` only: okderators-catalog-index branches, e.g. `release-4.20 release-4.21 release-4.22 release-5.0` (`release-4.N` or `release-5.N`); must include `IMAGE_BRANCH` (the test catalog's source) |
 | `IMAGE_BRANCH` | `release-4.21` | `catalog` only: the branch the test catalog image is built from; `release-5.0` for this OKD 5.0 cluster (added 2026-11-24) |
 | `MAX_OCP` | `4.23` | `full`/`check`: the one `olm.maxOpenShiftVersion` each bundle must carry; `5.1` for the `main` build (added 2026-11-24) |
 | `BUNDLES` | empty | `catalog` only: the two bundle refs (cluster-logging and loki-operator, any order), as the full run's `PUSHED` lines print them |
@@ -170,7 +170,7 @@ graphs, and builds the test catalog image for the homelab's `okd-test-logging` C
 DATE=$(date -u +%Y-%m-%d-%H%M%S)      # new for the catalog run; it only names the image tag
 oc process --local -f tests/okderators-logging-build/job-template.yaml \
   -p MODE=catalog -p DATE=$DATE \
-  -p CATALOG_BRANCHES='release-4.20 release-4.21 release-4.22' \
+  -p CATALOG_BRANCHES='release-4.20 release-4.21 release-4.22 release-5.0' -p IMAGE_BRANCH=release-5.0 \
   -p BUNDLES='<loki bundle ref@digest> <clo bundle ref@digest>' | oc -n okd-build create -f -
 oc -n okd-build logs -f job/build-catalog-$DATE
 oc -n okd-build logs job/build-catalog-$DATE | grep -E '^(STEP|PUSHED|CHECK|RESULT) '

@@ -23,7 +23,7 @@
 # pinned, pushed to CATALOG_IMAGE, rendered back and walked    CHECK catalog-image
 #
 # Env:
-#   CATALOG_BRANCHES  okderators-catalog-index branches, e.g. "release-4.20 release-4.21 release-4.22"
+#   CATALOG_BRANCHES  okderators-catalog-index branches, e.g. "release-4.20 release-4.21 release-4.22 release-5.0"
 #   BUNDLES           the two bundle image refs (cluster-logging and loki-operator, any order)
 #   RUN_DIR           empty working directory (build.sh: /work/run)
 #   CATALOG_IMAGE     push target, set and guarded by build.sh: ${BASE_REGISTRY}/logging-catalog:${DATE}
@@ -130,7 +130,7 @@ validate_inputs() {
   [[ $RUN_DIR == /* && -d $RUN_DIR ]] || die "RUN_DIR '${RUN_DIR}' is not an absolute directory"
   [[ -n $CATALOG_BRANCHES ]] || die "CATALOG_BRANCHES is empty"
   for b in $CATALOG_BRANCHES; do
-    [[ $b =~ ^release-4\.[0-9]+$ ]] || die "catalog branch '${b}' is not release-4.N"
+    [[ $b =~ ^release-[45]\.[0-9]+$ ]] || die "catalog branch '${b}' is not release-4.N or release-5.N"
   done
   if [[ -n $TEST_BUNDLES ]]; then
     [[ -d $TEST_BUNDLES ]] || die "CATALOG_EDIT_TEST_BUNDLES '${TEST_BUNDLES}' is not a directory"

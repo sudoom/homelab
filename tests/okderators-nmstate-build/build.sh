@@ -308,7 +308,18 @@ install_tools() {
 
   fetch "https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-amd64-opm" \
     "$OPM_SHA256" "opm-${OPM_VERSION}"
-  install -m 0755 "$CACHE/dl/opm-${OPM_VERSION}" "$TOOLS/bin/opm"
+  install -m 0755 "$CACHE/dl/opm-${OPM_VERSION}" "$TOOLS/bin/opm-${OPM_VERSION}"
+  # opm passes an explicit InsecureSkipTLSVerify=false to containers/image
+  # (cmd/opm/internal/util CreateCLIRegistry), which overrides the zot-direct `insecure = true`,
+  # so an image render through the plain-HTTP Service failed (2026-11-24: "server gave HTTP
+  # response to HTTPS client"). The shim adds --skip-tls-verify to every `opm render`, including
+  # the ones in upstream's hack/add-bundle.sh: TLS is still tried first, then plain HTTP.
+  cat >"$TOOLS/bin/opm" <<EOF
+#!/bin/bash
+if [[ \${1:-} == render ]]; then shift; exec "$TOOLS/bin/opm-${OPM_VERSION}" render --skip-tls-verify "\$@"; fi
+exec "$TOOLS/bin/opm-${OPM_VERSION}" "\$@"
+EOF
+  chmod 0755 "$TOOLS/bin/opm"
 
   fetch "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
     "$YQ_SHA256" "yq-${YQ_VERSION}"
@@ -361,7 +372,7 @@ EOF
   # Reads of zot go to its in-cluster Service, not the Route (plan 2026-11-24 zot-sync, Part A):
   # every tag lookup makes zot ask all four sync upstreams first, which ran past the router on
   # 2026-11-24 (504, then 502). containers/image applies `location` to image sources only, so
-  # pulls, skopeo inspect and opm render use the Service; pushes and list-tags keep the Route
+  # pulls, skopeo inspect and opm render (via the opm shim in tools) use the Service; pushes and list-tags keep the Route
   # (they trigger no sync). Image names stay zot.apps.okd.sudops.pl.
   mkdir -p /etc/containers/registries.conf.d
   cat >/etc/containers/registries.conf.d/90-zot-direct.conf <<'EOF'
