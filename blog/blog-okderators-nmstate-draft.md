@@ -1296,3 +1296,18 @@ The `rhel-9-server-ose` repo errors in the same log (`Could not resolve host: ba
 - 4.20: not run yet.
 
 Three earlier demo attempts failed against zot itself (two 504s, one in the tag check). That led to the zot Route timeout of 3m, the `list-tags` tag check, and the build Jobs reading zot through its Service (`blog/blog-zot-pullthrough-draft.md`, 2026-11-24).
+
+## 2026-11-25 — the refreshed 5.0 build installed here
+
+The 4.20 build failed once overnight in `build_bundle`: a `skopeo inspect` of its own console-plugin tag through zot's Service got `EOF` after zot spent 1m59s asking the four sync upstreams (zot logged a `200` for the same request at the moment the client gave up). The logging check run was hammering zot at the same time. Rerun alone at 23:28Z: `RESULT PASS full 2026-11-24-232812`. The two Jobs' `verify` steps also needed `opm render` through the plain-HTTP Service: opm v1.74.0 passes an explicit `InsecureSkipTLSVerify=false`, which overrides `insecure = true` in registries.conf, so both Jobs now install `opm` behind a shim that adds `--skip-tls-verify` to `render`.
+
+Catalog (`MODE=catalog`, `release-5.0` only, `catalog-branches.tsv` INSTALLED now includes this cluster's `v5.0.0-2026-11-10-162515`): `RESULT PASS catalog 2026-11-25-120918`, image `okd-test/nmstate-catalog:2026-11-25-120918@sha256:91afdc6f…`; the walk from the installed CSV reaches `v5.0.0-2026-11-24-184558`, and without the skipRange it is stranded.
+
+Install, after the network-change pre-flight (NNCP/NNCE Available, backnet up on all three with MTU 9000, only the structural CNPG primary PDBs at 0, CNPG archiving True, `br-ex.forwarding` 1 on all three):
+
+- InstallPlan `install-cghpb` (CSV, CRD, SA, RBAC; bundle `sha256:15a65c7a…`), approved 12:30Z; CSV `Succeeded` 12:30:58Z.
+- Handler DaemonSet rolled 12:31:17–12:31:52Z; NNCEs back to `Available` within seconds; `nmstate-tls-config` present.
+- After the roll: backnet unchanged, CNPG archiving True, `br-ex.forwarding` 1 on all three.
+- Argo CD showed `nmstate-operator` Degraded for ~4 min: the Subscription kept `ResolutionFailed` (`ConstraintsNotSatisfiable`, both CSVs existing at once) until OLM's next resolution at 12:36Z. Transient.
+
+Soak 2026-11-25T12:31:52Z → 2026-11-26T12:31:52Z. Rollback until then: catalog `sha256:7c3867a3…` and `startingCSV` `v5.0.0-2026-11-10-162515` (both kept).

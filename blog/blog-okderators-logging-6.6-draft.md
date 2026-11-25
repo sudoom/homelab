@@ -1060,3 +1060,18 @@ The backports keep 4.23, because `OCP_NEXT` there would lower the cap or not mov
 **CI.** #37/#38 add `cluster-logging-deploy.yaml`, triggered on their own branch. #36 fixes 4.22's copy, which triggered on `main`.
 
 **Build.** `logging-refresh-5.0`, MODE=full, `MAX_OCP=5.1`: `RESULT PASS full 2026-11-24-190056`. Both bundles have exactly one cap (5.1) and the new skipRange, the gateway env is this run's digest, and 11 images were pushed. #35 is fast-forwarded to that tree. Left: MODE=check for the three backports, MODE=catalog walks on all four catalog branches, the PR bodies, and the install here.
+
+## 2026-11-25 — all four branches built, catalog walked, installed here
+
+Check runs on the 5.0 images (`DATE=2026-11-24-190056`): 4.21 and 4.20 PASS overnight; 4.22 failed twice for reasons outside the PR (`opm render` through zot's plain-HTTP Service — fixed with an `opm` shim adding `--skip-tls-verify`; then the PVC lock still held by a deleted Job's terminating pod) and passed on the rerun this morning. 13 checks each: cap 4.23 exactly once, skipRange `>=6.2.0-0 <6.6.0`, every image this run's digest.
+
+`MODE=catalog` (after letting `catalog-edit.sh` accept `release-5.N`): `RESULT PASS catalog 2026-11-25-084518` on `release-4.20/4.21/4.22/5.0`. The 6.6.0 entries replace 6.5.0 (4.20) and 6.3.0 (others); every channel entry reaches 6.6.0; without the skipRange, `opm validate` still passes but the homelab's `6.6.0-2026-10-20-134619` is stranded. Test catalog image `okd-test/logging-catalog:2026-11-25-084518@sha256:d18164cc…`.
+
+Install (commit `872ba5e`, CatalogSource image only; no `startingCSV` — the skipRange carries the upgrade):
+
+- loki `install-zbngw` approved; CSV `Succeeded`; LokiStack rolled 12:14–12:18Z, 14 pods r=0 on `loki@5c65e26f44` / `lokistack-gateway@f34d209485`, `Ready=True`, PDBs back to 1.
+- cluster-logging `install-65sl4` approved; CSV `Succeeded` 12:24:16Z; collector 3/3 at 12:24Z; ClusterLogForwarder `Ready=True`.
+- `Upgradeable=False` now lists only the descheduler: the logging cap no longer blocks 5.1.
+- The new collectors' backlog hit the distributor limit (`ingestion rate limit exceeded for user infrastructure (limit: 2097152 bytes/sec)`) 12:23–12:27Z, 2/11/12/0/9 per minute, retried by vector; none from 12:28.
+
+Soak 2026-11-25T12:24:16Z → 2026-11-26T12:24:16Z. The operator wants a soak comment on #35 in the 2026-10-21 table format afterwards.
