@@ -4,7 +4,7 @@ namespace: cnpg-snapshot-retention
 
 image: quay.io/openshift/origin-cli:5.0@sha256:9a76702b84f93b2c9627511422739614ce729dd19357774066d6face269621c2
 
-# Offset from the ScheduledBackups (media 04:00, immich 04:30) so a prune never
+# Offset from the ScheduledBackups (media 04:00, immich 04:30, homebox 05:00) so a prune never
 # races the backup it would otherwise be counting.
 schedule: "30 5 * * *"
 
@@ -30,3 +30,6 @@ clusters:
     name: media-postgres
   - namespace: immich
     name: immich-postgres
+  # Added 2026-11-25: homebox's daily snapshots had no prune (33 held since 2026-10-24).
+  - namespace: homebox
+    name: homebox-postgres

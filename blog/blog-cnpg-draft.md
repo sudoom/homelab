@@ -1458,3 +1458,18 @@ The image has `oc`, `bash`, `awk`, `date`, `seq`, `sleep`, `base64`, `curl` and 
 In `cnpg-snapshot-retention` the script now names `backups.postgresql.cnpg.io`. The bare `backup` would be ambiguous with OADP's `backups.velero.io`, and because the `get` sends stderr to `/dev/null`, a wrong resolution would print "nothing prunable" and complete green. The verify step requires each cluster's line to show a total of ≥ 7.
 
 In `logging-stack` the image change moves the `sudops.pl/storage-secret-inputs` hash, so the `loki-secret-translator` Sync hook re-runs; the Secret write is a no-op `oc apply` when the data is the same.
+
+## 2026-11-25 — origin-cli 5.0 verified, homebox added to snapshot retention
+
+The first `cnpg-snapshot-retention` run on `quay.io/openshift/origin-cli:5.0@sha256:9a76702b…` (05:30Z, Job `cnpg-snapshot-retention-29926410`) pruned for real, with the resource now qualified as `backups.postgresql.cnpg.io`:
+
+```
+cutoff=2026-11-18T05:30:01Z floor=7 dryRun=false
+media/media-postgres: 8 backups, 1 beyond floor, 1 pruned
+immich/immich-postgres: 8 backups, 1 beyond floor, 1 pruned
+done: 2 pruned, dryRun=false
+```
+
+Both totals clear the floor of 7, which is the check the origin-cli plan asked for (a wrong `backup` resolution would have printed 0 and still completed).
+
+Reading that log showed a gap that predates it: `homebox-postgres` has a daily `volumeSnapshot` ScheduledBackup (05:00) but was never in `values.clusters`, so nothing pruned it. It held 33 scheduled snapshot backups, the oldest from 2026-10-24, 26 of them past the 7-day cutoff. Added `homebox/homebox-postgres` to `values.clusters` (one more Role + RoleBinding, in `homebox` only). The first run after the sync prunes about 26 RBD snapshots of a small volume in one go, then 1 a day like the others. The 05:00 backup finishes well before the 05:30 run.

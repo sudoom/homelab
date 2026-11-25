@@ -15,7 +15,7 @@ about 0.5 GiB/day/cluster. Full diagnosis and the manual reclaim: `blog/blog-cnp
 
 ## What it does
 
-Daily at 05:30, offset from the ScheduledBackups (media 04:00, immich 04:30). For each cluster in
+Daily at 05:30, offset from the ScheduledBackups (media 04:00, immich 04:30, homebox 05:00). For each cluster in
 `values.clusters`:
 
 1. List `Backup` CRs labelled `cnpg.io/cluster=<name>` that also carry `cnpg.io/scheduled-backup`, keep only
@@ -35,7 +35,7 @@ Both objects must go. The `VolumeSnapshot`'s `ownerReference` is the **Cluster**
 | Cannot touch non-CNPG snapshots | Label-scoped to `cnpg.io/cluster` |
 | Cannot touch manual or restore-drill backups | Requires `cnpg.io/scheduled-backup`, which only ScheduledBackup-created Backups carry. This is what protects artefacts like `immich-postgres-prev3-20260706` from the July restore drill |
 | Cannot empty the set | The floor is unconditional. If backups stop being created, everything ages past `maxAgeDays` and an age-only rule would delete every local restore point; with the floor, pruning simply stops |
-| Cannot reach beyond two namespaces | No ClusterRole. One Role + RoleBinding per entry in `values.clusters` |
+| Cannot reach beyond the three target namespaces | No ClusterRole. One Role + RoleBinding per entry in `values.clusters` |
 | Cannot create or modify anything | Verbs are `get`, `list`, `delete` only |
 | Failures are visible | Non-zero exit on any delete failure; the existing `UserNamespaceCronJobNotSucceeding` AlertingRule in `components/cluster-config/monitoring-config/` already covers these namespaces |
 
@@ -65,7 +65,7 @@ podman run --rm --platform linux/amd64 --network host \
   -v "$HOME/.kube/config-readonly:/kube/config:ro" \
   -e KUBECONFIG=/kube/config \
   -e MAX_AGE_DAYS=7 -e FLOOR=7 -e DRY_RUN=true \
-  -e CLUSTERS="media/media-postgres immich/immich-postgres" \
+  -e CLUSTERS="media/media-postgres immich/immich-postgres homebox/homebox-postgres" \
   quay.io/openshift/origin-cli:5.0@sha256:9a76702b84f93b2c9627511422739614ce729dd19357774066d6face269621c2 /bin/bash /script/prune.sh
 ```
 
@@ -81,4 +81,4 @@ The image is `origin-cli:5.0`, pinned by digest (2026-11-24; before that `4.22`)
 | `retention.maxAgeDays` | `7` | Matches the intent of the (inert) `retentionPolicy: "7d"` on the clusters |
 | `retention.floor` | `7` | Minimum kept per cluster regardless of age |
 | `schedule` | `30 5 * * *` | Offset from the 04:00/04:30 backups |
-| `clusters` | media, immich | Each entry also generates its namespace's Role + RoleBinding |
+| `clusters` | media, immich, homebox | Each entry also generates its namespace's Role + RoleBinding |
