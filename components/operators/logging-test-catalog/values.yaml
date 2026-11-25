@@ -1,6 +1,9 @@
-# Test build of okderators Logging/Loki 6.6, built from Red Hat's 6.6.1 commits
-# and pushed to the cluster's zot (tag 2026-10-20-153109). Pinned by digest.
+# Test build of okderators Logging/Loki 6.6.0-2026-11-24-190056, the reworked pipeline PRs #35-#38
+# (main's variant, Red Hat's 6.6.2 commits), pushed to the cluster's zot (tag 2026-11-25-084518;
+# the previous one, 2026-10-20-153109, built from 6.6.1, is the rollback). Pinned by digest.
+# Built from okderators-catalog-index release-5.0 with the 6.6.0 entries replacing 6.3.0 and
+# skipRange '>=6.2.0-0 <6.6.0', which is what upgrades the installed 6.6.0-2026-10-20-134619.
 # Temporary: this chart and its root-app entry leave again when the
 # cluster-logging and loki-operator Subscriptions move back to `okderators`
 # (once okderators publishes 6.6).
-image: zot.apps.okd.sudops.pl/okd-test/logging-catalog@sha256:bf21cf1baaa126b6d071e3bee6da11de41f2a93a69f871f65266ca658c4a5c86
+image: zot.apps.okd.sudops.pl/okd-test/logging-catalog@sha256:d18164cc35c65337525293d8c1b589f87faa20a388ad43a9ef7dd077d11264f4
