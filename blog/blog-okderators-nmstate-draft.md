@@ -1307,7 +1307,7 @@ Install, after the network-change pre-flight (NNCP/NNCE Available, backnet up on
 
 - InstallPlan `install-cghpb` (CSV, CRD, SA, RBAC; bundle `sha256:15a65c7a…`), approved 12:30Z; CSV `Succeeded` 12:30:58Z.
 - Handler DaemonSet rolled 12:31:17–12:31:52Z; NNCEs back to `Available` within seconds; `nmstate-tls-config` present.
-- After the roll: backnet unchanged, CNPG archiving True, `br-ex.forwarding` 1 on all three.
+- After the roll and again at T+15 (12:47Z): backnet unchanged, CNPG archiving True, `br-ex.forwarding` 1 on all three.
 - Argo CD showed `nmstate-operator` Degraded for ~4 min: the Subscription kept `ResolutionFailed` (`ConstraintsNotSatisfiable`, both CSVs existing at once) until OLM's next resolution at 12:36Z. Transient.
 
 Soak 2026-11-25T12:31:52Z → 2026-11-26T12:31:52Z. Rollback until then: catalog `sha256:7c3867a3…` and `startingCSV` `v5.0.0-2026-11-10-162515` (both kept).
