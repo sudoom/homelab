@@ -1311,3 +1311,7 @@ Install, after the network-change pre-flight (NNCP/NNCE Available, backnet up on
 - Argo CD showed `nmstate-operator` Degraded for ~4 min: the Subscription kept `ResolutionFailed` (`ConstraintsNotSatisfiable`, both CSVs existing at once) until OLM's next resolution at 12:36Z. Transient.
 
 Soak 2026-11-25T12:31:52Z → 2026-11-26T12:31:52Z. Rollback until then: catalog `sha256:7c3867a3…` and `startingCSV` `v5.0.0-2026-11-10-162515` (both kept).
+
+## 2026-11-26 — soak of the refreshed build passed
+
+24 h from 2026-11-25T12:31:52Z, posted on #43: CSV `kubernetes-nmstate-operator.v5.0.0-2026-11-24-184558` Succeeded, 3 NNCPs and NNCEs Available, 0 restarts in `openshift-nmstate` (operator, handler, webhook, metrics, console-plugin), nothing at `up==0`, and `br-ex.forwarding` 1/1/1 at T+25 h (operator-run sysctl read, 13:50Z). The rollback build `v5.0.0-2026-11-10-162515` and catalog `7c3867a3` can now be deleted from zot.

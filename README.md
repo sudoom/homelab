@@ -176,7 +176,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 
   There are two ways to fix it:
   - Raise the limit for that tenant in `components/cluster-config/logging-stack/templates/lokistack.yaml` (`spec.limits.tenants.infrastructure.ingestion.ingestionRate` / `ingestionBurstSize`, in MB). Check the `1x.pico` ingesters' memory headroom first.
-  - Cut infrastructure volume in the ClusterLogForwarder. Find the noisiest namespaces first.
+  - Cut infrastructure volume in the ClusterLogForwarder. **The noisiest source is known (2026-11-26):** the `registry-server` containers of `operatorhubio-catalog` (4376 MiB in 24 h) and `community-operators` (2498 MiB) are 59% of all infrastructure log bytes stored (11569 MiB), and they grew 50% between 11-25 and 11-26 while every other namespace stayed flat; our `okd-test-*` catalogs write ~110 MiB a day each. Read what they log first (`oc -n openshift-marketplace logs <pod> --tail=50`); a per-container drop filter in the CLF (`kubernetes.container_name == "registry-server"`, `openshift-marketplace`) is the likely shape. Measure with `.superpowers/sdd/2026-11-24-logging-prs-rework/soak-logql.sh openshift-marketplace` (gitignored; LogQL `bytes_over_time` per pod through the gateway). Loki counted 2.25M `rate_limited` samples on 11-26 (1.40M the day before); whether any are lost for good after Vector's retries is not measured (`vector_component_discarded_events_total` would show it).
 
   Validate:
   - Run `oc -n openshift-logging logs <distributor-pod> --since=60m | grep -c 'ingestion rate limit'` on each distributor pod; every count should be 0.

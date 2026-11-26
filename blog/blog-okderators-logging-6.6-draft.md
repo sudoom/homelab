@@ -1075,3 +1075,16 @@ Install (commit `872ba5e`, CatalogSource image only; no `startingCSV` — the sk
 - The new collectors' backlog hit the distributor limit (`ingestion rate limit exceeded for user infrastructure (limit: 2097152 bytes/sec)`) 12:23–12:27Z, 2/11/12/0/9 per minute, retried by vector; none from 12:28.
 
 Soak 2026-11-25T12:24:16Z → 2026-11-26T12:24:16Z. The operator wants a soak comment on #35 in the 2026-10-21 table format afterwards.
+
+## 2026-11-26 — soak of the 6.6.2-sources build passed
+
+24 h from 2026-11-25T12:24:16Z, posted on #35. Object-store failures 0, restarts 0 in `openshift-logging` and `openshift-operators-redhat`, nothing at `up==0` (21 targets), CSVs Succeeded, LokiStack and CLF Ready, collector 3/3. Uploads 410/h and chunk flushes 392/h, against 402 and 382 on the 2026-10-20 build the day before.
+
+One number moved: `loki_discarded_samples_total{reason="rate_limited"}` went from 1.40M to 2.25M, all in the `infrastructure` tenant. I chased it in four read-only passes (scripts in the gitignored ledger dir, `soak-*.sh`):
+
+1. Hourly: the discards rose in every hour of the soak (56k–146k/h, against 21k–96k/h), so it was not the collector's post-restart backlog.
+2. Collector: Vector read 9255 MiB of infrastructure container logs against 7458 MiB, with the same bytes-out per byte-in (2.75) in both windows; application and audit fell slightly. So not the new collector.
+3. LogQL `bytes_over_time` per namespace through the gateway: `openshift-marketplace` +2341 MiB of the +2353 MiB total.
+4. Per pod there: `operatorhubio-catalog` registry-server 4376 MiB against 2895, `community-operators` 2498 against 1748. Our `okd-test-*` catalogs are flat at ~110 MiB/day.
+
+So the extra volume comes from the cluster's upstream catalogs, not from the PR. The fix is the README TODO "Loki `infrastructure` tenant runs over its ingestion rate limit".
