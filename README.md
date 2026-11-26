@@ -232,7 +232,7 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
 - [ ] **Repo CI: shellcheck + secret scanning + the validation chain that already exists (proposed 2026-08-31, after a SonarQube question).** The repo has no CI; in value order: `shellcheck`, `gitleaks`, the documented `helm lint` → `helm template` → `kubeconform` chain as a merge gate, then `ansible-lint` with exclusions for the deliberate `midclt` wrappers. SonarQube was evaluated and rejected. Detail: `backlog/repo-ci.md`.
 
 ### Queued — operators / catalog
-- [ ] **okderators Logging/Loki 6.6 for OKD 5.0 and 4.20–4.22 — rework built and installed here (2026-11-25), soak running.** Plan `docs/superpowers/plans/2026-11-24-logging-prs-rework.md`, ledger `.superpowers/sdd/2026-11-24-logging-prs-rework/progress.md`. Our pipeline PRs [#35](https://github.com/okd-project/okd-operator-pipeline/pull/35) (`main`), [#36](https://github.com/okd-project/okd-operator-pipeline/pull/36)–[#38](https://github.com/okd-project/okd-operator-pipeline/pull/38) (4.22/4.21/4.20) were reworked:
+- [ ] **okderators Logging/Loki 6.6 for OKD 5.0 and 4.20–4.22 — rework built and installed here (2026-11-25), soak passed 2026-11-26.** Plan `docs/superpowers/plans/2026-11-24-logging-prs-rework.md`, ledger `.superpowers/sdd/2026-11-24-logging-prs-rework/progress.md`. Our pipeline PRs [#35](https://github.com/okd-project/okd-operator-pipeline/pull/35) (`main`), [#36](https://github.com/okd-project/okd-operator-pipeline/pull/36)–[#38](https://github.com/okd-project/okd-operator-pipeline/pull/38) (4.22/4.21/4.20) were reworked:
   - `main`'s own 6.6 variant plus the passthrough gateway;
   - Red Hat **6.6.2** sources (loki-server on `upstream-v3.7.9`), named `6.6.0-<DATE>` on all four branches;
   - Loki `skipRange >=6.2.0-0 <6.6.0`, so the current okderators heads (6.5.0 on 4.20, 6.3.0 elsewhere) upgrade;
@@ -240,8 +240,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   - no free-disk workflow step; a CI workflow on 4.21/4.20; the 4.22 trigger fixed.
 
   All four builds and the catalog walk on `release-4.20/4.21/4.22/5.0` passed, #35–#38 are fast-forwarded and their bodies updated (2026-11-25), back in draft until the soak ends (operator). **Installed here 2026-11-25** (`6.6.0-2026-11-24-190056`, catalog `okd-test/logging-catalog:2026-11-25-084518`). **Next:**
-  1. the 24 h soak (until 2026-11-26 12:24Z), then a soak comment on #35 in the 2026-10-21 table format, and the operator marks #35–#38 ready;
-  2. deleting the superseded test images (the 2026-10-20 build and the check-run copies under `okd-test/check-logging-refresh-*`).
+  1. the soak passed (2026-11-26, comment on #35); the operator marks #35–#38 ready;
+  2. after upstream merge and CI, move both Subscriptions back to `okderators`. The superseded zot test images (the 2026-10-20 build, its catalog, `okd-test/check-logging-refresh-*`) were deleted 2026-11-26.
 
   Chronology: `blog/blog-okderators-logging-6.6-draft.md`.
 - [ ] **okderators contribution candidates — assessed 2026-09-14 against what this cluster's catalogs actually offer.** Of the operators absent from every reachable catalog and public in `openshift/*`, `vertical-pod-autoscaler-operator` ranks first (no community VPA operator exists, and its recommender answers this cluster's `KubeCPUOvercommit`), then `secrets-store-csi-driver-operator` and several tiny single-image operators. Detail: `backlog/okderators-candidates.md`.
@@ -252,8 +252,8 @@ Tracked work — order is rough impact-per-effort, not strict sequencing.
   - the submodules moved to the upstream `release-X` heads (5.0 adds OCPBUGS-136668).
 
   Builds with a piped stdin: the old head reproduced the CI error, and all four branches passed. #43–#46 are fast-forwarded and their bodies updated (2026-11-25), back in draft until the soak ends (operator). **Installed here 2026-11-25 12:31Z** (catalog `okd-test/nmstate-catalog:2026-11-25-120918`; `br-ex.forwarding` 1 on all nodes before and after). **Next:**
-  1. the 24 h soak (until 2026-11-26 12:31Z; rollback `v5.0.0-2026-11-10-162515`), then a soak comment on #43, and the operator marks #43–#46 ready;
-  2. deleting the test images of the demo and backport runs, the failed 4.20 run (`2026-11-24-212443`), and after the soak the `2026-11-10-162515` build.
+  1. the soak passed (2026-11-26, comment on #43); the operator marks #43–#46 ready;
+  2. after upstream merge and CI, move the Subscription to `okderators`. The superseded zot test images were deleted 2026-11-26; the passing 4.20/4.21/4.22 PR builds (`232812`, `205029`, `191809`) are still in zot.
 
   The quay push permission for `okderators/nmstate/*` is fixed upstream (run 44105656020 pushed all three images). Chronology: `blog/blog-okderators-nmstate-draft.md`.
 - [ ] **Track upstream fixes for `kubernetes-nmstate-operator` (operatorhubio-catalog) CSV — THREE RBAC defects** — not needed here since the 2026-10-26 switch: the okderators build ships all three grants. (a) `use` on the `privileged` SCC and (b) `get/list/watch apiservers.config.openshift.io` are okd-operator-pipeline PR #19; (c), the CSV's `nmstate-monitor` + `prometheus-k8s` RoleBindings binding `prometheus-k8s` in the nonexistent namespace `monitoring`, is NOT covered by PR #19. Left to do: file the community issue for (c) from the `bugs/` draft (`bugs/upstream-community-operators-nmstate-csv-prometheus-rolebinding-wrong-namespace.md`), if the community build is worth reporting to. History: `blog/blog-okderators-nmstate-draft.md`.

@@ -365,3 +365,22 @@ At 17:53Z a manifest miss took 1.3 s, so the upstream slowness comes and goes. N
 Change: `haproxy.router.openshift.io/timeout: 3m` on the zot Route (`components/apps/zot/templates/route.yaml`). The build Job's tag check also moved to `skopeo list-tags`, which zot answers from storage without an upstream sync. Why ghcr.io and docker.io answered so slowly from the cluster was not investigated.
 
 Follow-up the same evening. The 3m route timeout did not end it. At 20:47Z a parallel `skopeo inspect` from the NMState 4.21 build got `502 Bad Gateway` on one of its own `okd-test/` tags. zot's log for those minutes shows one sync round of about 35 s per lookup (quay 1 s, docker.io 4 s, ghcr.io 30 s). The sync on held tags is the root cause; I tracked it as a README TODO. The builds were rerun.
+
+## 2026-11-26 — logging and NMState test images deleted after the soaks
+
+Inventory first (read-only: `_catalog`, `tags/list`, `HEAD` on each manifest; script `zot-inventory.sh` in the gitignored logging ledger dir): 145 tags under `okd-test/`, `data-zot-0` 21.35 GiB free of 48.91. The delete list had 61 manifests, checked for: an empty digest, a path outside `okd-test/`, a kept tag in the same repository at the same digest, and any of the 11 logging/NMState digests the running pods use. All four checks came back empty. The check repositories share digests with the live `cluster-logging/*` build, but a delete by digest only touches its own repository.
+
+- `okd-test/check-logging-refresh-4.2{0,1,2}/*`: 33 (the MODE=check runs of 2026-11-24)
+- `okd-test/cluster-logging/*` `6.6.0-2026-10-20-134619`: 10, and `logging-catalog:2026-10-20-153109` (`bf21cf1b`)
+- `okd-test/nmstate/*` `5.0.0-2026-11-10-162515` (the rollback build) and the 175653/182153 demos and 201137/212443 failed tries: 16, and `nmstate-catalog:2026-11-10-165132` (`7c3867a3`)
+
+The operator ran it:
+
+```
+awk '{print "zot.apps.okd.sudops.pl/"$1"@"$3}' zot-delete-list.txt | while read -r ref; do skopeo delete "docker://$ref" && echo "deleted $ref" || echo "FAILED $ref"; done | tee zot-delete.log | grep -c '^deleted'
+# 61
+```
+
+`okd-test-logging` and `okd-test-nmstate` stayed `READY`; no pod in `openshift-logging`, `openshift-operators-redhat` or `openshift-nmstate` left Running. The blobs go at the next GC (24 h interval); the free-space reading after it is still to come. Not in this delete: the passing NMState 4.20/4.21/4.22 PR builds (12 manifests, list `zot-delete-optional.txt`), the operator's call.
+
+Two oddities from the inventory, not followed up yet: the `HEAD` returned no digest for OADP `1.6.0-2026-11-02-205027` and descheduler `5.4.0-2026-11-03-074110` (every tag in both), and the running OADP pods use the `233420` digests and the descheduler pods digests that match neither tag.

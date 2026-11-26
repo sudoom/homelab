@@ -2,8 +2,9 @@
 # operator release-5.0 5f4a6d0, incl. OCPBUGS-136668; console-plugin ddc329a), catalog tag
 # 2026-11-25-120918, replacing the 4.22 head with skips [v4.22.0-2025-12-14-152353,
 # v4.21.0-2026-05-05-165851]; the walk from the installed v5.0.0-2026-11-10-162515 reaches it.
-# Rollback target until its 24 h soak: sha256:7c3867a353a40740841a4d4397e86fd7255e8c99e980f4c47ca0eb0512fb3333
-# (tag 2026-11-10-165132, below).
+# Soak passed 2026-11-26; the 2026-11-10 catalog (tag 2026-11-10-165132,
+# sha256:7c3867a353a40740841a4d4397e86fd7255e8c99e980f4c47ca0eb0512fb3333) and its build were then
+# deleted from zot, so the rollback is v0.87.0 from operatorhubio-catalog (components/operators/nmstate/README.md).
 # Before: release-5.0 with the ImageStream-free bundle
 # kubernetes-nmstate-operator.v5.0.0-2026-11-10-162515 (pipeline #43's branch at 173a239: operator
 # gitlink at openshift/kubernetes-nmstate release-5.0 96778808, el10 handler, tls_config.yaml in the
